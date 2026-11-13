@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Line endings: LF in the repository and in the working tree for every text file.
+# PowerShell, msbuild, WiX and NSIS read LF files fine, so no file needs CRLF.
+# UTF-16 files (the kernel driver INFs) are detected as binary by text=auto and kept as is.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.cat binary
+*.sys binary
+*.dll binary
+*.exe binary
