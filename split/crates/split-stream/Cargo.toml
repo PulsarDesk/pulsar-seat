@@ -1,0 +1,56 @@
+[package]
+name = "split-stream"
+description = "Pulsar Split per-seat stream server: config, apps, control pipe, firewall, ports, supervision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# In-memory fakes of every system trait, for the integrator's tests.
+fake = []
+
+[dependencies]
+split-proto.workspace = true
+split-core.workspace = true
+# Log-watch fallback for the audio state of unmodified upstream (spec 70 §3.5).
+split-audio.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+zeroize = "1"
+sha2 = "0.11"
+base64 = "0.22"
+# Loopback HTTPS to the upstream server's own web-UI listener only (contracts §7.1).
+# ureq 2.x: unlike 3.x it accepts a complete rustls ClientConfig, which we need for the
+# pinned-certificate verifier.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Environment",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_NetworkManagement_WindowsFirewall",
+] }
+
+[dev-dependencies]
+tempfile = "3"

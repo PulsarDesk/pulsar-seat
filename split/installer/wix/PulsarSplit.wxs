@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  Pulsar Split - WiX v3 fragment merged into the Tauri 2 MSI
+  (bundle.windows.wix.fragmentPaths / componentRefs / featureRefs, see apps/manager/src-tauri/tauri.conf.json).
+
+  What it adds to the Tauri product:
+    * the seat service binary + ServiceInstall / ServiceConfig / ServiceConfigFailureActions /
+      ServiceControl (PulsarSplit, LocalSystem, own process, SID type unrestricted,
+      restart after 5 s / 30 s / 120 s, reset after 1 day)          spec 90 §2.7
+    * the headless RDP helper, and (x64 only) the shim module, launchers and shimctl
+    * deferred, no-impersonate custom actions calling our own signed service binary:
+        install / reconcile / uninstall                              spec 90 §9.1
+    * public property REMOVEUSERDATA (default empty)                 spec 90 §9.1
+    * feature ExperimentalMultiSession (off by default) that ONLY writes
+      HKLM\SOFTWARE\PulsarSplit\Termwrap\Offered=1. Enabling the module happens in the
+      manager after its warning, never here (contracts §2.4 / §8.2).
+    * architecture guard: the x64 MSI refuses an ARM64 machine and vice versa.
+    * remembers a reference-product install seen at install time (the manager then opens
+      the coexistence page; the service runs passive, spec 90 §8.2).
+
+  What it never does: certificates, AV exclusions, files in System32, firewall rules,
+  web-UI assets, licence checks. Nothing runs at build time.
+
+  Build-time inputs (environment variables, set by the build steps in ../README.md):
+    PULSAR_SPLIT_BIN   folder with pulsar-split-service.exe, pulsar-split-rdp-helper.exe
+    PULSAR_SPLIT_SHIM  folder with the shim/ build output (x64 MSI only)
+  $(sys.BUILDARCH) is x64 or arm64 (Tauri passes -arch to candle).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- ================================================================ properties -->
+    <Property Id="REMOVEUSERDATA" Secure="yes" />
+    <!-- Driver ids / consent passed to `install` / `reconcile` ("none" = no driver). Empty
+         (repair, major upgrade, or not given) = the choice saved at the first install in
+         HKLM\SOFTWARE\PulsarSplit\Setup\Drivers (REG_MULTI_SZ, written by the service
+         binary); the manifest defaults apply only when nothing was saved yet. -->
+    <Property Id="PULSARDRIVERS" Secure="yes" />
+    <Property Id="PULSARCONSENT" Secure="yes" />
+    <Property Id="EXPERIMENTALMULTISESSION" Secure="yes" />
+
+    <!-- Native machine architecture (64-bit registry view; not virtualised for x64-on-ARM64). -->
+    <Property Id="PSNATIVEARCH">
+      <RegistrySearch Id="PsNativeArch" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+                      Name="PROCESSOR_ARCHITECTURE" />
+    </Property>
+<?if $(sys.BUILDARCH) = "arm64" ?>
+    <Condition Message="Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın.">
+      <![CDATA[Installed OR PSNATIVEARCH ~= "ARM64"]]>
+    </Condition>
+<?else ?>
+    <Condition Message="Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın.">
+      <![CDATA[Installed OR PSNATIVEARCH ~= "AMD64"]]>
+    </Condition>
+<?endif ?>
+
+    <!-- Reference multi-seat product (spec 90 §8.1 signal 1). Install is allowed; the
+         service starts passive. We only remember that we saw it. -->
+    <Property Id="PSREFERENCEVERSION">
+      <RegistrySearch Id="PsReferenceArp" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{DB5AA12E-1299-4244-8651-F363406E89F6}_is1"
+                      Name="DisplayVersion" />
+    </Property>
+
+    <!-- ================================================================ files + service -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="PulsarSplitServiceComponent" Guid="{3E55ECF4-F09C-44E3-8AE5-E9196B5193AD}" Win64="yes">
+        <File Id="PulsarSplitServiceExe" Name="pulsar-split-service.exe" KeyPath="yes"
+              Source="$(env.PULSAR_SPLIT_BIN)\pulsar-split-service.exe" />
+        <ServiceInstall Id="PulsarSplitServiceInstall"
+                        Name="PulsarSplit"
+                        DisplayName="Pulsar Split"
+                        Description="Pulsar Split çoklu oturum hizmeti"
+                        Type="ownProcess"
+                        Start="demand"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments="--service"
+                        Vital="yes">
+          <!-- MsiServiceConfig: SID type unrestricted so ACLs can name NT SERVICE\PulsarSplit.
+               DelayedAutoStart is set by the manager's "start with Windows" toggle.
+               RequiredPrivileges are not restricted yet (open question, see README). -->
+          <ServiceConfig DelayedAutoStart="no" ServiceSid="unrestricted"
+                         OnInstall="yes" OnReinstall="yes" />
+          <!-- MsiServiceConfigFailureActions: restart 5 s, 30 s, 120 s; reset after 1 day. -->
+          <ServiceConfigFailureActions OnInstall="yes" OnReinstall="yes" ResetPeriod="86400">
+            <Failure Action="restart" Delay="5000" />
+            <Failure Action="restart" Delay="30000" />
+            <Failure Action="restart" Delay="120000" />
+          </ServiceConfigFailureActions>
+        </ServiceInstall>
+        <!-- Stopped before files are replaced (upgrade) or removed; started after install. -->
+        <ServiceControl Id="PulsarSplitServiceControl" Name="PulsarSplit"
+                        Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <Component Id="PulsarSplitRdpHelperComponent" Guid="{655C8B7D-1108-452E-BC1B-639949F10C78}" Win64="yes">
+        <File Id="PulsarSplitRdpHelperExe" Name="pulsar-split-rdp-helper.exe" KeyPath="yes"
+              Source="$(env.PULSAR_SPLIT_BIN)\pulsar-split-rdp-helper.exe" />
+      </Component>
+
+      <!-- Remembers that the reference product was installed when we were (manager shows
+           the coexistence page on first start). Removed with the product. -->
+      <Component Id="PulsarSplitReferenceSeenComponent" Guid="{A89B11DF-F71D-4AB8-B9AE-208C918B0411}" Win64="yes">
+        <Condition>PSREFERENCEVERSION</Condition>
+        <RegistryValue Root="HKLM" Key="SOFTWARE\PulsarSplit\Setup" Name="ReferenceSeenAtInstall"
+                       Type="string" Value="[PSREFERENCEVERSION]" KeyPath="yes" />
+      </Component>
+
+<?if $(sys.BUILDARCH) = "x64" ?>
+      <!-- Shim (process isolation) is x64 + x86 only (spec 50 §14). Copied here, never to
+           System32; the service installs it only when the operator turns it on. -->
+      <Directory Id="PulsarSplitShimDir" Name="shim">
+        <Directory Id="PulsarSplitShimX64Dir" Name="x64">
+          <Component Id="PulsarSplitShimX64Component" Guid="{68094D7D-AAAB-4930-959C-902EF4F36708}" Win64="yes">
+            <File Id="PulsarSplitShimX64Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SPLIT_SHIM)\x86_64-pc-windows-msvc\release\PulsarSplitShim.dll" />
+            <File Id="PulsarSplitLaunchExe" Name="pulsar-split-launch.exe"
+                  Source="$(env.PULSAR_SPLIT_SHIM)\x86_64-pc-windows-msvc\release\pulsar-split-launch.exe" />
+            <File Id="PulsarSplitShimctlExe" Name="pulsar-split-shimctl.exe"
+                  Source="$(env.PULSAR_SPLIT_SHIM)\x86_64-pc-windows-msvc\release\pulsar-split-shimctl.exe" />
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSplitShimX86Dir" Name="x86">
+          <Component Id="PulsarSplitShimX86Component" Guid="{4D6EA0C5-94F7-4180-9A30-E765F3167E26}" Win64="yes">
+            <File Id="PulsarSplitShimX86Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SPLIT_SHIM)\i686-pc-windows-msvc\release\PulsarSplitShim.dll" />
+            <File Id="PulsarSplitLaunch32Exe" Name="pulsar-split-launch32.exe"
+                  Source="$(env.PULSAR_SPLIT_SHIM)\i686-pc-windows-msvc\release\pulsar-split-launch32.exe" />
+          </Component>
+        </Directory>
+      </Directory>
+<?endif ?>
+    </DirectoryRef>
+
+    <!-- ================================================================ experimental module -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="PulsarSplitTermwrapOfferedComponent" Guid="{ED0CF38E-D45C-4D67-B15B-23A3FC45183E}" Win64="yes">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\PulsarSplit\Termwrap" Name="Offered"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <!-- Off by default: Level 1000 is above the default INSTALLLEVEL (1). Turned on with
+         EXPERIMENTALMULTISESSION=1 or ADDLOCAL=ExperimentalMultiSession. -->
+    <Feature Id="ExperimentalMultiSession" Title="Deneysel çoklu oturum modülü"
+             Description="Yalnızca yöneticide deneysel modülü sunar; etkinleştirme uyarıyla birlikte yöneticide yapılır."
+             Level="1000" AllowAdvertise="no" Absent="allow">
+      <Condition Level="1">EXPERIMENTALMULTISESSION = "1"</Condition>
+      <ComponentRef Id="PulsarSplitTermwrapOfferedComponent" />
+    </Feature>
+
+    <!-- ================================================================ custom actions -->
+    <!-- EXE custom actions on our own signed binary. With the msi switch only a real failure returns
+         non-zero (Windows Installer would treat 2 / 3010 as fatal); details go to
+         %ProgramData%\PulsarSplit\logs\setup.log and the manager's host-health page. -->
+    <CustomAction Id="PsSetupInstall" FileKey="PulsarSplitServiceExe"
+                  ExeCommand="install --msi --drivers=[PULSARDRIVERS] --consent=[PULSARCONSENT]"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="PsSetupReconcile" FileKey="PulsarSplitServiceExe"
+                  ExeCommand="reconcile --msi --drivers=[PULSARDRIVERS] --consent=[PULSARCONSENT]"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <!-- Uninstall must not block removal (spec 90 §4.3): Return="ignore". -->
+    <CustomAction Id="PsSetupUninstall" FileKey="PulsarSplitServiceExe"
+                  ExeCommand="uninstall --msi REMOVEUSERDATA=[REMOVEUSERDATA]"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Fresh install: data folder + ACL, event source, drivers. -->
+      <Custom Action="PsSetupInstall" After="InstallServices">
+        <![CDATA[NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE ~= "ALL")]]>
+      </Custom>
+      <!-- Every install, upgrade and repair: idempotent reconcile (driver upgrades, config
+           migration). Runs before StartServices. -->
+      <Custom Action="PsSetupReconcile" After="PsSetupInstall">
+        <![CDATA[NOT (REMOVE ~= "ALL")]]>
+      </Custom>
+      <!-- Real uninstall only (not the old product's removal during a major upgrade):
+           after the service is stopped, before its files are removed. -->
+      <Custom Action="PsSetupUninstall" After="StopServices">
+        <![CDATA[(REMOVE ~= "ALL") AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

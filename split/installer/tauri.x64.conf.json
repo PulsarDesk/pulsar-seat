@@ -1,0 +1,16 @@
+{
+  "$comment": "SPDX-License-Identifier: GPL-3.0-only. x64 MSI only (merged after tauri.release.conf.json): adds the shim components. JSON merge patch replaces arrays, so the base componentRefs are repeated.",
+  "bundle": {
+    "windows": {
+      "wix": {
+        "componentRefs": [
+          "PulsarSplitServiceComponent",
+          "PulsarSplitRdpHelperComponent",
+          "PulsarSplitReferenceSeenComponent",
+          "PulsarSplitShimX64Component",
+          "PulsarSplitShimX86Component"
+        ]
+      }
+    }
+  }
+}

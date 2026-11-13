@@ -1,0 +1,133 @@
+; SPDX-License-Identifier: GPL-3.0-only
+; Pulsar Split PulsarPad: UMDF 2 HID minidriver under the inbox mshidumdf.sys
+; pass-through and the inbox WUDFRd reflector. UNBUILT · UNTESTED · UNSIGNED.
+; Written from the WDK documentation for UMDF HID minidrivers (not from any sample).
+; stampinf replaces $ARCH$, $UMDFVERSION$ and DriverVer at build time.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = PulsarSplitPad
+ClassGuid   = {7E548021-9E66-49BA-890C-5431C3D03F4C}
+Provider    = %ProviderName%
+CatalogFile = split_pad.cat
+DriverVer   =
+PnpLockdown = 1
+
+[ClassInstall32]
+AddReg = PadClass.AddReg
+
+[PadClass.AddReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,"-20"
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+split_pad.dll = 1
+
+[Manufacturer]
+%ManufacturerName% = Pulsar, NT$ARCH$.10.0...17763
+
+; Hardware ids (spec 60 §3.6): PULSARPAD\VID_<vid>&PID_<pid>[&IG_00]. The PULSARPAD\
+; enumerator prefix keeps other products' INFs from matching our devices.
+[Pulsar.NT$ARCH$.10.0...17763]
+%Pad.Ds5%  = PadPs,   PULSARPAD\VID_054C&PID_0CE6
+%Pad.Ds5e% = PadPs,   PULSARPAD\VID_054C&PID_0DF2
+%Pad.Ds4%  = PadPs,   PULSARPAD\VID_054C&PID_05C4
+%Pad.Xone% = PadXbox, PULSARPAD\VID_045E&PID_02FF&IG_00
+
+; ---------------- PlayStation kinds ----------------
+
+[PadPs.NT]
+CopyFiles = Pad.CopyFiles
+
+[PadPs.NT.HW]
+AddReg = Pad.Filters.AddReg, Pad.Security.AddReg
+
+[PadPs.NT.Services]
+AddService = WUDFRd, 0x000001f8, WUDFRd.Service
+AddService = mshidumdf, 0x000001fa, mshidumdf.Service
+
+[PadPs.NT.Wdf]
+UmdfService                = split_pad, split_pad.Wdf
+UmdfServiceOrder           = split_pad
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+UmdfFileObjectPolicy       = AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction    = Copy
+UmdfFsContextUsePolicy     = CanUseFsContext2
+UmdfHostPriority           = PriorityHigh
+
+; ---------------- Xbox kind (adds the inbox xinputhid upper filter) ----------------
+
+[PadXbox.NT]
+CopyFiles = Pad.CopyFiles
+; VERIFY: spec 60 §2.3 says the Xbox install pulls in the inbox xinputhid.inf sections.
+; The section names of xinputhid.inf must be checked on a test machine before enabling:
+; Include = xinputhid.inf
+; Needs   = <xinputhid install section>.NT
+
+[PadXbox.NT.HW]
+AddReg = Pad.Filters.AddReg, Pad.Security.AddReg, PadXbox.Filters.AddReg
+
+[PadXbox.NT.Services]
+AddService = WUDFRd, 0x000001f8, WUDFRd.Service
+AddService = mshidumdf, 0x000001fa, mshidumdf.Service
+
+[PadXbox.NT.Wdf]
+UmdfService                = split_pad, split_pad.Wdf
+UmdfServiceOrder           = split_pad
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+UmdfFileObjectPolicy       = AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction    = Copy
+UmdfFsContextUsePolicy     = CanUseFsContext2
+UmdfHostPriority           = PriorityHigh
+
+[PadXbox.Filters.AddReg]
+HKR,,"UpperFilters",0x00010008,"xinputhid"
+
+; ---------------- shared ----------------
+
+[Pad.CopyFiles]
+split_pad.dll
+
+[Pad.Filters.AddReg]
+HKR,,"LowerFilters",0x00010008,"WUDFRd"
+
+; Default device security until the service sets the per-seat descriptor (spec 60 §8.2):
+; SYSTEM and Administrators only.
+[Pad.Security.AddReg]
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+
+[split_pad.Wdf]
+UmdfLibraryVersion = $UMDFVERSION$
+ServiceBinary      = %13%\split_pad.dll
+
+[WUDFRd.Service]
+DisplayName   = %WudfRdName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\WUDFRd.sys
+
+[mshidumdf.Service]
+DisplayName   = %MsHidUmdfName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\mshidumdf.sys
+
+[Strings]
+ProviderName     = "Pulsar Split"
+ManufacturerName = "Pulsar Split"
+ClassName        = "Pulsar Split pads"
+DiskName         = "Pulsar Split pad driver"
+Pad.Ds5          = "Pulsar Split pad (DualSense layout)"
+Pad.Ds5e         = "Pulsar Split pad (DualSense Edge layout)"
+Pad.Ds4          = "Pulsar Split pad (DualShock 4 layout)"
+Pad.Xone         = "Pulsar Split pad (Xbox layout)"
+WudfRdName       = "Windows Driver Foundation - User-mode Driver Framework Reflector"
+MsHidUmdfName    = "MS HID UMDF pass-through"

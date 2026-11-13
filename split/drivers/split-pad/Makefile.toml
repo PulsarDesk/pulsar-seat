@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# cargo-make flow from windows-drivers-rs (stampinf, inf2cat, signing hooks).
+extend = "target/rust-driver-makefile.toml"
+
+[config]
+load_script = '''
+#!@rust
+//! ```cargo
+//! [dependencies]
+//! wdk-build = "0.3"
+//! ```
+#![allow(unused_doc_comments)]
+wdk_build::cargo_make::load_rust_driver_makefile()?
+'''

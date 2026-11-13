@@ -1,0 +1,70 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "PulsarSplitManager",
+  "version": "0.1.0",
+  "identifier": "com.pulsardesk.split.manager",
+  "build": {
+    "frontendDist": "../build",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Pulsar Split Yönetici",
+        "width": 800,
+        "height": 600,
+        "minWidth": 640,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "msi"
+    ],
+    "license": "GPL-3.0-only",
+    "licenseFile": "../../../LICENSE",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "wix": {
+        "upgradeCode": "32A39034-3135-45E2-A938-593053D6427D",
+        "language": "tr-TR",
+        "fragmentPaths": [
+          "../../../installer/wix/PulsarSplit.wxs"
+        ],
+        "componentRefs": [
+          "PulsarSplitServiceComponent",
+          "PulsarSplitRdpHelperComponent",
+          "PulsarSplitReferenceSeenComponent"
+        ],
+        "featureRefs": [
+          "ExperimentalMultiSession"
+        ]
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": [
+          "Turkish"
+        ],
+        "displayLanguageSelector": false,
+        "installerHooks": "../../../installer/nsis/hooks.nsh"
+      }
+    }
+  },
+  "mainBinaryName": "pulsar-split-manager"
+}

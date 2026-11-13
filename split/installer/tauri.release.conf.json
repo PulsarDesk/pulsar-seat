@@ -1,0 +1,13 @@
+{
+  "$comment": "SPDX-License-Identifier: GPL-3.0-only. Release override merged by `tauri build --config` (apps/manager package.json scripts installer:msi / installer:nsis). Holds what must exist only at bundle time: the third-party payload written by installer/scripts/fetch-deps.ts. Kept out of tauri.conf.json because tauri-build copies resources on every cargo build and would fail without the payload.",
+  "productName": "Pulsar Split",
+  "bundle": {
+    "resources": {
+      "../../../target/installer-deps/current/drivers.json": "drivers.json",
+      "../../../target/installer-deps/current/drivers/": "drivers/",
+      "../../../target/installer-deps/current/stream-server.json": "stream-server.json",
+      "../../../target/installer-deps/current/stream-server/": "stream-server/",
+      "../../../installer/licenses/": "licenses/"
+    }
+  }
+}

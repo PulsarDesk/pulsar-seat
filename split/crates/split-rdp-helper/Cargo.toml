@@ -1,0 +1,26 @@
+[package]
+name = "split-rdp-helper"
+description = "Pulsar Split headless loopback RDP client (creates and holds a seat's RDS session)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# IronRDP 0.17 needs Rust 1.89.
+rust-version = "1.89"
+
+[[bin]]
+name = "pulsar-split-rdp-helper"
+path = "src/main.rs"
+
+[dependencies]
+split-session = { path = "../split-session" }
+serde_json = "1"
+zeroize = "1"
+sha1 = "0.10"
+ironrdp = { version = "0.17", features = ["connector", "session", "rdpsnd", "svc", "pdu", "core", "graphics"] }
+ironrdp-blocking = "0.10"
+native-tls = "0.2"
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+split-proto.workspace = true

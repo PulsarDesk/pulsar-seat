@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Static CRT for every Windows target: our binaries ship no Microsoft runtime DLLs
+# (rules: no shipped MS DLLs; spec 90 §2.2). Same as shim/.cargo/config.toml.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

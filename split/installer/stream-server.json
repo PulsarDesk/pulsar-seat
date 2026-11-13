@@ -1,0 +1,20 @@
+{
+  "$comment": "Build-time stream-server manifest (SPDX-License-Identifier: GPL-3.0-only). fetch-deps.ts downloads builds[arch], verifies sha256, extracts it WITHOUT the browser web UI, and writes target/installer-deps/<arch>/stream-server.json as the runtime ServerDist (split-stream load_manifest): {flavour, version, file, sha256 (of the exe), source_url, licence}. sha256 values are the GitHub release asset digests (API, 2026-11-12). Pinned tag from spec 80. Provenance (checked 2026-11-12 with the GitHub REST API): repos/LizardByte/Sunshine resolves to full_name SunshineStream/Sunshine, fork=false, i.e. the vetted upstream repository moved to the SunshineStream org (same repo, not a fork); the release v2026.516.143833 of that repo lists exactly these two assets with these digests; tag v2026.516.143833 -> 14ffa6fdaa53f7b51512be2b3d24f3939695403c. source_url names the same repo and tag as the build URLs (fetch-deps.ts validateStream enforces it).",
+  "flavour": "upstream",
+  "version": "v2026.516.143833",
+  "licence": "GPL-3.0-only",
+  "source_url": "https://github.com/SunshineStream/Sunshine/tree/v2026.516.143833",
+  "exe": "sunshine.exe",
+  "install_dir": "stream-server",
+  "web_ui_dirs": ["assets/web", "web"],
+  "builds": {
+    "x64": {
+      "url": "https://github.com/SunshineStream/Sunshine/releases/download/v2026.516.143833/Sunshine-Windows-AMD64-portable.zip",
+      "sha256": "0a3af3dde43b8f2c94ffe04b850ad736d6e1be2b75906779d7094a5ad9d4783b"
+    },
+    "arm64": {
+      "url": "https://github.com/SunshineStream/Sunshine/releases/download/v2026.516.143833/Sunshine-Windows-ARM64-portable.zip",
+      "sha256": "bbed46a10f6496b4c0b23509b6d788e84e9c73ae76e0a73f858d132868e15df9"
+    }
+  }
+}

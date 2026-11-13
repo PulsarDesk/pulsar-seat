@@ -1,0 +1,16 @@
+[package]
+name = "pulsar-split-shimctl"
+description = "Pulsar Split operator tool: shim status / install / uninstall / kill switch / DXVK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pulsar-split-shimctl"
+path = "src/main.rs"
+
+[dependencies]
+split-shim-core.workspace = true
+serde_json = "1"
