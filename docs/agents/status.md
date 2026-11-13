@@ -676,6 +676,30 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     uses `git status --untracked-files=no`; generated notices are untracked).
   - Untested on hardware: FAT / exFAT refusal of keygen (NTFS path tested by a unit test
     and a scratch keygen + sign + verify run); SDV result parsing (SDV never completed a run).
+- 2026-11-14: **merge steps 5 + 6 done** (merge-plan.md section 3). Step 5: `SecretStore`
+  gained the remote seats' Pulsar slots (`RemoteSecretSlot` identity / connect password /
+  relay key, `set_remote` / `get_remote`, LSA names `L$PulsarSeat.Remote.<seat-id>.<slot>`,
+  `MAX_SECRET_CHARS` 4096); LSA limits checked and written down (architecture.md 10.3: no
+  value needs the encrypted-file fallback). Split's DPAPI code and HKLM secrets store are
+  deleted, no importer. Step 6: one service. `crates/split-service` and
+  `pulsar-split-service.exe` are gone; Split's controller + engine are the remote seat
+  worker in `crates/seat-service/src/remote/` (architecture.md 10.5): protocol 3 remote
+  requests reach it by seat number, `start_seats` / `stop_seat` / autostart cover remote
+  seats, it reads the config document (`DocStore`) and writes back only `rdp_client_name`,
+  `last_mode`, `settings.remote.multi_session`; remote runtimes in `get_status`, events
+  mapped to `seat_state` / `notice` / `stream`. Split's suspend / resume and session-change
+  handling ported into Seat's SCM skeleton; engine 1 s tick, pad pump and the shim health
+  pipe run in the Seat runtime; Split's setup sub-commands are `remote-setup ...`. Gates
+  green: cargo 1566 (was 1564; 9 split-service tests deleted on purpose: DPAPI round trip,
+  HKLM registry store x4, Split pipe SDDL + current SID, Split's own pipe round trip, Event
+  Log text cap; 11 added), clippy aarch64 + x86_64 clean, vitest 115 + 44, installer scripts
+  29, shim 8 (host; x64 check). Untested on hardware. Open: `apps/split-manager` has no
+  service until step 9 (its pipe is gone); `installer/split/` still names
+  `pulsar-split-service` (step 10); package registry keys under `HKLM\SOFTWARE\PulsarSplit`
+  (shim, termwrap, runtime seat map) and the `PulsarSplit` pipe names (health, pulsar-host)
+  are unchanged; `startup_apps` stays local-only (remote seats use `RemoteSeat.apps`).
+  **Next:** step 7 (one `rds_loopback`, `seat-rdp` headless mode replaces
+  `split-rdp-helper`, one wrapper kind).
 - 2026-11-13 (integrate, round 3): **whole tree green after egfx-h264, rdp-channels,
   host-containment, kiosk-shell, credprov, second-listener and release** (with their fix
   rounds). Nothing committed, installed, registered or run on hardware.

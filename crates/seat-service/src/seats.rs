@@ -309,6 +309,9 @@ impl Service {
     /// `after_seat_one_logon` one would fail every seat with `console_in_use`. Only a
     /// manual `start_seats` (the switch trigger, spec 35 §5.5) starts seats there.
     pub fn start_autostart_seats(&self) {
+        // Remote seats first: the remote seat worker starts them (it has its own checks,
+        // `crate::remote::glue::start_remote_autostart`).
+        self.start_remote_autostart();
         let b = self.backends();
         if !b.session.caps().concurrent {
             log::info(&format!(
@@ -323,7 +326,7 @@ impl Service {
             if self.may_start(&st, false).is_err() {
                 return;
             }
-            // Remote seats are started by the remote seat worker (merge step 6).
+            // Remote seats were handed to the remote seat worker above.
             st.config.seats.iter().filter(|s| s.autostart && s.is_local() && Self::managed(&st, s.number)).map(|s| s.number).collect()
         };
         self.start_sequence(seats);

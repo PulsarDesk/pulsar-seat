@@ -18,6 +18,7 @@
 //! | [`runstate`] | `run\state.json`, unclean-shutdown / crash-loop decision |
 //! | [`wizard`] | first-run capture wizard |
 //! | [`diag`] | diagnostic report |
+//! | [`remote`] | remote seat worker (Pulsar Split's controller + engine, merge step 6) |
 //! | `win` | pipe server, SCM, LSA secrets, Event Log, CfgMgr / CCD inventory, platform |
 
 mod auth;
@@ -34,6 +35,7 @@ mod listener;
 mod log;
 mod loopback_plan;
 mod platform;
+mod remote;
 mod requests;
 mod runstate;
 #[cfg(windows)]
@@ -97,6 +99,7 @@ fn main() {
                 }
             }
         }
+        Command::RemoteSetup(cmd) => remote::win::setup_cmd::run(cmd),
         Command::Preflight => win::setup::preflight(),
         Command::Install { exe, args } => {
             let exe = exe.or_else(|| std::env::current_exe().ok()).unwrap_or_default();

@@ -53,7 +53,7 @@ ready 120 s, client restart window 5 min / 3 failures.
 - A spawned process is a kill-on-drop guard until it is in its job and resumed: no error
   path leaves a suspended process behind.
 - The service must not rely on this crate for process COM security: `win::wmi` never calls
-  `CoInitializeSecurity` (split-service `main` owns it) and sets impersonate + packet
+  `CoInitializeSecurity` (the service process owns it, `pulsar-seat-service`) and sets impersonate + packet
   privacy on each WMI proxy.
 - `run\sessions.json` (the sweep kills the PIDs it lists) and the journal are trusted only
   when owned by SYSTEM / Administrators with no other allow ACE. seat-setup creates the

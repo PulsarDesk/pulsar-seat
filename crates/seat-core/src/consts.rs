@@ -34,6 +34,9 @@ pub const REGISTRY_ROOT: &str = r"SOFTWARE\Pulsar Seat";
 /// LSA private data key name of a seat's auto-logon password: prefix + two-digit seat
 /// number (`L$PulsarSeat.Seat.02`). `L$` = local secret.
 pub const LSA_SEAT_SECRET_PREFIX: &str = "L$PulsarSeat.Seat.";
+/// LSA local secret prefix of a remote seat's Pulsar secrets
+/// (`store::remote_secret_name`: `<prefix><seat-id>.<slot>`).
+pub const LSA_REMOTE_SECRET_PREFIX: &str = "L$PulsarSeat.Remote.";
 
 /// Seat-host binary (crate `seat-host`).
 pub const HOST_EXE: &str = "pulsar-seat-host.exe";

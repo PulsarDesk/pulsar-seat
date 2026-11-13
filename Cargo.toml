@@ -27,7 +27,6 @@ default-members = [
     "crates/split-rdp-helper",
     "crates/split-termwrap",
     "crates/split-display",
-    "crates/split-service",
     "crates/seat-audio",
     "crates/seat-stream",
     "crates/seat-pads",

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Persistence of global settings and seats behind [`ConfigStore`].
 //!
-//! Production: registry under `HKLM\SOFTWARE\PulsarSplit` (implemented in `split-service`,
-//! passwords as DPAPI machine-scope blobs). Here: [`MemoryStore`] for tests and
-//! [`FileStore`] (JSON file) for `--console` development. Neither of these two persists
+//! Production: the Seat config document (`seat-service` `remote::DocStore`, merge step 6;
+//! passwords in the LSA `SecretStore`). Here: [`MemoryStore`] for tests and
+//! [`FileStore`] (JSON file, kept for tests). Neither of these two persists
 //! passwords to disk: they keep them in process memory only (wiped on drop), so a
 //! `--console` service can start a seat until it exits.
 

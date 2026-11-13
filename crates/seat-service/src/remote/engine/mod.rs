@@ -4,7 +4,7 @@
 //! The [`Engine`] owns no Windows code: it drives the packages through their public traits
 //! (`SessionManager`, `DisplayBackend`, `AudioProbe`, `StreamBackend` / `SeatStream`, `PadManager`,
 //! `SeatMapWriter`, `Termwrap`) plus the small [`IsolationPort`] defined here. The real
-//! implementations are assembled in `crate::wiring`; the tests use the packages' fakes.
+//! implementations are assembled in `crate::remote::win::wiring`; the tests use the packages' fakes.
 //!
 //! Seat start runs on a worker thread per seat (start order: user → session → display →
 //! audio keys → stream → pads → isolation → autostart). Every step that changed something
@@ -15,7 +15,7 @@
 //! has its own mutex (tick / pairing / apps reload).
 
 use seat_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
-use crate::control::SeatEvent;
+use crate::remote::control::SeatEvent;
 use split_display::{
     AdapterChoice, AdapterEnumerator, BackendInfo, BackendKind, DisplayBackend, DisplayError, HdrLuminance, HdrUnavailable,
     ModeRequest, ModeResult, ModeStatus, SeatDisplay, SeatDisplayHandle, choose_backend, resolve_adapter,
@@ -66,7 +66,7 @@ fn err(code: ErrorCode, reason: &str, msg: impl std::fmt::Display) -> ProtoError
 }
 
 /// Isolation operations the service needs (spec 50; contracts §4.4). Real: AppHelp
-/// installer + `HKLM\SOFTWARE\PulsarSplit\Shim` + DXVK deployer (`crate::wiring`).
+/// installer + `HKLM\SOFTWARE\PulsarSplit\Shim` + DXVK deployer (`crate::remote::win::wiring`).
 pub trait IsolationPort: Send + Sync {
     fn status(&self) -> Result<IsolationStatus, ProtoError>;
     /// Install the AppHelp database for the stored target list and copy the modules.

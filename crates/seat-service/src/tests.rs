@@ -84,6 +84,10 @@ fn two_seat_config() -> Config {
 static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn harness_with(config: Config, prev: Option<RunState>) -> Harness {
+    harness_full(config, prev, None)
+}
+
+fn harness_full(config: Config, prev: Option<RunState>, remote: Option<crate::service::RemoteDeps>) -> Harness {
     let f = Arc::new(MockFactory::default());
     *f.display.devices.lock().unwrap() = vec![device("mon;1", DeviceKind::Monitor), device("mon;2", DeviceKind::Monitor)];
     *f.input.devices.lock().unwrap() = vec![
@@ -111,8 +115,10 @@ fn harness_with(config: Config, prev: Option<RunState>) -> Harness {
         spawner: Arc::new(Inline),
         data_dir: dir.clone(),
         console_mode: true,
+        remote,
     });
     svc.host_grace_ms.store(0, Ordering::SeqCst);
+    svc.remote_stop_wait_ms.store(0, Ordering::SeqCst);
     Harness { s: svc, f, p, clock, dir }
 }
 
@@ -649,6 +655,7 @@ fn adoption_refuses_a_reused_pid() {
         spawner: Arc::new(Inline),
         data_dir: h.dir.clone(),
         console_mode: true,
+        remote: None,
     });
     svc2.boot();
     assert!(svc2.lock().seats.get(&s(2)).unwrap().host.is_none());
@@ -842,6 +849,7 @@ fn adoption_after_restart() {
         spawner: Arc::new(Inline),
         data_dir: h.dir.clone(),
         console_mode: true,
+        remote: None,
     });
     svc2.boot();
     let rt = svc2.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap();
@@ -2057,7 +2065,7 @@ fn with_remote_seat() -> Config {
 }
 
 #[test]
-fn remote_requests_check_kind_and_wait_for_the_worker() {
+fn remote_requests_check_kind_and_need_the_worker() {
     let h = harness_with(with_remote_seat(), None);
     h.s.boot();
     let mut a = admin();
@@ -2068,11 +2076,11 @@ fn remote_requests_check_kind_and_wait_for_the_worker() {
     let e = call(&h, &mut a, RequestBody::GetPairState { seat: s(2) }).unwrap_err();
     assert_eq!(e.code, ErrorCode::WrongSeatKind);
     assert_eq!(e.reason.as_deref(), Some("remote"));
-    // Right kind / host-wide: not implemented until the remote seat worker (step 6).
+    // Right kind / host-wide, but this service has no remote seat worker.
     for body in [RequestBody::GetPairState { seat: s(3) }, RequestBody::GetHostInfo, RequestBody::TestSeatCredentials { seat: s(2) }] {
         let e = call(&h, &mut a, body).unwrap_err();
-        assert_eq!(e.code, ErrorCode::NotImplemented);
-        assert_eq!(e.reason.as_deref(), Some(crate::requests::REMOTE_WORKER_PENDING));
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert_eq!(e.reason.as_deref(), Some(crate::remote::glue::REMOTE_WORKER_UNAVAILABLE));
     }
     // Unknown seat.
     assert_eq!(call(&h, &mut a, RequestBody::GetSeatOtp { seat: s(9) }).unwrap_err().code, ErrorCode::NotFound);
@@ -2087,7 +2095,7 @@ fn remote_seats_are_not_started_by_the_local_worker() {
     h.s.boot();
     let mut a = admin();
     let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
-    assert_eq!(e.code, ErrorCode::NotImplemented);
+    assert_eq!(e.code, ErrorCode::Unsupported);
     // Autostart (`None`) starts the local seat 2 only.
     call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
     assert_ne!(state(&h, s(2)), SeatState::Off);
@@ -2099,6 +2107,144 @@ fn remote_seats_are_not_started_by_the_local_worker() {
     h.s.boot();
     let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
     assert_eq!(e.code, ErrorCode::SessionUnavailable);
+}
+
+// ---- remote seat worker (merge step 6) ----
+
+/// Records the engine hooks.
+#[derive(Default)]
+struct HostRec(std::sync::Mutex<Vec<String>>);
+
+impl crate::remote::RemoteHost for HostRec {
+    fn service_start(&self, global: &seat_core::remote::RemoteSettings, users: &[String]) {
+        self.0.lock().unwrap().push(format!("start multi={} users={users:?}", global.multi_session));
+    }
+    fn service_stop(&self, users: &[String]) {
+        self.0.lock().unwrap().push(format!("stop users={users:?}"));
+    }
+}
+
+/// `with_remote_seat` with seat 3 = user "veli", autostart on.
+fn remote_ready_config() -> Config {
+    let mut c = with_remote_seat();
+    let three = c.seats.iter_mut().find(|x| x.number == s(3)).unwrap();
+    three.account = SeatAccount::Local { user: "veli".into() };
+    three.autostart = true;
+    c.settings.start_mode = seat_core::config::StartMode::AtBoot;
+    c.settings.timings.start_delay_ms = 0;
+    let three = c.seats.iter_mut().find(|x| x.number == s(3)).unwrap();
+    let r = three.remote.as_mut().unwrap();
+    r.id = "0f8fad5b-d9cb-469f-a165-70867728950e".into();
+    r.rdp_client_name = "PSS0F8FAD5B".into();
+    c
+}
+
+/// A service with the Split controller over the fake platform as its remote worker.
+fn remote_harness(config: Config) -> (Harness, Arc<HostRec>) {
+    let rec = Arc::new(HostRec::default());
+    let host: Arc<dyn crate::remote::RemoteHost> = rec.clone();
+    let remote = crate::service::RemoteDeps {
+        worker: Box::new(|doc| {
+            Box::new(crate::remote::control::Controller::new(
+                doc,
+                crate::remote::control::tests::FakePlatform::default(),
+                "t",
+                true,
+            ))
+        }),
+        host: Some(host),
+    };
+    (harness_full(config, None, Some(remote)), rec)
+}
+
+#[test]
+fn mixed_local_and_remote_seats_start_and_stop_with_fakes() {
+    let mut c = remote_ready_config();
+    c.seats.iter_mut().find(|x| x.number == s(3)).unwrap().autostart = false;
+    let (h, rec) = remote_harness(c);
+    h.s.boot();
+    assert_eq!(rec.0.lock().unwrap().as_slice(), [r#"start multi=false users=["veli"]"#]);
+    let mut a = admin();
+    // No password yet: the worker refuses the start with Split's error code.
+    let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::MissingCredentials);
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(3), password: Some(Secret::new("pw3")) }).unwrap();
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(2), password: Some(Secret::new("pw2")) }).unwrap();
+    let rx = h.s.events.subscribe(vec![Topic::Status], Default::default());
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2), s(3)]) }).unwrap();
+    assert_ne!(state(&h, s(2)), SeatState::Off);
+    assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }), "{:?}", state(&h, s(3)));
+    let ResponseBody::Status(st) = call(&h, &mut a, RequestBody::GetStatus).unwrap() else { panic!() };
+    let three = st.seats.iter().find(|r| r.seat == s(3)).unwrap();
+    assert_eq!(three.kind, seat_core::config::SeatKind::Remote);
+    // The worker's `seat_phase` event became a v3 `seat_state` of the remote seat.
+    let mut saw = false;
+    while let Ok(f) = rx.try_recv() {
+        if let Event::SeatState { runtime } = f.event
+            && runtime.seat == s(3)
+        {
+            saw = true;
+        }
+    }
+    assert!(saw, "remote seat_state published");
+    // Stop both; the fake reports the remote seat stopped.
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap();
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(2) }).unwrap();
+    h.s.tick();
+    assert_eq!(state(&h, s(3)), SeatState::Off);
+    assert_eq!(call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap_err().code, ErrorCode::SeatNotRunning);
+    // Service stop: remote seats stopped, final sweep with the remote users.
+    h.s.shutdown();
+    assert_eq!(rec.0.lock().unwrap().last().map(String::as_str), Some(r#"stop users=["veli"]"#));
+}
+
+#[test]
+fn remote_autostart_suspend_and_resume() {
+    let (h, _rec) = remote_harness(remote_ready_config());
+    h.s.secrets.set(s(3), Some(&Secret::new("pw3"))).unwrap();
+    h.s.boot();
+    assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }), "autostart: {:?}", state(&h, s(3)));
+    h.s.on_suspend();
+    h.s.tick();
+    assert_eq!(state(&h, s(3)), SeatState::Off);
+    h.s.on_resume();
+    assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }), "resume: {:?}", state(&h, s(3)));
+}
+
+#[test]
+fn remote_requests_reach_the_worker_by_seat_number() {
+    let (h, _rec) = remote_harness(remote_ready_config());
+    h.s.boot();
+    let mut a = admin();
+    // A stopped seat has no pairing.
+    let ResponseBody::PairState(p) = call(&h, &mut a, RequestBody::GetPairState { seat: s(3) }).unwrap() else { panic!() };
+    assert_eq!(p, Default::default());
+    // Seat-scoped requests that need a running seat answer Split's error.
+    let e = call(&h, &mut a, RequestBody::ListPairedClients { seat: s(3) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceUnavailable);
+    // `seat:<N>` log sources become Split's seat names.
+    let ResponseBody::LogLines(l) = call(&h, &mut a, RequestBody::GetLogTail { source: "seat:3".into(), lines: 5 }).unwrap() else {
+        panic!()
+    };
+    assert_eq!(l, ["Salon:5"]);
+    assert_eq!(call(&h, &mut a, RequestBody::GetLogTail { source: "seat:2".into(), lines: 5 }).unwrap_err().code, ErrorCode::InvalidValue);
+    // Account requests serve both kinds.
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(2), password: Some(Secret::new("pw")) }).unwrap();
+    let ResponseBody::CredentialTest(t) = call(&h, &mut a, RequestBody::TestSeatCredentials { seat: s(2) }).unwrap() else { panic!() };
+    assert!(t.ok, "local seat 2 = ali / pw");
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(3), password: Some(Secret::new("wrong")) }).unwrap();
+    let ResponseBody::CredentialTest(t) = call(&h, &mut a, RequestBody::TestSeatCredentials { seat: s(3) }).unwrap() else { panic!() };
+    assert_eq!((t.ok, t.error_code), (false, Some(1326)));
+    let e = call(&h, &mut a, RequestBody::EnableUnlockAccount { seat: s(2), enable: true, unlock: true, confirm: false }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    assert!(call(&h, &mut a, RequestBody::EnableUnlockAccount { seat: s(3), enable: true, unlock: false, confirm: true }).is_ok());
+    // Host-wide requests.
+    assert!(matches!(call(&h, &mut a, RequestBody::GetShimStatus), Err(_) | Ok(ResponseBody::ShimStatus(_))));
+    let e = call(&h, &mut a, RequestBody::CleanupAudioEndpoints { confirm: false }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::BadRequest);
+    // Worker-owned fields written by the worker land in the document: multi-session.
+    let r = call(&h, &mut a, RequestBody::SetMultiSession { enabled: true });
+    assert!(r.is_err() || h.s.lock().config.settings.remote.multi_session, "{r:?}");
 }
 
 #[test]

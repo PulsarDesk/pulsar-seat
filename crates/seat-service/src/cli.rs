@@ -45,6 +45,9 @@ pub enum Command {
     Report { mask_users: bool },
     /// Internal console helper: play the test tone on one endpoint from this process.
     AudioTone { endpoint_id: String, duration_ms: u32 },
+    /// Remote-kind setup (from Pulsar Split, merge step 6): `remote-setup install |
+    /// reconcile | uninstall | check-coexistence [...]` (`seat_setup::cli`).
+    RemoteSetup(seat_setup::cli::SetupCommand),
     Help,
 }
 
@@ -141,12 +144,19 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             known(&["--no-mask"])?;
             Command::Report { mask_users: !flag("--no-mask") }
         }
+        "remote-setup" => {
+            let args: Vec<String> = rest.iter().map(|a| a.to_string()).collect();
+            match seat_setup::cli::parse(&args)? {
+                Some(cmd) => Command::RemoteSetup(cmd),
+                None => return Err("remote-setup install | reconcile | uninstall | check-coexistence bekler".into()),
+            }
+        }
         "help" | "--help" | "-h" | "/?" => Command::Help,
         other => return Err(format!("bilinmeyen komut: {other}")),
     })
 }
 
-pub const USAGE: &str = "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask]>";
+pub const USAGE: &str = "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>";
 
 /// Short Turkish text for a service error code (CLI output).
 pub fn error_text(code: seat_proto::ErrorCode) -> &'static str {
@@ -293,6 +303,14 @@ mod tests {
         assert_eq!(full_pipe_name(r"\\.\pipe\X"), r"\\.\pipe\X");
         let Command::Console { pipe, .. } = parse(&a(&["--console", "--pipe", "Dev"])).unwrap() else { panic!() };
         assert_eq!(pipe.as_deref(), Some(r"\\.\pipe\Dev"));
+    }
+
+    #[test]
+    fn remote_setup_is_parsed_by_seat_setup() {
+        assert!(matches!(parse(&a(&["remote-setup", "check-coexistence"])).unwrap(), Command::RemoteSetup(_)));
+        assert!(matches!(parse(&a(&["remote-setup", "uninstall", "--msi"])).unwrap(), Command::RemoteSetup(_)));
+        assert!(parse(&a(&["remote-setup"])).is_err());
+        assert!(parse(&a(&["remote-setup", "frobnicate"])).is_err());
     }
 
     #[test]

@@ -1,13 +1,13 @@
 # seat-setup
 
 Library behind the service sub-commands of spec 90 §9.1 (the integrator wires them into
-`pulsar-split-service`; `seat_setup::cli::parse` + `cli::run` take the raw argv):
+`pulsar-seat-service remote-setup` (merge step 6; was `pulsar-split-service`); `seat_setup::cli::parse` + `cli::run` take the raw argv):
 
 ```text
-pulsar-split-service install   [--drivers a,b|none] [--consent a,b] [--register-service] [--allow-downgrade] [--msi]
-pulsar-split-service reconcile [same options]
-pulsar-split-service uninstall [--remove-user-data | REMOVEUSERDATA=1] [--unregister-service] [--msi]
-pulsar-split-service check-coexistence --json
+pulsar-seat-service remote-setup install   [--drivers a,b|none] [--consent a,b] [--register-service] [--allow-downgrade] [--msi]
+pulsar-seat-service remote-setup reconcile [same options]
+pulsar-seat-service remote-setup uninstall [--remove-user-data | REMOVEUSERDATA=1] [--unregister-service] [--msi]
+pulsar-seat-service remote-setup check-coexistence --json
 ```
 
 Exit codes 0 / 1 failure / 2 partial / 3010 reboot required; `--msi` maps everything but

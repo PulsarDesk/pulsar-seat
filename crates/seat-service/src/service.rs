@@ -65,6 +65,18 @@ pub struct Deps {
     pub data_dir: PathBuf,
     /// `--console` dev mode (memory secrets, current user on the pipe).
     pub console_mode: bool,
+    /// The remote seat worker (merge step 6); `None` = remote seats are refused with
+    /// `unsupported` / `remote_worker_unavailable`.
+    pub remote: Option<RemoteDeps>,
+}
+
+/// Builds the remote seat worker once the service's document view and secret store exist.
+pub type RemoteWorkerFactory = Box<dyn FnOnce(crate::remote::DocStore) -> Box<dyn crate::remote::RemoteWorker> + Send>;
+
+pub struct RemoteDeps {
+    pub worker: RemoteWorkerFactory,
+    /// Engine boot / stop hooks (Windows: the real engine).
+    pub host: Option<Arc<dyn crate::remote::RemoteHost>>,
 }
 
 pub(crate) struct State {
@@ -109,11 +121,13 @@ pub(crate) struct State {
     pub app_launches: BTreeMap<u32, std::collections::VecDeque<u64>>,
     /// Credential provider registration and one-time grants (`crate::credprov`).
     pub credprov: crate::credprov::CredprovState,
+    /// Remote seats' runtimes from the remote seat worker (`crate::remote::glue`).
+    pub remote_rt: BTreeMap<SeatNumber, SeatRuntime>,
 }
 
 pub struct Service {
     pub(crate) store: Box<dyn ConfigStore>,
-    pub(crate) secrets: Box<dyn SecretStore>,
+    pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) run_store: RunStore,
     pub(crate) platform: Arc<dyn Platform>,
     pub(crate) factory: Arc<dyn BackendFactory>,
@@ -129,7 +143,11 @@ pub struct Service {
     pub(crate) host_grace_ms: std::sync::atomic::AtomicU64,
     /// Cache of "a password is stored" per seat, so `get_config` never decrypts secrets
     /// (spec 00 §5.5.1). Filled by the first `has` and kept up to date by `set`.
-    pub(crate) password_known: Mutex<BTreeMap<SeatNumber, bool>>,
+    pub(crate) password_known: crate::remote::PasswordCache,
+    /// The remote seat worker (`crate::remote::glue`).
+    pub(crate) remote: Option<crate::remote::glue::RemoteSlot>,
+    /// Longest wait for remote seats to stop (tests set 0).
+    pub(crate) remote_stop_wait_ms: std::sync::atomic::AtomicU64,
     weak: Weak<Service>,
     /// Update check / download / install (spec 90 §11 item 10, [`crate::update`]).
     pub(crate) updater: crate::update::Updater,
@@ -169,10 +187,17 @@ impl Service {
         let now = d.clock.now_ms();
         let seats = config.seats.iter().map(|s| (s.number, Slot::new(s.number))).collect();
         let product = if config.settings.enabled { ProductState::Enabled { started: false } } else { ProductState::Disabled };
+        let secrets: Arc<dyn SecretStore> = Arc::from(d.secrets);
+        let password_known = crate::remote::PasswordCache::default();
+        let remote = d.remote.map(|r| {
+            let doc = crate::remote::SharedDoc::default();
+            let store = crate::remote::DocStore::new(doc.clone(), secrets.clone(), password_known.clone());
+            crate::remote::glue::RemoteSlot::new((r.worker)(store), doc, r.host)
+        });
         Arc::new_cyclic(|weak| Service {
             events: EventHub::new(d.clock.clone()),
             store: d.store,
-            secrets: d.secrets,
+            secrets,
             run_store: d.run_store,
             platform: d.platform,
             factory: d.factory,
@@ -208,9 +233,12 @@ impl Service {
                 listener: Default::default(),
                 app_launches: BTreeMap::new(),
                 credprov: Default::default(),
+                remote_rt: BTreeMap::new(),
             }),
 
-            password_known: Mutex::new(BTreeMap::new()),
+            password_known,
+            remote,
+            remote_stop_wait_ms: std::sync::atomic::AtomicU64::new(crate::remote::glue::REMOTE_STOP_WAIT_MS),
             wizard_jobs: Mutex::new(WizardQueue::default()),
             wizard_op: Mutex::new(()),
             backends: Mutex::new(backends),
@@ -366,6 +394,11 @@ impl Service {
                 Err(e) => log::error_id(eventid::BACKEND_FAILED, &format!("prepare_host: {e}")),
             }
             self.apply_ownership();
+        }
+        // Remote seats: the engine prepares the host (coexistence, termwrap, RDS, sweeps)
+        // before any remote seat starts (contracts §9.4).
+        if enabled {
+            self.remote_boot();
         }
         let autostart = enabled && decision.safe_mode.is_none();
         if autostart {
@@ -969,6 +1002,7 @@ impl Service {
             self.reconfigure_hosts();
         }
         self.watchdog(now);
+        self.remote_tick();
         self.platform.reap_exited();
         self.enforce_deny_logoffs(now);
         self.update_keep_awake();
@@ -1135,6 +1169,8 @@ impl Service {
             self.stop_seat_now(seat, true);
             progress(i + 1, total);
         }
+        // Remote seats: stop, wait (bounded), final sweep.
+        self.remote_shutdown();
         // Release the keep-awake power request (is_stopping is set).
         self.update_keep_awake();
         let mut st = self.lock();
@@ -1151,6 +1187,8 @@ impl Service {
         self.refresh_inventory();
         self.apply_ownership();
         self.reconfigure_hosts();
+        // Remote seats stopped at suspend start again (Pulsar Split, spec 20 §7).
+        self.remote_resume();
     }
 
     /// Tell every running host to re-read its assignment.
@@ -1165,8 +1203,9 @@ impl Service {
         st.config
             .seats
             .iter()
-            .filter_map(|c| {
-                st.seats.get(&c.number).map(|s| seat_core::state::SeatRuntime { kind: c.kind, ..s.rt.clone() })
+            .filter_map(|c| match (c.kind, st.remote_rt.get(&c.number)) {
+                (seat_core::config::SeatKind::Remote, Some(r)) => Some(r.clone()),
+                _ => st.seats.get(&c.number).map(|s| seat_core::state::SeatRuntime { kind: c.kind, ..s.rt.clone() }),
             })
             .collect()
     }

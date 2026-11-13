@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Shim health pipe `\\.\pipe\PulsarSplit.ShimHealth` (contracts §4.4, OQ 27).
+//! Shim health pipe `\\.\pipe\PulsarSplit.ShimHealth` (contracts §4.4, OQ 27), served by
+//! `pulsar-seat-service` since merge step 6 (name kept: the `shim/` workspace writes to it).
 //!
 //! The isolation module in each hooked process writes one frame (u32 LE length + JSON
 //! `ShimHealth`, ≤ 4 KiB) and closes. DACL: SYSTEM full, Authenticated Users only
@@ -10,9 +11,9 @@
 //! The engine keeps at most `MAX_HEALTH` entries. Health data is informational only (any
 //! local user can write a frame).
 
-use crate::engine::Engine;
-use crate::pipe::Shutdown;
-use crate::security::{SecurityDescriptor, wide};
+use crate::remote::engine::Engine;
+
+use crate::win::security::{SecurityDescriptor, wide};
 use std::io::{self, Read};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::sync::Arc;
@@ -34,6 +35,26 @@ pub const READ_DEADLINE: Duration = Duration::from_secs(2);
 /// Re-cancel period after the deadline (a cancel between two reads hits nothing).
 const RECANCEL: Duration = Duration::from_millis(200);
 
+/// Stops [`HealthServer::run`]: sets the flag, then releases a blocking `ConnectNamedPipe`
+/// by connecting once.
+pub struct Shutdown {
+    name: String,
+    flag: Arc<AtomicBool>,
+}
+
+impl Shutdown {
+    pub fn trigger(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        // Retry briefly: between two instances there may be no listening instance.
+        for _ in 0..20 {
+            if std::fs::OpenOptions::new().write(true).open(&self.name).is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
 struct OwnedPipe(HANDLE);
 unsafe impl Send for OwnedPipe {}
 
@@ -48,7 +69,7 @@ impl HealthServer {
     }
 
     pub fn shutdown_handle(&self) -> Shutdown {
-        Shutdown::new(seat_shim_core::HEALTH_PIPE, self.flag.clone())
+        Shutdown { name: seat_shim_core::HEALTH_PIPE.to_string(), flag: self.flag.clone() }
     }
 
     fn instance(&self, first: bool) -> io::Result<HANDLE> {

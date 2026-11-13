@@ -9,8 +9,8 @@
 //! - [`ports`]: stream-server port blocks; only remote seats reserve ports.
 //! - [`streamconf`]: the per-seat stream-server config file.
 //! - [`watchdog`]: stream-server restart policy.
-//! - [`store`]: Split's record store for its controller (transitional until step 6, when the
-//!   remote seat worker reads the config document instead).
+//! - [`store`]: Split's record store trait for its controller; the service implements it
+//!   over the config document (`seat-service` `remote::DocStore`, merge step 6).
 
 pub mod model;
 pub mod ports;

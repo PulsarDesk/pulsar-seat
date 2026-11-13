@@ -2,6 +2,10 @@
 //! Process runtime shared by SCM mode and `--console` dev mode: data folders with ACLs,
 //! logger, stores, platform, backends, the [`Service`], the control pipe, and the
 //! boot / tick threads. Adapted from pulsar-split (`split-service::service`).
+//!
+//! Remote seats (merge step 6): the remote seat worker (`crate::remote::win::build`) is
+//! part of the [`Service`]; this runtime also drives its engine: a 1 s engine tick, the
+//! 4 ms pad pump, the shim health pipe and session-change forwarding.
 
 use crate::runstate::RunStore;
 use crate::service::{Deps, Service, TICK_MS, ThreadSpawner};
@@ -104,6 +108,10 @@ pub fn ensure_data_dirs(root: &Path, acl: bool) -> std::io::Result<()> {
 
 pub struct Running {
     pub service: Arc<Service>,
+    /// The remote seat engine (`None` when its packages could not be wired).
+    engine: Option<crate::remote::engine::Engine>,
+    health: Mutex<Option<crate::remote::win::health::HealthServer>>,
+    health_shutdown: Option<crate::remote::win::health::Shutdown>,
     server: PipeServer,
     first: Mutex<Option<PipeIo>>,
     shutdown: Shutdown,
@@ -128,6 +136,18 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
     } else {
         Box::new(LsaSecretStore)
     };
+    // Remote seats' Pulsar secrets: LSA (stateless, a second handle is the same store); in
+    // console mode a memory store of their own.
+    let pulsar_secrets: Arc<dyn SecretStore> =
+        if opts.console { Arc::new(MemorySecretStore::default()) } else { Arc::new(LsaSecretStore) };
+    let remote_global = {
+        use seat_core::store::ConfigStore;
+        store.load().map(|c| c.settings.remote).unwrap_or_default()
+    };
+    let install_dir =
+        std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("."));
+    let (remote, engine) =
+        crate::remote::win::build(&opts.data_dir, &install_dir, &remote_global, pulsar_secrets, opts.console);
     let platform = Arc::new(WinPlatform::new(opts.data_dir.clone(), logs));
     let trusted_children = platform.clone();
     let platform_for_hosts = platform.clone();
@@ -141,6 +161,7 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
         spawner: Arc::new(ThreadSpawner),
         data_dir: opts.data_dir.clone(),
         console_mode: opts.console,
+        remote: Some(remote),
     });
     service.updater.set_net(Arc::new(crate::win::update::WinUpdateNet { console: opts.console }));
     let mut sddl = seat_proto::PIPE_SDDL.to_string();
@@ -181,8 +202,23 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
         .with_trusted(Arc::new(move |pid| trusted_children.is_service_child(pid)));
 
     let first = server.claim().map_err(|e| format!("pipe {} already in use or not creatable: {e}", opts.pipe_name))?;
+    let health = if engine.is_some() {
+        match crate::remote::win::health::HealthServer::new() {
+            Ok(h) => Some(h),
+            Err(e) => {
+                log::warn(&format!("shim health pipe not available: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let health_shutdown = health.as_ref().map(crate::remote::win::health::HealthServer::shutdown_handle);
     Ok(Running {
         service,
+        engine,
+        health: Mutex::new(health),
+        health_shutdown,
         shutdown: server.shutdown_handle(),
         server,
         first: Mutex::new(Some(first)),
@@ -196,13 +232,60 @@ impl Running {
     pub fn start_background(&self) {
         let s = self.service.clone();
         std::thread::spawn(move || s.boot());
-        let (s, stop) = (self.service.clone(), self.stop.clone());
+        let (s, stop, engine) = (self.service.clone(), self.stop.clone(), self.engine.clone());
         std::thread::spawn(move || {
+            let mut last_engine_tick = std::time::Instant::now();
             while !stop.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(TICK_MS));
+                // The remote engine keeps Pulsar Split's 1 s tick (watchdogs, stream servers).
+                if let Some(e) = &engine
+                    && last_engine_tick.elapsed() >= Duration::from_secs(1)
+                {
+                    last_engine_tick = std::time::Instant::now();
+                    e.tick(crate::remote::win::wiring::now_ms());
+                }
                 s.tick();
             }
         });
+        self.start_pad_pump();
+        self.start_health();
+    }
+
+    /// Remote seats' pad input pump: every 4 ms (HYPOTHESIS from Pulsar Split: enough for
+    /// controller input).
+    fn start_pad_pump(&self) {
+        let (Some(e), stop) = (self.engine.clone(), self.stop.clone()) else { return };
+        if !e.has_pads() {
+            return;
+        }
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                e.pump_pads();
+                std::thread::sleep(Duration::from_millis(4));
+            }
+        });
+    }
+
+    /// The shim health pipe (informational, remote seats' per-process isolation).
+    fn start_health(&self) {
+        let Some(e) = self.engine.clone() else { return };
+        let Some(h) = self.health.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        std::thread::spawn(move || {
+            if let Err(err) = h.run(e) {
+                log::warn(&format!("shim health pipe stopped: {err}"));
+            }
+        });
+    }
+
+    /// Session change for both kinds: the local seats' handling, then the remote engine
+    /// (raw `WTS_*` reason, Pulsar Split's `SessionChange::from_raw`).
+    pub fn on_session_change(&self, change: Option<crate::seats::SessionChange>, raw_reason: u32, session_id: u32) {
+        if let Some(c) = change {
+            self.service.on_session_change(c, session_id);
+        }
+        if let Some(e) = &self.engine {
+            e.on_session_change(split_session::manager::SessionChange::from_raw(raw_reason, session_id));
+        }
     }
 
     /// Serve the control pipe on this thread until [`Self::stop`].
@@ -224,6 +307,9 @@ impl Running {
     pub fn stop_with(&self, progress: &dyn Fn(usize, usize)) {
         self.service.shutdown_with(progress);
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = &self.health_shutdown {
+            h.trigger();
+        }
         self.shutdown.trigger();
     }
 }

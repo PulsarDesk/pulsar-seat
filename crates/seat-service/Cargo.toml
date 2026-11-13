@@ -44,6 +44,16 @@ seat-rdp = { path = "../seat-rdp", default-features = false }
 # Release signature of SHA256SUMS.txt (minisign Ed25519). Verification only: the
 # `sign` feature (key generation, signing) stays in the maintainer tool.
 seat-release = { path = "../seat-release", default-features = false }
+# Remote seat worker (Pulsar Split's engine, merge step 6).
+uuid.workspace = true
+split-session.workspace = true
+split-termwrap.workspace = true
+split-display.workspace = true
+seat-audio.workspace = true
+seat-stream.workspace = true
+seat-pads.workspace = true
+seat-shim-core.workspace = true
+seat-setup.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-service.workspace = true
@@ -84,5 +94,12 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 seat-core = { workspace = true, features = ["mock"] }
+split-session = { workspace = true, features = ["fake"] }
+split-termwrap = { workspace = true, features = ["fake"] }
+split-display = { workspace = true, features = ["fake"] }
+seat-audio = { workspace = true, features = ["fake"] }
+seat-stream = { workspace = true, features = ["fake"] }
+seat-pads = { workspace = true, features = ["fake"] }
+seat-shim-core = { workspace = true, features = ["fake"] }
 seat-release = { path = "../seat-release" }
 tempfile = "3.27.0"

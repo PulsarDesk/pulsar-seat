@@ -4782,20 +4782,29 @@ name = "seat-service"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-audio",
  "seat-compat",
  "seat-core",
  "seat-display",
  "seat-input",
  "seat-media",
+ "seat-pads",
  "seat-proto",
  "seat-rdp",
  "seat-release",
  "seat-session",
+ "seat-setup",
+ "seat-shim-core",
+ "seat-stream",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "split-display",
+ "split-session",
+ "split-termwrap",
  "tempfile",
  "thiserror 2.0.21",
+ "uuid",
  "windows-service",
  "windows-sys 0.61.2",
  "winreg",
@@ -5371,30 +5380,6 @@ dependencies = [
  "sha1 0.10.7",
  "split-session",
  "x509-cert 0.2.5",
- "zeroize",
-]
-
-[[package]]
-name = "split-service"
-version = "0.1.0"
-dependencies = [
- "log",
- "seat-audio",
- "seat-core",
- "seat-pads",
- "seat-proto",
- "seat-setup",
- "seat-shim-core",
- "seat-stream",
- "serde",
- "serde_json",
- "split-display",
- "split-session",
- "split-termwrap",
- "uuid",
- "windows-service",
- "windows-sys 0.61.2",
- "winreg",
  "zeroize",
 ]
 

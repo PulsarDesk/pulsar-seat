@@ -38,13 +38,6 @@ fn err(code: ErrorCode, msg: impl Into<String>) -> ProtoError {
     ProtoError::new(code, msg)
 }
 
-/// Reason of every remote-kind answer until the remote seat worker exists (merge step 6).
-pub const REMOTE_WORKER_PENDING: &str = "remote_worker_pending";
-
-fn remote_pending(what: &str) -> ProtoError {
-    err(ErrorCode::NotImplemented, format!("{what}: remote seats are served from merge step 6")).with_reason(REMOTE_WORKER_PENDING)
-}
-
 fn store_err(e: seat_core::store::StoreError) -> ProtoError {
     log::error_id(crate::eventid::CONFIG_STORE_FAILED, &format!("store: {e}"));
     err(ErrorCode::Store, e.to_string())
@@ -206,12 +199,15 @@ impl Service {
                 }
                 let list = match seats {
                     Some(l) => {
-                        self.refuse_remote_starts(&l)?;
-                        l
+                        // Remote seats go to the remote seat worker (`session_unavailable`
+                        // without concurrent sessions); the local ones follow below.
+                        self.start_remote_seats(&l)?;
+                        let st = self.lock();
+                        l.into_iter().filter(|n| st.config.seat(*n).is_some_and(|s| s.is_local())).collect()
                     }
                     None => {
+                        self.start_remote_autostart();
                         let st = self.lock();
-                        // Remote seats are started by the remote seat worker (step 6).
                         st.config.seats.iter().filter(|s| s.autostart && s.is_local()).map(|s| s.number).collect()
                     }
                 };
@@ -221,6 +217,9 @@ impl Service {
                 Ok(ResponseBody::Ack)
             }
             B::StopSeat { seat } => {
+                if self.lock().config.seat(seat).is_some_and(|s| s.is_remote()) {
+                    return self.stop_remote_seat(seat);
+                }
                 if !Service::managed(&self.lock(), seat) {
                     return Err(err(ErrorCode::Unsupported, "seat 1 is the console").with_reason("console_seat"));
                 }
@@ -501,36 +500,6 @@ impl Service {
             .with_reason(need.as_str())),
             _ => Ok(()),
         }
-    }
-
-    /// Explicit starts of remote seats: `session_unavailable` without concurrent sessions,
-    /// else `not_implemented` until the remote seat worker exists (merge step 6).
-    fn refuse_remote_starts(&self, seats: &[SeatNumber]) -> Result<(), ProtoError> {
-        let st = self.lock();
-        let Some(seat) = seats.iter().copied().find(|n| st.config.seat(*n).is_some_and(|s| s.is_remote())) else {
-            return Ok(());
-        };
-        if !st.config.settings.backends.session.hosts_remote_seats() {
-            return Err(err(ErrorCode::SessionUnavailable, format!("seat {seat}: remote seats need concurrent sessions"))
-                .with_reason("session_unavailable"));
-        }
-        Err(remote_pending(&format!("start of remote seat {seat}")))
-    }
-
-    /// Protocol 3 requests from Pulsar Split. The seat-scoped ones check the seat (the kind
-    /// was checked before); every one answers `not_implemented` until merge step 6.
-    fn remote_kind_request(&self, body: &RequestBody) -> R {
-        let seat = match body {
-            RequestBody::TestSeatCredentials { seat } | RequestBody::EnableUnlockAccount { seat, .. } => Some(*seat),
-            other => other.seat_kind().map(|(s, _)| s),
-        };
-        if let Some(seat) = seat
-            && self.lock().config.seat(seat).is_none()
-        {
-            return Err(err(ErrorCode::NotFound, format!("seat {seat} is not configured")));
-        }
-        let name = serde_json::to_value(body).ok().and_then(|v| v["type"].as_str().map(str::to_owned)).unwrap_or_default();
-        Err(remote_pending(&name))
     }
 
     pub fn status(&self) -> ServiceStatus {

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Setup sub-commands (`install`, `reconcile`, `uninstall`, `check-coexistence`, spec 90
-//! §9.1): `seat_setup` does the work; this module registers the package restore hooks
-//! (contracts §8.1) and the config migration hook.
+//! Remote-kind setup sub-commands (`pulsar-seat-service remote-setup install | reconcile |
+//! uninstall | check-coexistence`, spec 90 §9.1): `seat_setup` does the work; this module
+//! registers the package restore hooks (contracts §8.1). There is no config hook any more:
+//! remote seats live in the Seat config document, migrated by `Config::from_json`.
 //!
 //! Hooks: `session` (RDS rows), `termwrap` (ServiceDll + path-B rows; restarts TermService,
 //! so it runs last), `shim` (AppHelp database, module copies, DXVK files), `stream`
@@ -9,7 +10,7 @@
 //! (Virtual-Display-Driver `vdd_settings.xml`: the journaled original, which also holds
 //! the display count, is written back and the driver reloaded).
 //!
-//! Reconcile hooks: `config` (schema), `display` (gives back a VDD settings change left
+//! Reconcile hooks: `display` (gives back a VDD settings change left
 //! by a service that died with seats attached; setup runs with the service stopped).
 
 use seat_setup::cli::SetupCommand;
@@ -63,8 +64,8 @@ impl RestoreHook for ShimHook {
         "shim"
     }
     fn restore_all(&self) -> Result<(), SetupError> {
-        use crate::engine::IsolationPort;
-        crate::wiring::WinIsolation::new(&self.install_dir).restore_all().map_err(|e| other(e.message))
+        use crate::remote::engine::IsolationPort;
+        crate::remote::win::wiring::WinIsolation::new(&self.install_dir).restore_all().map_err(|e| other(e.message))
     }
 }
 
@@ -81,7 +82,7 @@ impl RestoreHook for StreamHook {
         let j = seat_stream::journal::JsonlJournal::open(
             fs,
             self.data_root.join("journal").join("stream.jsonl"),
-            crate::wiring::SysClock,
+            crate::remote::win::wiring::SysClock,
         )
         .map_err(other)?;
         seat_stream::firewall::restore_all(&seat_stream::win::ComFirewall, &j).map(|_| ()).map_err(other)
@@ -97,7 +98,7 @@ impl RestoreHook for PadsHook {
         "pads"
     }
     fn restore_all(&self) -> Result<(), SetupError> {
-        crate::wiring::bluetooth(&self.data_root).restore_all().map(|_| ()).map_err(other)
+        crate::remote::win::wiring::bluetooth(&self.data_root).restore_all().map(|_| ()).map_err(other)
     }
 }
 
@@ -130,21 +131,8 @@ impl<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> Reconcile
 fn display_hook(data_root: PathBuf) -> DisplayHook<impl Fn() -> Result<(), split_display::DisplayError> + Send + Sync> {
     DisplayHook {
         restore: move || {
-            crate::wiring::vdd_backend(&data_root, std::sync::Arc::new(split_display::SystemClock::default())).restore_all()
+            crate::remote::win::wiring::vdd_backend(&data_root, std::sync::Arc::new(split_display::SystemClock::default())).restore_all()
         },
-    }
-}
-
-/// `reconcile`: opening the registry store writes the current schema version (v2 fields
-/// read as defaults when missing, nothing else to migrate).
-struct ConfigHook;
-
-impl ReconcileHook for ConfigHook {
-    fn name(&self) -> &str {
-        "config"
-    }
-    fn reconcile(&self) -> Result<(), SetupError> {
-        crate::registry_store::RegistryStore::open_machine().map(|_| ()).map_err(other)
     }
 }
 
@@ -160,7 +148,7 @@ pub fn run(cmd: SetupCommand) -> i32 {
         Box::new(display_hook(data_root.clone())),
         Box::new(TermwrapHook { data_root: data_root.clone() }),
     ];
-    let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(ConfigHook), Box::new(display_hook(data_root))];
+    let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(display_hook(data_root))];
     let ctx = seat_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);
     seat_setup::cli::run(cmd, ctx)
 }

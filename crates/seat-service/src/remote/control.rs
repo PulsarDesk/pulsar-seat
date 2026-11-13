@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Request handling for the control pipe, independent of the transport. Moved here from
-//! `split-core` at merge step 4 (it speaks Split's legacy v2 enums,
-//! `seat_proto::remote::legacy`, and `seat-core` must not depend on `seat-proto`); it
-//! becomes the remote seat worker at step 6. The service wires
-//! a [`Controller`] to a real [`ConfigStore`] and [`Platform`]; tests use fakes.
+//! The remote seat worker's request handling (Pulsar Split's controller). Moved from
+//! `split-core` at merge step 4 and from `split-service` into `seat-service` at step 6. It
+//! still speaks Split's v2 enums (`seat_proto::remote::legacy`); the service maps protocol
+//! 3 requests onto them (`crate::remote::to_legacy`). The service wires a [`Controller`] to
+//! `crate::remote::DocStore` (the Seat config document) and the Windows [`Platform`]; tests
+//! use [`tests::FakePlatform`] and `seat_core::remote::store::MemoryStore`.
 //!
 //! Since protocol v2 seat start and stop are asynchronous (contracts §9.4): the platform
 //! starts a per-seat worker and returns at once; progress comes back as [`SeatEvent`]s that
@@ -311,6 +312,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         &mut self.platform
     }
 
+    // Split's own pipe is gone (merge step 6); the tests still drive the controller this way.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle(&mut self, req: Request) -> Response {
         if req.version != PROTOCOL_VERSION {
             let e = ProtoError::new(
@@ -521,16 +524,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                     return Err(ProtoError::new(ErrorCode::BadRequest, "confirm must be true").with_field("confirm"));
                 }
                 let seat = self.seat(&name)?;
-                if seat.user_name.is_empty() {
-                    return Err(ProtoError::new(ErrorCode::MissingCredentials, "seat has no user").with_field("user_name"));
-                }
-                if !self.platform.user_facts(&seat.user_name).exists {
-                    return Err(ProtoError::new(ErrorCode::InvalidUser, "user does not exist").with_field("user_name"));
-                }
-                if self.platform.passive() {
-                    return Err(passive_err());
-                }
-                self.platform.enable_unlock_account(&seat.user_name, enable, unlock).map(|_| ResponseBody::Ack)
+                self.enable_unlock_user(&seat.user_name, enable, unlock).map(|_| ResponseBody::Ack)
             }
         }
     }
@@ -685,16 +679,23 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         if seat.user_name.is_empty() || !self.store.has_password(&seat.name) {
             return Err(ProtoError::new(ErrorCode::MissingCredentials, "seat needs a user and a password").with_field("user_name"));
         }
-        let facts = self.platform.user_facts(&seat.user_name);
+        let password = self.store.password(&seat.name).map_err(store_err)?;
+        self.test_user_credentials(&seat.user_name, password)
+    }
+
+    /// The logon test for any user (a local seat's user, merge step 6): same checks and
+    /// answer as `test_seat_credentials`, with the password the caller read.
+    pub fn test_user_credentials(&mut self, user: &str, password: Option<Secret>) -> Result<CredentialTest, ProtoError> {
+        if user.is_empty() {
+            return Err(ProtoError::new(ErrorCode::MissingCredentials, "seat needs a user and a password").with_field("user_name"));
+        }
+        let facts = self.platform.user_facts(user);
         if !facts.exists {
             return Err(ProtoError::new(ErrorCode::InvalidUser, "user does not exist").with_field("user_name"));
         }
-        let password = self
-            .store
-            .password(&seat.name)
-            .map_err(store_err)?
-            .ok_or_else(|| ProtoError::new(ErrorCode::MissingCredentials, "no stored password").with_field("password"))?;
-        let outcome = self.platform.test_logon(&seat.user_name, &password)?;
+        let password =
+            password.ok_or_else(|| ProtoError::new(ErrorCode::MissingCredentials, "no stored password").with_field("password"))?;
+        let outcome = self.platform.test_logon(user, &password)?;
         drop(password);
         let mut t = CredentialTest {
             ok: outcome.is_ok(),
@@ -708,6 +709,20 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
             t.message = Some(self.platform.win32_message(code));
         }
         Ok(t)
+    }
+
+    /// Enable and / or unlock `user` (the operator confirmed; any seat kind).
+    pub fn enable_unlock_user(&mut self, user: &str, enable: bool, unlock: bool) -> Result<(), ProtoError> {
+        if user.is_empty() {
+            return Err(ProtoError::new(ErrorCode::MissingCredentials, "seat has no user").with_field("user_name"));
+        }
+        if !self.platform.user_facts(user).exists {
+            return Err(ProtoError::new(ErrorCode::InvalidUser, "user does not exist").with_field("user_name"));
+        }
+        if self.platform.passive() {
+            return Err(passive_err());
+        }
+        self.platform.enable_unlock_account(user, enable, unlock)
     }
 
     fn set_password(&mut self, name: &str, password: &Secret) -> Result<(), ProtoError> {
@@ -846,6 +861,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
     }
 
     /// `true` when an event with `seq > after` exists (used by the waiting `poll_events`).
+    // Split's own pipe is gone (merge step 6); the tests still drive the controller this way.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn has_events_after(&self, after: u64) -> bool {
         self.next_seq - 1 > after
     }
@@ -985,6 +1002,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
     }
 
     /// Seats to start after resume: the enabled ones (`start_with_service`).
+    // Split's own pipe is gone (merge step 6); the tests still drive the controller this way.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resume_seat_names(&self) -> Vec<String> {
         self.autostart_seat_names()
     }
@@ -1010,25 +1029,25 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use seat_core::remote::store::MemoryStore;
     use seat_proto::remote::AutostartApp;
 
     #[derive(Default)]
-    struct FakePlatform {
-        started: Vec<String>,
-        passwords: Vec<Option<String>>,
-        stopped: Vec<String>,
-        removed: Vec<String>,
-        fail_start: bool,
-        console: Option<String>,
-        passive: bool,
-        reports: Vec<(String, SeatEvent)>,
-        pins: Vec<Option<u32>>,
-        listening: Vec<u16>,
-        unlocked: Vec<(String, bool, bool)>,
-        rebooted: bool,
+    pub(crate) struct FakePlatform {
+        pub(crate) started: Vec<String>,
+        pub(crate) passwords: Vec<Option<String>>,
+        pub(crate) stopped: Vec<String>,
+        pub(crate) removed: Vec<String>,
+        pub(crate) fail_start: bool,
+        pub(crate) console: Option<String>,
+        pub(crate) passive: bool,
+        pub(crate) reports: Vec<(String, SeatEvent)>,
+        pub(crate) pins: Vec<Option<u32>>,
+        pub(crate) listening: Vec<u16>,
+        pub(crate) unlocked: Vec<(String, bool, bool)>,
+        pub(crate) rebooted: bool,
     }
 
     impl Platform for FakePlatform {

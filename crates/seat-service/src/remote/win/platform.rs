@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Windows implementation of [`crate::control::Platform`].
+//! Windows implementation of [`crate::remote::control::Platform`] (from Pulsar Split).
 //!
-//! Local user enumeration, user checks, console user and the service start type live here;
-//! everything seat related is delegated to the [`Engine`] (`crate::engine`).
+//! Local user enumeration, user checks and the console user live here; everything seat
+//! related is delegated to the [`Engine`] (`crate::remote::engine`). The remote setting
+//! `start_with_windows` no longer changes the service start type: there is one service
+//! (Pulsar Seat's), installed as automatic.
 
-use crate::security::wide;
-use crate::engine::Engine;
-use crate::control::{Platform, SeatEvent};
+use crate::remote::control::{Platform, SeatEvent};
+use crate::remote::engine::Engine;
+use crate::win::security::wide;
 use seat_core::remote::streamconf::SeatFiles;
 use seat_core::remote::validate::UserFacts;
 use seat_proto::remote::{
@@ -22,15 +24,10 @@ use windows_sys::Win32::NetworkManagement::NetManagement::{
 use windows_sys::Win32::System::RemoteDesktop::{
     WTS_CURRENT_SERVER_HANDLE, WTSFreeMemory, WTSGetActiveConsoleSessionId, WTSQuerySessionInformationW, WTSUserName,
 };
-use windows_sys::Win32::System::Services::{
-    ChangeServiceConfigW, CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_AUTO_START,
-    SERVICE_CHANGE_CONFIG, SERVICE_DEMAND_START, SERVICE_NO_CHANGE,
-};
 
 const NERR_SUCCESS: u32 = 0;
 const ERROR_MORE_DATA: u32 = 234;
 const NERR_USER_NOT_FOUND: u32 = 2221;
-const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 
 pub struct WindowsPlatform {
     /// Phase 1 per-seat config folder (`config\<seat>.conf`); only cleaned up now, the
@@ -66,49 +63,6 @@ impl WindowsPlatform {
     fn engine(&self) -> Result<&Engine, ProtoError> {
         self.engine.as_ref().ok_or_else(no_engine)
     }
-
-    fn set_start_type(&self, automatic: bool) -> Result<(), ProtoError> {
-        let name = wide(crate::service::SERVICE_NAME);
-        // SAFETY: plain SCM calls; handles closed below.
-        unsafe {
-            let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);
-            if scm.is_null() {
-                return Err(ProtoError::new(ErrorCode::Internal, std::io::Error::last_os_error().to_string()));
-            }
-            let svc = OpenServiceW(scm, name.as_ptr(), SERVICE_CHANGE_CONFIG);
-            if svc.is_null() {
-                let e = std::io::Error::last_os_error();
-                CloseServiceHandle(scm);
-                if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST) {
-                    // Dev / console mode without an installed service: nothing to change.
-                    crate::log::info("service not installed; start type not changed");
-                    return Ok(());
-                }
-                return Err(ProtoError::new(ErrorCode::Internal, e.to_string()));
-            }
-            let start = if automatic { SERVICE_AUTO_START } else { SERVICE_DEMAND_START };
-            let ok = ChangeServiceConfigW(
-                svc,
-                SERVICE_NO_CHANGE,
-                start,
-                SERVICE_NO_CHANGE,
-                ptr::null(),
-                ptr::null(),
-                ptr::null_mut(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-            );
-            let err = std::io::Error::last_os_error();
-            CloseServiceHandle(svc);
-            CloseServiceHandle(scm);
-            if ok == 0 {
-                return Err(ProtoError::new(ErrorCode::Internal, err.to_string()));
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Platform for WindowsPlatform {
@@ -141,9 +95,6 @@ impl Platform for WindowsPlatform {
     }
 
     fn apply_global(&mut self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
-        if old.start_with_windows != new.start_with_windows {
-            self.set_start_type(new.start_with_windows)?;
-        }
         if let Some(e) = &self.engine {
             e.apply_isolation(old, new)?;
             e.set_pad_preference(new.pad_backend);
@@ -186,7 +137,7 @@ impl Platform for WindowsPlatform {
         match seat {
             None => {
                 let root = self.config_dir.parent().map(PathBuf::from).unwrap_or_else(|| self.config_dir.clone());
-                Ok(crate::log::tail_file(&root.join("logs").join("service.log"), n))
+                Ok(crate::remote::tail_file(&root.join("logs").join("service.log"), n))
             }
             Some(s) => Ok(self.engine()?.seat_log_tail(s, n)),
         }
@@ -296,7 +247,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn user_picture(&mut self, user: &str) -> Result<seat_proto::remote::UserPicture, ProtoError> {
-        Ok(crate::picture::read(user))
+        Ok(crate::remote::win::picture::read(user))
     }
 
     fn cleanup_audio_endpoints(&mut self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
@@ -430,7 +381,7 @@ fn reboot() -> std::io::Result<()> {
             AdjustTokenPrivileges(tok, 0, &tp, 0, ptr::null_mut(), ptr::null_mut());
         }
         CloseHandle(tok);
-        let msg = wide("Pulsar Split: işlem yamalama değişikliği için Windows yeniden başlatılıyor.");
+        let msg = wide("Pulsar Seat: işlem yamalama değişikliği için Windows yeniden başlatılıyor.");
         let rc = InitiateShutdownW(
             ptr::null(),
             msg.as_ptr(),

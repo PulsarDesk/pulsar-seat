@@ -7,7 +7,7 @@
 //! `display_backend` setting) picks them. Pads: ViGEmBus / usbip-win2 when installed, our
 //! own pad driver only reports itself (unsigned). Nothing here loads or installs a driver.
 
-use crate::engine::{CoexistOutcome, Deps, IsolationPort, StreamEnv, from_target};
+use crate::remote::engine::{CoexistOutcome, Deps, IsolationPort, StreamEnv, from_target};
 use seat_proto::remote::{ErrorCode, RemoteSettings, IsolationStatus, ProtoError};
 use seat_shim_core::install::{AppHelpInstaller, ModulePaths, ShimInstaller, ShimSystem, SystemRestoreApplier};
 use seat_shim_core::{RegValue, ShimError, ShimTarget};
@@ -110,7 +110,7 @@ impl WinIsolation {
 
     fn remember_dxvk(&self, sys: &dyn ShimSystem, game: &Path, enabled: bool) {
         let mut list = self.dxvk_games(sys);
-        crate::engine::dxvk_games_update(&mut list, &game.display().to_string(), enabled);
+        crate::remote::engine::dxvk_games_update(&mut list, &game.display().to_string(), enabled);
         if let Err(e) = sys.reg_write(seat_shim_core::REG_SHIM, DXVK_GAMES, &RegValue::MultiSz(list)) {
             log::warn!("dxvk game list not stored: {e}");
         }
@@ -233,8 +233,8 @@ impl IsolationPort for WinIsolation {
             .iter()
             .map(|g| {
                 let marker = Path::new(g).parent().map(|d| d.join(seat_shim_core::dxvk::GAME_MARKER));
-                let read = marker.and_then(|m| crate::engine::read_dxvk_marker(&m));
-                crate::engine::dxvk_game(g, read)
+                let read = marker.and_then(|m| crate::remote::engine::read_dxvk_marker(&m));
+                crate::remote::engine::dxvk_game(g, read)
             })
             .collect();
         Ok(seat_proto::remote::DxvkStatus { release, games })
@@ -252,12 +252,13 @@ impl IsolationPort for WinIsolation {
     }
 }
 
-/// Per-host random salt for pad MAC addresses (spec 60 §6.4), kept in HKLM.
+/// Per-host random salt for pad MAC addresses (spec 60 §6.4), kept in HKLM under
+/// `seat_core::consts::REGISTRY_ROOT` (`PadHostSalt`).
 fn pad_host_salt() -> [u8; 16] {
     use winreg::RegKey;
     use winreg::enums::{HKEY_LOCAL_MACHINE, RegType};
     let mut salt = [0u8; 16];
-    if let Ok((k, _)) = RegKey::predef(HKEY_LOCAL_MACHINE).create_subkey(crate::registry_store::ROOT_PATH) {
+    if let Ok((k, _)) = RegKey::predef(HKEY_LOCAL_MACHINE).create_subkey(seat_core::consts::REGISTRY_ROOT) {
         if let Ok(v) = k.get_raw_value("PadHostSalt")
             && v.bytes.len() == 16
         {
@@ -315,7 +316,7 @@ fn pads(data_root: &Path, global: &RemoteSettings) -> Arc<Mutex<seat_pads::PadMa
     ];
     let (pid, start) = seat_pads::win::process::current_process_identity();
     let cfg = PadManagerConfig {
-        preferred: global.pad_backend.map(crate::engine::to_backend_id),
+        preferred: global.pad_backend.map(crate::remote::engine::to_backend_id),
         creator_pid: pid,
         creator_start_time: start,
         ..Default::default()
@@ -374,14 +375,15 @@ pub fn vdd_backend(data_root: &Path, clock: Arc<split_display::SystemClock>) -> 
 }
 
 /// Every dependency on the real machine. `install_dir` = folder of the service exe
-/// (helper, stream-server manifest, shim payload). `registry` = the HKLM config store is in
-/// use; otherwise (dev file store) Pulsar secrets stay in memory and HKLM is not touched.
+/// (helper, stream-server manifest, shim payload). `pulsar_secrets` = the service's
+/// `SecretStore` (LSA, or memory in `--console` dev mode) behind the stream package's trait
+/// (`crate::remote::StorePulsarSecrets`).
 pub fn build(
     data_root: &Path,
     install_dir: &Path,
     global: &RemoteSettings,
     service_version: &str,
-    registry: bool,
+    pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore>,
 ) -> Result<Deps, String> {
     use split_display::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
     let helper = install_dir.join("pulsar-split-rdp-helper.exe");
@@ -431,18 +433,6 @@ pub fn build(
     // `pulsar-host` (docs/split/agents/pulsar-host-backend.md §1): `<install>\pulsar-host\pulsar-host.json`
     // + the exe next to it. Not shipped yet: seats on this backend fail with `backend_missing`.
     let host_dir = install_dir.join("pulsar-host");
-    // Never fatal: a missing secrets key must not take the engine (and Sunshine seats) down.
-    let pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore> = if registry {
-        match crate::registry_store::RegPulsarSecrets::open_machine() {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                crate::log::error(&format!("pulsar secrets key not available: {e}"));
-                Arc::new(crate::registry_store::UnavailablePulsarSecrets(e.to_string()))
-            }
-        }
-    } else {
-        Arc::new(crate::registry_store::MemPulsarSecrets::default())
-    };
     let pulsar = seat_stream::backend::PulsarHostBackend::new(seat_stream::backend::pulsar::PulsarEnv {
         fs: fs.clone(),
         launcher,

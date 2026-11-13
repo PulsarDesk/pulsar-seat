@@ -4,7 +4,8 @@
 //! - [`types`]: status / pairing / isolation / DXVK / event payloads (re-exported here).
 //! - The remote config model (`seat_core::remote`) is re-exported here too, so remote-kind
 //!   crates find every type of the old `split_proto` crate under `seat_proto::remote`.
-//! - [`legacy`]: Split's v2 request / response enums for `split-service`'s own pipe and
+//! - [`legacy`]: Split's v2 request / response enums for the remote seat worker inside
+//!   `seat-service` and
 //!   `apps/split-manager` (transitional, removed at steps 6 / 9).
 //! - [`map_legacy_event`]: Split's event ring entries as v3 events (architecture.md 10.2).
 

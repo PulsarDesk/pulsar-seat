@@ -224,8 +224,24 @@ fn session_change(r: SessionChangeReason) -> Option<SessionChange> {
 /// Notifications handled in arrival order on one worker thread (a Lock / Unlock or Logon /
 /// Logoff pair must not be applied in reverse).
 enum Notice {
-    Session(SessionChange, u32),
+    /// Seat's mapped change (if it handles that reason), the raw `WTS_*` reason (remote
+    /// engine) and the session id.
+    Session(Option<SessionChange>, u32, u32),
+    Suspend,
     Resume,
+}
+
+/// What a power event means (ported from Pulsar Split): `PBT_APMSUSPEND` stops the remote
+/// seats (local seats keep their sessions); `PBT_APMRESUMEAUTOMATIC` (always sent on
+/// resume, with or without a user) re-checks devices and starts the remote autostart seats
+/// again. `PBT_APMRESUMESUSPEND` follows it when a user is present and is ignored so seats
+/// do not start twice.
+fn power_notice(p: &PowerEventParam) -> Option<Notice> {
+    match p {
+        PowerEventParam::Suspend => Some(Notice::Suspend),
+        PowerEventParam::ResumeAutomatic => Some(Notice::Resume),
+        _ => None,
+    }
 }
 
 /// Status updates while stopping: wait hint per update and how often to send one.
@@ -247,15 +263,15 @@ fn run_service() -> Result<(), String> {
                 let _ = tx.send(());
                 ServiceControlHandlerResult::NoError
             }
-            ServiceControl::PowerEvent(PowerEventParam::ResumeAutomatic) => {
-                queue(Notice::Resume);
+            ServiceControl::PowerEvent(p) => {
+                if let Some(n) = power_notice(&p) {
+                    queue(n);
+                }
                 ServiceControlHandlerResult::NoError
             }
-            ServiceControl::PowerEvent(_) => ServiceControlHandlerResult::NoError,
             ServiceControl::SessionChange(p) => {
-                if let Some(kind) = session_change(p.reason) {
-                    queue(Notice::Session(kind, p.notification.session_id));
-                }
+                let raw = p.reason as u32;
+                queue(Notice::Session(session_change(p.reason), raw, p.notification.session_id));
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -268,7 +284,8 @@ fn run_service() -> Result<(), String> {
             let current = r2.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let Some(r) = current else { continue };
             match n {
-                Notice::Session(kind, id) => r.service.on_session_change(kind, id),
+                Notice::Session(kind, raw, id) => r.on_session_change(kind, raw, id),
+                Notice::Suspend => r.service.on_suspend(),
                 Notice::Resume => r.service.on_resume(),
             }
         }
@@ -347,4 +364,18 @@ pub fn scm_state() -> Option<String> {
     let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).ok()?;
     let svc = m.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS).ok()?;
     Some(format!("{:?}", svc.query_status().ok()?.current_state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Moved from split-service `service::tests::power_events_map_to_seat_actions`.
+    #[test]
+    fn power_events_map_to_seat_actions() {
+        assert!(matches!(power_notice(&PowerEventParam::Suspend), Some(Notice::Suspend)));
+        assert!(matches!(power_notice(&PowerEventParam::ResumeAutomatic), Some(Notice::Resume)));
+        assert!(power_notice(&PowerEventParam::ResumeSuspend).is_none(), "no double start");
+        assert!(power_notice(&PowerEventParam::PowerStatusChange).is_none());
+    }
 }

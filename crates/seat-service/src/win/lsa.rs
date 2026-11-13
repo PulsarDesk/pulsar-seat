@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! [`SecretStore`] on LSA private data (architecture §6, spec 00 §5.5.1): one local secret
-//! per seat, `L$PulsarSeat.Seat.NN`. Readable only by SYSTEM (and administrators with LSA
+//! per seat, `L$PulsarSeat.Seat.NN`, and one per remote seat slot,
+//! `L$PulsarSeat.Remote.<seat-id>.<slot>` (Pulsar identity, connect password, relay key). Readable only by SYSTEM (and administrators with LSA
 //! policy rights, by Windows design). The clear text never leaves this module except
 //! as a [`Secret`] that is wiped on drop. Untested on hardware: needs SYSTEM / elevation.
 
 use seat_core::consts::LSA_SEAT_SECRET_PREFIX;
-use seat_core::store::{SecretStore, StoreError};
+use seat_core::store::{RemoteSecretSlot, SecretStore, StoreError, check_secret_len, remote_secret_name};
 use seat_core::{SeatNumber, Secret};
 use std::ptr;
 use windows_sys::Win32::Foundation::{NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND};
@@ -129,24 +130,10 @@ pub fn set_named(secret: &str, value: Option<&Secret>) -> Result<(), StoreError>
 
 impl SecretStore for LsaSecretStore {
     fn set(&self, seat: SeatNumber, password: Option<&Secret>) -> Result<(), StoreError> {
-        let p = open(POLICY_CREATE_SECRET)?;
-        let mut name: Vec<u16> = secret_name(seat).encode_utf16().collect();
-        let key = ustr(&mut name)?;
-        let st = match password {
-            Some(pw) => {
-                let mut data: zeroize::Zeroizing<Vec<u16>> = zeroize::Zeroizing::new(pw.expose().encode_utf16().collect());
-                let val = ustr(&mut data)?;
-                // SAFETY: valid policy handle and strings that outlive the call.
-                unsafe { LsaStorePrivateData(p.0, &key, &val) }
-            }
-            // A null value deletes the secret.
-            // SAFETY: as above.
-            None => unsafe { LsaStorePrivateData(p.0, &key, ptr::null()) },
-        };
-        if st < 0 && !(password.is_none() && st == STATUS_OBJECT_NAME_NOT_FOUND) {
-            return Err(err("LsaStorePrivateData", st));
+        if let Some(p) = password {
+            check_secret_len(p)?;
         }
-        Ok(())
+        set_named(&secret_name(seat), password)
     }
 
     /// Presence only: the LSA buffer is wiped and freed without building a [`Secret`]
@@ -157,6 +144,19 @@ impl SecretStore for LsaSecretStore {
 
     fn get(&self, seat: SeatNumber) -> Result<Option<Secret>, StoreError> {
         with_secret(seat, |v| v.map(|s| Secret::new(String::from_utf16_lossy(s))))
+    }
+
+    /// One local secret per slot (`seat_core::store::remote_secret_name`); values are short
+    /// (checked against `MAX_SECRET_CHARS`; LSA limits in the `seat_core::store` module doc).
+    fn set_remote(&self, seat_id: &str, slot: RemoteSecretSlot, value: Option<&Secret>) -> Result<(), StoreError> {
+        if let Some(v) = value {
+            check_secret_len(v)?;
+        }
+        set_named(&remote_secret_name(seat_id, slot)?, value)
+    }
+
+    fn get_remote(&self, seat_id: &str, slot: RemoteSecretSlot) -> Result<Option<Secret>, StoreError> {
+        get_named(&remote_secret_name(seat_id, slot)?)
     }
 }
 

@@ -40,7 +40,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `crates/seat-input` | lib | input | `InputRouter` impls (raw input host, KMDF filter client), unit enumeration + keys, hot-plug, activity, hotkey; `raw` reader for the seat host |
 | `crates/seat-media` | lib | media | `AudioRouter` (RDP audio bridge), `DeviceGate`s (device security, session drive letters, camera consent, minifilter client), **`pnp::WinPnpTree`**, `bridge::AudioBridge` for the host |
 | `crates/seat-compat` | lib | compat | preflight + coexistence checks, CPU sets + job launcher, reversible tweaks + journal, reference-config importer, app seat API helpers |
-| `crates/seat-service` | bin `pulsar-seat-service` | service | SCM service, pipe server, controller / state machine, boot sequence, LSA secret store, events, logs, diagnostics, sub-commands |
+| `crates/seat-service` | bin `pulsar-seat-service` | service | SCM service, pipe server, controller / state machine, boot sequence, LSA secret store, events, logs, diagnostics, sub-commands; `src/remote/` = the remote seat worker (Split's controller + engine, §10.5) |
 | `crates/seat-host` | bins `pulsar-seat-host`, `pulsar-seat-agent` | host | per-seat host (RDP client + presenter + input + audio bridge) and per-session agent |
 | `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5, `adapter-static` | manager | all screens of spec 10 (Turkish), tray, wizard UI; `src-tauri` = pipe client |
 | `credprov/` | C++20 COM DLL (v145, SDK 10.0.28000), unsigned | credprov | credential provider + filter for `fast_user_switch` (auto-logon, switch link); registered only by the service — see [credprov/README.md](../../credprov/README.md) |
@@ -53,8 +53,8 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 
 | Path | Kind | What | Merged at |
 | --- | --- | --- | --- |
-| (removed) `crates/split-proto`, `crates/split-core` | lib | Split IPC v2 and model | step 4 (done 2026-11-14): `seat_proto::remote`, `seat_core::remote`, `seat_core::error`; Controller in `split-service/src/control.rs` (§10) |
-| `crates/split-service` | bin `pulsar-split-service` | Split service, `engine/` = future remote seat worker | step 6 into `seat-service` |
+| (removed) `crates/split-proto`, `crates/split-core` | lib | Split IPC v2 and model | step 4 (done 2026-11-14): `seat_proto::remote`, `seat_core::remote`, `seat_core::error` (§10) |
+| (removed) `crates/split-service` | bin `pulsar-split-service` | Split service | step 6 (done 2026-11-14): `seat-service/src/remote/` (§10.5); DPAPI + HKLM store + own pipe deleted |
 | `crates/split-session`, `crates/split-termwrap` | lib | Server + RDSH sessions, wrapper integration | step 7 into `seat-session` |
 | `crates/split-rdp-helper` | bin `pulsar-split-rdp-helper` | headless IronRDP client (same IronRDP crate versions as `seat-rdp`) | step 7: replaced by a `seat-rdp` headless mode |
 | `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8, one display trait |
@@ -926,6 +926,7 @@ monitor's same-container hub keeps a seat the monitor is not on.
 | --- | --- | --- |
 | Config document (`seat_core::config::Config`, `schema_version` 2 since 2026-11-14 (§10.1), `revision`) | `%ProgramData%\Pulsar Seat\config.json` | SYSTEM + Administrators full, Users read; atomic replace; migrations in `Config::from_json` |
 | Seat passwords | LSA private data `L$PulsarSeat.Seat.NN` | SYSTEM; write-only from the manager; never in files, logs, reports |
+| Remote seats' Pulsar secrets (identity, connect password, relay key) | LSA private data `L$PulsarSeat.Remote.<seat-id>.<slot>` (§10.3) | SYSTEM; only `pulsar-host`'s per-launch pipe gets them |
 | Run state (crash counter, last boot, `KnownSession`s, last user SID per seat, failing passwords) | `%ProgramData%\Pulsar Seat\run\` | SYSTEM + Administrators only |
 | Undo journal (every system change with its previous value, incl. "absent") | `%ProgramData%\Pulsar Seat\journal\changes.jsonl` | SYSTEM + Administrators only |
 | Logs | `…\logs\service.log`, `host-NN.log`, `agent-<session>.log` | size-capped; errors also to Event Log source `PulsarSeat` |
@@ -1055,7 +1056,7 @@ step 2-3 Split's locked registry entries were unioned in.
 
 Joint contract for the merge with Pulsar Split ([merge-plan.md](merge-plan.md), maintainer
 decisions §5). Step 4 put it into `seat-core` / `seat-proto`; the remote seat worker that
-serves it comes at step 6. Split's old contract stays in
+serves it is in `seat-service` since step 6 (§10.5). Split's old contract stays in
 [../split/agents/contracts.md](../split/agents/contracts.md) for the packages.
 
 ### 10.1 Config document (`seat_core::config`, `CONFIG_SCHEMA_VERSION` = 2)
@@ -1081,11 +1082,12 @@ GlobalSettings.remote: RemoteSettings        // Split's old GlobalSettings (hid_
   `split_proto::SeatConfig`): `name` = `SeatConfig.name`, `user_name` = the user of a
   `local` `account`, `start_with_service` = `autostart`; every other field is in
   `RemoteSeat`. `RemoteSeat::to_record` / `RemoteSeat::from_record` convert both ways (the
-  Split controller still works on records until step 6).
+  Split controller works on records through `crate::remote::DocStore`, §10.5).
 - Common fields (`cpu_sets`, `cpu_hard_limit`, `wallpaper`, `ip_binding`, `startup_apps`)
-  are stored for both kinds; the remote worker honours them from step 6 (until then they
-  are ignored for remote seats). `startup_apps` and `RemoteSeat.apps` overlap; step 6
-  decides which one stays.
+  are stored for both kinds; the remote worker ignores them for remote seats so far
+  (step 6 kept Split's behaviour). `startup_apps` and `RemoteSeat.apps` overlap: remote
+  seats use `RemoteSeat.apps` (Split's autostart), `startup_apps` stays local-only until
+  the manager merge (step 9) folds the two editors together.
 - Validation (`seat_core::validate`): exactly the kind's sub-struct is set
   (`seat_kind_mismatch`); seat 1 is always local (`console_seat_remote`); no device
   assignment names a remote seat (`device_on_remote_seat`); every remote seat passes Split's
@@ -1130,9 +1132,9 @@ requests (`relogon_seat`, `host_*`, `credprov_switch`, `agent_switch`) need `loc
 other kind the service answers **`wrong_seat_kind`**. A remote seat start without a session
 backend that has concurrent sessions (Server + RDSH, or the wrapper kind) fails with
 **`session_unavailable`**; U1 (`fast_user_switch`) / U3 (`desktops`) are local only.
-Until step 6 the service answers every new request (after the kind check) with
-`not_implemented`, reason `remote_worker_pending`, never starts remote seats and refuses
-`start_seats` on one with `not_implemented` (same reason) after the session check.
+Since step 6 the remote seat worker answers them (§10.5). A service without a worker
+(tests only; production always builds one) answers `unsupported`, reason
+`remote_worker_unavailable`.
 
 Errors: one `ErrorCode` (`seat_core::error`, re-exported by `seat_proto`) = Seat's codes,
 plus Split's (`invalid_name`, `duplicate_name`, `invalid_display_name`, `invalid_port`,
@@ -1151,31 +1153,53 @@ Events (topic mapping, `seat_proto::remote::map_legacy_event`):
 
 `poll_events` stays for simple clients.
 
-Transitional (removed at step 6 / 9): `seat_proto::remote::legacy` keeps Split's v2 request
-and response enums (now stamped with `PROTOCOL_VERSION` 3) for `split-service`'s own pipe
-and `apps/split-manager`; Split's `Controller` / `Platform` moved from `split-core` to
-`crates/split-service/src/control.rs` (it needs the request enums, and `seat-core` must not
-depend on `seat-proto`). Split's `ConfigStore` for records is `seat_core::remote::store`.
+Transitional (removed at step 9): `seat_proto::remote::legacy` keeps Split's v2 request and
+response enums (stamped with `PROTOCOL_VERSION` 3). Since step 6 no pipe serves them: the
+remote seat worker uses them internally (`crate::remote::to_legacy` / `from_legacy`) and
+`apps/split-manager` still compiles against them (it has no service to talk to until step
+9). Split's `Controller` / `Platform` live in `crates/seat-service/src/remote/control.rs`.
+Split's `ConfigStore` for records is `seat_core::remote::store` (the service implements it
+over the config document; `MemoryStore` / `FileStore` stay for tests).
 
-### 10.3 Secrets (`SecretStore`, implemented at step 5)
+### 10.3 Secrets (`SecretStore`, step 5, done 2026-11-14)
 
-One trait in `seat_core::store`, LSA private data for every secret (decision §5), no DPAPI:
+One trait in `seat_core::store`, LSA private data for every secret (decision §5). No DPAPI and
+no importer for old Pulsar Split installs (decision §5: no migration); Split's DPAPI code and
+its `HKLM\SOFTWARE\PulsarSplit\Secrets` store were deleted at step 6.
 
 ```rust
 pub trait SecretStore: Send + Sync {
     fn set(&self, seat: SeatNumber, password: Option<&Secret>) -> Result<(), StoreError>;
     fn has(&self, seat: SeatNumber) -> bool;
     fn get(&self, seat: SeatNumber) -> Result<Option<Secret>, StoreError>;
+    // Remote seats' Pulsar secrets, keyed by `RemoteSeat::id` (GUID, survives renumbering).
+    fn set_remote(&self, seat_id: &str, slot: RemoteSecretSlot, value: Option<&Secret>) -> Result<(), StoreError>;
+    fn get_remote(&self, seat_id: &str, slot: RemoteSecretSlot) -> Result<Option<Secret>, StoreError>;
 }
-// step 5 adds: enum SecretSlot { Password, ConnectPassword, Identity, RelayKey } and
-// slot-aware set / has / get for the remote seat's Pulsar secrets.
+pub enum RemoteSecretSlot { Identity, ConnectPassword, RelayKey }
 ```
 
-The per-seat password slot exists today (`L$PulsarSeat.Seat.NN`). Step 5 adds the remote
-slots (connect password, Pulsar identity, relay key) after checking LSA limits
-(HYPOTHESIS: size / count limits). One `Secret` type (`seat_core::Secret`: wiped on drop,
-`Debug` prints `Secret(***)`, `Secret::new` / `expose()`; the inner `String` is public for
-the Split code that used `Secret(..)` / `.0`).
+| Secret | LSA name | Size |
+| --- | --- | --- |
+| seat password (both kinds) | `L$PulsarSeat.Seat.NN` | <= 256 characters (`MAX_PASSWORD_CHARS`) |
+| Pulsar identity | `L$PulsarSeat.Remote.<seat-id>.identity` | 44 characters (32 random bytes, base64) |
+| connect password | `L$PulsarSeat.Remote.<seat-id>.connect_password` | <= 128 characters |
+| relay access key | `L$PulsarSeat.Remote.<seat-id>.relay_key` | issued by the relay; short (HYPOTHESIS: < 256 characters) |
+
+`remote_secret_name` lower-cases the id and accepts only 1-64 ASCII hex digits and `-`, so a
+name can never leave the `L$PulsarSeat.Remote.` prefix. Implementations: `LsaSecretStore`
+(`seat-service/src/win/lsa.rs`), `MemorySecretStore` (tests, `--console`; memory only). The
+stream package reaches the slots through `crate::remote::StorePulsarSecrets` (its own
+`PulsarSecretStore` trait).
+
+LSA limits (checked 2026-11-14 against Microsoft's `LsaStorePrivateData` and "Private Data
+Object" pages): a value is an `LSA_UNICODE_STRING`, so at most 65 534 bytes (32 767 UTF-16
+units); Microsoft says only that "a limited number" of private data objects exist per system
+(no figure; HYPOTHESIS from older documentation: a few thousand). Pulsar Seat uses at most
+one password per seat plus three slots per remote seat (16 seats: fewer than 64 objects) and
+every value is short, so no value needs the "encrypted file in the protected data dir, key in
+LSA" fallback. Every store refuses values over `MAX_SECRET_CHARS` (4096 UTF-16 units) instead;
+if a future secret is bigger, add that fallback then. Untested on hardware: LSA needs SYSTEM.
 
 ### 10.4 Sessions for remote seats (`SessionBackend`, step 7)
 
@@ -1187,3 +1211,76 @@ replaces `split-rdp-helper`. During the migration the startup sweep recognises b
 client-name prefixes (`PSEAT-NN`, `PSS...`). The `pulsar-host` pipe contract
 ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)) is
 unchanged; its `PulsarSplit\seat\<id>` name prefix stays until pulsar-desktop changes with it.
+
+### 10.5 One service: the remote seat worker (step 6, done 2026-11-14)
+
+`pulsar-seat-service` is the only service (SCM name `PulsarSeat`, pipe
+`\\.\pipe\PulsarSeat.Control`, data dir `%ProgramData%\Pulsar Seat`, ACLs unchanged).
+`crates/split-service` and `pulsar-split-service.exe` are gone. Pulsar Split's controller and
+engine are the remote seat worker in `crates/seat-service/src/remote/`:
+
+| Module | What |
+| --- | --- |
+| `remote/control.rs` | Split's `Controller` + `Platform` trait (v2 enums inside), tests with `FakePlatform` |
+| `remote/engine/` | Split's seat engine (session, display, audio, stream, pads, isolation), tests with the packages' fakes |
+| `remote/mod.rs` | `RemoteWorker` trait (implemented by every `Controller`), `RemoteHost` (engine boot / stop hooks), `DocStore`, `merge_worker_fields`, `StorePulsarSecrets`, `to_legacy` / `from_legacy`, `runtime_of`, log tail + redaction |
+| `remote/glue.rs` | the `Service` side: requests, starts / stops, boot / stop / power hooks, events |
+| `remote/win/` | Windows `Platform`, package wiring, shim health pipe, user pictures, `remote-setup` sub-commands |
+
+- **Requests.** Every protocol 3 remote request (`is_remote_kind_request`) goes, after the
+  access table and the `wrong_seat_kind` check, to the worker: the seat number becomes the
+  seat's name, `get_shim_status` becomes `get_isolation_status`, `get_log_tail`'s
+  `seat:<N>` becomes `seat:<name>` (not a remote seat: `invalid_value`, field `source`).
+  `test_seat_credentials` / `enable_unlock_account` on a **local** seat use the worker's
+  account code with the local seat's user and stored password.
+- **Starts and stops.** `start_seats` with a list hands its remote seats to the worker
+  (`session_unavailable` without concurrent sessions; the worker's first refusal, e.g.
+  `missing_credentials`, is the answer) and starts the local ones as before. `start_seats`
+  without a list and the boot autostart (`start_autostart_seats`) also start the remote
+  seats with `autostart` (product enabled, no safe mode, `start_mode` not `manual`, a session
+  backend with concurrent sessions). `stop_seat` on a remote seat goes to the worker.
+  Remote seat starts are asynchronous (Split v2): progress arrives as `seat_state` events.
+- **Config.** The worker reads the config document through `DocStore` (Split's record store:
+  remote seats only, `settings.remote` as Split's global settings, passwords from the
+  `SecretStore` by seat number). Creating, renaming and deleting remote seats is
+  `apply_config` only (the store refuses them). The worker writes back only what it owns:
+  `rdp_client_name`, `last_mode` and `settings.remote.multi_session`; the service merges
+  those (`merge_worker_fields`) and saves a new revision. `settings.remote.start_with_windows`
+  no longer changes the service start type (one service, always automatic).
+- **Status and events.** After every worker call the service reads the worker's status into
+  `State.remote_rt` (`runtime_of`: stopped = `off`, booting = `starting{phase}`, running =
+  `signed_in{user}`, failed = `error{reason, detail}` with Split's failure code mapped to a
+  `FailureReason` when the names match, else `internal`; a streaming seat carries
+  `degraded: ["streaming"]`). `get_status` shows these runtimes (admin only, decision §5).
+  Worker events map with `map_legacy_event` onto the event hub (`seat_state`, `notice`,
+  `stream`).
+- **Boot and stop.** Boot (product enabled): `RemoteHost::service_start` (Split's
+  coexistence check, termwrap boot check, RDS prepare, `PSS…` session sweep) before any
+  autostart. Ordered stop: local seats, then the worker stops every remote seat, waits up to
+  90 s until none is active, then `RemoteHost::service_stop` (final sweep).
+- **Power and sessions (ported from Split into Seat's SCM skeleton, `win/scm.rs`).**
+  `PBT_APMSUSPEND` stops the remote seats (`Service::on_suspend`; local seats keep their
+  sessions). `PBT_APMRESUMEAUTOMATIC` re-checks devices (local) and, once the old remote
+  seats finished stopping, starts the remote autostart seats again; `PBT_APMRESUMESUSPEND`
+  is ignored (no double start). Every `SERVICE_CONTROL_SESSIONCHANGE` goes to the local
+  seats (mapped reasons) and to the engine (raw reason, `SessionChange::from_raw`), in
+  arrival order on one worker thread.
+- **Runtime threads (`runtime.rs`).** Seat's 500 ms tick (which drains the worker's reports),
+  the engine's own 1 s tick, the 4 ms pad pump (when pads exist) and the shim health pipe.
+- **Pipes.** One control pipe (Seat's, ACL unchanged). The shim health pipe
+  `\\.\pipe\PulsarSplit.ShimHealth` is served by `pulsar-seat-service` (name kept: the
+  `shim/` workspace writes to it; DACL SYSTEM full, Authenticated Users write-only). The
+  `pulsar-host` per-seat pipe (`\\.\pipe\PulsarSplit\seat\<id>\pulsar-host`) is unchanged
+  ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)).
+- **Data dir.** The engine uses Seat's data dir: `seats\<seat-id>\` (seat-stream's own
+  DACL), `run\sessions.json` next to Seat's `run\state.json`, `journal\<package>.jsonl` next
+  to `journal\changes.jsonl` (both folders SYSTEM + Administrators only), `logs\service.log`
+  is the one service log. The pad MAC salt is `PadHostSalt` under `HKLM\SOFTWARE\Pulsar
+  Seat`. Package registry keys under `HKLM\SOFTWARE\PulsarSplit\{Shim,Termwrap,Runtime}`
+  are unchanged until their packages merge (steps 7-8).
+- **Setup.** Split's setup sub-commands are `pulsar-seat-service remote-setup install |
+  reconcile | uninstall | check-coexistence [...]` (`seat_setup::cli`, restore hooks for
+  session, shim, stream, pads, display, termwrap). Its old `config` reconcile hook is gone
+  (the config document migrates itself). The one MSI (step 10) calls them.
+- Untested on hardware: everything above that touches Windows (nothing of it ran on a real
+  machine; the remote kind never did).
