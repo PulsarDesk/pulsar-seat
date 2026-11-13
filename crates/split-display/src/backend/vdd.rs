@@ -422,8 +422,17 @@ impl<P: VddPipe, F: VddSettingsFile> VddBackend<P, F> {
         if let Some(prev) = original {
             let text = String::from_utf8(prev)
                 .map_err(|_| DisplayError::Protocol("journal: settings not UTF-8".into()))?;
-            let current = self.file.read().ok();
-            if current.as_deref() != Some(text.as_str()) {
+            let current = match self.file.read() {
+                // The settings folder itself is gone (driver removed, `VDDPATH` deleted):
+                // nothing is left to restore. Close the epoch below so the next run is a
+                // no-op instead of failing and appending another Intent each time.
+                Err(DisplayError::DriverNotInstalled(m)) => {
+                    log::warn!("vdd: settings folder gone, nothing to restore: {m}");
+                    None
+                }
+                r => Some(r.ok()),
+            };
+            if let Some(current) = current.filter(|c| c.as_deref() != Some(text.as_str())) {
                 inner.seq += 1;
                 let now = self.env.clock.now_ms();
                 let cur = current.as_deref().map(str::as_bytes);
@@ -1019,6 +1028,22 @@ mod tests {
         s.b.restore_all().unwrap();
         assert_eq!(s.file.content(), vdd_xml::SAMPLE);
         assert!(journal::plan_restore(&s.journal.lines().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn restore_with_settings_folder_gone_closes_the_epoch() {
+        let r = rig(1);
+        r.b.attach(&seat(A, 1, AdapterChoice::Pinned(Luid { low: 42, high: 0 }))).unwrap();
+        r.pipe.set_absent(true);
+        r.file.set_folder_absent(true);
+        let s = rig_on(1, r.pipe.clone(), r.file.clone(), r.mons.clone(), r.modes.clone(), r.journal.clone());
+        s.b.restore_all().unwrap();
+        let lines = s.journal.lines().unwrap();
+        assert!(journal::plan_restore(&lines).is_empty());
+        // a second run (next reconcile / uninstall retry) appends nothing
+        let t = rig_on(1, r.pipe.clone(), r.file.clone(), r.mons.clone(), r.modes.clone(), r.journal.clone());
+        t.b.restore_all().unwrap();
+        assert_eq!(t.journal.lines().unwrap().len(), lines.len());
     }
 
     #[test]

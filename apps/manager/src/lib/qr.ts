@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Small QR code generator (ISO/IEC 18004 model 2): byte mode, error correction level M,
-// versions 1-10 (up to 213 bytes). Enough for "address:port" and relay ids in the pair
-// dialog. Runs offline; written for Pulsar Split, checked against an independent encoder
+// versions 1-9 (up to 180 bytes). Enough for "address:port" and relay ids in the pair
+// dialog. Capped at 9: only versions 1-9 were compared against the reference encoder, and
+// version 10+ switches byte mode to a 16-bit length field. Runs offline; written for Pulsar Split, checked against an independent encoder
 // (docs/journal.md 2026-11-13).
 
 export interface QrCode {
@@ -12,7 +13,7 @@ export interface QrCode {
   modules: boolean[][];
 }
 
-const MAX_VERSION = 10;
+const MAX_VERSION = 9;
 // Level M, index = version (0 unused).
 const ECC_PER_BLOCK = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
 const NUM_BLOCKS = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];

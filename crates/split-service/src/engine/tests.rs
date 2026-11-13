@@ -663,3 +663,20 @@ fn switching_backend_keeps_one_rule_set_and_removal_clears_secrets() {
     assert!(w.firewall.rules().is_empty());
     assert!(w.secrets.value(SEAT_ID, SecretKind::Identity).is_none());
 }
+
+#[test]
+fn dxvk_marker_read_is_bounded() {
+    let dir = std::env::temp_dir().join(format!("ps-dxvk-marker-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("m.json");
+    assert!(super::read_dxvk_marker(&p).is_none());
+    std::fs::write(&p, b"{}").unwrap();
+    assert_eq!(super::read_dxvk_marker(&p).unwrap().unwrap(), b"{}");
+    std::fs::write(&p, vec![b' '; super::DXVK_MARKER_MAX as usize + 1]).unwrap();
+    assert!(super::read_dxvk_marker(&p).unwrap().is_err());
+    // a directory under the marker name is refused, not read
+    std::fs::remove_file(&p).unwrap();
+    std::fs::create_dir(&p).unwrap();
+    assert!(super::read_dxvk_marker(&p).unwrap().is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

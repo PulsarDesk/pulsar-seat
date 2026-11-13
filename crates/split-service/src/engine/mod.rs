@@ -1613,6 +1613,38 @@ pub fn dxvk_game(exe: &str, marker: Option<std::io::Result<Vec<u8>>>) -> split_p
     g
 }
 
+/// Largest DXVK game marker the service reads (real ones are well under 1 KiB).
+pub const DXVK_MARKER_MAX: u64 = 64 * 1024;
+
+/// Reads a game's DXVK marker for the status page. Game folders are often writable by
+/// standard users and this runs as SYSTEM, so: no reparse points (checked with
+/// `symlink_metadata`, not followed), regular files only, at most [`DXVK_MARKER_MAX`]
+/// bytes (also enforced while reading). Absent = `None`; any refused or failed read is
+/// `Some(Err)`, which [`dxvk_game`] reports as `marker_unreadable`.
+pub fn read_dxvk_marker(path: &std::path::Path) -> Option<std::io::Result<Vec<u8>>> {
+    use std::io::{Error, ErrorKind, Read};
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    if !meta.is_file() || meta.len() > DXVK_MARKER_MAX {
+        return Some(Err(Error::new(ErrorKind::InvalidData, "marker not a small regular file")));
+    }
+    let mut bytes = Vec::new();
+    Some(
+        std::fs::File::open(path)
+            .and_then(|f| f.take(DXVK_MARKER_MAX + 1).read_to_end(&mut bytes))
+            .and_then(|n| {
+                if n as u64 > DXVK_MARKER_MAX {
+                    Err(Error::new(ErrorKind::InvalidData, "marker too large"))
+                } else {
+                    Ok(bytes)
+                }
+            }),
+    )
+}
+
 /// Keeps the remembered DXVK game list (case-insensitive, at most 256 entries): a deploy adds
 /// the game, an undo removes it.
 pub fn dxvk_games_update(list: &mut Vec<String>, exe: &str, enabled: bool) {

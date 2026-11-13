@@ -171,11 +171,11 @@ impl VddPipe for FakeVddPipe {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct FakeVddSettings(Arc<Mutex<String>>);
+pub struct FakeVddSettings(Arc<Mutex<String>>, Arc<Mutex<bool>>);
 
 impl FakeVddSettings {
     pub fn new(xml: &str) -> Self {
-        FakeVddSettings(Arc::new(Mutex::new(xml.to_string())))
+        FakeVddSettings(Arc::new(Mutex::new(xml.to_string())), Arc::default())
     }
     pub fn content(&self) -> String {
         lock(&self.0).clone()
@@ -183,13 +183,28 @@ impl FakeVddSettings {
     pub fn set_content(&self, xml: &str) {
         *lock(&self.0) = xml.to_string();
     }
+    /// Simulates the settings folder being gone (driver removed, `VDDPATH` deleted):
+    /// read and write then fail with `DriverNotInstalled`.
+    pub fn set_folder_absent(&self, absent: bool) {
+        *lock(&self.1) = absent;
+    }
+    fn check_folder(&self) -> Result<(), DisplayError> {
+        if *lock(&self.1) {
+            return Err(DisplayError::DriverNotInstalled(
+                "fake: settings folder absent".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl VddSettingsFile for FakeVddSettings {
     fn read(&self) -> Result<String, DisplayError> {
+        self.check_folder()?;
         Ok(self.content())
     }
     fn write(&self, xml: &str) -> Result<(), DisplayError> {
+        self.check_folder()?;
         self.set_content(xml);
         Ok(())
     }

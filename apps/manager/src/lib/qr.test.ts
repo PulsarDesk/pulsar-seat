@@ -56,6 +56,7 @@ describe('encodeQr', () => {
       expect(big.modules[y + 1][x + 1]).toBe(false);
       expect(big.modules[y + 3][x + 3]).toBe(true);
     }
+    expect(() => encodeQr('z'.repeat(181))).toThrow();
     expect(() => encodeQr('z'.repeat(300))).toThrow();
   });
 

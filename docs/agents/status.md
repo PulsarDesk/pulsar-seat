@@ -193,13 +193,17 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     blocker; rules.md "Local services" keeps the strict rules.
   - Display restore hook: `setup_cmd::DisplayHook` (uninstall **and** reconcile) restores
     the journaled `vdd_settings.xml` (which holds the display count) and reloads the
-    driver; a missing driver only skips the reload. `wiring::vdd_backend` is shared with
+    driver; a missing driver only skips the reload, a missing settings folder closes the
+    journal epoch (nothing left to restore, next run is a no-op). `wiring::vdd_backend` is shared with
     the service. Closes the integrator-3 remainder.
   - IPC (protocol 2, new variants only): `get_dxvk_status`, `get_user_picture`,
     `cleanup_audio_endpoints`; `SeatStatus.streaming` / `stream_client`. DXVK games are
-    remembered in `HKLM\SOFTWARE\PulsarSplit\Shim\DxvkGames`.
+    remembered in `HKLM\SOFTWARE\PulsarSplit\Shim\DxvkGames`. The status read of each
+    game's marker (SYSTEM, user-writable folder) refuses reparse points / non-files and
+    caps it at 64 KiB (`engine::read_dxvk_marker`).
   - Manager: pair dialog QR code (pure TS encoder `src/lib/qr.ts`, checked module for
-    module against qrcodegen 1.8.0 for 48 cases); account-picture avatars (nav + seat
+    module against qrcodegen 1.8.0 for 48 cases, versions 1-9; capped at version 9 /
+    180 bytes); account-picture avatars (nav + seat
     page, initial fallback); DXVK page; microphone toggle stored (path not built,
     final-12); `pick_exe` file dialog (tauri-plugin-dialog 2.8, MIT / Apache-2.0) for
     autostart apps and DXVK games; session id + "yayında" in the nav; GPU warnings; host
@@ -217,3 +221,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     real seat host; driver sources (`drivers/split-idd`, `drivers/split-pad`) are unbuilt.
   - Untested: `picture::read` (registry + file), `pick_exe`, `CfgMgrRemover` through the
     new request, DXVK list on a real game folder, `DisplayHook` against the real VDD.
+  - Review fixes (2026-11-13): the above two hardening points, QR cap at version 9, and
+    CRLF restored in `crates/split-service/src/platform.rs` + `crates/split-stream/README.md`
+    (b891979 had converted them to LF). Line-ending policy is mixed (346 LF / 46 CRLF
+    files); a `.gitattributes` is deferred to a quiet moment, since renormalising would
+    touch files other agents edit on main.

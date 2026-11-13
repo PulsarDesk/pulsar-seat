@@ -233,7 +233,7 @@ impl IsolationPort for WinIsolation {
             .iter()
             .map(|g| {
                 let marker = Path::new(g).parent().map(|d| d.join(split_shim_core::dxvk::GAME_MARKER));
-                let read = marker.filter(|m| m.exists()).map(std::fs::read);
+                let read = marker.and_then(|m| crate::engine::read_dxvk_marker(&m));
                 crate::engine::dxvk_game(g, read)
             })
             .collect();
