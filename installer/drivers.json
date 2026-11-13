@@ -1,0 +1,71 @@
+[
+  {
+    "id": "vdd",
+    "version": "25.7.23",
+    "arch": ["x64"],
+    "url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip",
+    "sha256": "e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a",
+    "licence": "MIT",
+    "licence_url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/blob/25.7.23/LICENSE",
+    "install": { "kind": "inf_package", "inf": "*.inf", "root_hardware_id": "Root\\MttVDD", "class_guid": "{4d36e968-e325-11ce-bfc1-08002be10318}" },
+    "detect": { "kind": "hardware_id", "value": "Root\\MttVDD" },
+    "min_build": 19041,
+    "default_selected": true,
+    "archive": "zip",
+    "notes": "sha256 = GitHub release asset digest (API, 2026-11-12), not re-hashed locally. HYPOTHESIS: upstream names its amd64 driver-only asset 'x86'; fetch-deps.ts fails unless the INF has an NTamd64 section. HYPOTHESIS: root hardware id Root\\MttVDD; fetch-deps.ts fails unless the INF contains it. Signing (SignPath) to be checked with signtool on the test laptop (third-party.md)."
+  },
+  {
+    "id": "vdd",
+    "version": "25.7.23",
+    "arch": ["arm64"],
+    "url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-ARM64.Driver.Only.zip",
+    "sha256": "dcd487161469c726bab60f174a7e7f70ee02afd437cad0d5c0e6755953de5a25",
+    "licence": "MIT",
+    "licence_url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/blob/25.7.23/LICENSE",
+    "install": { "kind": "inf_package", "inf": "*.inf", "root_hardware_id": "Root\\MttVDD", "class_guid": "{4d36e968-e325-11ce-bfc1-08002be10318}" },
+    "detect": { "kind": "hardware_id", "value": "Root\\MttVDD" },
+    "min_build": 22000,
+    "default_selected": false,
+    "archive": "zip",
+    "notes": "Not selected by default: upstream says ARM64 on 24H2+ may need test-signing (OQ 24). Enable only after the Memory-Integrity-on check on the ARM64 laptop."
+  },
+  {
+    "id": "usbip-win2",
+    "version": "0.9.8.1",
+    "arch": ["x64"],
+    "url": "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe",
+    "sha256": "38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a",
+    "licence": "BSD-2-Clause",
+    "licence_url": "https://github.com/vadimgrn/usbip-win2/blob/v.0.9.8.1/LICENSE.txt",
+    "install": { "kind": "official_installer", "args": ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], "requires_consent": true },
+    "detect": { "kind": "hardware_id", "value": "ROOT\\USBIP_WIN2\\UDE" },
+    "default_selected": true,
+    "notes": "Official signed installer (WHLK/attestation per upstream). HYPOTHESIS: Inno Setup silent switches and the detect hardware id; verify on the test PC before release. Asked for consent because it installs its own uninstaller entry. 0.9.8.1 has a known serial-number regression (third-party.md): pin a tested version."
+  },
+  {
+    "id": "usbip-win2",
+    "version": "0.9.8.1",
+    "arch": ["arm64"],
+    "url": "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-arm64.exe",
+    "sha256": "cab7ff97f79275eeb5c5b8bb2eb3111ff6b6c4eead07d9bec9be5bd1e3a35800",
+    "licence": "BSD-2-Clause",
+    "licence_url": "https://github.com/vadimgrn/usbip-win2/blob/v.0.9.8.1/LICENSE.txt",
+    "install": { "kind": "official_installer", "args": ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], "requires_consent": true },
+    "detect": { "kind": "hardware_id", "value": "ROOT\\USBIP_WIN2\\UDE" },
+    "default_selected": true,
+    "notes": "See the x64 entry."
+  },
+  {
+    "id": "vigembus",
+    "version": "1.22.0",
+    "arch": ["x64", "arm64", "x86"],
+    "url": "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe",
+    "sha256": "",
+    "licence": "BSD-3-Clause",
+    "licence_url": "https://github.com/nefarius/ViGEmBus/blob/v1.22.0/LICENSE",
+    "install": { "kind": "detect_only" },
+    "detect": { "kind": "upgrade_code", "value": "{67175F6C-AA18-43A7-AE60-2FC3FD10BF79}" },
+    "default_selected": false,
+    "notes": "Use if installed, never bundle (spec 90 §3.2, OQ 23). The release predates GitHub asset digests, so no pinned hash: an 'offer the official installer' path needs the maintainer to pin one first."
+  }
+]

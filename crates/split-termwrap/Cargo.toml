@@ -1,0 +1,41 @@
+[package]
+name = "split-termwrap"
+description = "Pulsar Split EXPERIMENTAL client-SKU multi-session: integration with an operator-installed open-source TermService wrapper (off by default)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# In-memory fakes of every system trait, for the integrator's tests.
+fake = []
+# Reserved: an own TermService wrapper (contract path B2). NOT implemented; every call
+# returns `unsupported`. See README.md.
+own-wrapper = []
+
+[dependencies]
+split-proto.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,12 @@
+{
+  "$comment": "SPDX-License-Identifier: GPL-3.0-only. NSIS override (merged after tauri.release.conf.json). NSIS has no WiX fragment, so the service and the RDP helper ride along as externalBin: copy them to apps/manager/src-tauri/binaries/<name>-<target-triple>.exe first (installer/README.md); they install as $INSTDIR\\<name>.exe, where installer/nsis/hooks.nsh registers the service.",
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/pulsar-split-service",
+      "binaries/pulsar-split-rdp-helper"
+    ]
+  }
+}

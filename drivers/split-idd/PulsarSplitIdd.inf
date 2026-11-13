@@ -1,0 +1,82 @@
+; SPDX-License-Identifier: GPL-3.0-only
+;
+; PulsarSplitIdd.inf — Pulsar Split remote-session indirect display driver (UMDF 2, IddCx).
+; UNBUILT · UNTESTED · UNSIGNED — do not install. See README.md.
+;
+; The device is created by the Remote Desktop stack (SWD\REMOTEDISPLAYENUM\...) only when a
+; protocol provider names the hardware id below (spec 40 §2.3). Installing this INF alone
+; makes no device appear.
+
+[Version]
+PnpLockdown=1
+Signature="$Windows NT$"
+Class=Display
+ClassGuid={4D36E968-E325-11CE-BFC1-08002BE10318}
+ClassVer=2.0
+Provider=%ManufacturerName%
+CatalogFile=PulsarSplitIdd.cat
+DriverVer= ; set by stampinf (project property "Inf2Cat / StampInf")
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...22000
+
+[Standard.NT$ARCH$.10.0...22000]
+%DeviceName%=PulsarIdd_Install, PulsarSplit_IndirectDisplay
+
+[SourceDisksNames]
+1=%DiskName%
+
+[SourceDisksFiles]
+PulsarSplitIdd.dll=1
+
+[DestinationDirs]
+UMDriverCopy=13 ; DriverStore (run from the driver store)
+
+[UMDriverCopy]
+PulsarSplitIdd.dll
+
+; ---- install ------------------------------------------------------------------------------
+
+[PulsarIdd_Install.NT]
+CopyFiles=UMDriverCopy
+
+[PulsarIdd_Install.NT.hw]
+AddReg=PulsarIdd_HwAddReg
+
+[PulsarIdd_HwAddReg]
+HKR,,"UpperFilters",%REG_MULTI_SZ%,"IndirectKmd"
+; Device security (spec 40 §7): protected DACL, SYSTEM full, Administrators read.
+; Only the service (SYSTEM, session 0) opens the control interface.
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GR;;;BA)"
+; No DeviceGroupId: Microsoft recommends no device group for remote-session drivers.
+
+[PulsarIdd_Install.NT.Services]
+AddService=WUDFRd,0x000001fa,WUDFRD_ServiceInstall
+
+[PulsarIdd_Install.NT.Wdf]
+UmdfService=PulsarSplitIdd,PulsarIdd_UmdfInstall
+UmdfServiceOrder=PulsarSplitIdd
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+UmdfHostProcessSharing=ProcessSharingDisabled ; one host process per seat device
+UmdfFileObjectPolicy=AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction=Copy
+UmdfFsContextUsePolicy=CanUseFsContext2
+
+[PulsarIdd_UmdfInstall]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary=%13%\PulsarSplitIdd.dll
+UmdfExtensions=IddCx0102
+
+[WUDFRD_ServiceInstall]
+DisplayName=%WudfRdDisplayName%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\WUDFRd.sys
+
+[Strings]
+ManufacturerName="Pulsar Split"
+DiskName="Pulsar Split Display Installation Disk"
+DeviceName="Pulsar Split Seat Display"
+WudfRdDisplayName="Windows Driver Foundation - User-mode Driver Framework Reflector"
+REG_MULTI_SZ=0x00010000

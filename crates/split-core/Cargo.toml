@@ -1,0 +1,19 @@
+[package]
+name = "split-core"
+description = "Pulsar Split seat model: validation, ports, persistence, stream-server config, watchdog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+split-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"

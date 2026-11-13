@@ -1,0 +1,44 @@
+[package]
+name = "pulsar-split-shim-module"
+description = "Pulsar Split per-process isolation module (PulsarSplitShim.dll)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "PulsarSplitShim"
+# rlib only so the pure filter tests also run as a normal test binary.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+split-shim-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+tracelogging = "1.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Memory",
+    "Win32_System_Environment",
+    "Win32_System_EventLog",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
+    "Win32_Globalization",
+    "Win32_UI_Input",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))'.dependencies]
+# BSD-2-Clause (notice in shim/README.md). Stable API (RawDetour), no nightly features.
+retour = "=0.4.0-alpha.4"

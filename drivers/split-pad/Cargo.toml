@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# UNBUILT · UNTESTED · UNSIGNED. Not a member of the root workspace.
+[workspace]
+
+[package]
+name = "split_pad"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Pulsar Split PulsarPad: UMDF 2 HID minidriver for per-seat virtual gamepads"
+publish = false
+
+[package.metadata.wdk.driver-model]
+driver-type = "UMDF"
+umdf-version-major = 2
+target-umdf-version-minor = 15
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# windows-drivers-rs (MIT OR Apache-2.0, Microsoft). Pin the tested release when the
+# first build is done; versions below are the ones the code was written against.
+wdk = "0.3"
+wdk-sys = "0.3"
+wdk-panic = "0.3"
+# User-mode Win32 calls (sections, events, thread-pool waits) are allowed in UMDF.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_System_Performance",
+] }
+
+[build-dependencies]
+wdk-build = "0.3"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true

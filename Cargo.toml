@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/manager/src-tauri"]
+# `cargo test` / `cargo build` at the root cover the crates only. The manager needs its
+# frontend built first (`bun run build`), so it is built through bun / the Tauri CLI.
+default-members = [
+    "crates/split-proto",
+    "crates/split-core",
+    "crates/split-session",
+    "crates/split-rdp-helper",
+    "crates/split-termwrap",
+    "crates/split-display",
+    "crates/split-audio",
+    "crates/split-stream",
+    "crates/split-pads",
+    "crates/split-shim-core",
+    "crates/split-setup",
+    "crates/split-service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/PulsarDesk/pulsar-split"
+rust-version = "1.85"
+
+[workspace.dependencies]
+split-proto = { path = "crates/split-proto" }
+split-core = { path = "crates/split-core" }
+split-session = { path = "crates/split-session" }
+split-termwrap = { path = "crates/split-termwrap" }
+split-display = { path = "crates/split-display" }
+split-audio = { path = "crates/split-audio" }
+split-stream = { path = "crates/split-stream" }
+split-pads = { path = "crates/split-pads" }
+split-shim-core = { path = "crates/split-shim-core" }
+split-setup = { path = "crates/split-setup" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

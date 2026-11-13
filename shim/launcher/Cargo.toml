@@ -1,0 +1,30 @@
+[package]
+name = "pulsar-split-launch"
+description = "Pulsar Split launcher: start a process suspended, load the isolation module, resume"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# x64 build ships as pulsar-split-launch.exe, the x86 build is renamed to
+# pulsar-split-launch32.exe by the installer (same source).
+[[bin]]
+name = "pulsar-split-launch"
+path = "src/main.rs"
+
+[dependencies]
+split-shim-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+] }

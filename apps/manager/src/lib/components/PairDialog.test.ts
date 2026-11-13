@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import { render, screen } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import PairDialog from './PairDialog.svelte';
+import { t } from '#lib/i18n.ts';
+import type { Events, PairState } from '#lib/types.ts';
+
+const idle = (): Promise<Events> => new Promise(() => {}); // the long poll never answers
+
+function setup(state: PairState, backend: 'sunshine' | 'pulsar') {
+  const props = {
+    seatName: 'Salon PC',
+    port: 48100,
+    addresses: ['192.168.1.20'],
+    running: true,
+    backend,
+    relayId: backend === 'pulsar' ? '123456789' : null,
+    loadState: vi.fn(async () => state),
+    loadClients: vi.fn(async () => [{ uuid: 'ab'.repeat(32), name: 'Telefon' }]),
+    pollEvents: vi.fn(idle),
+    onSubmit: vi.fn(async () => {}),
+    onCancelRequest: vi.fn(async () => {}),
+    onUnpair: vi.fn(async () => {}),
+    onUnpairAll: vi.fn(async () => {}),
+    onClose: vi.fn(),
+    onAnswer: vi.fn(async () => {}),
+    onGetOtp: vi.fn(async (rotate: boolean) => (rotate ? '654321' : '123456')),
+    onSetConnectPassword: vi.fn(async () => {}),
+    onRelayAuth: vi.fn(async () => {})
+  };
+  render(PairDialog, props);
+  return { props, user: userEvent.setup() };
+}
+
+const pulsarPending: PairState = {
+  available: true,
+  backend: 'pulsar',
+  last_result: null,
+  relay_auth_required: false,
+  pending: {
+    request_id: 9,
+    device_name: 'Telefon',
+    received_at: 't',
+    mode: 'approve',
+    kind: 'connect',
+    key_fp: 'abcdef0123456789',
+    password_state: 'none'
+  }
+};
+
+describe('PairDialog', () => {
+  it('Sunshine seats keep the PIN form', async () => {
+    const pending: PairState = {
+      available: true,
+      backend: 'sunshine',
+      last_result: null,
+      pending: { request_id: 5, device_name: 'TV', received_at: 't' }
+    };
+    const { props, user } = setup(pending, 'sunshine');
+    expect(await screen.findByText(t.pair.pending('TV'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: t.pair.allow })).toBeNull();
+    await user.type(screen.getByRole('textbox', { name: t.pair.pin }), '1234');
+    await user.click(screen.getByRole('button', { name: t.pair.submit }));
+    expect(props.onSubmit).toHaveBeenCalledWith('1234', 'TV', 5);
+  });
+
+  it('Pulsar seats approve requests instead of a PIN', async () => {
+    const { props, user } = setup(pulsarPending, 'pulsar');
+    expect(await screen.findByText(t.pair.requestFrom('Telefon', 'connect'))).toBeInTheDocument();
+    expect(screen.getByText('abcdef0123456789')).toBeInTheDocument();
+    expect(screen.getByText('123456789')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: t.pair.pin })).toBeNull();
+    await user.click(screen.getByRole('button', { name: t.pair.viewOnly }));
+    expect(props.onAnswer).toHaveBeenCalledWith(9, true, true);
+    await user.click(screen.getByRole('button', { name: t.pair.deny }));
+    expect(props.onAnswer).toHaveBeenLastCalledWith(9, false, false);
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('shows the one-time password only on demand', async () => {
+    const { props, user } = setup({ ...pulsarPending, pending: null }, 'pulsar');
+    expect(await screen.findByText(t.pair.pulsarWaiting)).toBeInTheDocument();
+    expect(screen.queryByText('123456')).toBeNull();
+    expect(props.onGetOtp).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: t.pair.showOtp }));
+    expect(await screen.findByText('123456')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: t.pair.refreshOtp }));
+    expect(await screen.findByText('654321')).toBeInTheDocument();
+    expect(props.onGetOtp).toHaveBeenLastCalledWith(true);
+  });
+
+  it('connect password is write-only and can be cleared', async () => {
+    const { props, user } = setup({ ...pulsarPending, pending: null }, 'pulsar');
+    const field = await screen.findByLabelText(t.pair.connectPassword);
+    await user.type(field, 'kalici-sifre');
+    await user.click(screen.getByRole('button', { name: t.pair.connectPasswordSave }));
+    expect(props.onSetConnectPassword).toHaveBeenCalledWith('kalici-sifre');
+    expect(await screen.findByText(t.pair.connectPasswordSaved)).toBeInTheDocument();
+    expect(field).toHaveValue('');
+    // An empty field cannot save (and so never clears silently).
+    expect(screen.getByRole('button', { name: t.pair.connectPasswordSave })).toBeDisabled();
+    expect(props.onSetConnectPassword).toHaveBeenCalledTimes(1);
+    // Removing needs its own confirmed action; "Vazgeç" sends nothing.
+    await user.click(screen.getByRole('button', { name: t.pair.connectPasswordRemove }));
+    await user.click(screen.getByRole('button', { name: t.pair.connectPasswordRemoveNo }));
+    expect(props.onSetConnectPassword).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: t.pair.connectPasswordRemove }));
+    await user.click(screen.getByRole('button', { name: t.pair.connectPasswordRemoveYes }));
+    expect(props.onSetConnectPassword).toHaveBeenLastCalledWith('');
+    expect(await screen.findByText(t.pair.connectPasswordCleared)).toBeInTheDocument();
+  });
+
+  it('asks for relay credentials only when the relay wants them', async () => {
+    const { props, user } = setup({ ...pulsarPending, pending: null, relay_auth_required: true }, 'pulsar');
+    const pw = await screen.findByLabelText(t.pair.relayPassword);
+    await user.type(pw, 'relay-pw');
+    await user.type(screen.getByLabelText(t.pair.relayTotp), '123456');
+    await user.click(screen.getByRole('button', { name: t.pair.relayAuthSend }));
+    expect(props.onRelayAuth).toHaveBeenCalledWith('relay-pw', '123456');
+  });
+});
