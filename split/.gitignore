@@ -1,6 +1,0 @@
-docs/local/
-node_modules/
-target/
-build/
-.svelte-kit/
-apps/manager/src-tauri/binaries/
