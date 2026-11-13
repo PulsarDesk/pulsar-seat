@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Seat compatibility helpers.
 //!
-//! Owner: the **compat** package. Spec: `spec/80-apps-compat.md` §11, `spec/90-install.md`
-//! §11, `spec/10-manager.md` §3.8 (importer). Contract: `docs/agents/architecture.md`.
+//! Owner: the **compat** package. Spec: `spec/local/80-apps-compat.md` §11, `spec/local/90-install.md`
+//! §11, `spec/local/10-manager.md` §3.8 (importer). Contract: `docs/agents/architecture.md`.
 //!
 //! | Module | What |
 //! | --- | --- |

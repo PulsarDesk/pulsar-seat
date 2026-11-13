@@ -3,16 +3,16 @@
 //! session failure from the tick, pairing, apps, termwrap gate, passive mode.
 
 use super::*;
-use split_pads::{PadKind, PadManagerConfig};
+use seat_pads::{PadKind, PadManagerConfig};
 use split_proto::SeatAudioSettings;
 use split_session::fake::{FakeHost, HelperScript, fake_deps, loopback_session};
 use split_session::manager::{Manager, SessionTimeouts};
-use split_stream::backend::pulsar::{HostDistSource, PulsarEnv, SecretKind};
-use split_stream::backend::sunshine::SunshineEnv;
-use split_stream::backend::{PulsarHostBackend, SunshineBackend};
-use split_stream::dist::{HostDist, ServerDist, ServerFlavour};
-use split_stream::fake as sf;
-use split_stream::supervise::ControlConnector;
+use seat_stream::backend::pulsar::{HostDistSource, PulsarEnv, SecretKind};
+use seat_stream::backend::sunshine::SunshineEnv;
+use seat_stream::backend::{PulsarHostBackend, SunshineBackend};
+use seat_stream::dist::{HostDist, ServerDist, ServerFlavour};
+use seat_stream::fake as sf;
+use seat_stream::supervise::ControlConnector;
 use std::sync::atomic::AtomicU32;
 
 const SEAT_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -81,12 +81,12 @@ struct World {
     connector: sf::FakeConnector,
     clock: sf::FakeClock,
     firewall: Arc<sf::FakeFirewall>,
-    seatmap: Arc<split_shim_core::fake::FakeSeatMap>,
+    seatmap: Arc<seat_shim_core::fake::FakeSeatMap>,
     isolation: Arc<FakeIsolation>,
     passive: Arc<AtomicBool>,
     termwrap: split_termwrap::fake::FakeWorld,
     ports: Arc<sf::FakeProbe>,
-    bt: Arc<split_pads::fake::FakeUserServices>,
+    bt: Arc<seat_pads::fake::FakeUserServices>,
     pipes: sf::FakeHostPipes,
     secrets: Arc<sf::MemSecrets>,
 }
@@ -173,21 +173,21 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     });
     let stream = StreamEnv { fs: fs.clone(), backends: vec![Arc::new(sunshine), Arc::new(pulsar)] };
 
-    let tree = Arc::new(split_pads::fake::FakeDeviceTree::default());
-    let backend = split_pads::fake::FakeBackend::new(BackendId::Vigem, &[PadKind::X360], Some(tree.clone()));
+    let tree = Arc::new(seat_pads::fake::FakeDeviceTree::default());
+    let backend = seat_pads::fake::FakeBackend::new(BackendId::Vigem, &[PadKind::X360], Some(tree.clone()));
     let pads = PadManager::new(
         vec![Arc::new(backend)],
-        Box::new(split_pads::fake::MemOwnerStore::default()),
+        Box::new(seat_pads::fake::MemOwnerStore::default()),
         tree,
-        Arc::new(split_pads::fake::FakeProcessProbe::default()),
-        Arc::new(split_pads::fake::FakeClock::default()),
-        Arc::new(split_pads::channel::MemChannelFactory::default()),
-        Arc::new(split_pads::NullSink),
+        Arc::new(seat_pads::fake::FakeProcessProbe::default()),
+        Arc::new(seat_pads::fake::FakeClock::default()),
+        Arc::new(seat_pads::channel::MemChannelFactory::default()),
+        Arc::new(seat_pads::NullSink),
         PadManagerConfig::default(),
     );
 
-    let bt = Arc::new(split_pads::fake::FakeUserServices::default());
-    let seatmap = Arc::new(split_shim_core::fake::FakeSeatMap::default());
+    let bt = Arc::new(seat_pads::fake::FakeUserServices::default());
+    let seatmap = Arc::new(seat_shim_core::fake::FakeSeatMap::default());
     let isolation = Arc::new(FakeIsolation::default());
     let passive = Arc::new(AtomicBool::new(false));
     let p2 = passive.clone();
@@ -196,13 +196,13 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
         session: Arc::new(manager),
         displays: vec![Arc::new(rdp)],
         adapters: Arc::new(split_display::fake::FakeAdapters(Vec::new())),
-        audio: Arc::new(split_audio::fake::FakeAudioProbe::default()),
+        audio: Arc::new(seat_audio::fake::FakeAudioProbe::default()),
         stream,
         pads: Some(Arc::new(Mutex::new(pads))),
-        bluetooth: Some(Arc::new(Mutex::new(split_pads::bluetooth::BtController::new(
+        bluetooth: Some(Arc::new(Mutex::new(seat_pads::bluetooth::BtController::new(
             bt.clone(),
-            Arc::new(split_pads::journal::VecRestoreLog::default()),
-            Arc::new(split_pads::fake::FakeClock::default()),
+            Arc::new(seat_pads::journal::VecRestoreLog::default()),
+            Arc::new(seat_pads::fake::FakeClock::default()),
         )))),
         isolation: isolation.clone(),
         seatmap: seatmap.clone(),
@@ -212,7 +212,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
             report: Some(serde_json::json!({"mode": "normal"})),
         }),
         console_session: Arc::new(|| Some(1)),
-        audio_cleanup: Arc::new(|| Ok(split_audio::StaleReport { removed: vec![r"SWD\MMDEVAPI\X".into()], failed: vec![] })),
+        audio_cleanup: Arc::new(|| Ok(seat_audio::StaleReport { removed: vec![r"SWD\MMDEVAPI\X".into()], failed: vec![] })),
         data_root: PathBuf::from(r"C:\ProgramData\PulsarSplitTest"),
         service_version: "0.1.0".into(),
     });
@@ -293,7 +293,7 @@ fn start_runs_every_step_in_order_then_stop_undoes_them() {
     let conf = conf.expect("server.conf written");
     assert!(conf.contains("sunshine_name = Salon PC") && conf.contains("port = 48100"), "{conf}");
     // Seat map published for session 3 with the seat user's SID.
-    let map = split_shim_core::SeatMapReader::read_all(w.seatmap.as_ref()).unwrap();
+    let map = seat_shim_core::SeatMapReader::read_all(w.seatmap.as_ref()).unwrap();
     assert_eq!(map.len(), 1);
     assert_eq!((map[0].session_id, map[0].user_sid.as_str()), (3, USER_SID));
 
@@ -307,14 +307,14 @@ fn start_runs_every_step_in_order_then_stop_undoes_them() {
     w.engine.stop_seat(&seat()).unwrap();
     wait_for(&w, |e| *e == SeatEvent::Stopped);
     assert_eq!(w.engine.active_seats(), 0);
-    assert!(split_shim_core::SeatMapReader::read_all(w.seatmap.as_ref()).unwrap().is_empty());
+    assert!(seat_shim_core::SeatMapReader::read_all(w.seatmap.as_ref()).unwrap().is_empty());
     assert_eq!(w.session.wts.logoffs(), vec![3]);
     assert!(!w.launcher.terminated().is_empty(), "stream server terminated");
 }
 
 #[test]
 fn bluetooth_instance_of_a_seat_session_is_disabled_and_restored() {
-    use split_pads::bluetooth::{StartType, UserServiceInstance};
+    use seat_pads::bluetooth::{StartType, UserServiceInstance};
     let w = world();
     let inst = |name: &str, sess: u32| UserServiceInstance {
         name: name.into(),

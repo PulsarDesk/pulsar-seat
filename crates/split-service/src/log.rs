@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Minimal logger: stderr plus an optional append-only file. Never log secrets.
 //! In service mode ([`enable_event_log`]) error records also go to the Application event
-//! log under the source `PulsarSplit` (registered by `split-setup`, spec 20 §5 step 1,
+//! log under the source `PulsarSplit` (registered by `seat-setup`, spec 20 §5 step 1,
 //! spec 50 §13.2).
 
 use std::fs::{File, OpenOptions};
@@ -16,7 +16,7 @@ static DEBUG: AtomicBool = AtomicBool::new(false);
 /// `HANDLE` from `RegisterEventSourceW` as an integer (0 = off). Kept for the process life.
 static EVENT_SOURCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Event source name; must match `split_setup::layout::EVENTLOG_KEY`.
+/// Event source name; must match `seat_setup::layout::EVENTLOG_KEY`.
 pub const EVENT_SOURCE_NAME: &str = "PulsarSplit";
 /// Longest message text handed to the event log.
 const EVENT_MAX_CHARS: usize = 2000;

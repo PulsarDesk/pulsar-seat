@@ -10,7 +10,7 @@
 //!     --allow-current-user  DEV ONLY: let the current (non-elevated) user open the pipe
 //!     --debug               verbose log
 //! pulsar-split-service install | reconcile | uninstall | check-coexistence [...]
-//!                           setup sub-commands (spec 90 §9.1, `split_setup::cli`)
+//!                           setup sub-commands (spec 90 §9.1, `seat_setup::cli`)
 //! ```
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -44,7 +44,7 @@ fn main() {
     use std::path::PathBuf;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match split_setup::cli::parse(&args) {
+    match seat_setup::cli::parse(&args) {
         Ok(Some(cmd)) => std::process::exit(setup_cmd::run(cmd)),
         Ok(None) => {}
         Err(e) => {

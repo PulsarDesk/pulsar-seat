@@ -12,5 +12,5 @@ name = "pulsar-split-shimctl"
 path = "src/main.rs"
 
 [dependencies]
-split-shim-core.workspace = true
+seat-shim-core.workspace = true
 serde_json = "1"

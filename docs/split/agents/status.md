@@ -1,10 +1,10 @@
 # Status / resume point
 
-Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
+Index: [../../AGENTS.md](../../../AGENTS.md). Update after every step.
 
 - 2026-11-12: repo created (GPL-3, `main`, local only, no remote, nothing committed).
 - **Phase 0 (spec): draft v1 done** for `spec/00-architecture.md`, `10-manager.md`,
-  `20-service.md`. Pending rows `30`–`90` listed in [spec/README.md](../../spec/README.md).
+  `20-service.md`. Pending rows `30`–`90` listed in [spec/README.md](../../../spec/remote/README.md).
   - Gaps: no live IPC captured (reference service was stopped); certificate stores / boot
     settings not read (probe timed out); frame/pad shared-section layouts unknown (we
     define our own); stopped seat = logoff or disconnect? unknown; LAN reachability of the

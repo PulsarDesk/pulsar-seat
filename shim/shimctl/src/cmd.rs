@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Command-line parsing (pure, unit-tested).
 
-use split_shim_core::dxvk::{DxvkDll, DxvkRelease};
-use split_shim_core::install::ShimTarget;
+use seat_shim_core::dxvk::{DxvkDll, DxvkRelease};
+use seat_shim_core::install::ShimTarget;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "\

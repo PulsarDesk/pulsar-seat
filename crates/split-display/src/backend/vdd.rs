@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Backend 1: Virtual-Display-Driver (VirtualDrivers, MIT, SignPath-signed; see
-//! `docs/agents/third-party.md`) through its documented interface only:
+//! `docs/split/agents/third-party.md`) through its documented interface only:
 //!
 //! * `vdd_settings.xml` (path from `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver\VDDPATH`,
 //!   default `C:\VirtualDisplayDriver`): this backend owns `monitors/count`,

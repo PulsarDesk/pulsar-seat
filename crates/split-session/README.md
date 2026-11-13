@@ -3,8 +3,8 @@
 Multi-session support for Pulsar Split, **Path A**: Windows Server with the RD Session
 Host role. Licence: GPL-3.0-only.
 
-Spec: `spec/30-session-rds.md`, `spec/20-service.md` §5–§7. Contract:
-`docs/agents/contracts.md` §1. The client-SKU wrapper (Path B) is a separate, experimental
+Spec: `spec/remote/30-session-rds.md`, `spec/remote/20-service.md` §5–§7. Contract:
+`docs/split/agents/contracts.md` §1. The client-SKU wrapper (Path B) is a separate, experimental
 crate (`split-termwrap`); this crate only writes the two "path B" registry rows when the
 caller asks for them.
 
@@ -56,7 +56,7 @@ ready 120 s, client restart window 5 min / 3 failures.
   `CoInitializeSecurity` (split-service `main` owns it) and sets impersonate + packet
   privacy on each WMI proxy.
 - `run\sessions.json` (the sweep kills the PIDs it lists) and the journal are trusted only
-  when owned by SYSTEM / Administrators with no other allow ACE. split-setup creates the
+  when owned by SYSTEM / Administrators with no other allow ACE. seat-setup creates the
   data folder that way (open question setup-11); this crate creates `run\` / `journal\`
   with a protected DACL and checks directory + open file before use.
 - `TermSrvReadyEvent` is opened with `SYNCHRONIZE` only, never created. TermService is
@@ -84,7 +84,7 @@ creation (network-logon fallback is a HYPOTHESIS), WTS enumeration / log-off / u
 token, console user SID, SYSTEM-in-session token, `CreateProcessAsUserW` with the
 restricted Low-integrity token (HYPOTHESIS that it suffices for the helper), handle
 inheritance toggling, job objects, data-dir DACL creation, WMI packet privacy. See open
-questions session-1..13 in `docs/agents/open-questions.md`.
+questions session-1..13 in `docs/split/agents/open-questions.md`.
 
 ## Third-party
 

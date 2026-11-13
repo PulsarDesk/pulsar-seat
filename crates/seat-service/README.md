@@ -2,7 +2,7 @@
 
 GPL-3.0-only. The Pulsar Seat service: LocalSystem, session 0. Owns the config, the seat
 state machine, device assignment, seat secrets (LSA), every system change and the control
-pipe. Spec: `spec/20-service.md` §13, `spec/00-architecture.md` §5.5–5.7; contract:
+pipe. Spec: `spec/local/20-service.md` §13, `spec/local/00-architecture.md` §5.5–5.7; contract:
 `docs/agents/architecture.md`. Module map: `src/main.rs`.
 
 ## Build and test

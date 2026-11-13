@@ -3,7 +3,7 @@
 Tauri 2 + SvelteKit + Svelte 5 (runes), `adapter-static`, Turkish UI. Runs as invoker in
 every session. It does no privileged work itself: every change is a request to the
 service over the control pipe (`docs/agents/architecture.md` §5). Behaviour target:
-`spec/10-manager.md`. The layout is our own and neutral; the maintainer redesigns it later.
+`spec/local/10-manager.md`. The layout is our own and neutral; the maintainer redesigns it later.
 
 ## Commands
 

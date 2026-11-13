@@ -3,8 +3,8 @@
 Behaviour spec of how the reference product (1.6.0.0) gives every seat its own virtual
 monitor, how that monitor's mode is chosen, how frames reach the seat's stream server, and
 what HDR looks like to the user. Each mechanism ends with a **Pulsar Split approach**
-subsection that proposes a clean design within [../docs/agents/rules.md](../docs/agents/rules.md).
-Written by the analyst. No code, no decompiled material. See [../CLEANROOM.md](../CLEANROOM.md).
+subsection that proposes a clean design within [../docs/agents/rules.md](../../docs/split/agents/rules.md).
+Written by the analyst. No code, no decompiled material. See [../CLEANROOM.md](../../CLEANROOM.md).
 
 Evidence markers: **[S]** static (shipped files), **[L]** live reference system (read-only),
 **[D]** public Microsoft documentation (Microsoft Learn, Windows SDK headers), **[I]** analyst

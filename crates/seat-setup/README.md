@@ -1,7 +1,7 @@
-# split-setup
+# seat-setup
 
 Library behind the service sub-commands of spec 90 §9.1 (the integrator wires them into
-`pulsar-split-service`; `split_setup::cli::parse` + `cli::run` take the raw argv):
+`pulsar-split-service`; `seat_setup::cli::parse` + `cli::run` take the raw argv):
 
 ```text
 pulsar-split-service install   [--drivers a,b|none] [--consent a,b] [--register-service] [--allow-downgrade] [--msi]
@@ -35,10 +35,10 @@ file.
 ## Build / test
 
 ```powershell
-cargo test   -p split-setup
-cargo clippy -p split-setup --all-targets
-cargo clippy -p split-setup --all-targets --features fake
-cargo check  -p split-setup --target x86_64-pc-windows-msvc --all-targets
+cargo test   -p seat-setup
+cargo clippy -p seat-setup --all-targets
+cargo clippy -p seat-setup --all-targets --features fake
+cargo check  -p seat-setup --target x86_64-pc-windows-msvc --all-targets
 ```
 
 Tests never change the machine. The `win` tests are read-only (registry, SCM, cert store,

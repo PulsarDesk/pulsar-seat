@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { encodeQr, qrPath } from './qr.ts';
 
 // "192.168.1.20:48100", level M, mask 2, produced by an independent encoder (qrcodegen
-// 1.8.0); every mask and versions 1-9 were compared the same way (docs/journal.md).
+// 1.8.0); every mask and versions 1-9 were compared the same way (docs/split/journal.md).
 const REFERENCE = [
   '1111111000100010001111111',
   '1000001001111001001000001',

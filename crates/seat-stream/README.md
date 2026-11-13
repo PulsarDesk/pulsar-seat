@@ -1,11 +1,11 @@
-# split-stream
+# seat-stream
 
 Per-seat stream server integration for Pulsar Split (package "stream", contract
-`docs/agents/contracts.md` §7, behaviour spec `spec/80-stream-server.md`).
+`docs/split/agents/contracts.md` §7, behaviour spec `spec/remote/80-stream-server.md`).
 
 Each running seat gets one game-stream server process inside its Windows session. The
 server is **upstream LizardByte Sunshine** (GPL-3.0), pinned tag `v2026.516.143833`,
-unmodified for Phase 2 (`docs/agents/third-party.md`), or later the Pulsar fork with the
+unmodified for Phase 2 (`docs/split/agents/third-party.md`), or later the Pulsar fork with the
 spec 80 patches. The binary is **downloaded and SHA-256 verified, never vendored** in
 this repository: the installer writes `<install>\stream-server.json`
 (`dist::ServerDist`), and the service re-checks the hash before every launch.
@@ -14,7 +14,7 @@ this repository: the installer writes `<install>\stream-server.json`
 
 | Module | Purpose |
 | --- | --- |
-| `backend` | `StreamBackend` / `SeatStream` traits (contracts §7.4); `SunshineBackend` (the path below, unchanged) and `PulsarHostBackend` (`pulsar-host.exe`, docs/agents/pulsar-host-backend.md): argv, data dir `seats\<id>\pulsar\`, service-owned control pipe client (`backend::pulsar::control`), per-seat secrets trait, one UDP firewall rule, `backend_missing` when not installed |
+| `backend` | `StreamBackend` / `SeatStream` traits (contracts §7.4); `SunshineBackend` (the path below, unchanged) and `PulsarHostBackend` (`pulsar-host.exe`, docs/split/agents/pulsar-host-backend.md): argv, data dir `seats\<id>\pulsar\`, service-owned control pipe client (`backend::pulsar::control`), per-seat secrets trait, one UDP firewall rule, `backend_missing` when not installed |
 | `dist` | manifest parse/validate, streamed SHA-256 check, `verify_installed`; `HostDist` / `verify_installed_host` for `pulsar-host.json` |
 | `seatdir` | `%ProgramData%\PulsarSplit\seats\<seat-id>\` layout; `SecureFs` trait (owner SYSTEM + protected DACL `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` on the data root, `seats\`, the seat folder and `journal\`, created top down; an existing folder that is a reparse point or has a foreign owner is refused; atomic write, log rotation keep 3) |
 | `conf` | `server.conf` generator (spec 80 §2.3). Builds on `split_core::streamconf` (log level, parser) without editing split-core. Absolute paths, CR/LF rejected, `pulsar_*` keys only for the fork |
@@ -77,9 +77,9 @@ covered by the folder ACL check only.
 ## Build and test
 
 ```
-cargo test -p split-stream
-cargo clippy -p split-stream --all-targets
-cargo check -p split-stream --target x86_64-pc-windows-msvc
+cargo test -p seat-stream
+cargo clippy -p seat-stream --all-targets
+cargo check -p seat-stream --target x86_64-pc-windows-msvc
 ```
 
 Tests never touch HKLM, services, the firewall configuration, drivers or accounts. A few

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Per-seat virtual display for Pulsar Split (contract: `docs/agents/contracts.md` §3,
-//! behaviour: `spec/40-display-hdr.md`).
+//! Per-seat virtual display for Pulsar Split (contract: `docs/split/agents/contracts.md` §3,
+//! behaviour: `spec/remote/40-display-hdr.md`).
 //!
 //! * [`modes`], [`adapters`], [`hdr`], [`seat`], [`frame`], [`ioctl`] are pure and
 //!   platform-neutral; their unit tests run anywhere.

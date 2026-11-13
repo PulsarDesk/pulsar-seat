@@ -11,7 +11,7 @@
 use super::device::decide;
 use super::hook::{Hook, guarded, install, install_first};
 use crate::filter::{Probe, compact, filter_multi_sz, may_be_device_path, nth_kept};
-use split_shim_core::decide::{Access, is_filtered_device_path};
+use seat_shim_core::decide::{Access, is_filtered_device_path};
 use std::ffi::c_void;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CONFIGRET, CR_SUCCESS, HDEVINFO, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,

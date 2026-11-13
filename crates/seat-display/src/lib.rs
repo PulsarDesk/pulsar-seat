@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Seat display — implements [`seat_core::backend::DisplayBinding`] (service side)
-//! and [`seat_core::backend::FrameSink`] (seat-host side). Spec `spec/40-display.md` §6,
-//! `spec/00-architecture.md` §5.2, T1, T6; contract `docs/agents/architecture.md` §4.2.
+//! and [`seat_core::backend::FrameSink`] (seat-host side). Spec `spec/local/40-display.md` §6,
+//! `spec/local/00-architecture.md` §5.2, T1, T6; contract `docs/agents/architecture.md` §4.2.
 //!
 //! | module | what |
 //! | --- | --- |

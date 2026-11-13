@@ -57,7 +57,7 @@ impl Layout {
     pub fn downloads_dir(&self) -> PathBuf {
         self.data_root.join("downloads")
     }
-    /// Resolved driver manifest shipped by the installer (`installer/drivers.json` after
+    /// Resolved driver manifest shipped by the installer (`installer/split/drivers.json` after
     /// `fetch-deps.ts` resolved INF globs).
     pub fn driver_manifest(&self) -> PathBuf {
         self.install_root.join("drivers.json")

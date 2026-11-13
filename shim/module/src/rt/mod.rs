@@ -28,12 +28,12 @@ mod reg;
 mod steam;
 mod threads;
 
-use split_shim_core::decide::{
+use seat_shim_core::decide::{
     FOCUS_HOSTS, HookPlan, ProcessFacts, Role, STEAM_EXES, ShimConfig, WNF_FOCUS_CANDIDATES, hook_plan, role,
     wnf_known_with,
 };
-use split_shim_core::seatmap::{SeatMapEntry, SeatMapReader};
-use split_shim_core::win;
+use seat_shim_core::seatmap::{SeatMapEntry, SeatMapReader};
+use seat_shim_core::win;
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,7 +150,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         hid_open: true,
         hid_enumeration: true,
         focus_filter: verified && FOCUS_HOSTS.contains(&exe),
-        mask_remote: split_shim_core::decide::mask_remote(
+        mask_remote: seat_shim_core::decide::mask_remote(
             &Role::Seat { seat_id: String::new(), session_id: facts.session_id },
             &facts.exe_lower,
             &cfg.mask_apps,
@@ -191,7 +191,7 @@ fn init_once() {
         } else if facts.safe_mode {
             Some("safe_mode")
         } else if facts.kill_switch {
-            Some(split_shim_core::ShimError::KillSwitch.code())
+            Some(seat_shim_core::ShimError::KillSwitch.code())
         } else {
             None
         };
@@ -218,7 +218,7 @@ fn init_once() {
             live: Mutex::new(now),
         });
         if !want.any() {
-            let err = disabled.then(|| split_shim_core::ShimError::TargetDisabled(String::new()).code());
+            let err = disabled.then(|| seat_shim_core::ShimError::TargetDisabled(String::new()).code());
             health::send(&facts, role_label, false, err);
             return;
         }

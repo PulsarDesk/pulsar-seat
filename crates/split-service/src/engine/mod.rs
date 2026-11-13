@@ -14,26 +14,26 @@
 //! Locks: `seats` is never held across a blocking package call. Each seat's stream server
 //! has its own mutex (tick / pairing / apps reload).
 
-use split_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
+use seat_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
 use split_core::control::SeatEvent;
 use split_display::{
     AdapterChoice, AdapterEnumerator, BackendInfo, BackendKind, DisplayBackend, DisplayError, HdrLuminance, HdrUnavailable,
     ModeRequest, ModeResult, ModeStatus, SeatDisplay, SeatDisplayHandle, choose_backend, resolve_adapter,
 };
-use split_pads::{BackendId, PadManager, PadReleased, PadWanted, SeatPadContext};
+use seat_pads::{BackendId, PadManager, PadReleased, PadWanted, SeatPadContext};
 use split_proto::{
     DisplayBackendPref, ErrorCode, GlobalSettings, HostInfo, IsolationStatus, PadBackendPref, PairMode, PairState, PairedClient,
     PendingPair, ProtoError, SeatConfig, SeatRuntime, Secret, ShimTargetDto, StopAction, StreamBackendInfo, StreamBackendKind,
 };
 use split_session::launch::{DEFAULT_DESKTOP, LaunchSpec, TokenKind};
 use split_session::manager::{CancelToken, SeatSession, SessionChange, SessionManager, SessionNotice, SessionRequest};
-use split_shim_core::{SeatFlags, SeatMapEntry, SeatMapWriter, ShimHealth, ShimTarget};
-use split_stream::StreamError;
-use split_stream::apps::{AppEntry, default_apps, parse_apps_json, render_apps_json, validate_apps, wrap_with_launcher};
-use split_stream::backend::{PeerEvent, Prepared, SeatStream, SeatStreamSpec, StreamBackend, availability_all, find_backend};
-use split_stream::control::ServerEvent;
-use split_stream::seatdir::{SecureFs, SeatDir};
-use split_stream::supervise::StreamNotice;
+use seat_shim_core::{SeatFlags, SeatMapEntry, SeatMapWriter, ShimHealth, ShimTarget};
+use seat_stream::StreamError;
+use seat_stream::apps::{AppEntry, default_apps, parse_apps_json, render_apps_json, validate_apps, wrap_with_launcher};
+use seat_stream::backend::{PeerEvent, Prepared, SeatStream, SeatStreamSpec, StreamBackend, availability_all, find_backend};
+use seat_stream::control::ServerEvent;
+use seat_stream::seatdir::{SecureFs, SeatDir};
+use seat_stream::supervise::StreamNotice;
 use split_termwrap::{Termwrap, TermwrapState};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -84,11 +84,11 @@ pub trait IsolationPort: Send + Sync {
     fn restore_all(&self) -> Result<(), ProtoError>;
 }
 
-/// Stream servers of the seats (spec 80, docs/agents/pulsar-host-backend.md).
+/// Stream servers of the seats (spec 80, docs/split/agents/pulsar-host-backend.md).
 pub struct StreamEnv {
     /// Seat folder access (`apps.json`, logs, seat folder removal).
     pub fs: Arc<dyn SecureFs>,
-    /// One per kind (`split_stream::backend::SunshineBackend`, `PulsarHostBackend`). Each
+    /// One per kind (`seat_stream::backend::SunshineBackend`, `PulsarHostBackend`). Each
     /// seat uses the one named by `SeatConfig::stream_backend`; a kind without an entry
     /// fails the start with `backend_missing`.
     pub backends: Vec<Arc<dyn StreamBackend>>,
@@ -106,17 +106,17 @@ pub struct Deps {
     /// `None` when the pad manager could not be built (logged; seats run without pads).
     pub pads: Option<Arc<Mutex<PadManager>>>,
     /// Bluetooth per-user service handling (spec 60 §10.4, global `bluetooth_console_only`).
-    pub bluetooth: Option<Arc<Mutex<split_pads::bluetooth::BtController>>>,
+    pub bluetooth: Option<Arc<Mutex<seat_pads::bluetooth::BtController>>>,
     pub isolation: Arc<dyn IsolationPort>,
     pub seatmap: Arc<dyn SeatMapWriter>,
     pub termwrap: Arc<dyn Termwrap>,
-    /// Coexistence evaluation (spec 90 §8), JSON of `split_setup::CoexistReport`.
+    /// Coexistence evaluation (spec 90 §8), JSON of `seat_setup::CoexistReport`.
     pub coexist: Arc<dyn Fn() -> CoexistOutcome + Send + Sync>,
     /// Session attached to the physical console, if any.
     pub console_session: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
     /// Spec 70 §2.6 operator-triggered stale RDP audio endpoint cleanup
-    /// (`split_audio::remove_stale_endpoints` over the real probe, remover and WTS list).
-    pub audio_cleanup: Arc<dyn Fn() -> Result<split_audio::StaleReport, split_audio::AudioError> + Send + Sync>,
+    /// (`seat_audio::remove_stale_endpoints` over the real probe, remover and WTS list).
+    pub audio_cleanup: Arc<dyn Fn() -> Result<seat_audio::StaleReport, seat_audio::AudioError> + Send + Sync>,
     /// `%ProgramData%\PulsarSplit`.
     pub data_root: PathBuf,
     pub service_version: String,
@@ -657,7 +657,7 @@ impl Engine {
                 args: split_args(&app.arguments),
                 session_id,
                 token: TokenKind::SeatUser,
-                env_extra: if global.steam_isolation { split_shim_core::steam_env(&seat.id) } else { Vec::new() },
+                env_extra: if global.steam_isolation { seat_shim_core::steam_env(&seat.id) } else { Vec::new() },
                 desktop: DEFAULT_DESKTOP.into(),
                 stdout: None,
             };
@@ -887,9 +887,9 @@ impl Engine {
             };
             for o in out {
                 let (seat_id, ty, body) = match o {
-                    split_pads::Outgoing::Detach { seat_id, msg } => (seat_id, "pad.detach", json(&msg)),
-                    split_pads::Outgoing::Attach { seat_id, msg } => (seat_id, "pad.attach", json(&msg)),
-                    split_pads::Outgoing::Denied { seat_id, msg } => (seat_id, "pad.denied", json(&msg)),
+                    seat_pads::Outgoing::Detach { seat_id, msg } => (seat_id, "pad.detach", json(&msg)),
+                    seat_pads::Outgoing::Attach { seat_id, msg } => (seat_id, "pad.attach", json(&msg)),
+                    seat_pads::Outgoing::Denied { seat_id, msg } => (seat_id, "pad.denied", json(&msg)),
                 };
                 self.pad_request(&seat_id, ty, &body);
             }
@@ -1054,7 +1054,7 @@ impl Engine {
             Some(b) => parse_apps_json(&String::from_utf8_lossy(&b)).map_err(|e| e.code().to_string())?.apps,
             None => default_apps(),
         };
-        let app = split_stream::backend::pulsar::find_app(&apps, app_id).ok_or("app_not_found")?;
+        let app = seat_stream::backend::pulsar::find_app(&apps, app_id).ok_or("app_not_found")?;
         let Some(cmd) = app.cmd.as_deref().filter(|c| !c.trim().is_empty()) else {
             return Ok(None);
         };
@@ -1069,7 +1069,7 @@ impl Engine {
             args: argv,
             session_id,
             token: TokenKind::SeatUser,
-            env_extra: if steam { split_shim_core::steam_env(seat_id) } else { Vec::new() },
+            env_extra: if steam { seat_shim_core::steam_env(seat_id) } else { Vec::new() },
             desktop: DEFAULT_DESKTOP.into(),
             stdout: None,
         };
@@ -1477,7 +1477,7 @@ impl Engine {
     }
 
     /// Last `n` lines of the seat's stream-server log (current file), redacted
-    /// (`split_stream::seatdir::last_lines` + the service's own line filter).
+    /// (`seat_stream::seatdir::last_lines` + the service's own line filter).
     pub fn seat_log_tail(&self, seat: &SeatConfig, n: usize) -> Vec<String> {
         let Ok(dir) = SeatDir::checked(&self.d().data_root, &seat.id) else { return Vec::new() };
         let log = match self.backend_for(seat.stream_backend) {
@@ -1485,7 +1485,7 @@ impl Engine {
             Err(_) => dir.log.clone(),
         };
         let bytes = self.d().stream.fs.read(&log).ok().flatten().unwrap_or_default();
-        split_stream::seatdir::last_lines(&bytes, n).iter().map(|l| redact(l)).collect()
+        seat_stream::seatdir::last_lines(&bytes, n).iter().map(|l| redact(l)).collect()
     }
 
     pub fn remove_seat_files(&self, seat: &SeatConfig) {
@@ -1506,7 +1506,7 @@ impl Engine {
                     for b in &s.backends {
                         let lf = b.log_file(&dir);
                         let mut files = vec![lf.clone()];
-                        files.extend(split_stream::seatdir::rotated_names(&lf, split_stream::seatdir::LOG_KEEP));
+                        files.extend(seat_stream::seatdir::rotated_names(&lf, seat_stream::seatdir::LOG_KEEP));
                         for f in files {
                             if let Err(e) = s.fs.remove_file(&f) {
                                 log::warn!("seat '{}': {} not removed: {e}", seat.name, f.display());
@@ -1594,7 +1594,7 @@ pub fn dxvk_game(exe: &str, marker: Option<std::io::Result<Vec<u8>>>) -> split_p
     match marker {
         None => {}
         Some(Err(_)) => g.error = Some("marker_unreadable".into()),
-        Some(Ok(b)) => match serde_json::from_slice::<split_shim_core::dxvk::GameMarker>(&b) {
+        Some(Ok(b)) => match serde_json::from_slice::<seat_shim_core::dxvk::GameMarker>(&b) {
             Ok(m) => {
                 g.deployed = true;
                 g.version = Some(m.version);

@@ -1,6 +1,6 @@
 # Behaviour spec
 
-Written by the analyst only (see [../CLEANROOM.md](../CLEANROOM.md)). Behaviour and
+Written by the analyst only (see [../../CLEANROOM.md](../../CLEANROOM.md)). Behaviour and
 interfaces, no code. Each file also notes what must change for native ARM64.
 
 | File | Covers | Status |

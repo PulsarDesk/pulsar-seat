@@ -1,12 +1,12 @@
 # Plan and decisions
 
-Index: [../../AGENTS.md](../../AGENTS.md).
+Index: [../../AGENTS.md](../../../AGENTS.md).
 
 ## Phases
 
 | # | Scope | Output |
 | --- | --- | --- |
-| 0 | Behaviour spec of the reference multi-seat product | `spec/` |
+| 0 | Behaviour spec of the reference multi-seat product | `spec/remote/` |
 | 1 | Manager app + seat service: create/delete seats and users, ports, start/stop, status | Tauri app + Rust service |
 | 2 | Multi-session + per-seat streaming host | |
 | 3 | Per-seat virtual display (IDD), HDR via IddCx | |
@@ -20,8 +20,8 @@ Each phase works on its own before the next starts.
 - Name **Pulsar Split**; lives under the Pulsar umbrella. Pulsar's existing support for an
   installed third-party multi-seat product **stays**.
 - Manager: **Tauri 2 + SvelteKit**; service and drivers in **Rust** where possible.
-- Clean room with **two separate agents**: analyst writes `spec/` only, implementer reads
-  `spec/` only.
+- Clean room with **two separate agents**: analyst writes `spec/remote/` only, implementer reads
+  `spec/remote/` only.
 - UI layout may match the reference for now; the maintainer redesigns it later. No
   third-party branding at any point.
 - Fully free: no licence keys, activation or paid tiers.
@@ -41,7 +41,7 @@ Each phase works on its own before the next starts.
 - **Monorepo** (2026-11-12): one repo `pulsar-split` holds everything — unlike Pulsar's
   multi-repo split. Root Cargo workspace + root bun workspace. Layout:
   `crates/` (Rust libs + service), `apps/` (manager, later tools), `drivers/` (IDD, pad
-  driver — Phase 3/4), `shim/` (per-process isolation — Phase 4), `installer/`, `spec/`,
+  driver — Phase 3/4), `shim/` (per-process isolation — Phase 4), `installer/split/`, `spec/remote/`,
   `docs/`. One CI, one version, one release.
 - **Multi-session (2026-11-12):** both paths, optional. Default: Windows Server + RDSH
   (licence-clean). Separate **experimental** module for client SKUs (termsrv wrapper),

@@ -1,7 +1,7 @@
 # Architecture (our design)
 
 Index: [../../AGENTS.md](../../AGENTS.md). Behaviour targets are in `spec/` (esp.
-`spec/00-architecture.md` §5); decisions in [plan.md](plan.md) "Decisions for phases 1–5".
+`spec/local/00-architecture.md` §5); decisions in [plan.md](plan.md) "Decisions for phases 1–5".
 This file is **how Pulsar Seat is built** and the contract every package builds on. The
 types named here are defined (and doc-commented) in `crates/seat-core` and
 `crates/seat-proto`; when this file and the code disagree, fix one of them.
@@ -46,14 +46,34 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `credprov/` | C++20 COM DLL (v145, SDK 10.0.28000), unsigned | credprov | credential provider + filter for `fast_user_switch` (auto-logon, switch link); registered only by the service — see [credprov/README.md](../../credprov/README.md) |
 | `drivers/` | C (KMDF / FltMgr) + C++17 (IddCx), built unsigned with WDK 10.0.28000, never loaded | drivers | `seat-input-filter` (keyboard / mouse + HID roles), `seat-idd`, `seat-storage-filter` — see [drivers/README.md](../../drivers/README.md) |
 | `installer/` | packaging | installer | see [installer/README.md](../../installer/README.md) |
+| `.cargo/config.toml` | cargo config | contracts | `+crt-static` for x64 / x86 / ARM64 (from Pulsar Split, merge step 2-3) |
+
+Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs in
+[../split/agents/](../split/agents/architecture.md) until the merge steps fold them in):
+
+| Path | Kind | What | Merged at |
+| --- | --- | --- | --- |
+| `crates/split-proto`, `crates/split-core` | lib | Split IPC v2 and model | step 4 into `seat-proto` / `seat-core` |
+| `crates/split-service` | bin `pulsar-split-service` | Split service, `engine/` = future remote seat worker | step 6 into `seat-service` |
+| `crates/split-session`, `crates/split-termwrap` | lib | Server + RDSH sessions, wrapper integration | step 7 into `seat-session` |
+| `crates/split-rdp-helper` | bin `pulsar-split-rdp-helper` | headless IronRDP client (same IronRDP crate versions as `seat-rdp`) | step 7: replaced by a `seat-rdp` headless mode |
+| `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8, one display trait |
+| `crates/seat-audio` | lib | Session Remote Audio discovery, stream-server audio keys (was `split-audio`; target name for the audio merge with `seat-media` discovery at step 8) | — |
+| `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
+| `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 into `apps/manager` |
+| `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
+| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | step 8 / 10 |
+| `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 into one MSI |
+| `spec/remote/` | analyst spec | remote kind ([../../spec/README.md](../../spec/README.md)); the local kind is `spec/local/` | — |
 
 Dependency rule: package crates depend on `seat-core` (and `seat-proto` where they speak
 the protocol), **never on each other** — except `seat-service` (wires everything) and
 `seat-host` (uses display / input / media host-side helpers). Shared PnP access goes
 through `Arc<dyn seat_core::pnp::PnpTree>` built by the service from `seat-media`.
 Package crates add their own deps in their own `Cargo.toml` with explicit versions; only
-the contracts owner edits the root `workspace.dependencies`. Code from pulsar-split may be
-copied with a comment "adapted from pulsar-split", never referenced as a dependency.
+the contracts owner edits the root `workspace.dependencies`. Until merge steps 4-8 the
+remote-kind crates keep their own dependency rules (docs/split/agents/architecture.md);
+`seat-*` local-kind crates do not depend on `split-*` crates.
 
 ## 3. Processes
 
@@ -958,20 +978,23 @@ stopping, error{reason}}`) and is served over the pipe; nothing in volatile regi
 
 ```
 set CARGO_TARGET_DIR=target\agent-<label>        (parallel agents)
-cd apps\manager && bun install && bun run check && bun run test && bun run build
-cargo build && cargo test --workspace             (aarch64; --workspace includes the app,
-                                                  which needs the frontend build first)
+bun install && bun run check && bun run test && bun run build   (root: both managers)
+cargo build && cargo test --workspace             (aarch64; --workspace includes both apps,
+                                                  which need their frontend build first)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace --target x86_64-pc-windows-msvc
 cargo build --release                             then check PE machine 0xAA64 / 0x8664
 bun test installer/scripts
+bun test installer/split/scripts
+cd shim && cargo test --target x86_64-pc-windows-msvc   (x64 + x86 only; x64 emulation on ARM64)
 ```
 
 seat-service builds seat-session with `experimental-client-sku` (a default feature of
 seat-service): the termsrv wrapper module is compiled in but stays off at run time until the
 admin acknowledged the current warning version. `--no-default-features` leaves it out.
 
-`Cargo.lock` was seeded from pulsar-split so offline resolution uses cached crates.
+`Cargo.lock` was seeded from pulsar-split so offline resolution uses cached crates; at merge
+step 2-3 Split's locked registry entries were unioned in.
 
 ### Wizard and manager additions (2026-11-13, wizard-manager)
 

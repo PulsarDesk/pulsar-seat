@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Service-owned server end of the `pulsar-host` control pipe
-//! (docs/agents/pulsar-host-backend.md §3.1).
+//! (docs/split/agents/pulsar-host-backend.md §3.1).
 //!
 //! - Created **before** `pulsar-host` is launched, with `FILE_FLAG_FIRST_PIPE_INSTANCE`
 //!   (fails if anyone already owns the name), `PIPE_REJECT_REMOTE_CLIENTS`, byte mode, one

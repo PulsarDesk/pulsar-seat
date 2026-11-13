@@ -1,4 +1,4 @@
-# Separate workspace (not a root member, contracts.md §0.2): x64 + x86 Windows only.
+# Separate workspace (not a root member, docs/split/agents/contracts.md §0.2): x64 + x86 Windows only.
 [workspace]
 resolver = "3"
 members = ["module", "launcher", "shimctl"]
@@ -7,11 +7,11 @@ members = ["module", "launcher", "shimctl"]
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
-repository = "https://github.com/PulsarDesk/pulsar-split"
+repository = "https://github.com/PulsarDesk/pulsar-seat"
 rust-version = "1.85"
 
 [workspace.dependencies]
-split-shim-core = { path = "../crates/split-shim-core", default-features = false }
+seat-shim-core = { path = "../crates/seat-shim-core", default-features = false }
 log = "0.4"
 
 [profile.release]

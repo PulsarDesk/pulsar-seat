@@ -207,7 +207,7 @@ pub fn apply_seat_rules(
     apply_rules(fw, journal, &seat_rules(seat_id, display_name, base, program, domain))
 }
 
-/// Pulsar seat (docs/agents/pulsar-host-backend.md §3.6): one inbound UDP rule for the node
+/// Pulsar seat (docs/split/agents/pulsar-host-backend.md §3.6): one inbound UDP rule for the node
 /// port, program-scoped to `pulsar-host.exe`, same name as the Sunshine UDP rule so a seat
 /// that switches backend keeps one rule set. No TCP rule.
 pub fn pulsar_seat_rule(seat_id: &str, display_name: &str, node_port: u16, program: &Path, domain: bool) -> FirewallRuleSpec {

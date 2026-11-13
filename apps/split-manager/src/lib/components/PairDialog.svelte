@@ -4,7 +4,7 @@
      Sunshine seats: PIN mode (type the client's PIN). Pulsar seats: approve mode (allow /
      view only / deny a pending request), one-time password on demand, write-only
      permanent connect password, relay sign-in when the relay asks
-     (docs/agents/pulsar-host-backend.md §3.7). -->
+     (docs/split/agents/pulsar-host-backend.md §3.7). -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import { errorMessage, failureText, t } from '#lib/i18n.ts';

@@ -78,7 +78,7 @@ pub fn error(code: &str, detail: &str) {
     use windows_sys::Win32::System::EventLog::{
         DeregisterEventSource, EVENTLOG_ERROR_TYPE, RegisterEventSourceW, ReportEventW,
     };
-    let src: Vec<u16> = split_shim_core::EVENT_SOURCE.encode_utf16().chain(std::iter::once(0)).collect();
+    let src: Vec<u16> = seat_shim_core::EVENT_SOURCE.encode_utf16().chain(std::iter::once(0)).collect();
     let msg: Vec<u16> = format!("{code}: {detail}").encode_utf16().chain(std::iter::once(0)).collect();
     let strings = [msg.as_ptr()];
     // SAFETY: valid NUL-terminated strings; handle closed below.

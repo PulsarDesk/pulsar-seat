@@ -1,6 +1,6 @@
 # Hard rules
 
-Index: [../../AGENTS.md](../../AGENTS.md).
+Index: [../../AGENTS.md](../../../AGENTS.md).
 
 ## Pulsar-wide (from `../docs/agents/rules.md`)
 
@@ -39,7 +39,7 @@ Index: [../../AGENTS.md](../../AGENTS.md).
 
 ## Clean room
 
-- See [../../CLEANROOM.md](../../CLEANROOM.md). Implementers read `spec/` and public docs
+- See [../../CLEANROOM.md](../../../CLEANROOM.md). Implementers read `spec/remote/` and public docs
   only; never third-party binaries, disassembly or analyst raw notes.
 - No third-party names, logos, icons, images or UI copy. Layout and flow may follow the
   spec for now; the maintainer will redesign the UI later.

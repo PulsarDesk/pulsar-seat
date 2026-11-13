@@ -160,8 +160,8 @@ impl Platform for WindowsPlatform {
     }
 
     fn listening_ports(&self) -> Vec<u16> {
-        use split_stream::ports::ListenerProbe;
-        match split_stream::win::IpHelperProbe.listening() {
+        use seat_stream::ports::ListenerProbe;
+        match seat_stream::win::IpHelperProbe.listening() {
             Ok(v) => v.into_iter().map(|(p, _)| p).collect(),
             Err(e) => {
                 crate::log::warn(&format!("listening ports not read: {e}"));

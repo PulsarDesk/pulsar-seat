@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Split per-process isolation, the shared part (spec `50-shim-isolation.md`,
-//! contract `docs/agents/contracts.md` §4.2).
+//! contract `docs/split/agents/contracts.md` §4.2).
 //!
 //! Used by the service (seat map writer, installer, DXVK deploy, health decoding) and by
 //! the `shim/` workspace (the injected module, the launcher and `shimctl`). Everything a

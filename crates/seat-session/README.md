@@ -1,7 +1,7 @@
 # seat-session
 
-Session backends of Pulsar Seat (Phase 2). Licence: GPL-3.0-only. Spec: `spec/30-sessions.md`
-§6, `spec/00-architecture.md` §5.2 / §5.2.1. Contract: `docs/agents/architecture.md` §4.1.
+Session backends of Pulsar Seat (Phase 2). Licence: GPL-3.0-only. Spec: `spec/local/30-sessions.md`
+§6, `spec/local/00-architecture.md` §5.2 / §5.2.1. Contract: `docs/agents/architecture.md` §4.1.
 
 ## Public API (for `seat-service`)
 

@@ -75,7 +75,7 @@ impl Default for GlobalSettings {
     }
 }
 
-/// Same wire names as `split_pads::BackendId`.
+/// Same wire names as `seat_pads::BackendId`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PadBackendPref {
@@ -152,7 +152,7 @@ impl Default for HdrLuminanceSettings {
     }
 }
 
-/// Same fields as `split_audio::SeatAudio`.
+/// Same fields as `seat_audio::SeatAudio`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SeatAudioSettings {
@@ -212,7 +212,7 @@ impl Default for SeatStreamSettings {
     }
 }
 
-/// Stream server a seat runs (contracts §7.4, docs/agents/pulsar-host-backend.md). Each
+/// Stream server a seat runs (contracts §7.4, docs/split/agents/pulsar-host-backend.md). Each
 /// seat runs exactly one. Missing in a v2 config = `sunshine`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -395,13 +395,13 @@ pub struct HostInfo {
     pub max_seats: Option<u32>,
     /// `split_session::HostWarning` values (`{kind, …}`).
     pub warnings: Vec<serde_json::Value>,
-    /// `split_setup::CoexistReport` (`{mode, findings[], …}`).
+    /// `seat_setup::CoexistReport` (`{mode, findings[], …}`).
     pub coexistence: Option<serde_json::Value>,
     /// `split_termwrap::TermwrapStatus`.
     pub termwrap: Option<serde_json::Value>,
     /// `split_display::BackendInfo[]`: driver backend status and HDR availability.
     pub display_backends: Vec<serde_json::Value>,
-    /// `split_pads::BackendAvailability[]`.
+    /// `seat_pads::BackendAvailability[]`.
     pub pad_backends: Vec<serde_json::Value>,
     /// Current `GlobalSettings::multi_session`.
     pub multi_session: bool,
@@ -485,7 +485,7 @@ pub struct PairedClient {
     pub name: String,
 }
 
-/// Same fields as `split_shim_core::ShimTarget`.
+/// Same fields as `seat_shim_core::ShimTarget`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShimTargetDto {

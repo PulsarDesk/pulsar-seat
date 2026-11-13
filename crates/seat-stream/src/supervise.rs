@@ -106,7 +106,7 @@ pub enum StreamNotice {
     GaveUp { last_log: Vec<String> },
     Event(ServerEvent),
     /// Pulsar backend only: operator prompts, relay and trust changes, app launches
-    /// (docs/agents/pulsar-host-backend.md §3.4).
+    /// (docs/split/agents/pulsar-host-backend.md §3.4).
     Peer(crate::backend::PeerEvent),
 }
 

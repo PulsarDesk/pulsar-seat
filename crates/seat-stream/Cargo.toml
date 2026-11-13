@@ -1,5 +1,5 @@
 [package]
-name = "split-stream"
+name = "seat-stream"
 description = "Pulsar Split per-seat stream server: config, apps, control pipe, firewall, ports, supervision"
 version.workspace = true
 edition.workspace = true
@@ -15,7 +15,7 @@ fake = []
 split-proto.workspace = true
 split-core.workspace = true
 # Log-watch fallback for the audio state of unmodified upstream (spec 70 §3.5).
-split-audio.workspace = true
+seat-audio.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

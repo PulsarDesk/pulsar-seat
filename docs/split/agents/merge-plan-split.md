@@ -1,6 +1,6 @@
 # Merge plan: Pulsar Split side
 
-Index: [../../AGENTS.md](../../AGENTS.md). Status: **plan only (2026-11-14)**. No code moves.
+Index: [../../AGENTS.md](../../../AGENTS.md). Status: **plan only (2026-11-14)**. No code moves.
 Counterpart: the Pulsar Seat draft, `../pulsar-seat/docs/agents/merge-plan.md` (Seat half).
 Decision source: [plan.md](plan.md), "Merge with Pulsar Seat" (2026-11-13). Nothing here is
 decided until the maintainer and both sessions agree.
@@ -16,7 +16,7 @@ Placeholder for the unnamed product: `<prod>` (crate prefix `<prod>-`).
 
 ## 1. Packages in pulsar-split
 
-Workspace: root `Cargo.toml` (`crates/*` + `apps/manager/src-tauri`; `default-members` =
+Workspace: root `Cargo.toml` (`crates/*` + `apps/split-manager/src-tauri`; `default-members` =
 every crate, not the manager), root `package.json` (bun workspace `apps/*`). Details:
 [architecture.md](architecture.md) "Layout", [contracts.md](contracts.md) §0–§8.
 
@@ -29,16 +29,16 @@ every crate, not the manager), root `package.json` (bun workspace `apps/*`). Det
 | `crates/split-rdp-helper` | `pulsar-split-rdp-helper.exe` | Headless IronRDP loopback client that creates and holds one seat session. `crates/split-rdp-helper/README.md` |
 | `crates/split-termwrap` | lib | EXPERIMENTAL, off by default: integrates a wrapper the operator installed. `crates/split-termwrap/README.md` |
 | `crates/split-display` | lib | `DisplayBackend` trait + `rdp_session` / `vdd` / `pulsar_idd`, mode / HDR / GPU rules. `crates/split-display/README.md` |
-| `crates/split-audio` | lib | Session Remote Audio endpoint discovery, TS policy, stream-server audio keys, limitations. `crates/split-audio/README.md` |
-| `crates/split-stream` | lib | `StreamBackend` (Sunshine, `pulsar-host`), seat dirs, `server.conf`, apps, pairing, firewall, watchdog. `crates/split-stream/README.md` |
-| `crates/split-pads` | lib | `PadBackend` (ViGEm, usbip-win2 DualSense, own pad), `PadManager`, device security. `crates/split-pads/README.md` |
-| `crates/split-shim-core` | lib | Pure part of per-process isolation: seat map, decisions, health frame, AppHelp install, DXVK. `crates/split-shim-core/README.md` |
-| `crates/split-setup` | lib | `install` / `reconcile` / `uninstall` / `check-coexistence` sub-commands, driver manifests, restore replay. `crates/split-setup/README.md` |
-| `apps/manager` | `PulsarSplitManager` (Tauri 2 + SvelteKit 3 + Svelte 5) | Elevated manager UI (Turkish), pipe client, SCM control. |
+| `crates/seat-audio` | lib | Session Remote Audio endpoint discovery, TS policy, stream-server audio keys, limitations. `crates/seat-audio/README.md` |
+| `crates/seat-stream` | lib | `StreamBackend` (Sunshine, `pulsar-host`), seat dirs, `server.conf`, apps, pairing, firewall, watchdog. `crates/seat-stream/README.md` |
+| `crates/seat-pads` | lib | `PadBackend` (ViGEm, usbip-win2 DualSense, own pad), `PadManager`, device security. `crates/seat-pads/README.md` |
+| `crates/seat-shim-core` | lib | Pure part of per-process isolation: seat map, decisions, health frame, AppHelp install, DXVK. `crates/seat-shim-core/README.md` |
+| `crates/seat-setup` | lib | `install` / `reconcile` / `uninstall` / `check-coexistence` sub-commands, driver manifests, restore replay. `crates/seat-setup/README.md` |
+| `apps/split-manager` | `PulsarSplitManager` (Tauri 2 + SvelteKit 3 + Svelte 5) | Elevated manager UI (Turkish), pipe client, SCM control. |
 | `shim/` | `PulsarSplitShim.dll`, `pulsar-split-launch(32).exe`, `pulsar-split-shimctl.exe` | Separate Cargo workspace, x64 + x86 only. `shim/README.md` |
 | `drivers/split-idd` | UMDF IddCx driver (C++) | Own remote-session IDD. Unbuilt, untested, unsigned. `drivers/split-idd/README.md` |
 | `drivers/split-pad` | UMDF HID minidriver | Own virtual pad. Unbuilt, untested, unsigned. `drivers/split-pad/README.md` |
-| `installer/` | scripts + manifests | WiX fragment, NSIS hooks, Tauri bundle overrides, `fetch-deps.ts`, `check-payload.ts`, `drivers.json`, `stream-server.json`. `installer/README.md` |
+| `installer/split/` | scripts + manifests | WiX fragment, NSIS hooks, Tauri bundle overrides, `fetch-deps.ts`, `check-payload.ts`, `drivers.json`, `stream-server.json`. `installer/split/README.md` |
 | `scripts/` | `coverage-rust.ts` | cargo-llvm-cov runner (x64 target, see [coverage.md](coverage.md)). |
 
 ## 2. Process and IPC model
@@ -50,7 +50,7 @@ every crate, not the manager), root `package.json` (bun workspace `apps/*`). Det
 | `PulsarSplitManager` | elevated admin, console session (`requireAdministrator` in release) | user |
 | `pulsar-split-service` (SCM name `PulsarSplit`) | LocalSystem, session 0 | SCM |
 | `pulsar-split-rdp-helper` | child of the service, one per running seat | service (`spawn_lock`, contracts §0.1a) |
-| `sunshine.exe` or `pulsar-host.exe` | SYSTEM token in the seat session, kill-on-close seat job | service (`split_stream` launcher) |
+| `sunshine.exe` or `pulsar-host.exe` | SYSTEM token in the seat session, kill-on-close seat job | service (`seat_stream` launcher) |
 | Autostart apps | seat user token in the seat session | service |
 | Shim module / launcher (opt-in) | inside seat-user processes | service / AppHelp |
 
@@ -90,7 +90,7 @@ Service threads: pipe server (thread per client), 1 s timer (`Engine::tick` then
 | Seat passwords | `HKLM\SOFTWARE\PulsarSplit\Secrets`, one REG_BINARY per seat | DPAPI machine scope; key DACL `D:P(A;OICI;KA;;;SY)(A;OICI;KA;;;BA)` |
 | Pulsar seat secrets | `Secrets\Pulsar\<seat-id>.{identity,connect_password,relay_key}` | DPAPI, own protected DACL |
 | Other keys | `Runtime\Seats\<session>` (volatile seat map), `Shim\` (incl. `DxvkGames`), `Termwrap\`, `Session\Originals` | |
-| Seat dirs | `%ProgramData%\PulsarSplit\seats\<seat-id>\` (`server.conf`, `apps.json`, `state.json`, `server.log`, `credentials\`, `pulsar\`) | `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`, reparse points refused (`split-stream/src/seatdir.rs`) |
+| Seat dirs | `%ProgramData%\PulsarSplit\seats\<seat-id>\` (`server.conf`, `apps.json`, `state.json`, `server.log`, `credentials\`, `pulsar\`) | `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`, reparse points refused (`seat-stream/src/seatdir.rs`) |
 | Run state, journals, logs | `%ProgramData%\PulsarSplit\{run\sessions.json, journal\<package>.jsonl, logs\}` | same protected DACL; journals are JSON Lines intent/done (contracts §0.3) |
 | Install root | `%ProgramFiles%\Pulsar Split` | |
 
@@ -114,20 +114,20 @@ Source: module doc of `crates/split-service/src/registry_store.rs`.
 | Area | Backends (default first) | State |
 | --- | --- | --- |
 | Display | `rdp_session` (default for remote seats, no HDR) · `vdd` (Virtual-Display-Driver, MIT, console seat only) · `pulsar_idd` (own `drivers/split-idd`, never auto-chosen while unsigned; needs a WRDS protocol provider) | `crates/split-display/README.md` |
-| Pads | ViGEmBus (X360 / DS4, only if already installed) · usbip-win2 + in-process USB/IP DualSense server · own `split-pad` (only on explicit `pad_backend = pulsar_pad`) | `crates/split-pads/README.md` |
+| Pads | ViGEmBus (X360 / DS4, only if already installed) · usbip-win2 + in-process USB/IP DualSense server · own `split-pad` (only on explicit `pad_backend = pulsar_pad`) | `crates/seat-pads/README.md` |
 | Isolation | pad device security first; AppHelp shim + launcher opt-in, x64/x86 only | `shim/README.md` |
-| Audio | no driver: the session's Remote Audio endpoint, captured by the stream server (WASAPI loopback); no microphone path yet | `crates/split-audio/README.md` |
+| Audio | no driver: the session's Remote Audio endpoint, captured by the stream server (WASAPI loopback); no microphone path yet | `crates/seat-audio/README.md` |
 | Stream | upstream Sunshine pinned `v2026.516.143833` (Moonlight, default) · `pulsar-host` (Pulsar clients, not built yet; missing = `backend_missing`, no fallback) | contracts §7.4, [pulsar-host-backend.md](pulsar-host-backend.md) |
 
 ## 6. Installer and signing
 
 | Item | Pulsar Split | Pulsar Seat |
 | --- | --- | --- |
-| Package | Tauri bundle: MSI default (WiX fragment `installer/wix/PulsarSplit.wxs` with `ServiceInstall`, deferred custom actions), NSIS alternative (`hooks.nsh`) | own WiX MSI under `installer/` |
-| Third-party pins | `installer/drivers.json` (URL + SHA-256 + licence per driver), `installer/stream-server.json` (Sunshine zip per arch + SHA-256); `fetch-deps.ts` verifies, `check-payload.ts` blocks MS DLLs / certs / web UI | check-payload gate |
+| Package | Tauri bundle: MSI default (WiX fragment `installer/split/wix/PulsarSplit.wxs` with `ServiceInstall`, deferred custom actions), NSIS alternative (`hooks.nsh`) | own WiX MSI under `installer/split/` |
+| Third-party pins | `installer/split/drivers.json` (URL + SHA-256 + licence per driver), `installer/split/stream-server.json` (Sunshine zip per arch + SHA-256); `fetch-deps.ts` verifies, `check-payload.ts` blocks MS DLLs / certs / web UI | check-payload gate |
 | CRT | `+crt-static` for x64 / x86 / ARM64 (`.cargo/config.toml`) | — |
 | Code signing | **none yet**; README asks for a public CA cert + RFC 3161 timestamp later; drivers unsigned | none yet for code; test-signing VM for drivers, attestation before release |
-| Release signing | none | minisign release key (key id 0E7EC5FC77170613), public key in `installer/release-signers.txt`, private key outside the repo, `seat-release` crate, update check |
+| Release signing | none | minisign release key (key id 0E7EC5FC77170613), public key in `installer/split/release-signers.txt`, private key outside the repo, `seat-release` crate, update check |
 
 ## 7. Overlap with Pulsar Seat
 
@@ -142,12 +142,12 @@ Source: module doc of `crates/split-service/src/registry_store.rs`.
 | Client-SKU wrapper integration | `split-termwrap` | `seat-session` `termsrv_wrapper` | **Keep one**, as a `SessionBackend` kind; pick by the union of both test suites. |
 | Fast user switch / kiosk | — | U1 / U3, `credprov/` | Local only; remote seats refuse them. |
 | Display | `rdp_session` / VDD / `split-idd` | CCD / window presenter / `display_core` / `seat-idd` | **Keep both behind one trait** per kind now; one own IddCx driver later (one signing cost). |
-| Pads + HID shim | `split-pads`, `split-shim-core`, `shim/` | `seat-input` (raw input, KMDF filter; XInput pads shared) | **Merge pads + shim into shared crates**; `seat-input` stays for keyboard / mouse / HID routing of local seats and can feed a seat-owned virtual pad. |
+| Pads + HID shim | `seat-pads`, `seat-shim-core`, `shim/` | `seat-input` (raw input, KMDF filter; XInput pads shared) | **Merge pads + shim into shared crates**; `seat-input` stays for keyboard / mouse / HID routing of local seats and can feed a seat-owned virtual pad. |
 | Audio | session Remote Audio endpoint, read by the stream server | `rdp_bridge` to the seat's physical endpoint (`seat-media`) | **Merge** endpoint discovery (session id, CfgMgr) into one audio crate; routing stays per kind. |
 | proto / core | `split-proto` v2, `split-core` | `seat-proto` v1, `seat-core` (traits, masks) | **Merge into one** proto + core; new protocol version above both. |
 | Journals / restore | per-package `journal\<package>.jsonl` | `journal\changes.jsonl` | **Merge** into one record format; uninstall replays both until old records are gone. |
 | Installer | Tauri MSI/NSIS, dep pins | WiX MSI, release key | **Keep one MSI** with Seat's signing / update gates plus Split's pinned-dependency fetch and payload rules (union). |
-| Streaming | `split-stream` | — | Remote only, moves as is. |
+| Streaming | `seat-stream` | — | Remote only, moves as is. |
 
 ## 8. Proposal
 
@@ -161,13 +161,13 @@ Source: module doc of `crates/split-service/src/registry_store.rs`.
     <prod>-display                                   shared trait, per-kind backends
     <prod>-host  <prod>-input  <prod>-media  <prod>-compat  <prod>-release   local kind
     <prod>-stream                                    remote kind
-  apps/manager                one manager
+  apps/split-manager                one manager
   shim/                       separate workspace (x64 + x86)
   credprov/                   local kind
   drivers/                    seat-input-filter, seat-storage-filter, IddCx driver(s), pad driver
-  installer/                  one MSI
+  installer/split/                  one MSI
   spec/local/  spec/remote/   analyst specs, kept apart
-  docs/agents/                one index, one rules.md, one CLEANROOM.md
+  docs/split/agents/                one index, one rules.md, one CLEANROOM.md
 ```
 
 ### 8.2 Crate names
@@ -215,7 +215,7 @@ streaming, pads, shim, display and setup. Those packages move in mostly unchange
 Every step ends with all gates green: `cargo test --workspace`,
 `cargo clippy --workspace --all-targets` (0 warnings), `cargo check --workspace --target
 x86_64-pc-windows-msvc`, `bun run test` / `check` / `build`, the `shim/` workspace tests,
-`bun test installer/scripts`, and PE machine checks of the artefacts. Test counts may only
+`bun test installer/split/scripts`, and PE machine checks of the artefacts. Test counts may only
 go up, except for tests a step deletes on purpose (list them).
 
 | # | Step | Extra tests |

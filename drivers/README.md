@@ -19,6 +19,15 @@ only, never copied (spec 00 §3.9 item 5).
 | `seat-idd/` | Virtual monitor per seat (sources written, see its README) | IddCx (UMDF 2) | root device via INF with a real hardware id | `DisplayBinding` / `pulsar_idd`; `DriverId::Idd` | `IDD_INTERFACE_GUID` |
 | `seat-storage-filter/` | Strict storage isolation | FltMgr minifilter | allocated altitude (to request; placeholder `UNALLOCATED` today) | `DeviceGate` / `storage_minifilter`; `DriverId::StorageMinifilter` | service `STORAGE_FILTER_SERVICE` (`PulsarSeatStorageGate`); port `MINIFILTER_PORT_NAME` |
 
+Remote seat kind (from Pulsar Split, merge-plan.md; one IddCx driver direction at step 8,
+both display backends behind one trait until then). **Unbuilt, untested, unsigned**; not
+part of `installer/scripts/build-drivers.ps1` yet:
+
+| Dir | Driver | Framework | Notes |
+| --- | --- | --- | --- |
+| `split-idd/` | Per-session virtual display, HDR via IddCx (`split-display` backend `pulsar_idd`) | IddCx (UMDF 2, C++) | [split-idd/README.md](split-idd/README.md); behaviour `spec/remote/40-display-hdr.md` |
+| `split-pad/` | Per-seat virtual gamepad (`seat-pads` backend PulsarPad) | UMDF 2 HID minidriver (Rust, windows-drivers-rs, own Cargo workspace) | [split-pad/README.md](split-pad/README.md); shares `crates/seat-pads/src/{layout,descriptors,features}.rs` via `#[path]` |
+
 `seat-storage-filter` is outside the rules.md driver list: an exception that needs the
 maintainer's explicit OK before it is ever installed (spec 70 §5.3, spec 90 §11 item 2).
 

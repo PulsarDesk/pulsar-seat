@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Seat session backends â€” implements [`seat_core::backend::SessionBackend`].
 //!
-//! Spec: `spec/30-sessions.md` Â§6, `spec/00-architecture.md` Â§5.2 / Â§5.2.1, plan.md
+//! Spec: `spec/local/30-sessions.md` Â§6, `spec/local/00-architecture.md` Â§5.2 / Â§5.2.1, plan.md
 //! "Decisions for phases 1â€“5". Contract: `docs/agents/architecture.md` Â§4.1. Details and
 //! what is untested: `README.md` next to this crate.
 //!

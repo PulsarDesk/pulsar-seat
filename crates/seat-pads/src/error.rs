@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The one error type of `split-pads`.
+//! The one error type of `seat-pads`.
 
 use split_proto::{ErrorCode, ProtoError};
 

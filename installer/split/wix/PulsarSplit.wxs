@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!--
   Pulsar Split - WiX v3 fragment merged into the Tauri 2 MSI
-  (bundle.windows.wix.fragmentPaths / componentRefs / featureRefs, see apps/manager/src-tauri/tauri.conf.json).
+  (bundle.windows.wix.fragmentPaths / componentRefs / featureRefs, see apps/split-manager/src-tauri/tauri.conf.json).
 
   What it adds to the Tauri product:
     * the seat service binary + ServiceInstall / ServiceConfig / ServiceConfigFailureActions /

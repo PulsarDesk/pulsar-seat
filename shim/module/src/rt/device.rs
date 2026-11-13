@@ -3,8 +3,8 @@
 //! (`CM_Get_Device_Interface_PropertyW`, `CM_Locate_DevNodeW`, `CM_Get_Parent`,
 //! `CM_Get_Device_IDW`, `CM_Get_DevNode_Registry_PropertyW`), cached per path.
 
-use split_shim_core::decide::{Access, DevNodeInfo, DeviceOrigin, classify_nodes, hid_access, interface_path_to_instance_id};
-use split_shim_core::regval::utf16_to_multi_sz;
+use seat_shim_core::decide::{Access, DevNodeInfo, DeviceOrigin, classify_nodes, hid_access, interface_path_to_instance_id};
+use seat_shim_core::regval::utf16_to_multi_sz;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{

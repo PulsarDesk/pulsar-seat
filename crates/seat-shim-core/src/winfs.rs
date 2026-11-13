@@ -14,7 +14,7 @@
 //! owner SYSTEM or Administrators.
 //!
 //! The DACL is the one the other packages use for the same data root
-//! (`split-setup` `DATA_DIR_SDDL`, `split-stream` `SEAT_DIR_SDDL`), so re-applying it never
+//! (`seat-setup` `DATA_DIR_SDDL`, `seat-stream` `SEAT_DIR_SDDL`), so re-applying it never
 //! fights them. No `BUILTIN\Users` read entry: nothing outside SYSTEM / Administrators
 //! reads these folders (the module reads only the registry).
 

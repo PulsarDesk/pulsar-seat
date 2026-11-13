@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Build-time (CI) step: download the third-party artefacts pinned in
-// installer/drivers.json and installer/stream-server.json, verify their SHA-256, lay them
+// installer/split/drivers.json and installer/split/stream-server.json, verify their SHA-256, lay them
 // out for the Tauri bundle and run check-payload on the result.
 //
-//   bun installer/scripts/fetch-deps.ts --arch x64|arm64 [--out target/installer-deps] [--only drivers|stream]
+//   bun installer/split/scripts/fetch-deps.ts --arch x64|arm64 [--out target/installer-deps] [--only drivers|stream]
 //
-// Output (per arch, plus a copy in <out>/current for installer/tauri.release.conf.json):
+// Output (per arch, plus a copy in <out>/current for installer/split/tauri.release.conf.json):
 //   <out>/<arch>/drivers.json              resolved manifest (only this arch, INF globs resolved)
 //   <out>/<arch>/drivers/<id>/...          extracted INF package or the official installer exe
 //   <out>/<arch>/stream-server/...         stream server without its browser web UI
@@ -195,7 +195,7 @@ async function unzip(zip: string, dest: string): Promise<void> {
 }
 
 async function fetchDrivers(root: string, arch: Arch, out: string, cache: string): Promise<void> {
-  const all: DriverPackage[] = JSON.parse(readFileSync(join(root, "installer", "drivers.json"), "utf8"));
+  const all: DriverPackage[] = JSON.parse(readFileSync(join(root, "installer", "split", "drivers.json"), "utf8"));
   const errs = validateDrivers(all);
   if (errs.length) throw new Error(errs.join("\n"));
   const resolved: DriverPackage[] = [];
@@ -226,7 +226,7 @@ async function fetchDrivers(root: string, arch: Arch, out: string, cache: string
 }
 
 async function fetchStream(root: string, arch: Arch, out: string, cache: string): Promise<void> {
-  const m: StreamManifest = JSON.parse(readFileSync(join(root, "installer", "stream-server.json"), "utf8"));
+  const m: StreamManifest = JSON.parse(readFileSync(join(root, "installer", "split", "stream-server.json"), "utf8"));
   const errs = validateStream(m);
   if (errs.length) throw new Error(errs.join("\n"));
   const b = m.builds[arch];
@@ -264,7 +264,7 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const root = resolve(import.meta.dir, "..", "..");
+  const root = resolve(import.meta.dir, "..", "..", "..");
   const arch = (arg("--arch") ?? (process.arch === "arm64" ? "arm64" : "x64")) as Arch;
   if (arch !== "x64" && arch !== "arm64") throw new Error(`unsupported --arch ${arch}`);
   const base = resolve(root, arg("--out") ?? join("target", "installer-deps"));

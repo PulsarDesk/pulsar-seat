@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `pulsar-split-shimctl`: operator tool for the isolation layer. Uses the same
-//! `split_shim_core` installer, seat map and DXVK code as the service. Changing commands
+//! `seat_shim_core` installer, seat map and DXVK code as the service. Changing commands
 //! need an elevated prompt; `status`, `seatmap` and `notice` only read.
 
 mod cmd;

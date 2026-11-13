@@ -2,8 +2,8 @@
 //! Pulsar Seat input — [`seat_core::backend::InputRouter`] implementations (service side)
 //! and the seat host's input path (raw input → [`seat_core::backend::InputSink`]).
 //!
-//! Owner: the **input** package. Spec: `spec/50-input.md` §4, `spec/30-sessions.md`
-//! §6.1.1 point 6, `spec/00-architecture.md` §5.6. Contract: `docs/agents/architecture.md`
+//! Owner: the **input** package. Spec: `spec/local/50-input.md` §4, `spec/local/30-sessions.md`
+//! §6.1.1 point 6, `spec/local/00-architecture.md` §5.6. Contract: `docs/agents/architecture.md`
 //! §4.3. Driver: `drivers/seat-input-filter` (KMDF, unsigned, never loaded).
 //!
 //! | Module | Side | What |

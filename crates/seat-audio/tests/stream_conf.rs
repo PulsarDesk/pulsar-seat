@@ -5,11 +5,11 @@
 
 use std::path::Path;
 
-use split_audio::{Flow, SeatAudio, server_keys};
+use seat_audio::{Flow, SeatAudio, server_keys};
 use split_proto::{GlobalSettings, SeatConfig};
-use split_stream::conf::{Capture, ConfInputs, Gamepad, generate};
-use split_stream::dist::ServerFlavour;
-use split_stream::seatdir::SeatDir;
+use seat_stream::conf::{Capture, ConfInputs, Gamepad, generate};
+use seat_stream::dist::ServerFlavour;
+use seat_stream::seatdir::SeatDir;
 
 const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const GUID: &str = "{6C26BA7D-F0B2-4225-B422-8168C5261E45}";
@@ -47,7 +47,7 @@ fn default_audio_keys_feed_the_stream_writer() {
     for flavour in [ServerFlavour::Upstream, ServerFlavour::PulsarFork] {
         for s in [SeatAudio::default(), SeatAudio { stream_audio: false, microphone: true }] {
             let text = conf(server_keys(&s, None), flavour);
-            assert_eq!(count(&text, "install_steam_audio_drivers"), 1, "written once, by split-stream");
+            assert_eq!(count(&text, "install_steam_audio_drivers"), 1, "written once, by seat-stream");
             assert!(text.contains("install_steam_audio_drivers = disabled"));
             let want = if s.stream_audio { "stream_audio = enabled" } else { "stream_audio = disabled" };
             assert!(text.lines().any(|l| l == want), "{text}");
@@ -58,8 +58,8 @@ fn default_audio_keys_feed_the_stream_writer() {
 #[test]
 fn pinned_audio_keys_feed_the_stream_writer() {
     let eid = format!("{{3.0.0.00000003}}.{GUID}");
-    let ep = split_audio::Endpoint {
-        instance_id: format!("{}{eid}", split_audio::MMDEVAPI_PREFIX),
+    let ep = seat_audio::Endpoint {
+        instance_id: format!("{}{eid}", seat_audio::MMDEVAPI_PREFIX),
         endpoint_id: eid.clone(),
         friendly_name: "Remote Audio".into(),
         session_id: Some(3),

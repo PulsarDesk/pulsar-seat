@@ -5,7 +5,7 @@ The PulsarPad UMDF 2 HID minidriver: per-seat virtual gamepads for Pulsar Split
 
 > This driver has never been compiled, loaded or signed. The plan (2026-11-12) is to
 > write our own drivers now and load them only after signing. The service never selects
-> this backend by default. `split_pads::PulsarPadBackend` is used only when the operator
+> this backend by default. `seat_pads::PulsarPadBackend` is used only when the operator
 > sets `pad_backend = pulsar_pad` **and** the package is staged.
 
 ## Design
@@ -48,7 +48,7 @@ The PulsarPad UMDF 2 HID minidriver: per-seat virtual gamepads for Pulsar Split
   - get input report;
   - activate / deactivate.
 - **Shared source**: `layout.rs`, `descriptors.rs` and `features.rs` are included from
-  `crates/split-pads/src` via `#[path]`. The service and the driver can therefore never
+  `crates/seat-pads/src` via `#[path]`. The service and the driver can therefore never
   disagree on offsets or report layouts.
 - No WDK sample code is used. The Windows-driver-samples repository is MS-PL, which is
   GPL-incompatible (OQ 26). The code follows the public API documentation only.

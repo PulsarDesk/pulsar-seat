@@ -3,7 +3,7 @@
 Behaviour spec of the multi-seat host that Pulsar Split must be compatible with
 ("the reference product", version 1.6.0.0). Written by the analyst from static
 inspection of the shipped files and read-only observation of one installed system.
-No code, no decompiled material. See [../CLEANROOM.md](../CLEANROOM.md).
+No code, no decompiled material. See [../CLEANROOM.md](../../CLEANROOM.md).
 
 Evidence markers used below:
 

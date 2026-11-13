@@ -1,22 +1,22 @@
 # Architecture (our design)
 
-Index: [../../AGENTS.md](../../AGENTS.md). Behaviour targets are in `spec/`; this file is
+Index: [../../AGENTS.md](../../../AGENTS.md). Behaviour targets are in `spec/remote/`; this file is
 how Pulsar Split is built. Open design questions: [open-questions.md](open-questions.md).
 
 ## Layout (monorepo)
 
 | Path | What |
 | --- | --- |
-| `Cargo.toml` | Cargo workspace: `crates/*` + `apps/manager/src-tauri`. `default-members` = every crate under `crates/` (not the manager), so `cargo test` at the root does not need the UI built. Package crates are also `[workspace.dependencies]`. |
+| `Cargo.toml` | Cargo workspace: `crates/*` + `apps/split-manager/src-tauri`. `default-members` = every crate under `crates/` (not the manager), so `cargo test` at the root does not need the UI built. Package crates are also `[workspace.dependencies]`. |
 | `package.json` | bun workspace (`apps/*`), root scripts `test` / `build` / `check` run in every workspace. One `bun.lock`. |
 | `crates/split-proto` | IPC messages (serde JSON) and pipe framing. No platform code. |
 | `crates/split-core` | Pure logic: seat/global model validation, port arithmetic + allocation, `ConfigStore` trait (memory + JSON file impls), Phase 1 config helpers, watchdog state machine, `Controller` (request handling over a `Platform` trait, async seat reports, event ring). |
 | `crates/split-service` | Windows service binary `pulsar-split-service.exe`: SCM glue, control pipe, shim health pipe, registry store, DPAPI, `engine/` (seat orchestration over the package traits, tested with the packages' fakes), `wiring.rs` (real package implementations), `WindowsPlatform`, setup sub-commands (`setup_cmd.rs`). |
 | `crates/split-session`, `split-rdp-helper` | Path A multi-session (Server + RDSH), loopback RDP helper. |
 | `crates/split-termwrap` | EXPERIMENTAL client-SKU module (operator-installed wrapper), off by default. |
-| `crates/split-display`, `split-audio`, `split-stream`, `split-pads`, `split-shim-core`, `split-setup` | Packages per [contracts.md](contracts.md). |
-| `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5 (runes), `adapter-static` SPA. `src-tauri` = Rust side. |
-| `drivers/`, `shim/`, `installer/` | Own drivers (unbuilt, unsigned), shim workspace (x64/x86), installer scripts. |
+| `crates/split-display`, `seat-audio`, `seat-stream`, `seat-pads`, `seat-shim-core`, `seat-setup` | Packages per [contracts.md](contracts.md). |
+| `apps/split-manager` | Tauri 2 + SvelteKit 3 + Svelte 5 (runes), `adapter-static` SPA. `src-tauri` = Rust side. |
+| `drivers/`, `shim/`, `installer/split/` | Own drivers (unbuilt, unsigned), shim workspace (x64/x86), installer scripts. |
 
 ## Processes
 
@@ -28,10 +28,10 @@ manager (elevated, console session)            seat service (LocalSystem, sessio
                                                               |-- WindowsPlatform (users, SCM start type)
                                                                     `-- Engine (seat workers)
                                                                           |-- split-session (helper child, sessions)
-                                                                          |-- split-display, split-audio
-                                                                          |-- split-stream (StreamBackend per seat: Sunshine | pulsar-host)
-                                                                          |-- split-pads, split-shim-core (seat map)
-                                                                          `-- split-termwrap, split-setup (coexistence)
+                                                                          |-- split-display, seat-audio
+                                                                          |-- seat-stream (StreamBackend per seat: Sunshine | pulsar-host)
+                                                                          |-- seat-pads, seat-shim-core (seat map)
+                                                                          `-- split-termwrap, seat-setup (coexistence)
   timer thread (1 s): Engine::tick (session restarts, server poll, pads) -> Controller::drain_reports
   pad pump thread (4 ms); shim health pipe PulsarSplit.ShimHealth (write-only for users)
 ```
@@ -129,7 +129,7 @@ password stored. Service start (background thread): coexistence, termwrap `boot_
 `host_info`, `prepare_host` + `wait_rds_ready` (only with multi-seat on), session sweep,
 pad orphans, seat map clear, then the seats marked "start with service". Shutdown: stop
 all, wait up to 60 s, sweep, pad orphans, seat map clear. Stream-server crashes are handled
-by split-stream's own watchdog (`server_policy`: 1 s to 60 s back-off, give up after 5).
+by seat-stream's own watchdog (`server_policy`: 1 s to 60 s back-off, give up after 5).
 
 ## Manager UI
 

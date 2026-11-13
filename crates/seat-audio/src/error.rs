@@ -3,8 +3,8 @@
 
 use split_proto::{ErrorCode, ProtoError};
 
-/// Errors of `split-audio`. Every variant has a stable snake_case reason code
-/// (`AudioError::code`), see docs/agents/contracts.md §0.3 / §6.
+/// Errors of `seat-audio`. Every variant has a stable snake_case reason code
+/// (`AudioError::code`), see docs/split/agents/contracts.md §0.3 / §6.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AudioError {
     /// `fDisableCam` (policy or RDP listener) blocks audio playback redirection, so the

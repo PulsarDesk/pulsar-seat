@@ -24,7 +24,7 @@ impl Default for SeatAudio {
     }
 }
 
-/// Written by `split-stream` (`conf::generate`, always `disabled`), **not** by
+/// Written by `seat-stream` (`conf::generate`, always `disabled`), **not** by
 /// [`server_keys`]: the stream writer owns the key and rejects audio keys that duplicate
 /// its own (open question audio-7). Kept for reference.
 pub const K_INSTALL_STEAM_AUDIO_DRIVERS: &str = "install_steam_audio_drivers";
@@ -34,7 +34,7 @@ pub const K_AUDIO_SINK: &str = "audio_sink";
 
 /// Audio keys for the seat's stream-server config (`ConfInputs::audio_keys`).
 ///
-/// - `install_steam_audio_drivers` is **not** emitted here: `split-stream` writes
+/// - `install_steam_audio_drivers` is **not** emitted here: `seat-stream` writes
 ///   `install_steam_audio_drivers = disabled` itself (a machine-wide Steam sink would mix
 ///   all seats, spec 70 §3.1) and refuses duplicates (open question audio-7).
 /// - `stream_audio = enabled|disabled`.
@@ -142,7 +142,7 @@ mod tests {
     fn keys_default_omit_sinks() {
         let k = server_keys(&SeatAudio::default(), None);
         assert_eq!(kv(&k), vec![("stream_audio", "enabled")]);
-        assert!(!k.iter().any(|(k, _)| k == K_INSTALL_STEAM_AUDIO_DRIVERS), "split-stream owns it");
+        assert!(!k.iter().any(|(k, _)| k == K_INSTALL_STEAM_AUDIO_DRIVERS), "seat-stream owns it");
         let off = SeatAudio { stream_audio: false, microphone: false };
         assert_eq!(kv(&server_keys(&off, None)), vec![("stream_audio", "disabled")]);
     }

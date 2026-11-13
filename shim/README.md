@@ -1,12 +1,12 @@
 # shim/ — per-process seat isolation
 
-Phase 4 isolation layer (spec `spec/50-shim-isolation.md`, contract
-`docs/agents/contracts.md` §4). Processes in seat session N should behave as if seat N
+Phase 4 isolation layer (spec `spec/remote/50-shim-isolation.md`, contract
+`docs/split/agents/contracts.md` §4). Processes in seat session N should behave as if seat N
 were the only interactive session; the console must not see seat-owned input.
 
 This directory is a **separate Cargo workspace** (not a root member), Windows **x64 + x86
 only**. ARM64 hosts are out of scope (spec 50 §14). All decisions live in the root crate
-`crates/split-shim-core` (pure, unit-tested); this workspace is the thin Windows glue.
+`crates/seat-shim-core` (pure, unit-tested); this workspace is the thin Windows glue.
 
 | Crate | Output | What |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ Opt-in, in this order of preference:
 
 1. **No injection.** Pad device security (pads package) scopes our virtual pads to their
    seat user for every API (HID, Raw Input, GameInput, WGI). Steam runs per seat as the
-   seat user with `-master_ipc_name_override` (`split_shim_core::steam_launch_args`), so
+   seat user with `-master_ipc_name_override` (`seat_shim_core::steam_launch_args`), so
    HKCU is naturally per seat. This is the primary path.
 2. **Launcher injection** for processes the service or the stream server starts (Steam,
    autostart apps, app-list entries): `pulsar-split-launch [--wait] -- <exe> <args…>`.
@@ -48,7 +48,7 @@ processes get only the HID rule, and only while a running seat asks for HID isol
 
 ## What the module does (spec 50 §4–§8)
 
-Each hook calls a pure function of `split_shim_core::decide`:
+Each hook calls a pure function of `seat_shim_core::decide`:
 
 | Group | Hooks | Decision |
 | --- | --- | --- |
@@ -121,7 +121,7 @@ cargo build --release --target x86_64-pc-windows-msvc
 cargo build --release --target i686-pc-windows-msvc
 ```
 
-Core logic: `cargo test -p split-shim-core` and `cargo clippy -p split-shim-core
+Core logic: `cargo test -p seat-shim-core` and `cargo clippy -p seat-shim-core
 --all-targets` at the repo root. Static CRT (`.cargo/config.toml`): no Microsoft runtime
 DLLs are shipped. Release profile uses `panic = "abort"`.
 
@@ -179,5 +179,5 @@ pulsar-split-shimctl restore            # replay %ProgramData%\PulsarSplit\journ
   the install folder's licence notices.
 - `tracelogging` (MIT, Microsoft), `windows-sys` (MIT/Apache-2.0), `serde`/`serde_json`,
   `thiserror`, `log`, `sha2`, `flate2`, `tar` (MIT/Apache-2.0).
-- DXVK (zlib/libpng licence) is never bundled; its notice (`split_shim_core::DXVK_NOTICE`)
+- DXVK (zlib/libpng licence) is never bundled; its notice (`seat_shim_core::DXVK_NOTICE`)
   is written next to the downloaded release and shown in the manager's About screen.

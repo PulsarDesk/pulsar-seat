@@ -2,15 +2,15 @@
 //! Runs a parsed command against the real system (same code paths as the service).
 
 use crate::cmd::Cmd;
-use split_shim_core::ShimError;
-use split_shim_core::dxvk::{
+use seat_shim_core::ShimError;
+use seat_shim_core::dxvk::{
     DXVK_NOTICE, DxvkDeployer, FsDxvkDeployer, StdFs, download_release, load_pin, pin_release, release_dir, store_pin,
 };
-use split_shim_core::install::{AppHelpInstaller, ModulePaths, ShimInstaller, ShimSystem, SystemRestoreApplier};
-use split_shim_core::journal::{now_rfc3339, restore_all};
-use split_shim_core::regval::RegValue;
-use split_shim_core::seatmap::SeatMapReader;
-use split_shim_core::win::{RegSeatMap, WinHttpFetcher, WinShimSystem, ensure_dxvk_root, open_journal};
+use seat_shim_core::install::{AppHelpInstaller, ModulePaths, ShimInstaller, ShimSystem, SystemRestoreApplier};
+use seat_shim_core::journal::{now_rfc3339, restore_all};
+use seat_shim_core::regval::RegValue;
+use seat_shim_core::seatmap::SeatMapReader;
+use seat_shim_core::win::{RegSeatMap, WinHttpFetcher, WinShimSystem, ensure_dxvk_root, open_journal};
 
 fn clock() -> String {
     now_rfc3339()
@@ -18,11 +18,11 @@ fn clock() -> String {
 
 /// Journal for read-only commands: never written, reads as empty.
 struct NoJournal;
-impl split_shim_core::journal::RestoreLog for NoJournal {
-    fn append(&self, _: &split_shim_core::journal::RestoreRecord) -> Result<(), ShimError> {
+impl seat_shim_core::journal::RestoreLog for NoJournal {
+    fn append(&self, _: &seat_shim_core::journal::RestoreRecord) -> Result<(), ShimError> {
         Err(ShimError::System("read-only command wrote to the journal".into()))
     }
-    fn read_all(&self) -> Result<Vec<split_shim_core::journal::RestoreRecord>, ShimError> {
+    fn read_all(&self) -> Result<Vec<seat_shim_core::journal::RestoreRecord>, ShimError> {
         Ok(Vec::new())
     }
 }
@@ -33,7 +33,7 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
     // or written to it (a user-planted journal would steer the elevated restore).
     // Read-only commands do not need it (and run without elevation).
     let read_only = matches!(c, Cmd::Status { .. } | Cmd::SeatMap | Cmd::NoticeDxvk);
-    let log: Box<dyn split_shim_core::journal::RestoreLog> =
+    let log: Box<dyn seat_shim_core::journal::RestoreLog> =
         if read_only { Box::new(NoJournal) } else { Box::new(open_journal()?) };
     let log = log.as_ref();
     let inst = AppHelpInstaller { sys: &sys, log, clock: &clock };
@@ -46,7 +46,7 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
             let mut out = format!(
                 "installed: {}\ndatabase {}: {}\nkill switch: {}\n",
                 s.installed,
-                split_shim_core::SHIM_DB_GUID,
+                seat_shim_core::SHIM_DB_GUID,
                 if s.db_guid_present { "registered" } else { "absent" },
                 if s.kill_switch { "on" } else { "off" }
             );
@@ -78,7 +78,7 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
             })
         }
         Cmd::KillSwitch(on) => {
-            sys.reg_write(split_shim_core::REG_SHIM, split_shim_core::values::SHIM_DISABLED, &RegValue::Dword(on as u32))?;
+            sys.reg_write(seat_shim_core::REG_SHIM, seat_shim_core::values::SHIM_DISABLED, &RegValue::Dword(on as u32))?;
             Ok(format!("kill switch {}", if on { "on" } else { "off" }))
         }
         Cmd::SeatMap => {
@@ -106,7 +106,7 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
         Cmd::DxvkDownload(r) => {
             let root = ensure_dxvk_root()?;
             let dir = download_release(&WinHttpFetcher, &StdFs, &r, &root)?;
-            split_shim_core::winfs::check_tree(&dir)?;
+            seat_shim_core::winfs::check_tree(&dir)?;
             // The trusted record deploys check against (HKLM, admin-only).
             store_pin(&sys, &pin_release(&StdFs, &dir)?)?;
             Ok(format!("DXVK {} verified at {}", r.version, dir.display()))
@@ -117,13 +117,13 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
             let pin = load_pin(&sys)?.ok_or_else(|| ShimError::DxvkNotDownloaded("run `dxvk download` first".into()))?;
             let root = ensure_dxvk_root()?;
             let rel = release_dir(&root, &pin.version);
-            split_shim_core::winfs::check_tree(&rel)?;
+            seat_shim_core::winfs::check_tree(&rel)?;
             FsDxvkDeployer { fs: &StdFs, pin: &pin, log, clock: &clock }.deploy(&game, &rel, &dlls)?;
             Ok(format!("DXVK deployed next to {}", game.display()))
         }
         Cmd::DxvkUndo { game } => {
             // Undo needs no release: it only removes what the game folder's marker names.
-            let pin = load_pin(&sys)?.unwrap_or(split_shim_core::dxvk::ReleasePin {
+            let pin = load_pin(&sys)?.unwrap_or(seat_shim_core::dxvk::ReleasePin {
                 version: String::new(),
                 source_sha256: String::new(),
                 manifest_sha256: String::new(),

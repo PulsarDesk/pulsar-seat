@@ -6,7 +6,7 @@
 //! (returning no shim-engine hooks: we install our own detours with `retour`) and
 //! `PulsarSplitInit` (called synchronously by the launcher before the target resumes).
 //!
-//! Every hook calls a pure decision function from `split_shim_core::decide`; the module
+//! Every hook calls a pure decision function from `seat_shim_core::decide`; the module
 //! only gathers inputs (session ids, device parent chains, WNF payloads) and applies the
 //! answer. Pure buffer filters live in [`filter`] and are unit-tested on any host.
 #![allow(non_snake_case)] // the crate is named after the DLL file: PulsarSplitShim

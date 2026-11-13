@@ -1,7 +1,7 @@
-# split-pads
+# seat-pads
 
-Virtual controllers for Pulsar Split seats (package **pads**, `docs/agents/contracts.md` §5,
-behaviour in `spec/60-controllers.md`). Licence GPL-3.0-only.
+Virtual controllers for Pulsar Split seats (package **pads**, `docs/split/agents/contracts.md` §5,
+behaviour in `spec/remote/60-controllers.md`). Licence GPL-3.0-only.
 
 ## What it does
 
@@ -67,8 +67,8 @@ behaviour in `spec/60-controllers.md`). Licence GPL-3.0-only.
 ## Integration sketch
 
 ```rust
-let (pid, start) = split_pads::win::current_process_identity();
-let tree = Arc::new(split_pads::win::CmDeviceTree);
+let (pid, start) = seat_pads::win::current_process_identity();
+let tree = Arc::new(seat_pads::win::CmDeviceTree);
 let backends: Vec<Arc<dyn PadBackend>> = vec![
     Arc::new(VigemBackend::new(Arc::new(win::WinVigemDriver), tree.clone())),
     Arc::new(UsbipDs5Backend::new(Arc::new(win::WinUsbipTool::default()),
@@ -87,10 +87,10 @@ m.cleanup_orphans()?;              // service start (and stop)
 ## Build and test
 
 ```
-cargo test   -p split-pads
-cargo clippy -p split-pads --all-targets
-cargo check  -p split-pads --all-targets --target x86_64-pc-windows-msvc
-cargo check  -p split-pads --features fake
+cargo test   -p seat-pads
+cargo clippy -p seat-pads --all-targets
+cargo check  -p seat-pads --all-targets --target x86_64-pc-windows-msvc
+cargo check  -p seat-pads --features fake
 ```
 
 The tests use fakes only (`fake.rs`, feature `fake`):

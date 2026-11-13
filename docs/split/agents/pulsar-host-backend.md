@@ -1,7 +1,7 @@
 # Pulsar host backend (`pulsar-host`) — contract
 
-Index: [../../AGENTS.md](../../AGENTS.md). Status: designed 2026-11-12; **service side
-implemented 2026-11-13** (contracts §7.4, `split_stream::backend`), untested on a real
+Index: [../../AGENTS.md](../../../AGENTS.md). Status: designed 2026-11-12; **service side
+implemented 2026-11-13** (contracts §7.4, `seat_stream::backend`), untested on a real
 host. `pulsar-host` itself is **not built** yet. The changes it needs in pulsar-core /
 pulsar-desktop (§6) are future work in those repos. Where the implementation differs
 from this note, the place says so (OQ stream-backends-1..5).
@@ -26,16 +26,16 @@ File:line citations below are relative to `../pulsar-core/crates/pulsar-core/src
 
 | Item | Value |
 | --- | --- |
-| Binary | `pulsar-host.exe`, installed under `%ProgramFiles%\Pulsar Split\pulsar-host\`. Not vendored. Pinned in a manifest like the Sunshine one (`split_stream::dist`: version, file, SHA-256, source URL, licence). Built for x64 and ARM64 (pulsar-desktop already ships both; Sunshine is x64 only). |
-| Started by | the service, through `split_stream::supervise::ServerLauncher::launch_system_in_session` (the same `crate::win::launch::SessionLauncher` as Sunshine): service SYSTEM token duplicated, `TokenSessionId` = seat session, `CreateProcessAsUserW` on `winsta0\default`, suspended, no inherited handles, assigned to the seat's kill-on-close job, then resumed. `lock_binary` verifies the hash and the install-folder ACL first. |
+| Binary | `pulsar-host.exe`, installed under `%ProgramFiles%\Pulsar Split\pulsar-host\`. Not vendored. Pinned in a manifest like the Sunshine one (`seat_stream::dist`: version, file, SHA-256, source URL, licence). Built for x64 and ARM64 (pulsar-desktop already ships both; Sunshine is x64 only). |
+| Started by | the service, through `seat_stream::supervise::ServerLauncher::launch_system_in_session` (the same `crate::win::launch::SessionLauncher` as Sunshine): service SYSTEM token duplicated, `TokenSessionId` = seat session, `CreateProcessAsUserW` on `winsta0\default`, suspended, no inherited handles, assigned to the seat's kill-on-close job, then resumed. `lock_binary` verifies the hash and the install-folder ACL first. |
 | argv | `pulsar-host.exe --split-seat <seat-id> --data-dir "<abs data dir>" --log "<abs data dir>\pulsar-host.log"`. Nothing else. No secret on argv, ever; `pulsar-host` refuses to start if it sees any secret-carrying flag (pulsar-desktop has one today: `--connect-pw`, `desk:src-tauri/src/lib.rs:378`). |
 | Environment | the SYSTEM environment block (`CreateEnvironmentBlock`), like Sunshine. No `PULSAR_*` overrides are set; `pulsar-host` ignores the dev env switches in split mode (see §6, item 11). |
 | Working dir | the install folder `%ProgramFiles%\Pulsar Split\pulsar-host\`. |
-| Data dir | `%ProgramData%\PulsarSplit\seats\<seat-id>\pulsar\`. It is created by the service inside the existing seat dir, so it inherits `SEAT_DIR_SDDL` = `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (`crates/split-stream/src/seatdir.rs:30`). The seat user has no access. |
+| Data dir | `%ProgramData%\PulsarSplit\seats\<seat-id>\pulsar\`. It is created by the service inside the existing seat dir, so it inherits `SEAT_DIR_SDDL` = `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (`crates/seat-stream/src/seatdir.rs:30`). The seat user has no access. |
 | Data-dir contents | `paired_devices.json` (trusted client public keys + names, not secret but integrity-critical), `pulsar-host.log` (+ rotated `.1`..`.3`, rotated by the service before each start as for `server.log`). Nothing else. **No** `identity.key`, **no** `config.json` with passwords: secrets come over the pipe (§3.3). |
 | Pipe | created by the service **before** the launch (§3.1). `pulsar-host` derives the name from `--split-seat`; it is not passed separately. |
 | Stop | `server.shutdown {grace_ms}` over the pipe, wait `grace_ms` + 1 s, then terminate (same as spec 80 §10). Closing the seat job kills it if the service dies. |
-| Restart | `split_stream::supervise::server_policy()` (1 s doubling to 60 s, give up after 5 failures). |
+| Restart | `seat_stream::supervise::server_policy()` (1 s doubling to 60 s, give up after 5 failures). |
 | One process per seat | yes. No machine-wide lease (§2). |
 
 The service writes no config file for `pulsar-host`. All settings arrive with
@@ -61,7 +61,7 @@ may also run their own Pulsar desktop app inside the same session.
 | LAN beacon UDP 21117 multicast with address reuse (`core:discovery.rs:30`, `:9`) | several seats on one box | fine: each seat beacons its own ID and name. Option per seat, default on |
 | NAT-PMP / UPnP port mapping, default on (`core:config.rs:66`; `core:connection/portmap.rs:28`) | N mappings from one host; spec 80 keeps `upnp = disabled` for Sunshine | default **off** for seats; seat option |
 | In-app relay (`desk:src-tauri/src/local_relay.rs`) | a relay inside a seat host | disabled in split mode |
-| `%ProgramData%\Pulsar\duo-pads.json` pad registry + reaper (`core:input/pad_cleanup.rs:7`, `:629`) | a second machine-wide pad reaper next to split-pads | not used: pads belong to split-pads (§5) |
+| `%ProgramData%\Pulsar\duo-pads.json` pad registry + reaper (`core:input/pad_cleanup.rs:7`, `:629`) | a second machine-wide pad reaper next to seat-pads | not used: pads belong to seat-pads (§5) |
 | `pulsar-sysagent` helper pipe `\\.\pipe\pulsar-sysagent-<session>` (`desk:crates/pulsar-sysagent/src/helper.rs:2`) | not needed: `pulsar-host` already runs as SYSTEM in the session | not used; the injector logic runs in-process (§6) |
 | Elevation relaunch (`desk:src-tauri/src/main.rs:107`) | — | skipped (SYSTEM) |
 
@@ -80,7 +80,7 @@ boundary (same caveat as spec 80 §3.4).
 | DACL | Designed `O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)`; **implemented** `D:P(A;;GA;;;SY)(A;;GA;;;BA)` (`HOST_PIPE_SDDL`, no owner; OQ stream-backends-3). SYSTEM + Administrators, as rules.md requires for control pipes |
 | Client check (service side) | `GetNamedPipeClientProcessId` = the launched pid **and** its creation time = `Launched::creation_time`. Any other client (an elevated admin tool, a second process) is disconnected before `hello`. The Administrators ACE therefore grants no control |
 | Server check (`pulsar-host` side) | `GetNamedPipeServerProcessId` = a process running as SYSTEM in session 0 whose image is `pulsar-split-service.exe` |
-| Framing | split-stream framing, unchanged: u32 LE length + UTF-8 JSON, max 1 MiB (`crates/split-stream/src/control/frame.rs:7`). Reuse `write_frame` / `read_frame` / `FrameBuf` |
+| Framing | seat-stream framing, unchanged: u32 LE length + UTF-8 JSON, max 1 MiB (`crates/seat-stream/src/control/frame.rs:7`). Reuse `write_frame` / `read_frame` / `FrameBuf` |
 | Envelope | spec 80 §8.4 envelope, unchanged: request `{id, type, body}`, response `{id, ok, body \| error{code, detail}}`, event `{event, body}`. Requests go service → `pulsar-host`; `pulsar-host` speaks only in responses and events (as the Sunshine fork does for `pad.wanted`) |
 | Protocol | `protocol: 1`, separate from the spec 80 seat-pipe protocol |
 | Timeouts | request 10 s (`REQUEST_TIMEOUT`), `pulsar-host` must send `hello` response within 30 s of launch (`CONNECT_WINDOW_MS`) |
@@ -97,7 +97,7 @@ them (the service already wipes control-pipe frames).
 3. `pulsar-host` answers `{protocol: 1, host_version, core_version, seat_id,
    capabilities}`. Capabilities (strings): `approve`, `connect_password`, `otp`,
    `trust_store`, `apps`, `app_launch_via_service`, `display_mode`, `audio_pinned`,
-   `split_pads`, `split_idd` (only when built with the frame-source hook, §4).
+   `seat_pads`, `split_idd` (only when built with the frame-source hook, §4).
    Seat-id mismatch or protocol mismatch: error `unsupported_protocol`, both close.
 4. Service sends `secrets.load`, then `config.apply`. Only after both succeed does
    `pulsar-host` bind its node, start the beacon and register with the relay.
@@ -143,14 +143,14 @@ Error codes: `bad_request`, `unsupported_protocol`, `not_found`, `no_pending_req
 | `relay.key_issued` | `key` (Secret) | the relay issued an access key; the service stores it |
 | `stream.started` / `stream.ended` | `sid`, `label`, `mode`, `app`?, `video`? / `sid`, `reason` | a client stream starts / ends |
 | `capture.error` | `code` (`no_output` / `access_lost` / `no_frames` / `encoder_failed` / `adapter_mismatch` / `producer_lost`, or null = recovered) | capture failed or recovered |
-| `display.mode.request` | `request_id`, `w`, `h`, `hz`, `hdr` | a client wants a mode (same shape as `split_stream::control::ServerEvent::DisplayModeRequest`) |
+| `display.mode.request` | `request_id`, `w`, `h`, `hz`, `hdr` | a client wants a mode (same shape as `seat_stream::control::ServerEvent::DisplayModeRequest`) |
 | `audio.state` | `state` (`capturing` / `no_device` / `silent` / `disabled`), `endpoint_id`? | audio capture changed |
 | `app.launch` | `request_id`, `app_id`, `sid` | a client picked an app (§3.5) |
 | `pad.wanted` / `pad.released` | spec 60 §3.5; additionally `kind` may be `x360`, and `client_type` may be `pulsar` | a client controller arrived / left |
 
 ### 3.5 Apps
 
-- The seat keeps **one** app list in `apps.json` (upstream format, `split_stream::apps`)
+- The seat keeps **one** app list in `apps.json` (upstream format, `seat_stream::apps`)
   for both backends. The manager form does not change.
 - For `pulsar`, the service sends only ids and names (`apps.set`). When a client picks one,
   `pulsar-host` sends `app.launch`; the **service** starts it as the seat user with the
@@ -258,7 +258,7 @@ Today `pulsar-host`'s code would create pads itself: ViGEm X360 / DS4
 attached with usbip-win2 (`core:input/ds5/virtual_pad.rs:1`, `core:input/ds5/attach.rs:5`),
 plus its own machine-wide leftover-pad registry (`core:input/pad_cleanup.rs:7`).
 
-**Recommendation: split-pads (the service) is the only owner of virtual pads for both
+**Recommendation: seat-pads (the service) is the only owner of virtual pads for both
 backends. `pulsar-host` never creates a device.**
 
 Why:
@@ -271,10 +271,10 @@ Why:
 2. Seat isolation needs facts only the service has: the seat user's SID for the device
    security descriptor, the session id property, the shim seat map's instance prefixes
    (`PadManager::seat_instance_prefixes`). `pulsar-host` would have to reimplement them.
-3. One orphan reaper. split-pads keeps `%ProgramData%\PulsarSplit\pads\owners.json`;
+3. One orphan reaper. seat-pads keeps `%ProgramData%\PulsarSplit\pads\owners.json`;
    pulsar-core keeps `%ProgramData%\Pulsar\duo-pads.json`. Two reapers on one machine
    can remove each other's devices or miss them.
-4. Device markers: split-pads marks USB/IP pads with the USB serial `PSPAD<seat32><slot>`
+4. Device markers: seat-pads marks USB/IP pads with the USB serial `PSPAD<seat32><slot>`
    (contracts §5.3). pulsar-core's DualSense has no serial string descriptor
    (`core:input/ds5/device.rs:206`), so its pads cannot be told apart per seat.
 5. `pulsar-host` then needs no SetupAPI rights, no usbip.exe child, no driver install
@@ -283,17 +283,17 @@ Why:
 Cost, and how to pay it:
 
 - DualSense **media** (HD haptics, pad speaker, pad mic) today flow in-process between the
-  USB/IP device and the stream (`desk:src-tauri/src/ds5/host.rs:6`). Through split-pads
+  USB/IP device and the stream (`desk:src-tauri/src/ds5/host.rs:6`). Through seat-pads
   they need a channel the spec 60 §4.5 protocol 1 does not have.
-  - v1: DualSense via split-pads `UsbipDs5Backend` with HID only: input, rumble,
-    adaptive triggers (raw), LEDs, player LEDs (`split_pads::Feedback`). Haptics, speaker
+  - v1: DualSense via seat-pads `UsbipDs5Backend` with HID only: input, rumble,
+    adaptive triggers (raw), LEDs, player LEDs (`seat_pads::Feedback`). Haptics, speaker
     and mic are off for split seats; the manager says so.
   - Later: protocol 2 of spec 60 §4.5 adds a per-pad media ring (`<base>_Media`,
     Pulsar-defined, 48 kHz PCM blocks both ways). OQ pulsar-host-4.
-- To avoid two DualSense emulations, split-pads may reuse pulsar-core's `input::ds5`
+- To avoid two DualSense emulations, seat-pads may reuse pulsar-core's `input::ds5`
   device and USB/IP server (our GPL-3 code) as a git dependency. Decide in OQ pulsar-host-4.
 - Mapping in `pulsar-host`: a client `GamepadState` / `Ds5Report` becomes a
-  `split_pads::PadState` written to `_In`; `_Out` entries become the client's rumble /
+  `seat_pads::PadState` written to `_In`; `_Out` entries become the client's rumble /
   `Ds5Output` messages. Kind choice: client X360 / XOne / generic → `x360` (ViGEm);
   DS4 → `ds4` (ViGEm); DualSense → `ds5` (usbip-win2). Unavailable backend →
   `pad.denied`, and the client is told no pad exists.
@@ -337,7 +337,7 @@ Listed as `pulsar-host-1` … `pulsar-host-12` in [open-questions.md](open-quest
 
 `pulsar.exe --split-seat <id> --data-dir <abs> --log <abs>` (the same binary as the app,
 not yet a separate `pulsar-host.exe`; §6 item 19 open). Details: pulsar-desktop
-`docs/agents/modes.md` "Split seat host". Done: §1 argv (strict, exit 2), §2 seat mutex
+`docs/split/agents/modes.md` "Split seat host". Done: §1 argv (strict, exit 2), §2 seat mutex
 (exit 3), singleton / shared mode bypassed, per-seat data dir, name verbatim, local relay
 and pad cleanup off; §3.1 server check (SYSTEM, session 0, `pulsar-split-service.exe`),
 broken pipe = exit 5; §3.2 handshake, bind only after `secrets.load` + `config.apply`;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Setup sub-commands (`install`, `reconcile`, `uninstall`, `check-coexistence`, spec 90
-//! §9.1): `split_setup` does the work; this module registers the package restore hooks
+//! §9.1): `seat_setup` does the work; this module registers the package restore hooks
 //! (contracts §8.1) and the config migration hook.
 //!
 //! Hooks: `session` (RDS rows), `termwrap` (ServiceDll + path-B rows; restarts TermService,
@@ -12,9 +12,9 @@
 //! Reconcile hooks: `config` (schema), `display` (gives back a VDD settings change left
 //! by a service that died with seats attached; setup runs with the service stopped).
 
-use split_setup::cli::SetupCommand;
-use split_setup::layout::Layout;
-use split_setup::{InstallOptions, ReconcileHook, RestoreHook, SetupError};
+use seat_setup::cli::SetupCommand;
+use seat_setup::layout::Layout;
+use seat_setup::{InstallOptions, ReconcileHook, RestoreHook, SetupError};
 use split_session::manager::SessionManager;
 use std::path::PathBuf;
 
@@ -77,14 +77,14 @@ impl RestoreHook for StreamHook {
         "stream"
     }
     fn restore_all(&self) -> Result<(), SetupError> {
-        let fs: std::sync::Arc<dyn split_stream::seatdir::SecureFs> = std::sync::Arc::new(split_stream::win::WinSecureFs);
-        let j = split_stream::journal::JsonlJournal::open(
+        let fs: std::sync::Arc<dyn seat_stream::seatdir::SecureFs> = std::sync::Arc::new(seat_stream::win::WinSecureFs);
+        let j = seat_stream::journal::JsonlJournal::open(
             fs,
             self.data_root.join("journal").join("stream.jsonl"),
             crate::wiring::SysClock,
         )
         .map_err(other)?;
-        split_stream::firewall::restore_all(&split_stream::win::ComFirewall, &j).map(|_| ()).map_err(other)
+        seat_stream::firewall::restore_all(&seat_stream::win::ComFirewall, &j).map(|_| ()).map_err(other)
     }
 }
 
@@ -161,8 +161,8 @@ pub fn run(cmd: SetupCommand) -> i32 {
         Box::new(TermwrapHook { data_root: data_root.clone() }),
     ];
     let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(ConfigHook), Box::new(display_hook(data_root))];
-    let ctx = split_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);
-    split_setup::cli::run(cmd, ctx)
+    let ctx = seat_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);
+    seat_setup::cli::run(cmd, ctx)
 }
 
 #[cfg(test)]

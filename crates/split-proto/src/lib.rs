@@ -123,7 +123,7 @@ pub enum RequestBody {
     /// New certificate / identity; stops the seat and unpairs every client.
     RegenerateSeatIdentity { name: String, confirm: bool },
     GetApps { name: String },
-    /// `split_stream::apps::AppEntry` values.
+    /// `seat_stream::apps::AppEntry` values.
     SetApps { name: String, apps: Vec<serde_json::Value> },
     GetIsolationStatus,
     SetShimTargets { targets: Vec<ShimTargetDto> },
@@ -146,7 +146,7 @@ pub enum RequestBody {
     /// Restart Windows (after the process-patching change, spec 10 §3.2). Stops every seat
     /// first; `confirm` must be true.
     RebootHost { confirm: bool },
-    // ---- v2 additions: stream backends (docs/agents/pulsar-host-backend.md §3.7) ----
+    // ---- v2 additions: stream backends (docs/split/agents/pulsar-host-backend.md §3.7) ----
     /// Availability of every stream backend; answered with [`ResponseBody::StreamBackends`].
     GetStreamBackends,
     /// Pulsar seats: allow / deny a pending connect or pair request. Sunshine seats answer
@@ -217,12 +217,12 @@ pub enum ResponseBody {
     SeatRuntime(SeatRuntime),
     /// `split_display::RenderAdapter` values.
     RenderAdapters(Vec<serde_json::Value>),
-    /// `split_pads::BackendAvailability` values.
+    /// `seat_pads::BackendAvailability` values.
     PadBackends(Vec<serde_json::Value>),
     PairState(PairState),
     Paired { uuid: String },
     PairedClients(Vec<PairedClient>),
-    /// `split_stream::apps::AppEntry` values.
+    /// `seat_stream::apps::AppEntry` values.
     Apps(Vec<serde_json::Value>),
     IsolationStatus(IsolationStatus),
     Events(Events),

@@ -2,7 +2,7 @@
 
 Client-SKU (Windows Pro / Enterprise) multi-session for Pulsar Split, through a
 TermService wrapper that **the operator installed themselves**. Contract:
-[`docs/agents/contracts.md`](../../docs/agents/contracts.md) §2. Spec: `spec/30-session-rds.md`
+[`docs/split/agents/contracts.md`](../../docs/split/agents/contracts.md) §2. Spec: `spec/remote/30-session-rds.md`
 §2.2, §2.4, §2.5 path B, §13, §14. Default host path stays Windows Server + RDSH (path A,
 `split-session`); this crate only matters when the operator opts in.
 
@@ -95,7 +95,7 @@ the problem and AV-flagged. The cargo feature `own-wrapper` exists only as a res
 - `FileVersion` is defined here (same shape as `split_session::FileVersion`; packages do
   not depend on each other, so the integrator converts).
 - `WindowsTermwrap::new(TermwrapDeps, TermwrapPolicy)`; `WindowsTermwrap::system(data_root,
-  policy)` on Windows; inherent `restore_all()` for `split-setup`'s `RestoreHook`.
+  policy)` on Windows; inherent `restore_all()` for `seat-setup`'s `RestoreHook`.
 - Extra traits: `Registry` (HKLM), `FileInspector`, `HostFacts`, `Clock`; fakes under
   `fake` (feature `fake`), including `FakeWorld`.
 - `TermwrapPolicy { allow_unsigned, restart_timeout }`. Default refuses unsigned DLLs; the
@@ -114,7 +114,7 @@ Tests use fakes only. The `win::*` tests do read-only process/file probes (nativ
 machine, `kernel32.dll` version/PE/ACL walk, a user-owned temp file and journal that must
 be refused); none touch the registry, services or drivers.
 
-The repo-root workspace did not load on 2026-11-12 (`crates/split-pads` had no targets
+The repo-root workspace did not load on 2026-11-12 (`crates/seat-pads` had no targets
 yet), so results were produced in a scratch copy of the workspace (split-proto +
 split-termwrap, same `Cargo.lock` and `workspace.package`). Re-run from the root once it
 loads.

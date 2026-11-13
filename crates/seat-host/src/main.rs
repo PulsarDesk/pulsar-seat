@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Seat host (`pulsar-seat-host.exe`): shows one extra seat on its monitors.
 //!
-//! Owner: the **host** package. Spec: `spec/00-architecture.md` §5.3 P9, §5.2.1,
-//! `spec/30-sessions.md` §6.1.1, `spec/40-display.md` §6.3, `spec/50-input.md` §4.1.4,
-//! `spec/60-audio.md` §8.3. Contract: `docs/agents/architecture.md` (§ Seat host).
+//! Owner: the **host** package. Spec: `spec/local/00-architecture.md` §5.3 P9, §5.2.1,
+//! `spec/local/30-sessions.md` §6.1.1, `spec/local/40-display.md` §6.3, `spec/local/50-input.md` §4.1.4,
+//! `spec/local/60-audio.md` §8.3. Contract: `docs/agents/architecture.md` (§ Seat host).
 //!
 //! Flow (`host.rs`, decisions in `flow.rs`; **untested on hardware**):
 //!

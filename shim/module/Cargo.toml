@@ -13,7 +13,7 @@ name = "PulsarSplitShim"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-split-shim-core.workspace = true
+seat-shim-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 tracelogging = "1.2"

@@ -14,7 +14,7 @@ name = "pulsar-split-launch"
 path = "src/main.rs"
 
 [dependencies]
-split-shim-core.workspace = true
+seat-shim-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

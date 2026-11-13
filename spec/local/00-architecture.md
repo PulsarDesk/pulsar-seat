@@ -1,7 +1,7 @@
 # 00 — Architecture
 
 Status: draft v1 (2026-11-12, critiqued, cross-checked). Analyst-written. Behaviour and interfaces only;
-see [../CLEANROOM.md](../CLEANROOM.md).
+see [../CLEANROOM.md](../../CLEANROOM.md).
 
 This file is the map. It ties together `10-manager.md` to `90-install.md`. It covers:
 

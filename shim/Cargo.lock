@@ -222,7 +222,7 @@ dependencies = [
 name = "pulsar-split-launch"
 version = "0.1.0"
 dependencies = [
- "split-shim-core",
+ "seat-shim-core",
  "windows-sys 0.61.2",
 ]
 
@@ -231,7 +231,7 @@ name = "pulsar-split-shim-module"
 version = "0.1.0"
 dependencies = [
  "retour",
- "split-shim-core",
+ "seat-shim-core",
  "tracelogging",
  "windows-sys 0.61.2",
 ]
@@ -240,8 +240,8 @@ dependencies = [
 name = "pulsar-split-shimctl"
 version = "0.1.0"
 dependencies = [
+ "seat-shim-core",
  "serde_json",
- "split-shim-core",
 ]
 
 [[package]]
@@ -292,6 +292,21 @@ dependencies = [
  "libc",
  "linux-raw-sys",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "seat-shim-core"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "thiserror",
+ "windows-sys 0.61.2",
+ "winreg",
 ]
 
 [[package]]
@@ -359,21 +374,6 @@ name = "slice-pool2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a3d689654af89bdfeba29a914ab6ac0236d382eb3b764f7454dde052f2821f8"
-
-[[package]]
-name = "split-shim-core"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "log",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "thiserror",
- "windows-sys 0.61.2",
- "winreg",
-]
 
 [[package]]
 name = "syn"

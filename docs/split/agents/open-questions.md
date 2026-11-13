@@ -1,7 +1,7 @@
 # Open questions
 
-Index: [../../AGENTS.md](../../AGENTS.md). Questions for the analyst (spec) or the
-maintainer (decision). Each has the choice we made for now. `spec/` is analyst-only, so
+Index: [../../AGENTS.md](../../../AGENTS.md). Questions for the analyst (spec) or the
+maintainer (decision). Each has the choice we made for now. `spec/remote/` is analyst-only, so
 spec questions are collected here.
 
 ## For the analyst (spec)
@@ -96,11 +96,11 @@ spec questions are collected here.
     wrapper the operator installed (path B1); no own `termsrv.dll` patcher (B2) is built.
     Confirm. Maintainer.
 
-## From the audio package (2026-11-12, see [crates/split-audio](../../crates/split-audio/README.md))
+## From the audio package (2026-11-12, see [crates/seat-audio](../../../crates/seat-audio/README.md))
 
 Numbered `audio-N` so parallel packages do not collide; the integrator may renumber.
 
-- audio-1. **Session id fallback from the endpoint id.** `split-audio` uses
+- audio-1. **Session id fallback from the endpoint id.** `seat-audio` uses
   `DEVPKEY_Device_SessionId` and, only when it is missing on an RDP endpoint (`{3.…}`),
   the 8-hex field of the id (spec 70 §2.1 `[I]`). Confirm on a seat host that the field
   always equals the session id (spec 70 OQ 3). Analyst / maintainer test.
@@ -151,7 +151,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   check) is accepted with a warning. Maintainer.
 - stream-1. **Server token.** The task brief said "launch with the user token"; contracts
   (`launch_system_in_session`) and spec 80 §4.3 say SYSTEM token with the seat's session id
-  (needed for input on the seat's lock/UAC desktop). `split-stream` follows the spec: SYSTEM
+  (needed for input on the seat's lock/UAC desktop). `seat-stream` follows the spec: SYSTEM
   token + per-seat job object; apps are launched by the server itself as the session user.
   Confirm. Maintainer.
 - stream-2. **OQ 22 answered (upstream source, pinned tag `v2026.516.143833`).** `POST
@@ -186,7 +186,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
 - stream-9. **HTTP client version.** `ureq` 2.12 (not 3.x): only 2.x accepts a full rustls
   `ClientConfig`, which the pinned-certificate verifier needs. rustls 0.23 with `ring`.
 
-## From the audio package review fix (2026-11-12, see [crates/split-audio](../../crates/split-audio/README.md))
+## From the audio package review fix (2026-11-12, see [crates/seat-audio](../../../crates/seat-audio/README.md))
 
 - audio-6. **Contract §6 additions for the integrator.** (a) Reason code
   `audio_remove_refused` (`AudioError::RemoveRefused`, maps to `ErrorCode::InvalidValue`)
@@ -201,9 +201,9 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   AudioError>)`: the WTS list is re-read before every removal; empty or without session 0
   is an error. Integrator: fold into contracts §6 / i18n / IPC reason mapping.
 - audio-7. **Owner of `install_steam_audio_drivers`.** Contracts §6 and §7 both claim it.
-  `split-stream` writes it (always `disabled`) and rejects duplicates in `audio_keys`, so
-  `split_audio::server_keys` no longer emits it (test `tests/stream_conf.rs` feeds
-  `server_keys` into `split_stream::conf::generate`). Integrator: drop the key from the
+  `seat-stream` writes it (always `disabled`) and rejects duplicates in `audio_keys`, so
+  `seat_audio::server_keys` no longer emits it (test `tests/stream_conf.rs` feeds
+  `server_keys` into `seat_stream::conf::generate`). Integrator: drop the key from the
   contracts §6 `server_keys` comment.
 - audio-8. **Stale-node maintenance needs the seat-start lock.** Removal planning now needs
   a present, live, property-matched `{3.0.f.<sid>}` endpoint to learn the RDP GUID suffix
@@ -216,11 +216,11 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   user-controlled). The prefix layout is taken from upstream Sunshine's public logging
   code (master 2026-11); confirm at the pinned tag together with audio-4.
 
-## From the installer package (2026-11-12, see [installer/README.md](../../installer/README.md))
+## From the installer package (2026-11-12, see [installer/split/README.md](../../../installer/split/README.md))
 
-- setup-1. **Ownership.** Contracts §8 gives the installer package `crates/split-setup` +
-  `installer/`; the workflow task text said `installer/` only. The library is in
-  `crates/split-setup` as the contract says. Integrator: OK?
+- setup-1. **Ownership.** Contracts §8 gives the installer package `crates/seat-setup` +
+  `installer/split/`; the workflow task text said `installer/split/` only. The library is in
+  `crates/seat-setup` as the contract says. Integrator: OK?
 - setup-2. **RequiredPrivileges.** Spec 90 §2.7 wants only the privileges the service uses;
   nobody has listed them yet. MSI `ServiceConfig` and `ServiceSpec::pulsar_split` leave
   the token unrestricted for now. Integrator: list them once session/pads/display land.
@@ -336,10 +336,10 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   field of `IDDCX_PATH2`, target-caps flags). First WDK build must check them. Implementer
   with WDK.
 
-## From the shim package (2026-11-12, `crates/split-shim-core`, `shim/`)
+## From the shim package (2026-11-12, `crates/seat-shim-core`, `shim/`)
 
 - shim-1. **Ownership text.** The workflow step said "shim/ only"; contracts §0.1 gives the
-  shim package `crates/split-shim-core` as well and §4.2/§10 require it there. Implemented
+  shim package `crates/seat-shim-core` as well and §4.2/§10 require it there. Implemented
   per the contract. Integrator: confirm.
 - shim-2. **Seat shell starts before the seat map entry.** Integration order (contracts §9.4)
   publishes the seat map after the session (and its `explorer.exe`) exists. The module
@@ -383,7 +383,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   (REG_SZ, written by the elevated DXVK download; deploy uses only that release and
   checks `release.json` against it). Folders `%ProgramData%\PulsarSplit`, `\journal`,
   `\shim`, `\dxvk` are created with `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (same DACL as
-  split-setup / split-stream; the review proposed an extra `BU` read entry, not added:
+  seat-setup / seat-stream; the review proposed an extra `BU` read entry, not added:
   nothing outside SYSTEM / Administrators reads them). An existing folder that is a
   reparse point or not owned by SYSTEM / Administrators is refused (`shim_system`), so
   `shimctl` write commands fail on a box where a user pre-created the data root. Restore
@@ -405,7 +405,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   `\\?\GLOBALROOT\??\HID#…` (the prefix order made it unreachable before). Analyst: confirm
   spec 50 §4.1 wants that form filtered.
 
-## From the pads package (2026-11-12, `crates/split-pads`, `drivers/split-pad`)
+## From the pads package (2026-11-12, `crates/seat-pads`, `drivers/split-pad`)
 
 - pads-1. **PadKind wire names.** Contract §5.1 says `serde(rename_all = "snake_case")`,
   which yields `ds5_edge` / `x_one`; spec 60 §3.5 uses `ds5e` / `xone`. Implemented with
@@ -485,18 +485,18 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   after a fresh `status()` says no stream is active. The fork's seat pipe removes all of
   this. Analyst: spec 80 §8.2 should say pending-pair events are unavailable on the
   upstream path at the default level.
-- stream-11. **Data-root ownership (installer/integrator).** `SeatDir::ensure` and
+- stream-11. **Data-root ownership (installer/split/integrator).** `SeatDir::ensure` and
   `JsonlJournal::open` now create or check `%ProgramData%\PulsarSplit`, `seats\`,
   `<seat>\` and `journal\` top down with `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`, and
   refuse an existing folder that is a reparse point or whose owner is not SYSTEM /
   Administrators. An installer that creates the data root as a specific admin *user*
-  (owner = that user SID, not BA) makes seat start fail. split-setup `layout` should
+  (owner = that user SID, not BA) makes seat start fail. seat-setup `layout` should
   create it as SYSTEM (MSI deferred CA) or set owner BA/SY. Stream journal records now
   store a firewall rule as `{"type":"sz","value":"<rule JSON>"}` (contracts §0.3 value
   types). `restore_all` replays only `package=stream`, `kind=firewall`, target
   `PulsarSplit ...`, spec group `PulsarSplit` and name == target.
-- stream-12. **Shared log prefix parser.** `split_stream::control::upstream::split_log_line`
-  is public. split-audio keeps its own copy for now (owned by the audio package); it may
+- stream-12. **Shared log prefix parser.** `seat_stream::control::upstream::split_log_line`
+  is public. seat-audio keeps its own copy for now (owned by the audio package); it may
   switch to the shared one.
 - setup-10. **Sunshine upstream org (third-party.md, spec 80).** On 2026-11-12 the GitHub
   REST API returns `repos/LizardByte/Sunshine` as `full_name: SunshineStream/Sunshine`,
@@ -505,9 +505,9 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   digests; tag -> commit `14ffa6fdaa53f7b51512be2b3d24f3939695403c`. The installer now
   names `SunshineStream/Sunshine` everywhere (stream-server.json `source_url`, NOTICES,
   SOURCE-OFFER) and `fetch-deps.ts validateStream` refuses a build URL whose repo / tag
-  differs from `source_url`. third-party.md and split-stream `dist.rs` docs still say
+  differs from `source_url`. third-party.md and seat-stream `dist.rs` docs still say
   LizardByte: owners should update them (analyst: confirm the move is official).
-- setup-11. **Data folder ownership (installer side of stream-11).** split-setup now
+- setup-11. **Data folder ownership (installer side of stream-11).** seat-setup now
   creates `%ProgramData%\PulsarSplit` and its sub-folders with
   `O:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)` (owner SYSTEM from the start, set again on
   each install / reconcile). An existing folder with another owner or as a reparse point
@@ -546,11 +546,11 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   (`HYPOTHESIS`: default UMDF host account; verify on hardware, else VDD commands fail
   with `protocol`).
 
-## From the integrator (2026-11-12, `crates/split-service`, `split-proto` v2, `apps/manager`)
+## From the integrator (2026-11-12, `crates/split-service`, `split-proto` v2, `apps/split-manager`)
 
 - integrator-1. **Process-wide spawn lock (session-12).** split-service now has three
-  process spawners: split-session (helper, autostart apps; holds `spawn_lock`), split-stream
-  `win::SessionLauncher` (stream server) and split-pads `WinUsbipTool` (`usbip.exe`). The
+  process spawners: split-session (helper, autostart apps; holds `spawn_lock`), seat-stream
+  `win::SessionLauncher` (stream server) and seat-pads `WinUsbipTool` (`usbip.exe`). The
   last two do not take `split_session::win::process::spawn_lock()`, so a stream-server or
   usbip launch that inherits handles in the same instant as a helper start could inherit
   the helper's password pipe. Needs either both packages to call a shared lock (an
@@ -565,7 +565,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   enough for gamepads; untested.
 - integrator-3. **Restore hooks.** Setup sub-commands register hooks for `session`,
   `shim`, `stream` (firewall) and `termwrap` (last). Display (VDD settings copy) and pads
-  (Bluetooth start types; BtController is not wired yet) rely on split-setup's generic
+  (Bluetooth start types; BtController is not wired yet) rely on seat-setup's generic
   journal replay. Analyst / installer: confirm that is enough or add hooks.
 - integrator-4. **Contract deviations of the integration** (for contracts.md §9):
   (a) package structures travel as JSON values inside `host_info`, `termwrap_status`,
@@ -582,7 +582,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   client's `display.mode.request` (fork only) sets the mode. Bluetooth per-user services
   (`bluetooth_console_only`) are stored but `BtController` is not driven yet. The
   Phase 1 `config\<seat>.conf` files are only deleted, not migrated into `seats\<id>\`
-  (they hold no pairing state). `installer/tauri-bundle.json` is not merged into
+  (they hold no pairing state). `installer/split/tauri-bundle.json` is not merged into
   `tauri.conf.json` yet (its resources need `target/installer-deps`, built by CI).
 - integrator-6. **Console dev mode needs elevation for seats.** The engine opens the stream
   journal (`%data%\journal`, owner SYSTEM) and HKLM keys; a non-elevated
@@ -596,7 +596,7 @@ Resolved by implementation (entries above stay as history):
 - final-1. **OQ 13 / OQ 29 resolved.** `split_core::ports::allocate` now follows spec 80
   §7.2 (first free `48100 + k·100`, skips 47984–48010 and any listening port, no wrap
   below 48100); the controller passes `Platform::listening_ports` (service: IP Helper
-  tables). Seat start runs `split_stream::ports::check_free` (listeners + upstream
+  tables). Seat start runs `seat_stream::ports::check_free` (listeners + upstream
   default block) before firewall / launch and fails with `port_in_use` + the ports.
   Watchdog: spec 80 §10 "5 failures in 5 min" as a sliding window
   (`Policy::window_ms` / `max_in_window`), plus 5 consecutive for the stream server.
@@ -613,9 +613,9 @@ Resolved by implementation (entries above stay as history):
   log, source `PulsarSplit` (service mode only; message id 1, no message file: Event
   Viewer shows the text as an insertion string).
 - final-4. **integrator-1 resolved.** One process-wide lock `split_proto::spawn` shared by
-  split-session (helper), split-pads (`usbip.exe`), split-shim-core (`sdbinst.exe`) and
-  split-setup's runner; std `Command` spawns go through `spawn_locked` (lock around the
-  create only). split-stream's launcher uses `bInheritHandles = FALSE` and needs no lock.
+  split-session (helper), seat-pads (`usbip.exe`), seat-shim-core (`sdbinst.exe`) and
+  seat-setup's runner; std `Command` spawns go through `spawn_locked` (lock around the
+  create only). seat-stream's launcher uses `bInheritHandles = FALSE` and needs no lock.
   Rule written in contracts.md §0.
 - final-5. **integrator-3 partly resolved.** New `pads` restore hook (Bluetooth start
   types via `BtController::restore_all`). Display (VDD settings copy) still relies on
@@ -625,8 +625,8 @@ Resolved by implementation (entries above stay as history):
   service-owned) after a `display.mode.result` of ok / ok_sdr_fallback / clamped, and
   used as the session size at the next start. `BtController` is driven from the 1 s
   tick (every 60 s, at once after a session change or a setting change) and restored at
-  service stop / uninstall. The tauri bundle config is merged (see installer/README.md);
-  the payload resources live in `installer/tauri.release.conf.json` because tauri-build
+  service stop / uninstall. The tauri bundle config is merged (see installer/split/README.md);
+  the payload resources live in `installer/split/tauri.release.conf.json` because tauri-build
   copies resources on every cargo build.
 
 Still open:
@@ -640,7 +640,7 @@ Still open:
   preferred path once it exists (final-8). No longer a release blocker.
 - final-8. **Stream-server fork patch set missing (high).** Spec 80 §0's four patches
   (pulsar_idd capture, seat control pipe + web UI off, pairing timeout, pulsar_pad
-  backend) do not exist; `installer/stream-server.json` pins only `upstream`. Without
+  backend) do not exist; `installer/split/stream-server.json` pins only `upstream`. Without
   them `display.mode.request`, the frame ring, `pad.wanted` / pulsar_pad, `apps.reload`
   and `audio.state` events never run end to end; HDR and own pads cannot work. Needs a
   Sunshine source checkout at the pinned tag and an x64 CI runner; not doable on the dev
@@ -669,14 +669,14 @@ Still open:
     `CLIENT CONNECTED`, so the nav shows only "yayında"; `stream_client` fills once a
     backend's `stream.started` carries `client` / `client_name`.
 - final-12. **Microphone (spec 70 §5.1): plumbing only.** The per-seat toggle is now
-  editable in the manager and stored (`Microphone`); `split_audio::rdp_client_flags`
+  editable in the manager and stored (`Microphone`); `seat_audio::rdp_client_flags`
   already sets `INFO_AUDIOCAPTURE` only when the path exists, and the status reports
   `no_microphone` / `mic_policy_blocked`. Remaining gap, in order: (1) the headless RDP
   helper must implement the MS-RDPEAI audio-input dynamic channel (format negotiation,
   PCM 16-bit 48 kHz) and set `INFO_AUDIOCAPTURE`; (2) a service-only named pipe from the
   stream server to that helper for the samples; (3) a mic extension stream between the
   Pulsar client and `pulsar-host` (Sunshine / Moonlight have none), inside the existing
-  ports; (4) flip `split_audio::MICROPHONE_PATH_AVAILABLE`. Needs the RDP library's DVC
+  ports; (4) flip `seat_audio::MICROPHONE_PATH_AVAILABLE`. Needs the RDP library's DVC
   support checked and a host test; Moonlight seats stay mic-less.
 - final-11. **Credential test logon type.** `test_seat_credentials` uses a *network*
   logon (validates the password without needing a logon right or loading a profile);
@@ -696,9 +696,9 @@ Context: [pulsar-host-backend.md](pulsar-host-backend.md).
 - pulsar-host-3. **Audio source.** Pinned endpoint loopback on the session's Remote Audio
   endpoint vs process loopback (exclude own tree) for SYSTEM in session N: which one
   hears only that seat? Test both.
-- pulsar-host-4. **DualSense media through split-pads.** v1 is HID only (no haptics,
+- pulsar-host-4. **DualSense media through seat-pads.** v1 is HID only (no haptics,
   speaker, mic). Design a protocol 2 media ring for spec 60 §4.5, and decide whether
-  split-pads reuses pulsar-core `input::ds5` (git dependency) instead of its own emulation.
+  seat-pads reuses pulsar-core `input::ds5` (git dependency) instead of its own emulation.
 - pulsar-host-5. **Where `pulsar-host` is built.** New crate in pulsar-desktop after
   extracting the host core from Tauri `AppHandle`, or a separate repo? Scope of the
   extraction (§6 item 1) is large; maintainer to decide.

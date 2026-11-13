@@ -1,7 +1,7 @@
 # Third-party components
 
-Index: [../../AGENTS.md](../../AGENTS.md). Decision context: [plan.md](plan.md) (Drivers,
-2026-11-12). Install-side facts: `spec/90-install.md` §3.
+Index: [../../AGENTS.md](../../../AGENTS.md). Decision context: [plan.md](plan.md) (Drivers,
+2026-11-12). Install-side facts: `spec/remote/90-install.md` §3.
 
 Research date **2026-11-12** (web only: upstream READMEs, GitHub REST API, upstream docs,
 crates.io). No binary was downloaded or opened. "Signing" cites what upstream *says*;

@@ -2,7 +2,7 @@
 //! # split-termwrap — EXPERIMENTAL, off by default
 //!
 //! Client-SKU (Windows Pro/Enterprise) multi-session through a TermService wrapper that
-//! **the operator installed themselves** (contract path B1, `docs/agents/contracts.md` §2).
+//! **the operator installed themselves** (contract path B1, `docs/split/agents/contracts.md` §2).
 //! Pulsar Split ships no wrapper, no `termsrv.dll` patch, no offsets and no patch tables.
 //! This crate only:
 //!

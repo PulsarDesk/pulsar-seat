@@ -1,6 +1,6 @@
 # Behaviour spec
 
-Written by the analyst only (see [../CLEANROOM.md](../CLEANROOM.md)). Behaviour and
+Written by the analyst only (see [../../CLEANROOM.md](../../CLEANROOM.md)). Behaviour and
 interfaces, no code. Each spec ends with a "Pulsar Split approach" and "Open questions".
 
 | File | Covers | Status |

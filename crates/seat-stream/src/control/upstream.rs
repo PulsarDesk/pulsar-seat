@@ -197,7 +197,7 @@ pub enum LogSignal {
 /// Splits an upstream log line `[<timestamp>]: <Level>: <message>` into
 /// `(timestamp, level, message)`. `None` for any other layout (continuation lines, text
 /// after an injected newline without a full prefix). Same layout rule as
-/// `split_audio::scan_log_line` (audio-9); shared here so both can use one parser.
+/// `seat_audio::scan_log_line` (audio-9); shared here so both can use one parser.
 pub fn split_log_line(line: &str) -> Option<(&str, &str, &str)> {
     let line = line.trim_end_matches(['\r', '\n']);
     let rest = line.strip_prefix('[')?;
@@ -239,9 +239,9 @@ pub struct UpstreamWebUi<H: HttpsLoopback> {
     next_request_id: u32,
     stream_active: bool,
     /// Spec 70 §3.5 fallback: upstream has no audio event, so its log lines feed
-    /// `split_audio::LogScanner` (anchored matches only); changes become `AudioState`.
-    audio: split_audio::LogScanner,
-    audio_reported: Option<split_audio::AudioState>,
+    /// `seat_audio::LogScanner` (anchored matches only); changes become `AudioState`.
+    audio: seat_audio::LogScanner,
+    audio_reported: Option<seat_audio::AudioState>,
     /// How long `pair_submit` waits for the new client to appear in the list.
     pub pair_poll: (u32, Duration),
 }
@@ -269,7 +269,7 @@ impl<H: HttpsLoopback> UpstreamWebUi<H> {
             pending: None,
             next_request_id: 1,
             stream_active: false,
-            audio: split_audio::LogScanner::new(),
+            audio: seat_audio::LogScanner::new(),
             audio_reported: None,
             pair_poll: (20, Duration::from_millis(500)),
         }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Crash guard, module side (spec 50 §12.2): a vectored exception handler that notices a
 //! fatal exception raised inside this module's own code and reports `fault` once over the
-//! health pipe. The service counts faults per target (`split_shim_core::FaultCounter`) and
+//! health pipe. The service counts faults per target (`seat_shim_core::FaultCounter`) and
 //! writes the target to `Shim\DisabledTargets`. The handler never handles the exception.
 //!
 //! The handler runs in exception context, possibly while this thread holds the heap lock or
@@ -10,7 +10,7 @@
 //! is an atomic kept current by `live()`, and the pipe is opened with the real
 //! `NtCreateFile` (our hook's trampoline when hooked) and written with `NtWriteFile`.
 
-use split_shim_core::decide::{ProcessFacts, Role};
+use seat_shim_core::decide::{ProcessFacts, Role};
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -55,7 +55,7 @@ static PREPARED: OnceLock<Prepared> = OnceLock::new();
 /// Builds everything the handler needs. Called once from init, before [`install`].
 pub fn prepare(facts: &ProcessFacts, role: &Role) {
     set_role(role);
-    let nt_path = split_shim_core::HEALTH_PIPE.replacen(r"\\.\", r"\??\", 1);
+    let nt_path = seat_shim_core::HEALTH_PIPE.replacen(r"\\.\", r"\??\", 1);
     let ex = |n| super::hook::export("ntdll.dll", n);
     let (Some(nt_create), Some(nt_write), Some(nt_close)) = (ex("NtCreateFile"), ex("NtWriteFile"), ex("NtClose")) else {
         return;

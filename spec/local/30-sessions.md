@@ -1,7 +1,7 @@
 # 30 — Concurrent local sessions (one per seat)
 
 Status: draft v1 (2026-11-12, critiqued, cross-checked). Analyst-written. Behaviour and interfaces only; see
-[../CLEANROOM.md](../CLEANROOM.md).
+[../CLEANROOM.md](../../CLEANROOM.md).
 
 Confidence markers:
 

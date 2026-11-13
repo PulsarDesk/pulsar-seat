@@ -1,5 +1,5 @@
 [package]
-name = "split-pads"
+name = "seat-pads"
 description = "Pulsar Split virtual controllers: pad backends (ViGEmBus, usbip-win2 DualSense, own UMDF pad), ownership registry, orphan cleanup, feedback"
 version.workspace = true
 edition.workspace = true

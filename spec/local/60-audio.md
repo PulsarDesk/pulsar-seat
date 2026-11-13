@@ -1,7 +1,7 @@
 # 60 — Audio per seat
 
 Status: draft v1 (2026-11-12, critiqued, cross-checked). Analyst. Behaviour and interfaces only; see
-[../CLEANROOM.md](../CLEANROOM.md).
+[../CLEANROOM.md](../../CLEANROOM.md).
 
 This file describes how the reference product gives each seat its own playback (render) and
 recording (capture) endpoints, how it hides the other seats' endpoints, and how it works with

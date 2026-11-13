@@ -74,7 +74,7 @@ pub fn nth_kept(index: u32, limit: u32, mut probe: impl FnMut(u32) -> Probe) -> 
 
 /// Allocation-free first check of a UTF-16 file name (an `NtCreateFile` /
 /// `NtOpenFile` / `CreateFileW` name): could it be a HID or XUSB device-interface path?
-/// Same rule as `split_shim_core::decide::is_filtered_device_path` (prefix `\??\`, `\\?\`,
+/// Same rule as `seat_shim_core::decide::is_filtered_device_path` (prefix `\??\`, `\\?\`,
 /// `\\.\` or `\\?\GLOBALROOT\??\`, then `hid#…` or `…#{xusb guid}`), case-insensitive.
 /// Runs on every file open of the process, so it never allocates or locks.
 pub fn may_be_device_path(name: &[u16]) -> bool {
@@ -94,7 +94,7 @@ pub fn may_be_device_path(name: &[u16]) -> bool {
     if starts_ci(body, "hid#") {
         return true;
     }
-    let guid = split_shim_core::decide::GUID_DEVINTERFACE_XUSB;
+    let guid = seat_shim_core::decide::GUID_DEVINTERFACE_XUSB;
     let needle_len = guid.len() + 1;
     body.len() >= needle_len
         && (0..=body.len() - needle_len).any(|i| body[i] == u16::from(b'#') && starts_ci(&body[i + 1..], guid))
@@ -171,7 +171,7 @@ mod tests {
             r"\Device\HarddiskVolume3\x",
         ];
         for c in cases {
-            let core = split_shim_core::decide::is_filtered_device_path(c);
+            let core = seat_shim_core::decide::is_filtered_device_path(c);
             assert_eq!(may_be_device_path(&u(c)), core, "{c}");
         }
     }

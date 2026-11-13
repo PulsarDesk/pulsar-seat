@@ -45,7 +45,7 @@
         "upgradeCode": "32A39034-3135-45E2-A938-593053D6427D",
         "language": "tr-TR",
         "fragmentPaths": [
-          "../../../installer/wix/PulsarSplit.wxs"
+          "../../../installer/split/wix/PulsarSplit.wxs"
         ],
         "componentRefs": [
           "PulsarSplitServiceComponent",
@@ -62,7 +62,7 @@
           "Turkish"
         ],
         "displayLanguageSelector": false,
-        "installerHooks": "../../../installer/nsis/hooks.nsh"
+        "installerHooks": "../../../installer/split/nsis/hooks.nsh"
       }
     }
   },

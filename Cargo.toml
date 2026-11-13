@@ -2,9 +2,13 @@
 # Pulsar Seat monorepo. Layout and ownership: docs/agents/architecture.md.
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/manager/src-tauri"]
-# `cargo build` / `cargo test` at the root cover every crate but not the Tauri manager:
-# it needs its frontend built first (`bun run build` in apps/manager, or `bun tauri build`).
+# Two managers until merge-plan.md step 9: apps/manager (local seats) and
+# apps/split-manager (remote seats, from Pulsar Split). shim/, drivers/split-pad and
+# crates/seat-compat/apihelper are separate workspaces.
+members = ["crates/*", "apps/manager/src-tauri", "apps/split-manager/src-tauri"]
+# `cargo build` / `cargo test` at the root cover every crate but not the Tauri managers:
+# they need their frontend built first (`bun run build` in apps/manager and
+# apps/split-manager, or `bun tauri build`).
 default-members = [
     "crates/seat-proto",
     "crates/seat-core",
@@ -17,6 +21,20 @@ default-members = [
     "crates/seat-host",
     "crates/seat-rdp",
     "crates/seat-release",
+    # Remote seat kind (from Pulsar Split). split-* crates clash with a seat-* crate and are
+    # merged into it at merge-plan.md steps 4-8.
+    "crates/split-proto",
+    "crates/split-core",
+    "crates/split-session",
+    "crates/split-rdp-helper",
+    "crates/split-termwrap",
+    "crates/split-display",
+    "crates/split-service",
+    "crates/seat-audio",
+    "crates/seat-stream",
+    "crates/seat-pads",
+    "crates/seat-shim-core",
+    "crates/seat-setup",
 ]
 
 [workspace.package]
@@ -36,6 +54,16 @@ seat-display = { path = "crates/seat-display" }
 seat-input = { path = "crates/seat-input" }
 seat-media = { path = "crates/seat-media" }
 seat-compat = { path = "crates/seat-compat" }
+seat-audio = { path = "crates/seat-audio" }
+seat-stream = { path = "crates/seat-stream" }
+seat-pads = { path = "crates/seat-pads" }
+seat-shim-core = { path = "crates/seat-shim-core" }
+seat-setup = { path = "crates/seat-setup" }
+split-proto = { path = "crates/split-proto" }
+split-core = { path = "crates/split-core" }
+split-session = { path = "crates/split-session" }
+split-termwrap = { path = "crates/split-termwrap" }
+split-display = { path = "crates/split-display" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"

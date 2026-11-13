@@ -5,7 +5,7 @@
 //! nothing is verified yet, so on a stock install this hook is never installed.
 
 use super::hook::Hook;
-use split_shim_core::decide::{WNF_FOCUS_CANDIDATES, filter_focus, focus_target_pid};
+use seat_shim_core::decide::{WNF_FOCUS_CANDIDATES, filter_focus, focus_target_pid};
 use std::ffi::c_void;
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 

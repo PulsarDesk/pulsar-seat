@@ -6,8 +6,8 @@
 //! open question shim-8) and with `SECURITY_IDENTIFICATION` quality of service, so a
 //! process squatting the pipe name can never impersonate this (possibly elevated) client.
 
-use split_shim_core::decide::ProcessFacts;
-use split_shim_core::health::{HEALTH_VERSION, ShimHealth, encode_health};
+use seat_shim_core::decide::ProcessFacts;
+use seat_shim_core::health::{HEALTH_VERSION, ShimHealth, encode_health};
 use std::io::Write;
 use std::os::windows::fs::OpenOptionsExt;
 
@@ -22,7 +22,7 @@ pub fn frame(facts: &ProcessFacts, role: &str, hooks_on: bool, error: Option<&st
         pid: std::process::id(),
         session_id: facts.session_id,
         exe: facts.exe_name().to_string(),
-        module_version: split_shim_core::MODULE_VERSION.to_string(),
+        module_version: seat_shim_core::MODULE_VERSION.to_string(),
         role: role.to_string(),
         hooks_on,
         error: error.map(str::to_string),
@@ -35,7 +35,7 @@ pub fn write_now(bytes: &[u8]) {
         let open = std::fs::OpenOptions::new()
             .access_mode(FILE_WRITE_DATA | SYNCHRONIZE)
             .security_qos_flags(SECURITY_IDENTIFICATION)
-            .open(split_shim_core::HEALTH_PIPE);
+            .open(seat_shim_core::HEALTH_PIPE);
         match open {
             Ok(mut f) => {
                 let _ = f.write_all(bytes);

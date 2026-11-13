@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Windows part of the launcher.
 
-use split_shim_core::dxvk::Bitness;
-use split_shim_core::launch::{LaunchArgs, LaunchPlan, build_cmdline, delegate_args, pe_machine, plan_launch};
+use seat_shim_core::dxvk::Bitness;
+use seat_shim_core::launch::{LaunchArgs, LaunchPlan, build_cmdline, delegate_args, pe_machine, plan_launch};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
@@ -104,7 +104,7 @@ fn system_module_copy() -> Option<PathBuf> {
     if n == 0 || n >= buf.len() {
         return None;
     }
-    let name = if cfg!(target_pointer_width = "64") { split_shim_core::MODULE_X64 } else { split_shim_core::MODULE_X86 };
+    let name = if cfg!(target_pointer_width = "64") { seat_shim_core::MODULE_X64 } else { seat_shim_core::MODULE_X86 };
     let p = PathBuf::from(String::from_utf16_lossy(&buf[..n])).join(name);
     p.is_file().then_some(p)
 }
@@ -114,19 +114,19 @@ fn system_module_copy() -> Option<PathBuf> {
 /// injects that same file (`LoadLibraryW` returns the copy AppHelp already mapped), so the
 /// child never holds two copies of the module (review fix 2026-11-12).
 fn add_layer_to_env() -> Option<PathBuf> {
-    let key = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\InstalledSDB\{}", split_shim_core::SHIM_DB_GUID);
-    let installed = split_shim_core::win::read_value(&key, "DatabaseDescription").is_some()
-        || split_shim_core::win::read_value(&key, "DatabasePath").is_some();
+    let key = format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\InstalledSDB\{}", seat_shim_core::SHIM_DB_GUID);
+    let installed = seat_shim_core::win::read_value(&key, "DatabaseDescription").is_some()
+        || seat_shim_core::win::read_value(&key, "DatabasePath").is_some();
     if !installed {
         return None;
     }
     let copy = system_module_copy()?;
     let cur = std::env::var("__COMPAT_LAYER").unwrap_or_default();
-    if !cur.split_whitespace().any(|t| t.eq_ignore_ascii_case(split_shim_core::LAYER_NAME)) {
+    if !cur.split_whitespace().any(|t| t.eq_ignore_ascii_case(seat_shim_core::LAYER_NAME)) {
         let new = if cur.trim().is_empty() {
-            split_shim_core::LAYER_NAME.to_string()
+            seat_shim_core::LAYER_NAME.to_string()
         } else {
-            format!("{cur} {}", split_shim_core::LAYER_NAME)
+            format!("{cur} {}", seat_shim_core::LAYER_NAME)
         };
         // SAFETY: single-threaded at this point; only the child's inherited block is affected.
         unsafe { std::env::set_var("__COMPAT_LAYER", new) };

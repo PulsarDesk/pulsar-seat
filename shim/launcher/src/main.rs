@@ -21,7 +21,7 @@ mod win;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let args = match split_shim_core::launch::parse_launch_args(&argv) {
+    let args = match seat_shim_core::launch::parse_launch_args(&argv) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{}: {e}", e.code());

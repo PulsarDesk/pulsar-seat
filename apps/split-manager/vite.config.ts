@@ -22,7 +22,7 @@ export default defineConfig({
       include: ['src/**/*.{ts,svelte}'],
       exclude: ['src/**/*.test.ts', 'src/lib/test/**'],
       reporter: ['text-summary', 'html', 'lcov'],
-      reportsDirectory: '../../target/coverage/manager'
+      reportsDirectory: '../../target/coverage/split-manager'
     }
   }
 });

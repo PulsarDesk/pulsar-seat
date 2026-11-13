@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pulsar backend: `pulsar-host.exe` per seat (docs/agents/pulsar-host-backend.md).
+//! Pulsar backend: `pulsar-host.exe` per seat (docs/split/agents/pulsar-host-backend.md).
 //!
 //! Launch (§1): same launcher, seat job, watchdog policy and binary lock as Sunshine. argv
 //! is only `--split-seat <id> --data-dir <abs> --log <abs>`; no secret ever goes on argv,

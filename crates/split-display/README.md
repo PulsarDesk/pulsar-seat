@@ -2,7 +2,7 @@
 
 Per-seat virtual display for Pulsar Split: one `DisplayBackend` trait, three backends,
 the pure mode / HDR / GPU rules and the wire formats shared with the own driver.
-GPL-3.0-only. Contract: `docs/agents/contracts.md` §3. Behaviour: `spec/40-display-hdr.md`.
+GPL-3.0-only. Contract: `docs/split/agents/contracts.md` §3. Behaviour: `spec/remote/40-display-hdr.md`.
 
 ## Design
 

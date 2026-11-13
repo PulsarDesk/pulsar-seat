@@ -25,11 +25,11 @@
 
 extern crate wdk_panic;
 
-#[path = "../../../crates/split-pads/src/layout.rs"]
+#[path = "../../../crates/seat-pads/src/layout.rs"]
 pub mod layout;
-#[path = "../../../crates/split-pads/src/descriptors.rs"]
+#[path = "../../../crates/seat-pads/src/descriptors.rs"]
 pub mod descriptors;
-#[path = "../../../crates/split-pads/src/features.rs"]
+#[path = "../../../crates/seat-pads/src/features.rs"]
 pub mod features;
 
 mod channel;

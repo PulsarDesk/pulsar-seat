@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Restore journal (spec 90 §9.2, contracts §0.3): JSON Lines in
 //! `%ProgramData%\PulsarSplit\journal\session.jsonl`, `intent` before a change and `done`
-//! after, so `split-setup` can replay it on uninstall.
+//! after, so `seat-setup` can replay it on uninstall.
 
 use crate::SessionError;
 use crate::rds::RegData;
@@ -118,7 +118,7 @@ impl<T: RestoreLog + ?Sized> RestoreLog for std::sync::Arc<T> {
 
 /// Real journal file (platform-neutral std I/O; the path is under `%ProgramData%`).
 ///
-/// The service and `split-setup` replay it as SYSTEM / admin, so on Windows it is trusted
+/// The service and `seat-setup` replay it as SYSTEM / admin, so on Windows it is trusted
 /// only when nobody but SYSTEM / Administrators can have written it: `journal\` is created
 /// with [`crate::acl::PRIVATE_DIR_SDDL`] and the directory and the open file are checked
 /// before every read and append. Anything else fails closed.

@@ -1,5 +1,5 @@
 [package]
-name = "split-audio"
+name = "seat-audio"
 description = "Pulsar Split per-seat audio: session Remote Audio endpoint, stream-server audio keys, RDP audio flags, limitations"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-# Exposes `split_audio::fake` (in-memory probe, device nodes, registry, remover) to other
+# Exposes `seat_audio::fake` (in-memory probe, device nodes, registry, remover) to other
 # crates' tests (the integrator's `split-service`).
 fake = []
 
@@ -29,4 +29,4 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 serde_json = "1"
 # Contract integration test only (tests/stream_conf.rs): server_keys -> stream conf writer.
-split-stream = { path = "../split-stream" }
+seat-stream = { path = "../seat-stream" }

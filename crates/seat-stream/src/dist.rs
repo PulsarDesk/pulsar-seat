@@ -75,7 +75,7 @@ fn validate_parts(file: &str, sha256: &str, version: &str, licence: &str) -> Res
     Ok(())
 }
 
-/// Manifest of `pulsar-host.exe` (docs/agents/pulsar-host-backend.md §1): same pinning as
+/// Manifest of `pulsar-host.exe` (docs/split/agents/pulsar-host-backend.md §1): same pinning as
 /// the Sunshine manifest, without a flavour. File `<install>\pulsar-host\pulsar-host.json`.
 pub const HOST_MANIFEST_FILE: &str = "pulsar-host.json";
 

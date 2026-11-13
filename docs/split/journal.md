@@ -1,6 +1,6 @@
 # Journal
 
-Index: [../AGENTS.md](../AGENTS.md). One dated line per finding or session; newest last.
+Index: [../AGENTS.md](../../AGENTS.md). One dated line per finding or session; newest last.
 
 - 2026-11-12: repo created (GPL-3, `main`, local only). Clean-room rules written. Phase 0
   analyst started on architecture, manager and service specs.

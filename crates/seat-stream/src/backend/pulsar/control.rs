@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Service side of the `pulsar-host` control pipe (docs/agents/pulsar-host-backend.md §3).
+//! Service side of the `pulsar-host` control pipe (docs/split/agents/pulsar-host-backend.md §3).
 //!
 //! The **service** owns `\\.\pipe\PulsarSplit\seat\<seat-id>\pulsar-host` (created before
 //! the launch, see [`super::HostPipeListener`]); `pulsar-host` is the client. Framing and

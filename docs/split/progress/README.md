@@ -11,4 +11,4 @@ Next:
 Verify:
 ```
 
-Delete the file once its result is recorded in `docs/agents/status.md`.
+Delete the file once its result is recorded in `docs/split/agents/status.md`.

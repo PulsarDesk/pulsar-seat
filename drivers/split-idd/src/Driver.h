@@ -4,7 +4,7 @@
 // UNBUILT · UNTESTED · UNSIGNED — do not install. See ../README.md.
 //
 // Written from Microsoft Learn's IddCx documentation (no sample code copied, see OQ 26).
-// Behaviour: spec/40-display-hdr.md §2.3, §3.3, §4.4, §5, §6.4, §7, §8.4.
+// Behaviour: spec/remote/40-display-hdr.md §2.3, §3.3, §4.4, §5, §6.4, §7, §8.4.
 
 #pragma once
 

@@ -4,22 +4,22 @@
 //! server (responses, rdpsnd acks, reactivation). Frames are decoded and dropped.
 
 use crate::emit;
-use ironrdp::connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
-use ironrdp::connector::sspi::generator::NetworkRequest;
-use ironrdp::connector::sspi::network_client::NetworkClient;
-use ironrdp::connector::{
+use ironrdp_connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
+use ironrdp_connector::sspi::generator::NetworkRequest;
+use ironrdp_connector::sspi::network_client::NetworkClient;
+use ironrdp_connector::{
     ClientConnector, Config, ConnectorError, ConnectorErrorKind, Credentials, DesktopSize, Sequence as _, ServerName,
 };
-use ironrdp::core::WriteBuf;
-use ironrdp::graphics::image_processing::PixelFormat;
-use ironrdp::pdu::gcc::KeyboardType;
-use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
-use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
-use ironrdp::rdpsnd::client::{Rdpsnd, RdpsndClientHandler};
-use ironrdp::rdpsnd::pdu::{AudioFormat, PitchPdu, VolumePdu, WaveFormat};
-use ironrdp::session::fast_path::ProcessorBuilder;
-use ironrdp::session::image::DecodedImage;
-use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use ironrdp_core::WriteBuf;
+use ironrdp_graphics::image_processing::PixelFormat;
+use ironrdp_pdu::gcc::{ConnectionType, KeyboardType};
+use ironrdp_pdu::rdp::capability_sets::{MajorPlatformType, RailSupportLevel};
+use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
+use ironrdp_rdpsnd::client::{Rdpsnd, RdpsndClientHandler};
+use ironrdp_rdpsnd::pdu::{AudioFormat, PitchPdu, VolumePdu, WaveFormat};
+use ironrdp_session::fast_path::ProcessorBuilder;
+use ironrdp_session::image::DecodedImage;
+use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_blocking::Framed;
 use sha1::{Digest, Sha1};
 use split_session::helper_proto::{HelperArgs, HelperEvent, HelperFailure, hex20};
@@ -63,7 +63,7 @@ impl RdpsndClientHandler for DiscardAudio {
     fn get_formats(&self) -> &[AudioFormat] {
         &self.formats
     }
-    fn wave(&mut self, _format_no: usize, _ts: u32, _data: Cow<'_, [u8]>) {}
+    fn wave(&mut self, _format: &AudioFormat, _ts: u32, _data: Cow<'_, [u8]>) {}
     fn set_volume(&mut self, _volume: VolumePdu) {}
     fn set_pitch(&mut self, _pitch: PitchPdu) {}
     fn close(&mut self) {}
@@ -73,8 +73,8 @@ impl RdpsndClientHandler for DiscardAudio {
 struct NoNetwork;
 
 impl NetworkClient for NoNetwork {
-    fn send(&self, _request: &NetworkRequest) -> ironrdp::connector::sspi::Result<Vec<u8>> {
-        Err(ironrdp::connector::sspi::Error::new(ironrdp::connector::sspi::ErrorKind::NoAuthenticatingAuthority, "no KDC: NTLM only"))
+    fn send(&self, _request: &NetworkRequest) -> ironrdp_connector::sspi::Result<Vec<u8>> {
+        Err(ironrdp_connector::sspi::Error::new(ironrdp_connector::sspi::ErrorKind::NoAuthenticatingAuthority, "no KDC: NTLM only"))
     }
 }
 
@@ -82,30 +82,43 @@ impl NetworkClient for NoNetwork {
 pub(crate) fn build_config(a: &HelperArgs, password: &str) -> Config {
     Config {
         desktop_size: DesktopSize { width: a.width as u16, height: a.height as u16 },
+        monitor_layout: None,
         desktop_scale_factor: 0,
+        desktop_physical_size: None,
+        desktop_orientation: None,
+        device_scale_factor: None,
+        monitor_extended_layout: None,
+        relative_mouse_input: false,
         enable_tls: false,
         enable_credssp: true,
+        enable_standard_rdp_security: false,
         credentials: Credentials::UsernamePassword { username: a.user.clone(), password: password.to_owned() },
         // Local account: the machine is the domain.
         domain: std::env::var("COMPUTERNAME").ok().filter(|d| !d.is_empty()),
         client_build: CLIENT_BUILD,
         client_name: a.client_name.clone(),
-        keyboard_type: KeyboardType::IbmEnhanced,
+        keyboard_type: KeyboardType::IBM_ENHANCED,
         keyboard_subtype: 0,
         keyboard_functional_keys_count: 12,
         keyboard_layout: a.layout,
+        // What IronRDP 0.10's connector always sent.
+        connection_type: ConnectionType::Lan,
         ime_file_name: String::new(),
         bitmap: None,
         dig_product_id: String::new(),
         client_dir: String::from(r"C:\Windows\System32\mstscax.dll"),
         alternate_shell: String::new(),
         work_dir: String::new(),
+        remote_application_mode: false,
+        rail_support_level: RailSupportLevel::empty(),
         platform: MajorPlatformType::WINDOWS,
         hardware_id: None,
         request_data: None,
         autologon: false,
         // false sets INFO_NOAUDIOPLAYBACK; spec 70 §2.6 wants the session's own endpoint.
         enable_audio_playback: true,
+        // INFO_AUDIOCAPTURE (mic, spec 70 §5.1): off, as with IronRDP 0.17 (no such field).
+        enable_audio_capture: false,
         performance_flags: PerformanceFlags::DISABLE_WALLPAPER
             | PerformanceFlags::DISABLE_FULLWINDOWDRAG
             | PerformanceFlags::DISABLE_MENUANIMATIONS
@@ -116,6 +129,7 @@ pub(crate) fn build_config(a: &HelperArgs, password: &str) -> Config {
         enable_server_pointer: false,
         pointer_software_rendering: true,
         multitransport_flags: None,
+        support_dyn_vc_gfx_protocol: false,
     }
 }
 
@@ -170,8 +184,8 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>) -> Result<String, Failur
     if a.audio_playback {
         connector.attach_static_channel(Rdpsnd::new(Box::new(DiscardAudio { formats: pcm_formats() })));
     }
-    // INFO_AUDIOCAPTURE (mic, spec 70 §5.1) is not exposed by IronRDP 0.17's connector;
-    // `--audio-capture` is accepted and has no effect yet.
+    // INFO_AUDIOCAPTURE (mic, spec 70 §5.1) stays off (`build_config`): `--audio-capture`
+    // is accepted and has no effect yet.
 
     let mut framed = Framed::new(tcp);
     let should = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
@@ -204,7 +218,7 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>) -> Result<String, Failur
 
     let upgraded = ironrdp_blocking::mark_as_upgraded(should, &mut connector);
     let mut framed = Framed::new_with_leftover(tls, leftover);
-    let mut result = ironrdp_blocking::connect_finalize(
+    let outcome = ironrdp_blocking::connect_finalize(
         upgraded,
         connector,
         &mut framed,
@@ -214,6 +228,7 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>) -> Result<String, Failur
         None,
     )
     .map_err(conn_err)?;
+    let mut result = outcome.into_connected().map_err(conn_err)?;
     // CredSSP is done: drop our copy, and keep no password in the reactivation factory.
     drop(password);
     result.activation_factory =
@@ -225,7 +240,7 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>) -> Result<String, Failur
     active(&mut framed, result)
 }
 
-fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp::connector::ConnectionResult) -> Result<String, Failure> {
+fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::ConnectionResult) -> Result<String, Failure> {
     let factory = result.activation_factory;
     let (io_ch, user_ch) = (factory.io_channel_id(), factory.user_channel_id());
     let mut size = result.desktop_size;
@@ -250,7 +265,7 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp::connector::C
             }
             Err(e) => return Err(io_fail("read", e)),
         };
-        let outputs = stage.process(&mut image, action, &payload).map_err(|e| (HelperFailure::Protocol, e.to_string()))?;
+        let outputs = stage.process(&mut image, action, &payload, framed.last_read_at()).map_err(|e| (HelperFailure::Protocol, e.to_string()))?;
         for out in outputs {
             match out {
                 ActiveStageOutput::ResponseFrame(f) if !f.is_empty() => framed.write_all(&f).map_err(|e| io_fail("write", e))?,
@@ -259,9 +274,11 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp::connector::C
                     let mut seq = factory.create();
                     let mut buf = WriteBuf::new();
                     loop {
-                        if let ConnectionActivationState::Finalized { desktop_size, share_id, enable_server_pointer: _, pointer_software_rendering: _ } =
-                            seq.connection_activation_state()
-                        {
+                        let state = seq.connection_activation_state();
+                        if matches!(state, ConnectionActivationState::Redirected { .. }) {
+                            return Err((HelperFailure::Protocol, "server redirection during reactivation".into()));
+                        }
+                        if let ConnectionActivationState::Finalized { desktop_size, share_id, .. } = state {
                             stage.set_fastpath_processor(
                                 ProcessorBuilder {
                                     io_channel_id: io_ch,
@@ -269,7 +286,6 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp::connector::C
                                     share_id,
                                     enable_server_pointer: false,
                                     pointer_software_rendering: true,
-                                    bulk_decompressor: None,
                                 }
                                 .build(),
                             );
@@ -284,7 +300,7 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp::connector::C
                         let written = match seq.next_pdu_hint() {
                             Some(h) => {
                                 let pdu = framed.read_by_hint(h).map_err(|e| io_fail("reactivation read", e))?;
-                                seq.step(&pdu, &mut buf)
+                                seq.step(&pdu, framed.last_read_at(), &mut buf)
                             }
                             None => seq.step_no_input(&mut buf),
                         }

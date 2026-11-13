@@ -3,7 +3,7 @@
 // versions 1-9 (up to 180 bytes). Enough for "address:port" and relay ids in the pair
 // dialog. Capped at 9: only versions 1-9 were compared against the reference encoder, and
 // version 10+ switches byte mode to a 16-bit length field. Runs offline; written for Pulsar Split, checked against an independent encoder
-// (docs/journal.md 2026-11-13).
+// (docs/split/journal.md 2026-11-13).
 
 export interface QrCode {
   version: number;

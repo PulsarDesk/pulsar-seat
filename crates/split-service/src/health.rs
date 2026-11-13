@@ -48,11 +48,11 @@ impl HealthServer {
     }
 
     pub fn shutdown_handle(&self) -> Shutdown {
-        Shutdown::new(split_shim_core::HEALTH_PIPE, self.flag.clone())
+        Shutdown::new(seat_shim_core::HEALTH_PIPE, self.flag.clone())
     }
 
     fn instance(&self, first: bool) -> io::Result<HANDLE> {
-        let name = wide(split_shim_core::HEALTH_PIPE);
+        let name = wide(seat_shim_core::HEALTH_PIPE);
         let sa = self.sd.attributes();
         let mut mode = PIPE_ACCESS_INBOUND;
         if first {
@@ -66,7 +66,7 @@ impl HealthServer {
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
                 0,
-                split_shim_core::health::MAX_HEALTH_FRAME as u32,
+                seat_shim_core::health::MAX_HEALTH_FRAME as u32,
                 0,
                 &sa,
             )
@@ -143,7 +143,7 @@ fn serve(pipe: OwnedPipe, engine: &Engine) {
     // SAFETY: we own the handle; File closes it.
     let mut f = unsafe { std::fs::File::from_raw_handle(h as _) };
     let mut buf = Vec::with_capacity(512);
-    let max = split_shim_core::health::MAX_HEALTH_FRAME + 4;
+    let max = seat_shim_core::health::MAX_HEALTH_FRAME + 4;
     let mut chunk = [0u8; 512];
     while buf.len() < max {
         match f.read(&mut chunk) {
@@ -151,7 +151,7 @@ fn serve(pipe: OwnedPipe, engine: &Engine) {
             Ok(n) => buf.extend_from_slice(&chunk[..n.min(max - buf.len())]),
         }
     }
-    match split_shim_core::decode_health(&buf) {
+    match seat_shim_core::decode_health(&buf) {
         Ok(hl) => engine.record_health(hl),
         Err(e) => crate::log::debug(&format!("bad shim health frame: {e}")),
     }

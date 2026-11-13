@@ -2,7 +2,7 @@
 //! Driver side of the shared channel (spec 60 §4.5): opens the four objects the service
 //! created (never creates them), reads the input section with the seqlock rule and
 //! appends to the output ring. `core` only; layout constants come from the shared
-//! `layout.rs` of `crates/split-pads` (single source of truth).
+//! `layout.rs` of `crates/seat-pads` (single source of truth).
 
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 

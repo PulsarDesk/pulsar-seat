@@ -15,9 +15,9 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "tauri": "tauri",
-    "installer:msi": "tauri build --bundles msi --config ../../installer/tauri.release.conf.json",
-    "installer:msi:x64": "tauri build --bundles msi --target x86_64-pc-windows-msvc --config ../../installer/tauri.release.conf.json --config ../../installer/tauri.x64.conf.json",
-    "installer:nsis": "tauri build --bundles nsis --config ../../installer/tauri.release.conf.json --config ../../installer/tauri.nsis.conf.json"
+    "installer:msi": "tauri build --bundles msi --config ../../installer/split/tauri.release.conf.json",
+    "installer:msi:x64": "tauri build --bundles msi --target x86_64-pc-windows-msvc --config ../../installer/split/tauri.release.conf.json --config ../../installer/split/tauri.x64.conf.json",
+    "installer:nsis": "tauri build --bundles nsis --config ../../installer/split/tauri.release.conf.json --config ../../installer/split/tauri.nsis.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4"

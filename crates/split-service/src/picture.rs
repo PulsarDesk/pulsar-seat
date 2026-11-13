@@ -61,7 +61,7 @@ pub fn pick(values: &[(String, String)], public: &Path, sid: &str) -> Option<Pat
 pub fn encode(path: &Path, bytes: &[u8]) -> UserPicture {
     match mime_for(path) {
         Some(mime) if !bytes.is_empty() && bytes.len() as u64 <= MAX_BYTES => {
-            UserPicture { mime: mime.into(), data: split_setup::b64::encode(bytes) }
+            UserPicture { mime: mime.into(), data: seat_setup::b64::encode(bytes) }
         }
         _ => UserPicture::default(),
     }
@@ -71,7 +71,7 @@ pub fn encode(path: &Path, bytes: &[u8]) -> UserPicture {
 #[cfg(windows)]
 pub fn read(user: &str) -> UserPicture {
     use std::io::Read;
-    let Ok(Some(sid)) = split_setup::win::accounts::local_user_sid(user) else {
+    let Ok(Some(sid)) = seat_setup::win::accounts::local_user_sid(user) else {
         return UserPicture::default();
     };
     let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);

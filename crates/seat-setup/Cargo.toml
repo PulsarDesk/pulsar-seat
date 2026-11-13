@@ -1,5 +1,5 @@
 [package]
-name = "split-setup"
+name = "seat-setup"
 description = "Pulsar Split install / reconcile / uninstall / coexistence logic (service sub-commands)"
 version.workspace = true
 edition.workspace = true

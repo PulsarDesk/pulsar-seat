@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Seat service (`pulsar-seat-service.exe`): LocalSystem, session 0. Owns config,
 //! seat state machine, device assignment, seat secrets (LSA), every system change and the
-//! control pipe. Spec: `spec/20-service.md` §13, `spec/00-architecture.md` §5.5–5.7.
+//! control pipe. Spec: `spec/local/20-service.md` §13, `spec/local/00-architecture.md` §5.5–5.7.
 //! Contract: `docs/agents/architecture.md`. Command line: [`cli`].
 //!
 //! Module map:

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Steam in a seat (spec 50 §6.2). Preferred: the service starts Steam as the seat user with
-//! `split_shim_core::steam_launch_args`. This hook only covers `steam.exe` started from the
+//! `seat_shim_core::steam_launch_args`. This hook only covers `steam.exe` started from the
 //! seat shell without the option: `GetCommandLineW/A` return the command line with the
 //! per-seat `-master_ipc_name_override`, and the matching variable is set in-process.
 
 use super::hook::Hook;
-use split_shim_core::decide::Role;
-use split_shim_core::steam::{IPC_ENV, ipc_name, steam_cmdline_patch};
+use seat_shim_core::decide::Role;
+use seat_shim_core::steam::{IPC_ENV, ipc_name, steam_cmdline_patch};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows_sys::Win32::Globalization::{CP_ACP, WideCharToMultiByte};
 use windows_sys::Win32::System::Environment::{GetCommandLineW, SetEnvironmentVariableW};

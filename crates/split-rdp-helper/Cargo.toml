@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# IronRDP 0.17 needs Rust 1.89.
+# IronRDP needs Rust 1.89.
 rust-version = "1.89"
 
 [[bin]]
@@ -17,8 +17,16 @@ split-session = { path = "../split-session" }
 serde_json = "1"
 zeroize = "1"
 sha1 = "0.10"
-ironrdp = { version = "0.17", features = ["connector", "session", "rdpsnd", "svc", "pdu", "core", "graphics"] }
-ironrdp-blocking = "0.10"
+# Same IronRDP crate versions as seat-rdp: one workspace allows only one `picky` (the
+# connector pins it exactly). This helper is replaced by seat-rdp's headless mode at
+# merge-plan.md step 7.
+ironrdp-connector = "0.12"
+ironrdp-session = "0.13"
+ironrdp-blocking = "0.12"
+ironrdp-pdu = "0.11"
+ironrdp-core = "0.3"
+ironrdp-graphics = "0.11"
+ironrdp-rdpsnd = "0.11"
 native-tls = "0.2"
 x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 

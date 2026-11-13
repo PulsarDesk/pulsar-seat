@@ -2,7 +2,7 @@
 //! Pulsar Seat media and devices — implements [`seat_core::backend::AudioRouter`] and
 //! [`seat_core::backend::DeviceGate`], plus the Windows [`seat_core::pnp::PnpTree`].
 //!
-//! Owner: the **media** package. Spec: `spec/60-audio.md` §8, `spec/70-usb-devices.md` §5.
+//! Owner: the **media** package. Spec: `spec/local/60-audio.md` §8, `spec/local/70-usb-devices.md` §5.
 //! Contract: `docs/agents/architecture.md` (§ Audio, § Devices).
 //!
 //! Public API:

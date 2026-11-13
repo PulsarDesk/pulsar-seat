@@ -386,7 +386,7 @@ impl ConfigStore for RegistryStore {
     }
 }
 
-/// Pulsar seat secrets (docs/agents/pulsar-host-backend.md §2): DPAPI machine scope under
+/// Pulsar seat secrets (docs/split/agents/pulsar-host-backend.md §2): DPAPI machine scope under
 /// `<root>\Secrets\Pulsar`. The key gets its own protected SYSTEM + Administrators DACL
 /// on every open; inheriting from `Secrets` is not enough (that key may not be protected
 /// yet, and `RegSetKeySecurity` does not push ACEs down to an existing subkey).
@@ -414,23 +414,23 @@ impl RegPulsarSecrets {
         self.key.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn value_name(seat_id: &str, kind: split_stream::backend::pulsar::SecretKind) -> Result<String, split_stream::StreamError> {
-        split_stream::validate_seat_id(seat_id)?;
+    fn value_name(seat_id: &str, kind: seat_stream::backend::pulsar::SecretKind) -> Result<String, seat_stream::StreamError> {
+        seat_stream::validate_seat_id(seat_id)?;
         Ok(format!("{seat_id}.{}", kind.as_str()))
     }
 }
 
-fn secret_err(context: &str, e: io::Error) -> split_stream::StreamError {
-    split_stream::StreamError::Io(format!("{context}: {e}"))
+fn secret_err(context: &str, e: io::Error) -> seat_stream::StreamError {
+    seat_stream::StreamError::Io(format!("{context}: {e}"))
 }
 
-impl split_stream::backend::pulsar::PulsarSecretStore for RegPulsarSecrets {
-    fn get(&self, seat_id: &str, kind: split_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, split_stream::StreamError> {
+impl seat_stream::backend::pulsar::PulsarSecretStore for RegPulsarSecrets {
+    fn get(&self, seat_id: &str, kind: seat_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, seat_stream::StreamError> {
         let name = Self::value_name(seat_id, kind)?;
         match self.key().get_raw_value(&name) {
             Ok(v) => {
                 let plain = zeroize::Zeroizing::new(dpapi::unprotect(&v.bytes).map_err(|e| secret_err("unprotect", e))?);
-                let s = std::str::from_utf8(&plain).map_err(|_| split_stream::StreamError::Io("secret is not UTF-8".into()))?;
+                let s = std::str::from_utf8(&plain).map_err(|_| seat_stream::StreamError::Io("secret is not UTF-8".into()))?;
                 Ok(Some(Secret(s.to_string())))
             }
             Err(e) if not_found(&e) => Ok(None),
@@ -441,9 +441,9 @@ impl split_stream::backend::pulsar::PulsarSecretStore for RegPulsarSecrets {
     fn set(
         &self,
         seat_id: &str,
-        kind: split_stream::backend::pulsar::SecretKind,
+        kind: seat_stream::backend::pulsar::SecretKind,
         value: Option<&Secret>,
-    ) -> Result<(), split_stream::StreamError> {
+    ) -> Result<(), seat_stream::StreamError> {
         let name = Self::value_name(seat_id, kind)?;
         match value {
             Some(v) => {
@@ -466,8 +466,8 @@ impl split_stream::backend::pulsar::PulsarSecretStore for RegPulsarSecrets {
 #[derive(Default)]
 pub struct MemPulsarSecrets(std::sync::Mutex<std::collections::HashMap<String, Secret>>);
 
-impl split_stream::backend::pulsar::PulsarSecretStore for MemPulsarSecrets {
-    fn get(&self, seat_id: &str, kind: split_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, split_stream::StreamError> {
+impl seat_stream::backend::pulsar::PulsarSecretStore for MemPulsarSecrets {
+    fn get(&self, seat_id: &str, kind: seat_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, seat_stream::StreamError> {
         let name = RegPulsarSecrets::value_name(seat_id, kind)?;
         Ok(self.0.lock().unwrap_or_else(|e| e.into_inner()).get(&name).map(|s| Secret(s.0.clone())))
     }
@@ -475,9 +475,9 @@ impl split_stream::backend::pulsar::PulsarSecretStore for MemPulsarSecrets {
     fn set(
         &self,
         seat_id: &str,
-        kind: split_stream::backend::pulsar::SecretKind,
+        kind: seat_stream::backend::pulsar::SecretKind,
         value: Option<&Secret>,
-    ) -> Result<(), split_stream::StreamError> {
+    ) -> Result<(), seat_stream::StreamError> {
         let name = RegPulsarSecrets::value_name(seat_id, kind)?;
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         match value {
@@ -492,13 +492,13 @@ impl split_stream::backend::pulsar::PulsarSecretStore for MemPulsarSecrets {
 /// working; Pulsar seats fail on their first secret access.
 pub struct UnavailablePulsarSecrets(pub String);
 
-impl split_stream::backend::pulsar::PulsarSecretStore for UnavailablePulsarSecrets {
-    fn get(&self, _: &str, _: split_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, split_stream::StreamError> {
-        Err(split_stream::StreamError::Io(format!("pulsar secrets key unavailable: {}", self.0)))
+impl seat_stream::backend::pulsar::PulsarSecretStore for UnavailablePulsarSecrets {
+    fn get(&self, _: &str, _: seat_stream::backend::pulsar::SecretKind) -> Result<Option<Secret>, seat_stream::StreamError> {
+        Err(seat_stream::StreamError::Io(format!("pulsar secrets key unavailable: {}", self.0)))
     }
 
-    fn set(&self, _: &str, _: split_stream::backend::pulsar::SecretKind, _: Option<&Secret>) -> Result<(), split_stream::StreamError> {
-        Err(split_stream::StreamError::Io(format!("pulsar secrets key unavailable: {}", self.0)))
+    fn set(&self, _: &str, _: seat_stream::backend::pulsar::SecretKind, _: Option<&Secret>) -> Result<(), seat_stream::StreamError> {
+        Err(seat_stream::StreamError::Io(format!("pulsar secrets key unavailable: {}", self.0)))
     }
 }
 
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn pulsar_secrets_roundtrip_encrypted() {
-        use split_stream::backend::pulsar::{PulsarSecretStore, SecretKind};
+        use seat_stream::backend::pulsar::{PulsarSecretStore, SecretKind};
         const SEAT: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
         let path = format!(r"Software\PulsarSplitTest-{}", uuid::Uuid::new_v4());
         let _guard = TempKey(path.clone());
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn mem_and_unavailable_pulsar_secrets() {
-        use split_stream::backend::pulsar::{PulsarSecretStore, SecretKind};
+        use seat_stream::backend::pulsar::{PulsarSecretStore, SecretKind};
         const SEAT: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
         let m = MemPulsarSecrets::default();
         m.set(SEAT, SecretKind::RelayKey, Some(&Secret("k".into()))).unwrap();

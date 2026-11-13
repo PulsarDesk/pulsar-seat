@@ -1,7 +1,7 @@
-# split-audio
+# seat-audio
 
-Per-seat audio for Pulsar Split (spec `spec/70-audio.md`, contract
-`docs/agents/contracts.md` §6). GPL-3.0-only.
+Per-seat audio for Pulsar Split (spec `spec/remote/70-audio.md`, contract
+`docs/split/agents/contracts.md` §6). GPL-3.0-only.
 
 ## Purpose
 
@@ -14,7 +14,7 @@ around that model:
 | --- | --- |
 | Endpoint discovery (CfgMgr32, `DEVPKEY_Device_SessionId`) | `AudioProbe::endpoints`, `session_endpoint`, `session_capture_endpoint`, `parse_endpoint_id` |
 | Terminal Services policy (read only: `fDisableCam`, `fDisableAudioCapture`, `AllowedAudioQualityMode`) | `AudioProbe::policy`, `read_policy`, `resolve_policy` |
-| Stream-server keys | `server_keys` (`stream_audio`, sinks omitted unless pinned to a live endpoint id; `install_steam_audio_drivers = disabled` is written by `split-stream`, open question audio-7) |
+| Stream-server keys | `server_keys` (`stream_audio`, sinks omitted unless pinned to a live endpoint id; `install_steam_audio_drivers = disabled` is written by `seat-stream`, open question audio-7) |
 | Headless RDP client flags | `rdp_client_flags` -> `RdpAudioFlags::{info_flags, helper_args}` |
 | Seat state for the manager | `seat_audio_state`, `scan_log_line`, `LogScanner`, `seat_audio_status` |
 | Documented limitations | `limitations` (`no_microphone`, `no_controller_audio`, `steam_remote_play_unsupported`, `surround_is_stereo`, `policy_blocks_audio`, `mic_policy_blocked`) |
@@ -64,15 +64,15 @@ integrator owns the manager's `i18n.ts`.
 ## Build and test
 
 ```
-cargo test -p split-audio
-cargo test -p split-audio --all-features   # includes tests/stream_conf.rs (needs split-stream)
-cargo clippy -p split-audio --all-targets
-cargo check -p split-audio --all-targets --target x86_64-pc-windows-msvc
+cargo test -p seat-audio
+cargo test -p seat-audio --all-features   # includes tests/stream_conf.rs (needs seat-stream)
+cargo clippy -p seat-audio --all-targets
+cargo check -p seat-audio --all-targets --target x86_64-pc-windows-msvc
 # Read-only smoke test against this machine's device tree and HKLM (changes nothing):
-cargo test -p split-audio live_read_only_probe -- --ignored --nocapture
+cargo test -p seat-audio live_read_only_probe -- --ignored --nocapture
 ```
 
-Feature `fake` exports `split_audio::fake` (`FakeAudioProbe`, `FakeDeviceNodes`,
+Feature `fake` exports `seat_audio::fake` (`FakeAudioProbe`, `FakeDeviceNodes`,
 `FakeRegistry`, `FakeRemover`) for the integrator's tests.
 
 ## Untested
@@ -87,4 +87,4 @@ Feature `fake` exports `split_audio::fake` (`FakeAudioProbe`, `FakeDeviceNodes`,
   the playback channel (spec 70 OQ 2) — session / stream packages.
 
 No third-party code is included. Dependencies: `serde`, `thiserror`, `log`, `winreg`,
-`windows-sys` (MIT/Apache-2.0), `split-proto`; dev-only `split-stream`, `serde_json`.
+`windows-sys` (MIT/Apache-2.0), `split-proto`; dev-only `seat-stream`, `serde_json`.

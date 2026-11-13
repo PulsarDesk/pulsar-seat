@@ -1,20 +1,20 @@
-# installer/
+# installer/split/
 
 Installer and uninstaller for Pulsar Split (spec `90-install.md`, contract
-`docs/agents/contracts.md` §8). Everything here is a reviewable script or manifest;
+`docs/split/agents/contracts.md` §8). Everything here is a reviewable script or manifest;
 **nothing in this folder has been executed** against a real machine. The logic the
-scripts call lives in `crates/split-setup` (service sub-commands `install`, `reconcile`,
+scripts call lives in `crates/seat-setup` (service sub-commands `install`, `reconcile`,
 `uninstall`, `check-coexistence`; see its README).
 
 ## Files
 
 | File | What it does |
 | --- | --- |
-| `drivers.json` | Third-party driver manifest (`DriverPackage[]`): URL, pinned SHA-256, licence, install kind, detection, minimum build. Defaults from `docs/agents/third-party.md`. |
+| `drivers.json` | Third-party driver manifest (`DriverPackage[]`): URL, pinned SHA-256, licence, install kind, detection, minimum build. Defaults from `docs/split/agents/third-party.md`. |
 | `stream-server.json` | Build-time stream-server manifest (upstream Sunshine, pinned tag of spec 80), one portable zip per arch with its SHA-256. |
 | `wix/PulsarSplit.wxs` | WiX v3 fragment for the Tauri MSI: service exe + `ServiceInstall` (PulsarSplit, LocalSystem, own process, SID type unrestricted, restart 5 s / 30 s / 120 s, reset 1 day) + `ServiceControl`, RDP helper, shim (x64 MSI only), deferred no-impersonate custom actions (`install`, `reconcile`, `uninstall`), `REMOVEUSERDATA`, feature `ExperimentalMultiSession` (off; only writes `Termwrap\Offered=1`), arch guard, "reference seen" marker. |
 | `nsis/hooks.nsh` | Tauri NSIS `installerHooks`: arch guard, Turkish reference-product notice, stop/register/reconcile/start the service, Turkish "remove user data?" question, `/REMOVEUSERDATA`, `/DRIVERS=`, `/CONSENT=`. |
-| `apps/manager/src-tauri/tauri.conf.json` | Merged bundle config (2026-11-12, final fixer): default target **MSI** (the WiX fragment carries `ServiceInstall` and the deferred custom actions), fixed `upgradeCode`, `tr-TR`, fragment, component/feature refs, NSIS hooks, WebView2 bootstrapper mode. |
+| `apps/split-manager/src-tauri/tauri.conf.json` | Merged bundle config (2026-11-12, final fixer): default target **MSI** (the WiX fragment carries `ServiceInstall` and the deferred custom actions), fixed `upgradeCode`, `tr-TR`, fragment, component/feature refs, NSIS hooks, WebView2 bootstrapper mode. |
 | `tauri.release.conf.json` | Release override (`--config`): product name and the third-party payload as `resources`. Not in `tauri.conf.json` because tauri-build copies resources on every cargo build and would fail before `fetch-deps.ts` ran. |
 | `tauri.x64.conf.json` | x64 MSI override: adds the shim components to `componentRefs`. |
 | `tauri.nsis.conf.json` | NSIS override: target `nsis`, service + RDP helper as `externalBin` (NSIS has no WiX fragment; `hooks.nsh` registers the service). |
@@ -32,14 +32,14 @@ cargo build --release --target x86_64-pc-windows-msvc -p split-service -p split-
 # shim (x64 MSI only): see shim/README.md, outputs under shim/target/<triple>/release
 
 # 2. Third-party payload (network, hash-verified) + payload check
-bun installer/scripts/fetch-deps.ts --arch x64
-bun installer/scripts/check-payload.ts target/installer-deps/x64
+bun installer/split/scripts/fetch-deps.ts --arch x64
+bun installer/split/scripts/check-payload.ts target/installer-deps/x64
 
 # 3. MSI through the Tauri bundler (config: tauri.conf.json + tauri.release.conf.json
 #    + tauri.x64.conf.json)
 $env:PULSAR_SPLIT_BIN  = "$PWD\target\x86_64-pc-windows-msvc\release"
 $env:PULSAR_SPLIT_SHIM = "$PWD\shim\target"
-cd apps/manager; bun run installer:msi:x64
+cd apps/split-manager; bun run installer:msi:x64
 
 # 3b. NSIS instead: copy the sidecars first (Tauri externalBin naming), then
 #   copy ..\..\target\x86_64-pc-windows-msvc\release\pulsar-split-service.exe src-tauri\binaries\pulsar-split-service-x86_64-pc-windows-msvc.exe

@@ -1,7 +1,7 @@
-# split-shim-core
+# seat-shim-core
 
-Shared part of the per-process isolation layer (spec `spec/50-shim-isolation.md`, contract
-`docs/agents/contracts.md` §4.2). Root workspace member and also a path dependency of the
+Shared part of the per-process isolation layer (spec `spec/remote/50-shim-isolation.md`, contract
+`docs/split/agents/contracts.md` §4.2). Root workspace member and also a path dependency of the
 separate `shim/` workspace (hence explicit package fields, and the `proto` feature that
 `shim/` turns off). Design overview, mechanism choice and test status: `shim/README.md`.
 
@@ -24,17 +24,17 @@ Errors: `ShimError` with stable codes (`shim_blocked`, `shim_foreign`, `shim_kil
 `shim_target_disabled`, `dxvk_hash_mismatch`, `dxvk_not_downloaded`, …) and
 `From<ShimError> for split_proto::ProtoError` (`proto` feature).
 
-Additions to the contract (see `docs/agents/open-questions.md` shim-6): `Role::Seat` also
+Additions to the contract (see `docs/split/agents/open-questions.md` shim-6): `Role::Seat` also
 carries `session_id`; `SeatFlags::shared_account`; `classify_nodes`; `hook_plan` +
 `ShimConfig`; `wnf_known_with`; `DxvkRelease::default_release()`.
 
 ## Build / test
 
 ```
-cargo test -p split-shim-core
-cargo test -p split-shim-core --no-default-features
-cargo clippy -p split-shim-core --all-targets
-cargo check -p split-shim-core --target x86_64-pc-windows-msvc
+cargo test -p seat-shim-core
+cargo test -p seat-shim-core --no-default-features
+cargo clippy -p seat-shim-core --all-targets
+cargo check -p seat-shim-core --target x86_64-pc-windows-msvc
 ```
 
 Tests use fakes only: no HKLM, services, files outside the temp folder, or network.

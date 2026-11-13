@@ -130,7 +130,7 @@ otherwise:
 - Live run of the reference on the test PC (needs enabling its service and probably the
   2.70.6 upgrade, a reboot and a restore point) to confirm the enabled-state HYPOTHESIS items.
 - Gamepads per seat (open gap): Pulsar Split handles this with usbip-win2 for DualSense,
-  ViGEm only if already installed, and a per-session HID shim (`crates/split-pads` and the
+  ViGEm only if already installed, and a per-session HID shim (`crates/seat-pads` and the
   shim crates in pulsar-split). Copy and adapt that, or decide a shared crate (2026-11-13,
   agreed with the Split session: no cross-repo dependency for now).
 - Share code with Pulsar Split (session creation, service skeleton, manager shell)? Both

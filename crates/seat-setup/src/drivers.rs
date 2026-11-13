@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Third-party driver manifest (`installer/drivers.json`), download + SHA-256 verify,
+//! Third-party driver manifest (`installer/split/drivers.json`), download + SHA-256 verify,
 //! and pure `pnputil` argv / output parsing.
 //!
-//! Defaults come from `docs/agents/third-party.md`: Virtual-Display-Driver (MIT) as an INF
+//! Defaults come from `docs/split/agents/third-party.md`: Virtual-Display-Driver (MIT) as an INF
 //! package, usbip-win2 (BSD-2) through its official signed installer, ViGEmBus (BSD-3)
 //! detect-only (never bundled, spec 90 §3.2). Nothing here runs a process; callers pass a
 //! [`CommandRunner`].
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn manifest_in_repo_parses_and_validates() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../installer/drivers.json");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../installer/split/drivers.json");
         let pkgs = load_driver_manifest(&path).unwrap();
         assert!(select(&pkgs, "vdd", "x64").is_some());
         assert!(select(&pkgs, "vdd", "arm64").is_some());

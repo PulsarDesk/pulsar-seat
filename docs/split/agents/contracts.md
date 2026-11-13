@@ -1,14 +1,14 @@
 # Package contracts (Phases 2–4)
 
-Index: [../../AGENTS.md](../../AGENTS.md). Design context: [architecture.md](architecture.md).
-Behaviour targets: `spec/30`–`spec/90`. Third-party driver / server choices:
-`docs/agents/third-party.md` (written by the research step; **it wins over any candidate
+Index: [../../AGENTS.md](../../../AGENTS.md). Design context: [architecture.md](architecture.md).
+Behaviour targets: `spec/remote/30`–`spec/remote/90`. Third-party driver / server choices:
+`docs/split/agents/third-party.md` (written by the research step; **it wins over any candidate
 named here**). Open points raised while writing this file are appended to
 [open-questions.md](open-questions.md) (items 25–30; items 19–24 come from the research step).
 
 This file fixes, for each implementation package, the public Rust API, the reused
 `split-core` / `split-proto` types, the IPC additions the service needs, and what the
-integrator wires into `split-service` and `apps/manager`. It is a contract: a package may
+integrator wires into `split-service` and `apps/split-manager`. It is a contract: a package may
 add items, but must not rename or drop items listed here without recording why in its
 progress note so the integrator can adapt.
 
@@ -23,18 +23,18 @@ progress note so the integrator can adapt.
 | session | `crates/split-session`, `crates/split-rdp-helper` | everything else |
 | termwrap | `crates/split-termwrap` | |
 | display | `crates/split-display`, `drivers/split-idd` | |
-| shim | `crates/split-shim-core`, `shim/` | |
-| pads | `crates/split-pads`, `drivers/split-pad` | |
-| audio | `crates/split-audio` | |
-| stream | `crates/split-stream` | |
-| installer | `crates/split-setup`, `installer/` | |
-| **integrator** (last step) | `crates/split-proto`, `crates/split-core`, `crates/split-service`, `apps/manager`, root `Cargo.toml`, `package.json` | — |
+| shim | `crates/seat-shim-core`, `shim/` | |
+| pads | `crates/seat-pads`, `drivers/split-pad` | |
+| audio | `crates/seat-audio` | |
+| stream | `crates/seat-stream` | |
+| installer | `crates/seat-setup`, `installer/split/` | |
+| **integrator** (last step) | `crates/split-proto`, `crates/split-core`, `crates/split-service`, `apps/split-manager`, root `Cargo.toml`, `package.json` | — |
 
 `drivers/README.md` (shared index) is edited only by the integrator; `shim/README.md`
-and `installer/README.md` belong to their packages.
+and `installer/split/README.md` belong to their packages.
 
 Every package also writes `docs/progress/<package>.md` and may **append** to
-`docs/agents/open-questions.md` and `docs/journal.md`. Nobody edits `spec/`.
+`docs/split/agents/open-questions.md` and `docs/split/journal.md`. Nobody edits `spec/remote/`.
 Each package adds a short `README.md` in its own directory (what it is, how to build and
 test, licence notices of anything third-party).
 
@@ -45,17 +45,17 @@ Every child process started inside the service process takes the one process-wid
 child). `std::process::Command` spawns use `split_proto::spawn::spawn_locked`. Reason:
 split-session briefly makes the RDP helper's password pipe inheritable; a concurrent
 `Command::spawn` (`bInheritHandles = TRUE`) would inherit it. A `CreateProcess*` call
-with `bInheritHandles = FALSE` (split-stream launcher) needs no lock.
+with `bInheritHandles = FALSE` (seat-stream launcher) needs no lock.
 
 ### 0.2 Cargo layout
 
-- Root workspace: `members = ["crates/*", "apps/manager/src-tauri"]`. A new directory under
+- Root workspace: `members = ["crates/*", "apps/split-manager/src-tauri"]`. A new directory under
   `crates/` is a member automatically. Do **not** touch the root `Cargo.toml`;
   `default-members` is extended by the integrator. Verify with
   `cargo test -p <crate>` and `cargo clippy -p <crate> --all-targets`.
 - Package fields may inherit (`version.workspace = true`, `edition.workspace = true`,
   `license.workspace = true`, `repository.workspace = true`, `rust-version.workspace = true`)
-  — except `crates/split-shim-core`, which must use explicit values
+  — except `crates/seat-shim-core`, which must use explicit values
   (`version = "0.1.0"`, `edition = "2024"`, `license = "GPL-3.0-only"`) because it is
   also a path dependency of the separate `shim/` workspace.
 - Dependencies: declare each with an explicit version in the crate's own `Cargo.toml`
@@ -79,7 +79,7 @@ with `bInheritHandles = FALSE` (split-stream launcher) needs no lock.
   B provides (for example launching a process in a seat session), **A defines the narrow
   trait it needs** and B exposes a concrete type; the integrator writes the adapter in
   `split-service`. Allowed exceptions: `split-rdp-helper` → `split-session`,
-  `shim/*` → `split-shim-core`.
+  `shim/*` → `seat-shim-core`.
 
 ### 0.3 Code conventions
 
@@ -110,7 +110,7 @@ with `bInheritHandles = FALSE` (split-stream launcher) needs no lock.
   `Runtime\` (volatile, service-written), `Shim\`, `Termwrap\`.
 - Restore records (spec 90 §9.2): every package that changes system state appends JSON
   Lines to `%ProgramData%\PulsarSplit\journal\<package>.jsonl` through its own
-  `RestoreLog` trait (fake = `Vec`). Common record shape, so `split-setup` can replay all
+  `RestoreLog` trait (fake = `Vec`). Common record shape, so `seat-setup` can replay all
   files on uninstall:
 
 ```json
@@ -476,7 +476,7 @@ Error codes: `warning_not_acknowledged`, `not_client_sku`, `foreign_wrapper`,
   that all remote sessions drop (spec 90 §4.3).
 - `boot_check` runs before session `prepare_host`; `wrapper_active` passed to
   `host_info` = `state == On`.
-- `split-setup` uninstall calls `disable` (via the service sub-command).
+- `seat-setup` uninstall calls `disable` (via the service sub-command).
 
 ### 2.4 Manager warning text (`WARNING_TR`, Turkish; also goes into `i18n.ts`)
 
@@ -652,7 +652,7 @@ Error codes: `display_timeout`, `no_display`, `session_attach_unsupported`,
 
 ---
 
-## 4. shim — `crates/split-shim-core`, `shim/`
+## 4. shim — `crates/seat-shim-core`, `shim/`
 
 Spec: 50 (all), 60 §8.2 (device security), 90 §8 (coexistence signals 6–10).
 
@@ -680,7 +680,7 @@ Order of preference, all opt-in through `GlobalSettings::process_patching` /
 No machine-wide `__COMPAT_LAYER`. Module installs no hooks in session 0, in the console
 session (unless a console rule applies), in safe mode, or when `Shim\ShimDisabled` = 1.
 
-### 4.2 `split_shim_core` (pure + small Windows parts; root workspace member)
+### 4.2 `seat_shim_core` (pure + small Windows parts; root workspace member)
 
 ```rust
 pub const SHIM_DB_GUID: &str = /* fresh GUID generated by the package */;
@@ -772,7 +772,7 @@ shim/module/             cdylib `PulsarSplitShim` – hooks (retour, stable API,
                          init thread: role -> install hooks -> send ShimHealth
 shim/launcher/           bin `pulsar-split-launch` (+ x86 build `pulsar-split-launch32`)
 shim/shimctl/            bin `pulsar-split-shimctl` – status/install/uninstall/kill-switch for
-                         operators; calls split-shim-core ShimInstaller (same code the service uses)
+                         operators; calls seat-shim-core ShimInstaller (same code the service uses)
 ```
 
 - Build: `rustup target add i686-pc-windows-msvc`; `cargo build --release --target
@@ -800,7 +800,7 @@ shim/shimctl/            bin `pulsar-split-shimctl` – status/install/uninstall
 
 ---
 
-## 5. pads — `crates/split-pads`, `drivers/split-pad`
+## 5. pads — `crates/seat-pads`, `drivers/split-pad`
 
 Spec: 60 (all), 80 §4. Default backends per plan.md: signed open-source third-party —
 **ViGEmBus** (Xbox 360 / DS4) and **usbip-win2** (DualSense, USB/IP); final picks in
@@ -808,7 +808,7 @@ third-party.md. Note: spec 60 §7 recommends no ViGEm; the maintainer's plan dec
 (2026-11-12) wins; Pulsar Split never bundles ViGEmBus by default (detect, offer official
 installer) — OQ 23.
 
-### 5.1 Public API (`split_pads`)
+### 5.1 Public API (`seat_pads`)
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -903,7 +903,7 @@ impl PadManager {
 `PadWanted` / `PadAttach` / `PadDenied` / `ReleaseReason` mirror the spec 60 §3.5 message
 bodies field-for-field (serde, snake_case) so the integrator can forward seat-pipe
 messages unchanged. Bluetooth per-user service handling (spec 60 §10) is a separate
-module `split_pads::bluetooth` with a `UserServices` SCM trait and the pure
+module `seat_pads::bluetooth` with a `UserServices` SCM trait and the pure
 `plan_bt(suffix_map, console_session) -> Vec<BtAction>`; per-host toggle default on.
 
 Error codes: `pad_unavailable`, `limit`, `disabled`, `driver_missing`, `usbip_failed`,
@@ -941,7 +941,7 @@ Error codes: `pad_unavailable`, `limit`, `disabled`, `driver_missing`, `usbip_fa
 
 ---
 
-## 6. audio — `crates/split-audio`
+## 6. audio — `crates/seat-audio`
 
 Spec: 70 (all). No audio driver; the seat's session "Remote Audio" endpoint.
 
@@ -993,7 +993,7 @@ code, no device picker). Steam's drivers are never installed/removed.
 
 ---
 
-## 7. stream — `crates/split-stream`
+## 7. stream — `crates/seat-stream`
 
 Spec: 80 (all), 20 §3–§4/§6.3, 70 §3.5, 90 §2.8. Server per third-party.md: **upstream
 Sunshine** (LizardByte, GPL-3), pinned tag `v2026.516.143833` (spec 80 §0), unmodified
@@ -1037,7 +1037,7 @@ Events for the unmodified upstream path (no pipe): the service polls `status`-li
 by reading `server.log` (`pair_pending` from the "PIN required" log line, best effort)
 and the clients list; spec 80 events are exact only with the fork.
 
-### 7.2 Public API (`split_stream`)
+### 7.2 Public API (`seat_stream`)
 
 ```rust
 pub mod dist;     // server binary manifest + verify
@@ -1200,7 +1200,7 @@ Error codes: `stream_server` (gave up), `server_binary_missing`, `server_hash_mi
 ### 7.4 Stream backends (2026-11-13, impl-stream-backends)
 
 Each seat runs one backend, `SeatConfig::stream_backend` (`sunshine` default | `pulsar`).
-Design: [pulsar-host-backend.md](pulsar-host-backend.md). Module `split_stream::backend`.
+Design: [pulsar-host-backend.md](pulsar-host-backend.md). Module `seat_stream::backend`.
 
 ```rust
 pub trait StreamBackend: Send + Sync {            // one per kind, shared by seats
@@ -1242,7 +1242,7 @@ pub trait SeatStream: Send {                      // one per running seat
 - Pulsar firewall: one UDP rule `PulsarSplit seat <id> UDP` (node port = base), program
   `pulsar-host.exe`; a Sunshine TCP rule of the same seat is removed. Discovery rule (UDP
   21117) not created yet.
-- Fakes (`split_stream::fake`): `MemSecrets`, `FakeHostPipes`, `pulsar_responder`.
+- Fakes (`seat_stream::fake`): `MemSecrets`, `FakeHostPipes`, `pulsar_responder`.
 - Fixes 2026-11-13 (fix-stream-backends):
   - Engine preflight: `availability()` of the seat's backend runs before the `user` phase;
     not installed = `Failed` with its reason, no logon, no display.
@@ -1262,11 +1262,11 @@ pub trait SeatStream: Send {                      // one per running seat
 
 ---
 
-## 8. installer — `installer/`, `crates/split-setup`
+## 8. installer — `installer/split/`, `crates/seat-setup`
 
 Spec: 90 (all), 30 §2.2 (coexistence), 50 §15, 60 §9, 80 §9.
 
-### 8.1 `split_setup` (lib; called by service sub-commands)
+### 8.1 `seat_setup` (lib; called by service sub-commands)
 
 ```rust
 pub mod coexist;   // spec 90 §8.1 signals 1–18 behind SystemProbe (pure evaluation)
@@ -1304,7 +1304,7 @@ pub struct DriverPackage { pub id: String /* "vigembus", "usbip-win2", "<idd>" *
     pub install: DriverInstall, pub detect: DriverDetect }
 pub enum DriverInstall { OfficialInstaller { args: Vec<String> }, InfPackage { inf: String } }
 pub enum DriverDetect { UpgradeCode(String), HardwareId(String), PublishedInf(String) }
-pub fn load_driver_manifest(path: &Path) -> Result<Vec<DriverPackage>, SetupError>; // installer/drivers.json
+pub fn load_driver_manifest(path: &Path) -> Result<Vec<DriverPackage>, SetupError>; // installer/split/drivers.json
 pub trait Fetcher: Send + Sync { fn fetch(&self, url: &str, dest: &Path) -> Result<(), SetupError>; } // HTTPS client, no server
 pub fn verify_sha256(path: &Path, expected: &str) -> Result<(), SetupError>;
 /// Pure: argv for pnputil (`/add-driver <inf> /install`, `/delete-driver <oemNN.inf> /uninstall`,
@@ -1328,13 +1328,13 @@ pub struct SetupCtx { /* probes, runners, paths, Vec<Box<dyn RestoreHook>> regis
 pub trait RestoreHook: Send + Sync { fn name(&self) -> &str; fn restore_all(&self) -> Result<(), SetupError>; } // session, termwrap, shim, pads, stream firewall
 ```
 
-### 8.2 `installer/` (scripts only; nothing is executed by the package)
+### 8.2 `installer/split/` (scripts only; nothing is executed by the package)
 
 ```
-installer/README.md                 build steps, what each artefact does, licence notices list
-installer/drivers.json              DriverPackage manifest (URLs + SHA-256 from third-party.md)
-installer/stream-server.json        ServerDist manifest
-installer/wix/PulsarSplit.wxs       WiX fragment: ServiceInstall (PulsarSplit, LocalSystem, own process,
+installer/split/README.md                 build steps, what each artefact does, licence notices list
+installer/split/drivers.json              DriverPackage manifest (URLs + SHA-256 from third-party.md)
+installer/split/stream-server.json        ServerDist manifest
+installer/split/wix/PulsarSplit.wxs       WiX fragment: ServiceInstall (PulsarSplit, LocalSystem, own process,
                                     SID type unrestricted, failure actions 5 s/30 s/120 s, reset 1 day),
                                     ServiceControl, custom actions calling
                                     `pulsar-split-service install|reconcile|uninstall|check-coexistence`
@@ -1342,18 +1342,18 @@ installer/wix/PulsarSplit.wxs       WiX fragment: ServiceInstall (PulsarSplit, L
                                     "ExperimentalMultiSession" (off by default) that only sets
                                     HKLM\SOFTWARE\PulsarSplit\Termwrap\Offered=1 (enabling happens in the
                                     manager with the warning, never in the installer)
-installer/nsis/hooks.nsh            NSIS installerHooks equivalent (/REMOVEUSERDATA)
-installer/tauri.*.conf.json         merged (2026-11-12): bundle config lives in
-                                    apps/manager/src-tauri/tauri.conf.json (MSI default, WiX fragment,
+installer/split/nsis/hooks.nsh            NSIS installerHooks equivalent (/REMOVEUSERDATA)
+installer/split/tauri.*.conf.json         merged (2026-11-12): bundle config lives in
+                                    apps/split-manager/src-tauri/tauri.conf.json (MSI default, WiX fragment,
                                     upgradeCode, NSIS hooks); tauri.release.conf.json (resources),
                                     tauri.x64.conf.json (shim components), tauri.nsis.conf.json
                                     (externalBin service + rdp-helper) are `--config` overrides
-installer/scripts/fetch-deps.ts     bun script (build time, CI): downloads drivers.json / stream-server.json
+installer/split/scripts/fetch-deps.ts     bun script (build time, CI): downloads drivers.json / stream-server.json
                                     artefacts into target/installer-deps/, verifies SHA-256, fails on mismatch
-installer/scripts/check-payload.ts  fails the build if web-UI assets, Microsoft DLLs (vcruntime*, msvcp*,
+installer/split/scripts/check-payload.ts  fails the build if web-UI assets, Microsoft DLLs (vcruntime*, msvcp*,
                                     ucrtbase, WebView2Loader, rdpidd, rfxvmt) or *.pfx/*.cer/root certs are
                                     in the payload
-installer/licenses/                 notice files (ViGEmBus BSD-3, usbip-win2 BSD-2,
+installer/split/licenses/                 notice files (ViGEmBus BSD-3, usbip-win2 BSD-2,
                                     IronRDP MIT/Apache-2.0, DXVK zlib, Sunshine GPL-3 + source offer, …)
 ```
 
@@ -1369,7 +1369,7 @@ installed, recorded in the journal), devnodes with our markers, shim DB.
 
 ### 8.3 Integration
 
-- `split-service` main gets the four sub-commands (spec 90 §9.1) calling `split_setup`.
+- `split-service` main gets the four sub-commands (spec 90 §9.1) calling `seat_setup`.
 - Service start: `evaluate` → `Passive` blocks every system change (RDS, termwrap, shim,
   pads, display registry) and seat starts; status carries the report (§9).
 - Manager: host-health page lists findings (Turkish per `Signal`), repair items are
@@ -1384,7 +1384,7 @@ installed, recorded in the journal), devnodes with our markers, shim DB.
 - `PROTOCOL_VERSION` → **2** when these land (manager and service ship together).
   New struct fields use `#[serde(default)]`; new enum variants are additive.
 - Seat-pipe protocol (spec 80 §8.4) is separate: `protocol: 1`, owned by
-  `split-stream::control`. Helper protocol `HELPER_PROTOCOL = 1`. Shim health `v: 1`.
+  `seat-stream::control`. Helper protocol `HELPER_PROTOCOL = 1`. Shim health `v: 1`.
   Frame header v1, pad shared memory protocol 1, IDD IOCTL buffers version 1.
 
 ### 9.2 New requests / responses
@@ -1422,7 +1422,7 @@ installed, recorded in the journal), devnodes with our markers, shim DB.
 | `answer_relay_auth` | {`name`, `password`: Secret, `totp`?: Secret (6 digits)} | `ack` | Pulsar `relay.auth` (running seat) |
 | `get_dxvk_status` (final-low-items) | – | `dxvk_status` {`release`?, `games`: [{`exe`, `deployed`, `version`?, `dlls`[], `error`?}]} | `load_pin` + `Shim\DxvkGames` list + each game's marker file |
 | `get_user_picture` | {`user`} (local SAM name, no `\` `/` `@`) | `user_picture` {`mime`, `data` base64; empty = none} | `AccountPicture\Users\<SID>` `Image96`… inside `%PUBLIC%\AccountPictures\<SID>\`, ≤ 512 KiB |
-| `cleanup_audio_endpoints` | {`confirm`: true} | `audio_cleanup` {`removed`[], `failed`[[id, reason]]} | `split_audio::remove_stale_endpoints`; refused (`seat_booting`) while a seat starts, passive mode refused |
+| `cleanup_audio_endpoints` | {`confirm`: true} | `audio_cleanup` {`removed`[], `failed`[[id, reason]]} | `seat_audio::remove_stale_endpoints`; refused (`seat_booting`) while a seat starts, passive mode refused |
 
 `SeatStatus` gains `streaming` (between `stream_started` and `stream_ended` / stop) and
 `stream_client` (from `stream_started` data `client` / `client_name`, when sent).
@@ -1482,7 +1482,7 @@ installed, recorded in the journal), devnodes with our markers, shim DB.
 | session | `cargo test -p split-session -p split-rdp-helper`: classify, rds_rows + apply/restore on fake registry (originals saved once, policy override reported), find_seat_session, client names, plan_sweep (foreign disconnected session survives), helper argv/stdin/stdout round trip, timeouts with fake clock, SessionManager start/stop with fakes |
 | termwrap | gate fail-closed on unknown build, enable/disable restores original ServiceDll on fake SCM, foreign wrapper → hands off, warning ack version |
 | display | resolve_mode / dynamic_scale / clamps, hdr_availability matrix, resolve_adapter, header v1 offsets (`size_of` + byte tests), IOCTL buffer encode/decode, PulsarIdd against fake DeviceIo, choose_backend |
-| shim | split-shim-core: role, classify (TERMINPUT, PULSARPAD, PSPAD serial, ViGEm owned/unowned, never DUOCONTROLLER), hid_access table, seat map encode/decode, health frame, fault counter, dxvk plan + hash; `shim/`: `cargo check` x64 + i686 |
+| shim | seat-shim-core: role, classify (TERMINPUT, PULSARPAD, PSPAD serial, ViGEm owned/unowned, never DUOCONTROLLER), hid_access table, seat map encode/decode, health frame, fault counter, dxvk plan + hash; `shim/`: `cargo check` x64 + i686 |
 | pads | reports per kind, shm seqlock (torn read rejected, wrap > 16), mapping table, ownership + plan_orphans (dead creator), PadManager rules (reuse, generation, linger), pad_sddl, mac_for bits, bluetooth plan |
 | audio | session_endpoint, server_keys, seat_audio_state, limitations, scan_log_line, plan_stale_endpoints (never present nodes) |
 | stream | generate (all spec 80 §2.3 keys, absolute paths, no CR/LF, fork-only keys), apps validate/render/placeholders/wrap, control client against fake transport (hello, pipelined ids, events, errors), seat_rules ports (never base+1), conflicts, SeatServer back-off with fake launcher |

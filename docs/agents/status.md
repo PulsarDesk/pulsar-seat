@@ -10,7 +10,7 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   inventory, then write, critique and revise for each spec 10–90, then 00-architecture and
   a completeness pass. Analyst progress is in the analyst workspace `notes/progress.md`.
 - 2026-11-12: **Phase 0 draft v1 done.** All 10 spec files are written, critiqued, revised
-  and cross-checked (status table in [spec/README.md](../../spec/README.md)). The reference
+  and cross-checked (status table in [spec/README.md](../../spec/local/README.md)). The reference
   product was only ever seen **disabled** on the test PC, so the specs mark its
   enabled-state behaviour HYPOTHESIS.
 - **Blocking maintainer decisions** (see [plan.md](plan.md) "Open questions"): which
@@ -837,3 +837,14 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     ever auto-logon (now: never, explicit per-seat opt-in would be needed); merge-plan
     review with the Split session.
   - Next: maintainer review; first commit + tag; first hardware run with approval.
+- 2026-11-14: **merge steps 2 (finish) + 3 done** (merge-plan.md §3). `split/` is gone:
+  crates in `crates/` (no-clash ones renamed `seat-stream`, `seat-pads`, `seat-shim-core`,
+  `seat-setup`, `seat-audio`; clashing `split-*` kept for steps 4-8), `apps/split-manager`
+  (until step 9), `shim/`, `drivers/split-idd`, `drivers/split-pad`, `installer/split/`
+  (until step 10), `scripts/`, `spec/local/` + `spec/remote/`, `docs/split/` (Split history).
+  One root Cargo + bun workspace, root `.cargo/config.toml` (+crt-static), `.gitattributes`.
+  split-rdp-helper ported to seat-rdp's IronRDP versions (one `picky`). CI builds both
+  managers, the shim workspace and both installer script sets. Gates green: cargo 1548
+  passed / 5 ignored, clippy aarch64 + x86_64 clean, vitest 111 + 44, installer scripts
+  29 + 15, shim 8 (host + x64 target), i686 check. Two services and two managers still.
+  **Next:** step 4 (merge proto + core: `kind`, sub-structs, protocol v3).

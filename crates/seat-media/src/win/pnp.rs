@@ -2,7 +2,7 @@
 //! [`WinPnpTree`]: the CfgMgr32 device tree behind [`seat_core::pnp::PnpTree`].
 //!
 //! The CfgMgr32 list / locate / property helpers are adapted from pulsar-split
-//! (`crates/split-audio/src/win.rs`, GPL-3, same author).
+//! (`crates/seat-audio/src/win.rs`, GPL-3, same author).
 //!
 //! The whole tree (present and phantom devnodes) is read at `refresh` and cached; the
 //! service calls `refresh` after hot-plug notifications. Read-only; never changes anything.

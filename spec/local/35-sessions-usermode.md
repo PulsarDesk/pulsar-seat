@@ -1,11 +1,11 @@
 # 35 — Local seat sessions with user-mode code only (feasibility)
 
 Status: draft v2 (2026-11-13), revised after the spec-critic review of v1. Analyst-written.
-Behaviour and feasibility only, no code; see [../CLEANROOM.md](../CLEANROOM.md). Extends
+Behaviour and feasibility only, no code; see [../CLEANROOM.md](../../CLEANROOM.md). Extends
 [30-sessions.md](30-sessions.md) §3, §3.11 and §6.1. Related:
 [00-architecture.md](00-architecture.md) §5.2, [40-display.md](40-display.md) §6.3,
 [50-input.md](50-input.md), [60-audio.md](60-audio.md) §5,
-[../docs/agents/plan.md](../docs/agents/plan.md).
+[../docs/agents/plan.md](../../docs/agents/plan.md).
 
 Confidence markers as in spec 30: no marker = observed (in the reference product's files, in
 Windows binaries on the dev laptop or the test PC, or in Microsoft documentation);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Pulsar Split indirect display driver: wire contract shared with the service
-// (crates/split-display/src/ioctl.rs and src/frame.rs). Spec: spec/40-display-hdr.md §6.4, §7.
+// (crates/split-display/src/ioctl.rs and src/frame.rs). Spec: spec/remote/40-display-hdr.md §6.4, §7.
 //
 // UNBUILT · UNTESTED · UNSIGNED. Both sides must change together; the Rust unit tests pin
 // every offset and size below.

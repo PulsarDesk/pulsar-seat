@@ -7,7 +7,7 @@
 //! opened earlier (e.g. `HKCU\Software`) and then `Valve\Steam` below it is not redirected.
 
 use super::hook::Hook;
-use split_shim_core::decide::{Role, hkcu_redirect};
+use seat_shim_core::decide::{Role, hkcu_redirect};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER};
 

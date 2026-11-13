@@ -11,7 +11,7 @@
 //   - known vulnerable or kernel-patching drivers (RTCore64.sys, DuoDriver.sys, ...)
 // Kernel drivers (*.sys) of third-party packages produce a warning for review.
 //
-// Usage: bun installer/scripts/check-payload.ts <dir> [<dir> ...]
+// Usage: bun installer/split/scripts/check-payload.ts <dir> [<dir> ...]
 // Exit 0 = clean, 1 = violations (printed), 2 = usage error.
 
 import { readdirSync, statSync } from "node:fs";
@@ -104,7 +104,7 @@ export function checkDirs(dirs: string[]): Violation[] {
 if (import.meta.main) {
   const dirs = process.argv.slice(2);
   if (dirs.length === 0) {
-    console.error("usage: bun installer/scripts/check-payload.ts <dir> [<dir> ...]");
+    console.error("usage: bun installer/split/scripts/check-payload.ts <dir> [<dir> ...]");
     process.exit(2);
   }
   const found = checkDirs(dirs);

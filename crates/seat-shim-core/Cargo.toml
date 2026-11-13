@@ -1,5 +1,5 @@
 [package]
-name = "split-shim-core"
+name = "seat-shim-core"
 description = "Pulsar Split per-process isolation: seat map, pure isolation decisions, AppHelp installer, DXVK per-game deploy"
 # Explicit values (not `workspace = true`): this crate is also a path dependency of the
 # separate `shim/` workspace (contracts.md §0.2).
@@ -14,7 +14,7 @@ default = ["proto"]
 # `From<ShimError> for split_proto::ProtoError`. Off in `shim/` (the module never talks
 # the control protocol).
 proto = ["dep:split-proto"]
-# In-memory fakes of every system trait (`split_shim_core::fake`) for other crates' tests.
+# In-memory fakes of every system trait (`seat_shim_core::fake`) for other crates' tests.
 fake = []
 
 [dependencies]

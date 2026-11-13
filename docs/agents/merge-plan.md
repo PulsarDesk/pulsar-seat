@@ -5,7 +5,7 @@ Seat and Split sessions; waiting for maintainer approval.** No code moves before
 
 Inputs:
 - Seat side: this file's earlier draft (2026-11-13).
-- Split side: `../pulsar-split/docs/agents/merge-plan-split.md` (Split commit `efb328a`).
+- Split side: [../split/agents/merge-plan-split.md](../split/agents/merge-plan-split.md) (Split commit `efb328a`, imported under `split/` in e26aa4b and moved to `docs/split/` at step 2-3).
   That file has the full Split package, pipe, config and installer inventory. This file
   does not repeat it.
 
@@ -122,7 +122,7 @@ stay listed for the record.
 - Code merge starts now, after the first commit (step 0).
 - From the Split session: pulsar-desktop has `--split-seat` (local commits ddc0403 /
   15a685e, not pushed), the remote-seat stream host. Keep its pipe contract
-  (`pulsar-split/docs/agents/pulsar-host-backend.md`) unchanged when the service moves.
+  ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)) unchanged when the service moves.
   Only the pipe-name prefix may change, and only together with pulsar-desktop.
 
 Original questions:

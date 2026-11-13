@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Split multi-session support, Path A (Windows Server + RD Session Host).
 //!
-//! Spec: `spec/30-session-rds.md`, `spec/20-service.md` §5–§7. Contract:
-//! `docs/agents/contracts.md` §1.
+//! Spec: `spec/remote/30-session-rds.md`, `spec/remote/20-service.md` §5–§7. Contract:
+//! `docs/split/agents/contracts.md` §1.
 //!
 //! Layout: pure decision logic lives in the public modules and runs on any platform. Every
 //! system access goes through a trait ([`rds::Registry`], [`users::Accounts`],

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Stream-server backends (contracts §7.4, docs/agents/pulsar-host-backend.md).
+//! Stream-server backends (contracts §7.4, docs/split/agents/pulsar-host-backend.md).
 //!
 //! Each seat runs exactly one backend, picked by `SeatConfig::stream_backend`:
 //!
@@ -41,7 +41,7 @@ pub struct SeatStreamSpec<'a> {
     pub global: &'a GlobalSettings,
     /// `%ProgramData%\PulsarSplit`.
     pub data_root: &'a Path,
-    /// Audio keys for the server config (Sunshine; `split_audio::server_keys`).
+    /// Audio keys for the server config (Sunshine; `seat_audio::server_keys`).
     pub audio_keys: Vec<(String, String)>,
     /// App list written when `apps.json` is missing (already launcher-wrapped).
     pub default_apps: Vec<AppEntry>,
