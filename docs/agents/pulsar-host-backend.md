@@ -332,3 +332,26 @@ The job object of `desk:src-tauri/src/job.rs` nests inside the service's seat jo
 ## 7. Open questions
 
 Listed as `pulsar-host-1` … `pulsar-host-12` in [open-questions.md](open-questions.md).
+
+## 8. Implemented in pulsar-desktop 55c7df0 (2026-11-13, untested on a host)
+
+`pulsar.exe --split-seat <id> --data-dir <abs> --log <abs>` (the same binary as the app,
+not yet a separate `pulsar-host.exe`; §6 item 19 open). Details: pulsar-desktop
+`docs/agents/modes.md` "Split seat host". Done: §1 argv (strict, exit 2), §2 seat mutex
+(exit 3), singleton / shared mode bypassed, per-seat data dir, name verbatim, local relay
+and pad cleanup off; §3.1 server check (SYSTEM, session 0, `pulsar-split-service.exe`),
+broken pipe = exit 5; §3.2 handshake, bind only after `secrets.load` + `config.apply`;
+§3.3 `hello`, `secrets.load`, `config.apply`, `status`, `auth.decide`, `auth.otp.*`,
+`trust.*`, `relay.auth`, `server.shutdown`; §3.4 `auth.request` / `auth.ended`,
+`otp.changed`, `trust.changed`, `relay.state`, `relay.auth_required`, `relay.key_issued`.
+`not_supported` (error code): `clients.*`, `apps.set`, `app.launched`,
+`display.mode.result`, `pad.*`, `log.level`, and `config.apply` with `access: approve` or
+`capture: split_idd`. hello capabilities: `approve`, `connect_password`, `otp`,
+`trust_store`. Exit codes: 4 pipe open / server check failed, 6 seat mutex not creatable.
+Still open from §6: 1 (smallest seam: a window-less Tauri app, no `HostEnv`), 9, 10, 12,
+13, 14 (pads are still created by pulsar-core), 19; `status.capture` / `encoder` empty.
+
+Follow-up fix in pulsar-desktop 661e671: the seat pipe reader is now one long-lived future
+feeding whole frames to the serve loop (a frame split across reads no longer desyncs when
+an event is sent meanwhile), and the host-side caps cache (`last-stream-caps.json`) is
+written under `--data-dir` instead of the shared SYSTEM profile.
