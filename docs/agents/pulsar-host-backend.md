@@ -333,7 +333,7 @@ The job object of `desk:src-tauri/src/job.rs` nests inside the service's seat jo
 
 Listed as `pulsar-host-1` … `pulsar-host-12` in [open-questions.md](open-questions.md).
 
-## 8. Implemented in pulsar-desktop 55c7df0 (2026-11-13, untested on a host)
+## 8. Implemented in pulsar-desktop ddc0403 (2026-11-13, untested on a host)
 
 `pulsar.exe --split-seat <id> --data-dir <abs> --log <abs>` (the same binary as the app,
 not yet a separate `pulsar-host.exe`; §6 item 19 open). Details: pulsar-desktop
@@ -351,7 +351,7 @@ broken pipe = exit 5; §3.2 handshake, bind only after `secrets.load` + `config.
 Still open from §6: 1 (smallest seam: a window-less Tauri app, no `HostEnv`), 9, 10, 12,
 13, 14 (pads are still created by pulsar-core), 19; `status.capture` / `encoder` empty.
 
-Follow-up fix in pulsar-desktop 661e671: the seat pipe reader is now one long-lived future
+Follow-up fix in pulsar-desktop 15a685e: the seat pipe reader is now one long-lived future
 feeding whole frames to the serve loop (a frame split across reads no longer desyncs when
 an event is sent meanwhile), and the host-side caps cache (`last-stream-caps.json`) is
 written under `--data-dir` instead of the shared SYSTEM profile.
