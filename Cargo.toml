@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Pulsar Seat monorepo. Layout and ownership: docs/agents/architecture.md.
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/manager/src-tauri"]
+# `cargo build` / `cargo test` at the root cover every crate but not the Tauri manager:
+# it needs its frontend built first (`bun run build` in apps/manager, or `bun tauri build`).
+default-members = [
+    "crates/seat-proto",
+    "crates/seat-core",
+    "crates/seat-service",
+    "crates/seat-session",
+    "crates/seat-display",
+    "crates/seat-input",
+    "crates/seat-media",
+    "crates/seat-compat",
+    "crates/seat-host",
+    "crates/seat-rdp",
+    "crates/seat-release",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/PulsarDesk/pulsar-seat"
+rust-version = "1.85"
+
+# Shared crates. Package crates add their own extra deps in their own Cargo.toml with
+# explicit versions; only the contracts owner edits this table.
+[workspace.dependencies]
+seat-proto = { path = "crates/seat-proto" }
+seat-core = { path = "crates/seat-core" }
+seat-session = { path = "crates/seat-session" }
+seat-display = { path = "crates/seat-display" }
+seat-input = { path = "crates/seat-input" }
+seat-media = { path = "crates/seat-media" }
+seat-compat = { path = "crates/seat-compat" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+zeroize = "1.9.1"
+log = "0.4.35"
+windows-sys = "0.61.2"
+windows-service = "0.8.1"
+winreg = "0.56.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

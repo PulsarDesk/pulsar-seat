@@ -1,0 +1,10 @@
+Pulsar Seat - corresponding source (GNU GPL version 3, section 6)
+
+Pulsar Seat is licensed under the GNU General Public License version 3 only
+(SPDX: GPL-3.0-only). The complete corresponding source of every binary in this
+package is published at:
+
+  https://github.com/PulsarDesk/pulsar-seat
+  (the tag matching the version shown in the manager's "Hakkında" page)
+
+The package contains no third-party binaries other than those listed in NOTICES.md.

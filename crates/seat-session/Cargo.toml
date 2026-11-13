@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-session"
+description = "Pulsar Seat session backends: RDS loopback, experimental termsrv wrapper, fast user switch, desktops; WTS, accounts, launch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# EXPERIMENTAL client-SKU module (operator-installed TermService wrapper). Off by default;
+# even when built, the backend refuses to run until the admin acknowledged the warning.
+experimental-client-sku = []
+# Exposes `seat_session::fake` (in-memory fakes + FakeWorld) to other crates' tests.
+fake = []
+
+[dependencies]
+seat-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Environment",
+    "Win32_System_JobObjects",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
+
+# Firewall rule read-back through INetFwPolicy2 (src/win/loopback_listener.rs); same
+# version as seat-host / seat-media.
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+] }
+
+[dev-dependencies]
+seat-core = { workspace = true, features = ["mock"] }
+tempfile = "3.27.0"

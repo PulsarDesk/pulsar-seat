@@ -1,0 +1,19 @@
+{{!-- SPDX-License-Identifier: GPL-3.0-only --}}
+# Third-party notices (Rust crates)
+
+Pulsar Seat's binaries (GPL-3.0-only, see SOURCE-OFFER.txt) are built with the crates
+below. Each licence text is reproduced once, followed by the crates it covers.
+
+{{#each licenses}}
+## {{name}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+```text
+{{text}}
+```
+
+{{/each}}

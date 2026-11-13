@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Main window and the wizard's per-monitor pages: core APIs only; app commands talk to the service.","local":true,"windows":["main","wizard-page-*"],"permissions":["core:default"]}}

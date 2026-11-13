@@ -1,0 +1,229 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Process runtime shared by SCM mode and `--console` dev mode: data folders with ACLs,
+//! logger, stores, platform, backends, the [`Service`], the control pipe, and the
+//! boot / tick threads. Adapted from pulsar-split (`split-service::service`).
+
+use crate::runstate::RunStore;
+use crate::service::{Deps, Service, TICK_MS, ThreadSpawner};
+use crate::win::pipe::{Handler, PipeIo, PipeServer, Shutdown};
+use crate::win::{lsa::LsaSecretStore, platform::WinPlatform, security};
+use crate::{log, wiring};
+use seat_core::consts::{DATA_DIR_SDDL, DIAG_DIR, IMAGES_DIR, JOURNAL_DIR, LOGS_DIR, PRIVATE_DIR_SDDL, PRODUCT_DIR, RUN_DIR};
+use seat_core::store::{FileStore, MemorySecretStore, SecretStore};
+use seat_core::SystemClock;
+use seat_proto::PIPE_NAME;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub struct Options {
+    pub console: bool,
+    pub data_dir: PathBuf,
+    /// Dev only: also grant the current user full access to the pipe.
+    pub allow_current_user: bool,
+    pub debug: bool,
+    /// Dev only: use the pipe name given (tests / a second instance).
+    pub pipe_name: String,
+}
+
+/// `%ProgramData%\Pulsar Seat`.
+pub fn program_data() -> PathBuf {
+    std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\ProgramData")).join(PRODUCT_DIR)
+}
+
+/// Pipe name of `--console` dev mode unless `--pipe` names another: never the
+/// production name, so a dev run cannot pose as the service while it is stopped.
+pub fn dev_pipe_name() -> String {
+    format!("{PIPE_NAME}.dev")
+}
+
+/// Dev data folder for `--console` (never ProgramData unless asked).
+pub fn dev_data_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("Pulsar Seat-dev")
+}
+
+impl Options {
+    pub fn service_defaults() -> Self {
+        Self { console: false, data_dir: program_data(), allow_current_user: false, debug: false, pipe_name: PIPE_NAME.into() }
+    }
+}
+
+/// `O:BA` + a documented DACL: the folders are owned by Administrators, so a standard
+/// user who created the folder first keeps no implicit `WRITE_DAC`.
+fn owned(sddl: &str) -> String {
+    format!("O:BA{sddl}")
+}
+
+/// Sub-folders and their DACL. `diag\` is private: reports are for administrators.
+const SUB_DIRS: [(&str, &str); 5] = [
+    (LOGS_DIR, DATA_DIR_SDDL),
+    (IMAGES_DIR, DATA_DIR_SDDL),
+    (DIAG_DIR, PRIVATE_DIR_SDDL),
+    (RUN_DIR, PRIVATE_DIR_SDDL),
+    (JOURNAL_DIR, PRIVATE_DIR_SDDL),
+];
+
+/// Files the service reads or appends to as SYSTEM (checked for links once the folders
+/// are secured).
+fn trusted_files(root: &Path) -> Vec<PathBuf> {
+    let mut v = vec![
+        root.join(seat_core::consts::CONFIG_FILE),
+        root.join(format!("{}.tmp", seat_core::consts::CONFIG_FILE)),
+        root.join(RUN_DIR).join("state.json"),
+        root.join(RUN_DIR).join("state.json.tmp"),
+        root.join(LOGS_DIR).join("service.log"),
+    ];
+    for n in 1..=log::KEEP_ROTATED {
+        v.push(root.join(LOGS_DIR).join(format!("service.log.{n}")));
+    }
+    v
+}
+
+/// Create the data folders; with `acl` (service mode, elevated) take them over safely
+/// ([`security::ensure_dir`]: no reparse points, trusted owner, `O:BA` + protected DACL,
+/// children reset) and move linked / reparse files aside ([`security::sanitize_file`]).
+pub fn ensure_data_dirs(root: &Path, acl: bool) -> std::io::Result<()> {
+    if !acl {
+        std::fs::create_dir_all(root)?;
+        for (d, _) in SUB_DIRS {
+            std::fs::create_dir_all(root.join(d))?;
+        }
+        return Ok(());
+    }
+    security::ensure_dir(root, &owned(DATA_DIR_SDDL), false)?;
+    for (d, sddl) in SUB_DIRS {
+        security::ensure_dir(&root.join(d), &owned(sddl), true)?;
+    }
+    for f in trusted_files(root) {
+        security::sanitize_file(&f)?;
+    }
+    Ok(())
+}
+
+pub struct Running {
+    pub service: Arc<Service>,
+    server: PipeServer,
+    first: Mutex<Option<PipeIo>>,
+    shutdown: Shutdown,
+    stop: Arc<AtomicBool>,
+    pipe_name: String,
+}
+
+/// Build everything; the pipe name is claimed here (fails if already owned).
+pub fn prepare(opts: &Options) -> Result<Running, String> {
+    if let Err(e) = ensure_data_dirs(&opts.data_dir, !opts.console) {
+        return Err(format!("data folder {}: {e}", opts.data_dir.display()));
+    }
+    let logs = opts.data_dir.join(LOGS_DIR);
+    log::init(Some(&logs.join("service.log")), opts.debug, opts.console);
+    if !opts.console {
+        crate::win::eventlog::install_hooks();
+    }
+    let store = FileStore::new(opts.data_dir.join(seat_core::consts::CONFIG_FILE));
+    let secrets: Box<dyn SecretStore> = if opts.console {
+        log::warn("console mode: seat passwords are kept in memory only");
+        Box::new(MemorySecretStore::default())
+    } else {
+        Box::new(LsaSecretStore)
+    };
+    let platform = Arc::new(WinPlatform::new(opts.data_dir.clone(), logs));
+    let trusted_children = platform.clone();
+    let platform_for_hosts = platform.clone();
+    let service = Service::new(Deps {
+        store: Box::new(store),
+        secrets,
+        run_store: RunStore::new(&opts.data_dir.join(RUN_DIR)),
+        platform,
+        factory: Arc::new(wiring::PackageFactory::system(opts.data_dir.clone())),
+        clock: Arc::new(SystemClock),
+        spawner: Arc::new(ThreadSpawner),
+        data_dir: opts.data_dir.clone(),
+        console_mode: opts.console,
+    });
+    service.updater.set_net(Arc::new(crate::win::update::WinUpdateNet { console: opts.console }));
+    let mut sddl = seat_proto::PIPE_SDDL.to_string();
+    if opts.allow_current_user {
+        let sid = security::current_user_sid().map_err(|e| e.to_string())?;
+        log::warn(&format!("DEV: pipe also open to the current user {sid}"));
+        sddl.push_str(&format!("(A;;GA;;;{sid})"));
+    }
+    // Seat hosts and the console listener run as the dedicated host account (batch logon:
+    // not in INTERACTIVE, so the IU entry above does not admit them). Set up at every start;
+    // when that fails they use the SYSTEM Low token for this run (win::containment).
+    if !opts.console {
+        match crate::win::host_account::ensure() {
+            Ok(a) => {
+                match seat_session::host_account::pipe_ace(&a.sid) {
+                    Some(ace) => sddl.push_str(&ace),
+                    None => log::warn(&format!("host account SID {:?} not usable in the pipe DACL", a.sid)),
+                }
+                log::info(&format!("seat hosts run as {} ({})", a.name, a.sid));
+                platform_for_hosts.set_host_account(Some(a));
+            }
+            Err(e) => {
+                log::warn(&format!("host account not set up, seat hosts use SYSTEM at Low integrity: {e}"));
+                platform_for_hosts.set_host_account(None);
+            }
+        }
+    }
+    // Low mandatory label (no-write-up only): seat hosts and the console listener run at
+    // Low integrity (`hardened_system_token_in_session`) and must still write requests.
+    // Access stays decided by the DACL above.
+    sddl.push_str(seat_proto::PIPE_LOW_LABEL_SDDL);
+
+    // Boot decision (run state, safe modes) before any request is served, so requests
+    // never see or overwrite a default run state.
+    service.boot_prepare();
+    let server = PipeServer::new(&opts.pipe_name, &sddl)
+        .map_err(|e| format!("pipe: {e}"))?
+        .with_trusted(Arc::new(move |pid| trusted_children.is_service_child(pid)));
+
+    let first = server.claim().map_err(|e| format!("pipe {} already in use or not creatable: {e}", opts.pipe_name))?;
+    Ok(Running {
+        service,
+        shutdown: server.shutdown_handle(),
+        server,
+        first: Mutex::new(Some(first)),
+        stop: Arc::default(),
+        pipe_name: opts.pipe_name.clone(),
+    })
+}
+
+impl Running {
+    /// Boot sequence and the tick timer, on background threads (the pipe serves meanwhile).
+    pub fn start_background(&self) {
+        let s = self.service.clone();
+        std::thread::spawn(move || s.boot());
+        let (s, stop) = (self.service.clone(), self.stop.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(TICK_MS));
+                s.tick();
+            }
+        });
+    }
+
+    /// Serve the control pipe on this thread until [`Self::stop`].
+    pub fn serve(&self) -> std::io::Result<()> {
+        let first = self.first.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let Some(first) = first else { return Ok(()) };
+        let s = self.service.clone();
+        let handler: Handler = Arc::new(move |caller, req| s.handle(caller, req));
+        log::info(&format!("control pipe {} ready", self.pipe_name));
+        self.server.run(first, handler)
+    }
+
+    /// Ordered stop: seats, run state, timer, pipe.
+    pub fn stop(&self) {
+        self.stop_with(&|_, _| {});
+    }
+
+    /// [`Self::stop`] with a per-seat progress callback (SCM checkpoints).
+    pub fn stop_with(&self, progress: &dyn Fn(usize, usize)) {
+        self.service.shutdown_with(progress);
+        self.stop.store(true, Ordering::SeqCst);
+        self.shutdown.trigger();
+    }
+}

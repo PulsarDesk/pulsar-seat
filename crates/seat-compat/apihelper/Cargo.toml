@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# App-facing "which seat am I on" helper DLL (spec 80 §6, §11.5). Built for x86, x64,
+# ARM64 and ARM64EC because it is loaded into apps of every architecture. Own workspace
+# (not a member of the repo workspace) so the root `cargo build` stays as it is and the
+# extra targets are built only where they are installed (CI installers job):
+#   cargo build --release --manifest-path crates/seat-compat/apihelper/Cargo.toml --target <t>
+[package]
+name = "pulsar-seat-api"
+description = "Pulsar Seat app API helper DLL (Pulsar-native exports)"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/PulsarDesk/pulsar-seat"
+rust-version = "1.85"
+publish = false
+
+[lib]
+name = "pulsar_seat_api"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+seat-compat = { path = ".." }
+seat-core = { path = "../../seat-core" }
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

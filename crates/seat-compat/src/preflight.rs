@@ -1,0 +1,434 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Pre-flight checks (spec 90 §11 item 4, spec 80 §11.4 "check level" replaced by an
+//! explicit list). Each check is pass / warn / fail / info with a **Turkish** detail (the
+//! manager shows `detail` verbatim; spec 80 §11.4 asks for the reason in the UI language).
+//! The title comes from the manager's i18n by `id`; [`title_tr`] mirrors that wording for
+//! the installer and logs.
+//!
+//! Security states (Secure Boot, Memory Integrity, Smart App Control) are **reported
+//! only, never changed**.
+//!
+//! Split in two: [`Environment`] is a plain snapshot (probed on Windows by
+//! [`probe`]); [`evaluate`] is pure and unit-tested.
+
+use crate::coexist::Coexistence;
+use crate::ops::{Hive, SystemOps};
+use seat_proto::messages::{Check, CheckOutcome};
+use serde::{Deserialize, Serialize};
+
+/// Oldest supported build: Windows 10 22H2.
+pub const MIN_BUILD: u32 = 19045;
+/// Newest build this release was checked against. Newer builds are allowed (Pulsar Seat
+/// uses no OS internals) but reported as a warning until tested.
+pub const MAX_TESTED_BUILD: u32 = 26200;
+
+pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
+pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
+pub const IMAGE_FILE_MACHINE_I386: u16 = 0x014c;
+
+/// Machine type this binary was built for.
+pub const fn build_machine() -> u16 {
+    if cfg!(target_arch = "aarch64") {
+        IMAGE_FILE_MACHINE_ARM64
+    } else if cfg!(target_arch = "x86_64") {
+        IMAGE_FILE_MACHINE_AMD64
+    } else {
+        IMAGE_FILE_MACHINE_I386
+    }
+}
+
+pub fn machine_name(m: u16) -> &'static str {
+    match m {
+        IMAGE_FILE_MACHINE_ARM64 => "ARM64",
+        IMAGE_FILE_MACHINE_AMD64 => "x64",
+        IMAGE_FILE_MACHINE_I386 => "x86",
+        _ => "unknown",
+    }
+}
+
+/// Smart App Control state (`CI\Policy\VerifiedAndReputablePolicyState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartAppControl {
+    Off,
+    On,
+    Evaluation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Environment {
+    pub is_admin: bool,
+    pub os_build: u32,
+    pub os_ubr: u32,
+    pub edition_id: String,
+    pub is_server: bool,
+    /// Native machine of the PC (`IsWow64Process2`), never the WOW64 variable. 0 = the
+    /// query failed (reported as a warning, never assumed to match).
+    pub native_machine: u16,
+    /// Machine of this binary.
+    pub binary_machine: u16,
+    pub secure_boot: Option<bool>,
+    pub memory_integrity: Option<bool>,
+    pub smart_app_control: Option<SmartAppControl>,
+    pub windows_safe_mode: bool,
+    /// RD Session Host role (Server only; registry heuristic, HYPOTHESIS).
+    pub rdsh_role: Option<bool>,
+    pub coexistence: Coexistence,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            is_admin: true,
+            os_build: 26100,
+            os_ubr: 0,
+            edition_id: "Professional".into(),
+            is_server: false,
+            native_machine: build_machine(),
+            binary_machine: build_machine(),
+            secure_boot: Some(true),
+            memory_integrity: Some(true),
+            smart_app_control: Some(SmartAppControl::Off),
+            windows_safe_mode: false,
+            rdsh_role: None,
+            coexistence: Coexistence {
+                termservice_stock: true,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+fn chk(id: &str, outcome: CheckOutcome, detail: impl Into<String>) -> Check {
+    Check {
+        id: id.into(),
+        outcome,
+        detail: detail.into(),
+    }
+}
+
+/// Evaluate a snapshot. Order is stable (the manager lists them in this order).
+pub fn evaluate(env: &Environment) -> Vec<Check> {
+    use CheckOutcome::*;
+    let mut v = Vec::new();
+    v.push(if env.is_admin {
+        chk("admin", Pass, "yükseltilmiş yönetici")
+    } else {
+        chk("admin", Fail, "yönetici hakları gerekiyor")
+    });
+    v.push(if env.os_build < MIN_BUILD {
+        chk(
+            "os_build",
+            Fail,
+            format!("derleme {} en az {MIN_BUILD} olmalı", env.os_build),
+        )
+    } else if env.os_build > MAX_TESTED_BUILD {
+        chk(
+            "os_build",
+            Warn,
+            format!(
+                "derleme {}.{}, denenmiş en yeni derlemeden ({MAX_TESTED_BUILD}) daha yeni",
+                env.os_build, env.os_ubr
+            ),
+        )
+    } else {
+        chk(
+            "os_build",
+            Pass,
+            format!("derleme {}.{}", env.os_build, env.os_ubr),
+        )
+    });
+    v.push(if env.native_machine == 0 {
+        // The native-machine query failed: never assume a match (that would hide an x64
+        // build running emulated on ARM64, the case this check exists for).
+        chk(
+            "arch_native",
+            Warn,
+            format!(
+                "bilgisayarın yerel mimarisi belirlenemedi; bu paket {} için",
+                machine_name(env.binary_machine)
+            ),
+        )
+    } else if env.native_machine == env.binary_machine {
+        chk(
+            "arch_native",
+            Pass,
+            format!("yerel {}", machine_name(env.native_machine)),
+        )
+    } else {
+        chk(
+            "arch_native",
+            Fail,
+            format!(
+                "bu {} paketi {} bir bilgisayarda çalışıyor; {} paketini kurun",
+                machine_name(env.binary_machine),
+                machine_name(env.native_machine),
+                machine_name(env.native_machine)
+            ),
+        )
+    });
+    v.push(chk(
+        "edition",
+        Info,
+        format!(
+            "{} ({})",
+            env.edition_id,
+            if env.is_server { "sunucu" } else { "istemci" }
+        ),
+    ));
+    if env.is_server {
+        v.push(match env.rdsh_role {
+            Some(true) => chk("rdsh_role", Pass, "rol kurulu"),
+            Some(false) => chk(
+                "rdsh_role",
+                Warn,
+                "rol bulunamadı; koltuklar hızlı kullanıcı değiştirmeye geri döner",
+            ),
+            None => chk("rdsh_role", Info, "rol durumu bilinmiyor"),
+        });
+    }
+    v.push(match env.secure_boot {
+        Some(true) => chk("secure_boot", Pass, "açık"),
+        Some(false) => chk(
+            "secure_boot",
+            Info,
+            "kapalı (yalnızca bildirilir; Pulsar Seat bunu asla değiştirmez)",
+        ),
+        None => chk("secure_boot", Info, "yok (eski BIOS ya da bilinmiyor)"),
+    });
+    v.push(match env.memory_integrity {
+        Some(true) => chk("memory_integrity", Pass, "açık"),
+        Some(false) => chk(
+            "memory_integrity",
+            Info,
+            "kapalı (yalnızca bildirilir; Pulsar Seat bunu asla değiştirmez)",
+        ),
+        None => chk("memory_integrity", Info, "bilinmiyor"),
+    });
+    v.push(match env.smart_app_control {
+        Some(SmartAppControl::On) => chk(
+            "smart_app_control",
+            Info,
+            "açık: Pulsar Seat'in imzasız derlemeleri engellenebilir",
+        ),
+        Some(SmartAppControl::Evaluation) => chk("smart_app_control", Info, "değerlendirme modu"),
+        Some(SmartAppControl::Off) => chk("smart_app_control", Info, "kapalı"),
+        None => chk("smart_app_control", Info, "bilinmiyor"),
+    });
+    v.push(if env.windows_safe_mode {
+        chk(
+            "windows_safe_mode",
+            Warn,
+            "Windows Güvenli Mod'da çalışıyor: ek koltuklar başlatılmaz",
+        )
+    } else {
+        chk("windows_safe_mode", Pass, "normal açılış")
+    });
+    v.push(chk(
+        "driver_signing",
+        Info,
+        "Pulsar Seat sürücüleri henüz imzalı değil: kullanıcı kipi yöntemleri kullanılır",
+    ));
+    v.extend(env.coexistence.checks());
+    v
+}
+
+/// The installer stops on any `fail`.
+pub fn blocks_install(checks: &[Check]) -> bool {
+    checks.iter().any(|c| c.outcome == CheckOutcome::Fail)
+}
+
+/// Turkish title for a check id (installer and logs). Same wording as the manager's
+/// `checks` table in `apps/manager/src/lib/i18n.ts`, which is the UI source.
+pub fn title_tr(id: &str) -> &'static str {
+    match id {
+        "admin" => "Yönetici hakları",
+        "os_build" => "Windows sürümü",
+        "arch_native" => "Yerel derleme",
+        "edition" => "Windows baskısı",
+        "rdsh_role" => "Uzak Masaüstü Oturumu Ana Bilgisayarı rolü",
+        "secure_boot" => "Güvenli Önyükleme",
+        "memory_integrity" => "Bellek Bütünlüğü",
+        "smart_app_control" => "Akıllı Uygulama Denetimi",
+        "windows_safe_mode" => "Güvenli Mod",
+        "driver_signing" => "Sürücü imzası",
+        "reference_product" => "Başka bir çoklu koltuk yazılımı",
+        "termservice_stock" => "Uzak Masaüstü hizmeti özgün",
+        "foreign_input_filters" => "Başka giriş süzgeç sürücüleri",
+        _ => "Denetim",
+    }
+}
+
+// ---- registry parts of the probe (testable with MemoryOps) ------------------------------
+
+const CURRENT_VERSION: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+const SECURE_BOOT: &str = r"SYSTEM\CurrentControlSet\Control\SecureBoot\State";
+const HVCI: &str =
+    r"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity";
+const CI_POLICY: &str = r"SYSTEM\CurrentControlSet\Control\CI\Policy";
+const TERMINAL_SERVER: &str = r"SYSTEM\CurrentControlSet\Control\Terminal Server";
+
+fn dword(ops: &dyn SystemOps, key: &str, name: &str) -> Option<u32> {
+    ops.reg_read(Hive::Hklm, key, name)
+        .ok()
+        .flatten()
+        .and_then(|d| d.as_u32())
+}
+fn string(ops: &dyn SystemOps, key: &str, name: &str) -> Option<String> {
+    ops.reg_read(Hive::Hklm, key, name)
+        .ok()
+        .flatten()
+        .and_then(|d| d.as_str().map(str::to_string))
+}
+
+/// Fill the registry-derived fields of `env`.
+pub fn probe_registry(ops: &dyn SystemOps, env: &mut Environment) {
+    if let Some(b) = string(ops, CURRENT_VERSION, "CurrentBuildNumber").and_then(|s| s.parse().ok())
+    {
+        env.os_build = b;
+    }
+    env.os_ubr = dword(ops, CURRENT_VERSION, "UBR").unwrap_or(0);
+    env.edition_id = string(ops, CURRENT_VERSION, "EditionID").unwrap_or_default();
+    env.is_server = string(ops, CURRENT_VERSION, "InstallationType")
+        .is_some_and(|t| t.to_ascii_lowercase().starts_with("server"));
+    env.secure_boot = dword(ops, SECURE_BOOT, "UEFISecureBootEnabled").map(|v| v == 1);
+    env.memory_integrity = Some(dword(ops, HVCI, "Enabled") == Some(1));
+    env.smart_app_control =
+        dword(ops, CI_POLICY, "VerifiedAndReputablePolicyState").map(|v| match v {
+            1 => SmartAppControl::On,
+            2 => SmartAppControl::Evaluation,
+            _ => SmartAppControl::Off,
+        });
+    // HYPOTHESIS: `TSAppCompat` = 1 marks an installed RD Session Host role (application
+    // mode). The session package owns the authoritative probe (`SessionBackend::probe`).
+    env.rdsh_role = if env.is_server {
+        dword(ops, TERMINAL_SERVER, "TSAppCompat").map(|v| v == 1)
+    } else {
+        None
+    };
+}
+
+/// Full probe on Windows: token elevation, native machine, Safe Mode, registry, coexistence.
+#[cfg(windows)]
+pub fn probe(ops: &dyn SystemOps) -> Environment {
+    let mut env = Environment {
+        is_admin: crate::win::is_elevated(),
+        // 0 = unknown: `evaluate` reports it instead of assuming a match.
+        native_machine: crate::win::native_machine().unwrap_or(0),
+        binary_machine: build_machine(),
+        windows_safe_mode: crate::win::is_safe_mode(),
+        ..Default::default()
+    };
+    probe_registry(ops, &mut env);
+    env.coexistence = crate::coexist::detect(ops, None);
+    env
+}
+
+/// `preflight` request: probe and evaluate.
+#[cfg(windows)]
+pub fn run(ops: &dyn SystemOps) -> Vec<Check> {
+    evaluate(&probe(ops))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::{MemoryOps, RegData};
+
+    #[test]
+    fn default_env_passes() {
+        let c = evaluate(&Environment::default());
+        assert!(!blocks_install(&c), "{c:?}");
+        for x in &c {
+            assert_ne!(title_tr(&x.id), "Denetim", "missing title for {}", x.id);
+        }
+    }
+
+    #[test]
+    fn fails_on_old_build_wrong_arch_non_admin_reference() {
+        let mut e = Environment {
+            os_build: 19041,
+            is_admin: false,
+            ..Default::default()
+        };
+        e.native_machine = if build_machine() == IMAGE_FILE_MACHINE_ARM64 {
+            IMAGE_FILE_MACHINE_AMD64
+        } else {
+            IMAGE_FILE_MACHINE_ARM64
+        };
+        e.coexistence.reference_services.push("X".into());
+        let c = evaluate(&e);
+        let fails: Vec<_> = c
+            .iter()
+            .filter(|x| x.outcome == CheckOutcome::Fail)
+            .map(|x| x.id.as_str())
+            .collect();
+        assert_eq!(
+            fails,
+            vec!["admin", "os_build", "arch_native", "reference_product"]
+        );
+    }
+
+    #[test]
+    fn unknown_native_machine_is_not_a_match() {
+        let c = evaluate(&Environment {
+            native_machine: 0,
+            ..Default::default()
+        });
+        assert_eq!(
+            c.iter().find(|x| x.id == "arch_native").unwrap().outcome,
+            CheckOutcome::Warn
+        );
+    }
+
+    #[test]
+    fn newer_build_warns_only() {
+        let c = evaluate(&Environment {
+            os_build: 27000,
+            ..Default::default()
+        });
+        assert_eq!(
+            c.iter().find(|x| x.id == "os_build").unwrap().outcome,
+            CheckOutcome::Warn
+        );
+        assert!(!blocks_install(&c));
+    }
+
+    #[test]
+    fn registry_probe() {
+        let ops = MemoryOps::new();
+        ops.set(
+            Hive::Hklm,
+            CURRENT_VERSION,
+            "CurrentBuildNumber",
+            RegData::Sz("26100".into()),
+        );
+        ops.set(Hive::Hklm, CURRENT_VERSION, "UBR", RegData::Dword(4351));
+        ops.set(
+            Hive::Hklm,
+            CURRENT_VERSION,
+            "InstallationType",
+            RegData::Sz("Server".into()),
+        );
+        ops.set(
+            Hive::Hklm,
+            SECURE_BOOT,
+            "UEFISecureBootEnabled",
+            RegData::Dword(0),
+        );
+        ops.set(
+            Hive::Hklm,
+            CI_POLICY,
+            "VerifiedAndReputablePolicyState",
+            RegData::Dword(2),
+        );
+        let mut e = Environment::default();
+        probe_registry(&ops, &mut e);
+        assert_eq!((e.os_build, e.os_ubr, e.is_server), (26100, 4351, true));
+        assert_eq!(e.secure_boot, Some(false));
+        assert_eq!(e.memory_integrity, Some(false));
+        assert_eq!(e.smart_app_control, Some(SmartAppControl::Evaluation));
+        assert_eq!(e.rdsh_role, None);
+        assert!(evaluate(&e).iter().any(|c| c.id == "rdsh_role"));
+    }
+}

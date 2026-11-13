@@ -1,0 +1,130 @@
+# Pulsar Seat credential provider + filter (`credprov/`)
+
+In-process COM DLL `pulsar-seat-credprov.dll` that LogonUI loads. It gives
+`fast_user_switch` seats (spec 35 §5.4 / §5.5, U1 "real sessions, one at a time") an
+automatic logon with the seat's stored password, and a "switch seat" link on the logon and
+lock screens. Clean room: written from Microsoft Learn (`ICredentialProvider`,
+`ICredentialProviderCredential2`, `ICredentialProviderFilter`,
+`KERB_INTERACTIVE_UNLOCK_LOGON`, `CredProtectW`, named pipes); no sample code copied.
+
+**Status: built and self-tested only. Untested on hardware** (never registered, never
+loaded by LogonUI on any machine). Unsigned.
+
+## Files
+
+| File | What |
+| --- | --- |
+| `credprov.vcxproj` | the DLL, ARM64 + x64, Release + Debug, v145 toolset, SDK 10.0.28000, static CRT, CFG, Spectre, `/W4 /WX` |
+| `credprov-selftest.vcxproj` | console self-test of the same sources (never shipped) |
+| `src/dll.cpp` | `DllGetClassObject`, `DllCanUnloadNow`, class factory, `InLogonUI()` (no `DllRegisterServer`) |
+| `src/provider.*` | provider, the two tile kinds, the filter, `ApplyFilter`, `SeatTileWillExist` / `FilterHides`, `Notifier` (poll + `CredentialsChanged`), Turkish link text |
+| `src/pipe.*` | service pipe client (`\\.\pipe\PulsarSeat.Control`), one connection per call |
+| `src/json.*` | small strict JSON reader / writer for the seat-proto frames |
+| `src/pack.*` | Negotiate logon blob (`KERB_INTERACTIVE_UNLOCK_LOGON`, packed offsets) |
+| `tests/selftest.cpp` | 66 checks: JSON shapes (incl. secret buffers, `pending`), packing layout, filter decision, the shared seat-tile / filter predicate, link text, inert outside LogonUI |
+
+CLSIDs (also in `crates/seat-session/src/credprov.rs`): provider
+`{C086BD57-C066-4FBA-ACED-7679C157E3DC}`, filter `{FDC3F428-E8C8-455F-AA01-6CEB41E3155E}`.
+
+## Behaviour
+
+- Does nothing outside `%SystemRoot%\System32\LogonUI.exe`, and nothing for any scenario but
+  `CPUS_LOGON` / `CPUS_UNLOCK_WORKSTATION` (`E_NOTIMPL`: CredUI and change-password never
+  see it).
+- Asks the service `credprov_query` (2 s limit). No answer, or "not a seat session" = no
+  tiles, nothing hidden.
+- **Seat tile** (logon screen of a seat session that has an account): label "Koltuk N",
+  the account, a password box. If the service armed a one-time logon for this session it is
+  the default tile with auto-logon: at `GetSerialization` it takes the credential once
+  (`credprov_take_credentials`), packs it for Negotiate and submits. The outcome goes back
+  with `credprov_report`; a failure marks the stored password failing in the service, and
+  the tile stays as a normal password tile (the stored password is never retried).
+  Tiles are built at `GetCredentialCount` (after `SetUserArray`). The tile names the seat
+  account's SID (`GetUserSid`, from the service) only when LogonUI's user array lists that
+  SID; otherwise it is an "other user" tile.
+- **Late grant** (`pending`): under `fast_user_switch` the console is disconnected and
+  LogonUI of the fresh session enumerates at once, usually before the service has armed the
+  grant. While the service answers `pending` (a hand-over to this console session is under
+  way), the provider takes part with no tiles, keeps the `ICredentialProviderEvents` from
+  `Advise` and polls every 250 ms for at most 30 s on a worker thread; a changed answer
+  goes into the cache and `CredentialsChanged` makes LogonUI call `GetCredentialCount`
+  again, where the tiles are rebuilt (default + auto-logon once the grant is there).
+  **Untested on hardware**: `CredentialsChanged` from a worker thread; whether LogonUI
+  re-runs the filter then (if not, the other providers stay visible during a late
+  auto-logon — harmless, the default tile auto-submits).
+- **Switch tile** (logon and lock screen of a seat session, when other seats exist):
+  "Koltuk değiştir" with one command link per seat ("Koltuk 3'e geç") →
+  `credprov_switch`. Seat 1 is not offered: under this backend seat 1 is whatever session
+  holds the console and the backend keeps no record of its earlier session to connect back
+  to; Windows' own user tiles reach its user. Still open (status.md).
+- **Filter**: in the logon scenario only, and only when the service says `hide_others`
+  (an armed one-time logon in this session), the answer gives a seat tile (account known:
+  `SeatTileWillExist`, the same predicate the provider uses) and our provider is in the
+  list, every other provider is hidden. The service also never says `hide_others` without
+  an account. Provider and filter share one cached answer per LogonUI process.
+- **After a failed auto-logon** the provider asks the service once more (the grant is gone,
+  so the answer no longer hides) and calls `CredentialsChanged`; the seat tile and its
+  error text stay. Limitation: LogonUI decides the filter at enumeration; if it does not
+  re-filter on `CredentialsChanged` (HYPOTHESIS, untested), PIN / Windows Hello / "other
+  user" tiles stay hidden in that LogonUI instance: type the seat account's password, use
+  the switch link, or press Ctrl+Alt+Del / lock again for a fresh logon screen
+  ([docs/troubleshooting.md](../docs/troubleshooting.md) §7).
+- The lock screen never auto-submits.
+
+## Security
+
+- Server check: the pipe's server PID must be the running `PulsarSeat` service (SCM).
+  Client side of the check in the service: SYSTEM token, image `LogonUI.exe` in System32,
+  process session = token session (`crates/seat-service/src/credprov.rs`).
+- The grant is one-time, bound to one session id, expires after 120 s, and goes away on
+  logon / logoff / seat stop.
+- Passwords live in wiped buffers (`SecretW`, `Wipe`); the password is protected with
+  `CredProtectW` for the logon scenario. The JSON reader decodes every string into one
+  buffer reserved up front on the heap (never reallocated, never in the small-string
+  buffer, so moves hand over the pointer); half-parsed values, the frame text and the parse
+  tree are wiped on every error path (short read, timeout, bad JSON, wrong id); the `Ok`
+  subtree is moved, not copied; the password is converted to UTF-16 in a wiped vector.
+  Remaining: the kernel / pipe buffers and `CredProtectW`'s own copies are outside our
+  control.
+- **Unsigned today.** LogonUI loads the DLL as SYSTEM: a release must ship it
+  Authenticode-signed. `check-payload.ts --release` and `sign-release.ps1` refuse an
+  unsigned one; `build-installer.ps1 -SignedCredProv <dll>` bundles a signed build
+  (docs/release/checklist.md §3).
+
+## Registration
+
+Never by the installer and never by the DLL. The service registers it
+(`seat_session::credprov::sync`) only while the product is enabled **and** the active
+session backend is `fast_user_switch` **and** the DLL next to the service is native for
+this PC; it removes the four keys on disable, on another backend and on uninstall. Keys:
+
+- `HKLM\SOFTWARE\Classes\CLSID\{…}` + `InprocServer32` (default = DLL path,
+  `ThreadingModel=Apartment`), for both CLSIDs
+- `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{C086BD57-…}`
+- `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters\{FDC3F428-…}`
+
+Recovery: `CredProvDisabled=1` (DWORD) under
+`HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters`, safe mode, or deleting the
+keys offline: [docs/troubleshooting.md](../docs/troubleshooting.md) §7.
+
+## Architectures
+
+One native DLL per installer architecture: ARM64 (LogonUI on ARM64 is a native ARM64
+process) and x64. **No ARM64X**: the provider refuses `CPUS_CREDUI`, so it is never needed
+inside an emulated x64 app's CredUI. HYPOTHESIS: an x64 process on ARM64 that enumerates
+credential providers (it sees the same 64-bit registry) fails to load the ARM64 DLL and
+skips it.
+
+## Build
+
+```
+powershell -ExecutionPolicy Bypass -File installer\scripts\build-credprov.ps1
+powershell -ExecutionPolicy Bypass -File installer\scripts\build-credprov.ps1 -Platforms ARM64 -OutDir target\payload\arm64
+```
+
+Builds both projects, checks the PE machine (0xAA64 / 0x8664), runs the self-test (x64 under
+emulation on an ARM64 host). CI: job `credprov` in `.github/workflows/ci.yml` (native
+runner per architecture); locally `installer\scripts\ci-local.ps1 -CredProv` (or
+`-Payload`). `build-installer.ps1` calls it and puts the DLL into the
+payload. Outputs go to `credprov\build\` (gitignored). No `/INTEGRITYCHECK`: it would make
+the loader demand a signature.

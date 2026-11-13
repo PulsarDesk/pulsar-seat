@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-release"
+description = "Release signing for the Pulsar Seat update check: minisign-compatible Ed25519 keys and signatures (verify in the service, keygen / sign in the maintainer tool)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "seat_release"
+path = "src/lib.rs"
+
+# Maintainer tool: keygen / sign / verify / check-signers. Never shipped in the MSI.
+[[bin]]
+name = "pulsar-seat-release"
+path = "src/main.rs"
+required-features = ["sign"]
+
+[features]
+default = ["sign"]
+# Key generation and signing (the maintainer tool). The service uses
+# `default-features = false`: verification only, no secret-key code in the shipped binary.
+sign = ["dep:getrandom"]
+
+[dependencies]
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
+blake2 = "0.10.6"
+base64 = "0.22.1"
+zeroize.workspace = true
+getrandom = { version = "0.3.4", optional = true }
+
+# Maintainer tool only (protected DACL on the secret key file); the library uses none.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# Independent minisign implementation (MIT): interop check of our signatures.
+minisign-verify = "0.3.0"

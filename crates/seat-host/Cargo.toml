@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-host"
+description = "Pulsar Seat per-seat host (RDP client + presenter + input + audio bridge) and per-session agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Seat host: one per extra seat, in the console / dedicated host session, started by the service.
+[[bin]]
+name = "pulsar-seat-host"
+path = "src/main.rs"
+
+# Session agent: one per seat session, user token (drive letters, wallpaper, notices).
+[[bin]]
+name = "pulsar-seat-agent"
+path = "src/agent.rs"
+
+[dependencies]
+seat-core.workspace = true
+seat-proto.workspace = true
+seat-display.workspace = true
+seat-input.workspace = true
+seat-media.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Session side of the host (rdp/, keeper.rs): launch specs, desktop keeper helpers.
+seat-session.workspace = true
+# Default RDP backend (IronRDP engine, src/ironrdp.rs).
+seat-rdp = { path = "../seat-rdp" }
+zeroize.workspace = true
+
+# Remote Desktop ActiveX host (src/rdp/win.rs): COM / OLE automation, Win32 windows.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Pipe client (src/pipe.rs) and the session agent's tasks (src/agent.rs): flat Win32 APIs.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    # Kiosk shell (src/kiosk/win.rs): GDI painting, DWM cloak check, app job, DPI mode.
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_Shutdown",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    # Session agent's notification-area icon for the seat switch (src/agent.rs, spec 35 §5.5(a)).
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

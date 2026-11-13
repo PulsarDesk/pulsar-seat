@@ -1,0 +1,431 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  Pulsar Seat - WiX v3 fragment merged into the Tauri 2 MSI
+  (bundle.windows.wix.fragmentPaths / componentRefs, see ../tauri-bundle.json).
+  Adapted from pulsar-split (installer/wix/PulsarSplit.wxs, same author, GPL-3.0).
+
+  What it adds to the Tauri product (the manager exe is Tauri's main binary):
+    * pulsar-seat-service.exe + ServiceInstall (PulsarSeat, LocalSystem, own process,
+      automatic, depends on RpcSs + LSM, SID type unrestricted, restart 5 s / 30 s / 120 s,
+      reset after 1 day)                                         spec 90 §11, installer/README.md
+    * pulsar-seat-host.exe, pulsar-seat-agent.exe
+    * pulsar-seat-credprov.dll (file only; registered by the service, never by the MSI)
+    * machine Run value PulsarSeatManager = "<dir>\pulsar-seat-manager.exe" - -tray
+    * HKLM\SOFTWARE\Pulsar Seat: InstallPath, Version (nothing else)
+    * deferred, no-impersonate custom actions on our own binary:
+        install   - service description / privileges / SDDL, data dir + ACL, Event Log
+                    source (service package) + pre-flight gate, restore point, optional
+                    tweaks, signed driver packages (seat-compat::setup)
+        rollback  - if anything after `install` fails on a fresh install, reverts the
+                    journal (tweaks, drivers) before the files are rolled back
+        uninstall - stops seats, reverts every journaled change, removes the LSA
+                    secrets, driver packages we published, the Event Log source, the
+                    passwordless-seat RDP listener and its firewall block rule (made by
+                    the service on Server + RDSH only; installer/README.md "Never")
+    * interactive upgrade / repair / removal: a yes / no dialog before running seats are
+      stopped (ServiceControl Stop="both"); silent runs (/qn) stop them without asking
+    * interactive install: an options page (restore point, fast startup / sleep / crash
+      dump tweaks, all off by default) that sets PSRESTOREPOINT / PSTWEAKS; interactive
+      removal: a page that asks whether to delete %ProgramData%\Pulsar Seat (REMOVEUSERDATA)
+    * builds with signed driver packages: ScheduleReboot, so msiexec /norestart returns 3010
+    * interactive install: a non-blocking warning when TermService uses a non-default DLL
+      (the other warnings are in %ProgramData%\Pulsar Seat\logs\setup.log and shown by
+      the manager on its first start)
+
+    * signed driver packages: drivers\<package>\ from the generated fragment
+      (installer/scripts/bundle-config.ts, ComponentGroup PulsarSeatDriverPackages; empty
+      unless build-installer.ps1 ran with -SignedDrivers)
+    * coexistence guard: refuses to install while the reference multi-seat product's
+      service keys exist (interop identifiers, spec 90 §11 item 4)
+    * architecture guard: the x64 MSI refuses an ARM64 PC and vice versa.
+
+  Public properties (command line, e.g. msiexec /i PulsarSeat.msi /qn PSRESTOREPOINT=1):
+    PSRESTOREPOINT=1                   create a System Restore point before system settings change
+    PSTWEAKS=fast_startup_off,sleep_off,small_crash_dumps
+                                       optional system tweaks (journaled, undone on uninstall);
+                                       only a-z, _ and , (launch condition below)
+    REMOVEUSERDATA=1                   uninstall also deletes %ProgramData%\Pulsar Seat
+                                       (msiexec /x PulsarSeat.msi /qn REMOVEUSERDATA=1); the
+                                       updates\ download cache is deleted on every uninstall
+
+  Never: firewall allow rules (local pipe only, spec 90 §11 item 8), Defender exclusions,
+  certificates, test-signing, DeviceGuard / CI values, Windows Update blocking, files in
+  System32, class-wide filter edits. Built with the WiX 3.14 that Tauri's bundler downloads
+  (installer/README.md "Build"); never installed on the dev box.
+
+  Build-time input: PULSAR_SEAT_BIN = folder with pulsar-seat-service.exe,
+  pulsar-seat-host.exe, pulsar-seat-agent.exe for the architecture being built, plus
+  apihelper\<x86|x64[|arm64|arm64ec]>\pulsar-seat-api.dll (the app API helper for every
+  app architecture this PC runs; ARM64 folders only in the ARM64 package).
+  $(sys.BUILDARCH) is x64 or arm64 (Tauri passes -arch to candle).
+  Tauri's candle run does not see the caller's environment variables, so
+  installer/scripts/bundle-config.ts (`- -bin <dir>`) writes a copy of this file with
+  $(env.PULSAR_SEAT_BIN) replaced by the payload folder and points the bundle at that copy.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!-- ================================================================ properties -->
+    <Property Id="PSRESTOREPOINT" Secure="yes" />
+    <Property Id="PSTWEAKS" Secure="yes" />
+    <Property Id="REMOVEUSERDATA" Secure="yes" />
+
+    <!-- Native machine (64-bit registry view; not virtualised for x64 code on ARM64). -->
+    <Property Id="PSNATIVEARCH">
+      <RegistrySearch Id="PsNativeArch" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+                      Name="PROCESSOR_ARCHITECTURE" />
+    </Property>
+<?if $(sys.BUILDARCH) = "arm64" ?>
+    <Condition Message="Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın.">
+      <![CDATA[Installed OR PSNATIVEARCH ~= "ARM64"]]>
+    </Condition>
+<?else ?>
+    <Condition Message="Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın.">
+      <![CDATA[Installed OR PSNATIVEARCH ~= "AMD64"]]>
+    </Condition>
+<?endif ?>
+
+    <!-- Coexistence: every service key has a `Type` value, so reading it proves the key. -->
+    <Property Id="PSREFSEATSERVICE">
+      <RegistrySearch Id="PsRefSeatService" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\MUTESV_SERVICE" Name="Type" />
+    </Property>
+    <Property Id="PSREFDRIVERSERVICE">
+      <RegistrySearch Id="PsRefDriverService" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" Name="Type" />
+    </Property>
+    <Condition Message="Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.&#13;&#10;&#13;&#10;Pulsar Seat'i kurmak için önce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.">
+      <![CDATA[Installed OR (NOT PSREFSEATSERVICE AND NOT PSREFDRIVERSERVICE)]]>
+    </Condition>
+
+    <!-- Windows 10 22H2 (19045) or newer. VersionNT is 603 on 10/11, so read the build. -->
+    <Property Id="PSOSBUILD">
+      <RegistrySearch Id="PsOsBuild" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" />
+    </Property>
+    <Condition Message="Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir.">
+      <![CDATA[Installed OR (PSOSBUILD >= "19045" AND PSOSBUILD <> "")]]>
+    </Condition>
+
+    <Condition Message="Pulsar Seat'i kurmak için yönetici hakları gerekir.">
+      <![CDATA[Privileged]]>
+    </Condition>
+
+    <!-- Public properties reach a SYSTEM command line: allow only what they are for.
+         PSTWEAKS: lowercase ids and commas (the service parser refuses anything else
+         too); the characters that could split or escape the quoted argument are
+         refused here (whitespace is the only argument separator, so without it a stray quote
+         cannot start a new argument; MSI condition literals cannot hold a quote). -->
+    <!-- Not in CDATA: `&#9;` must be a real tab character in the condition (inside CDATA it
+         would be the literal text "&#9;"). The service's own parser
+         (seat-compat valid_tweak_list: a-z, _ and , only) stays the real validator. -->
+    <Condition Message="PSTWEAKS geçersiz: yalnızca küçük harf, alt çizgi ve virgül kullanılabilir.">Installed OR NOT (PSTWEAKS &gt;&lt; " " OR PSTWEAKS &gt;&lt; "&#9;" OR PSTWEAKS &gt;&lt; "-" OR PSTWEAKS &gt;&lt; "/" OR PSTWEAKS &gt;&lt; "\" OR PSTWEAKS &gt;&lt; "=" OR PSTWEAKS &gt;&lt; "[" OR PSTWEAKS &gt;&lt; "]")</Condition>
+    <Condition Message="PSRESTOREPOINT yalnızca 0 ya da 1 olabilir.">
+      <![CDATA[Installed OR NOT PSRESTOREPOINT OR PSRESTOREPOINT = "0" OR PSRESTOREPOINT = "1"]]>
+    </Condition>
+    <Condition Message="REMOVEUSERDATA yalnızca 0 ya da 1 olabilir.">
+      <![CDATA[NOT REMOVEUSERDATA OR REMOVEUSERDATA = "0" OR REMOVEUSERDATA = "1"]]>
+    </Condition>
+
+    <!-- Our service record (upgrade / repair: seats may be running). -->
+    <Property Id="PSSERVICEPRESENT">
+      <RegistrySearch Id="PsServicePresent" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\PulsarSeat" Name="Type" />
+    </Property>
+    <!-- TermService DLL as stored (raw REG_EXPAND_SZ reads come back with a leading "#";
+         HYPOTHESIS, the NSIS and Rust checks expand and compare the full path). -->
+    <Property Id="PSTERMSRVDLL">
+      <RegistrySearch Id="PsTermSrvDll" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\TermService\Parameters" Name="ServiceDll" />
+    </Property>
+    <!-- Fast startup state (raw DWORD reads come back as "#<n>"): the options dialog offers
+         to turn it off only while it is on (missing value = Windows default, on). -->
+    <Property Id="PSHIBERBOOT">
+      <RegistrySearch Id="PsHiberboot" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Control\Session Manager\Power" Name="HiberbootEnabled" />
+    </Property>
+    <!-- Options dialog check boxes (full UI). Pre-set from a PSTWEAKS given on the command
+         line; PsOptionsDlg's Next rebuilds PSTWEAKS from them. -->
+    <SetProperty Id="PSUI_FASTSTARTUP" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSTWEAKS >< "fast_startup_off"]]>
+    </SetProperty>
+    <SetProperty Id="PSUI_SLEEP" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSTWEAKS >< "sleep_off"]]>
+    </SetProperty>
+    <SetProperty Id="PSUI_DUMPS" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSTWEAKS >< "small_crash_dumps"]]>
+    </SetProperty>
+
+    <!-- ================================================================ files + service -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="PulsarSeatServiceComponent" Guid="{87FF2F4E-A397-4BBF-8798-5F5D87F25543}" Win64="yes">
+        <File Id="PulsarSeatServiceExe" Name="pulsar-seat-service.exe" KeyPath="yes"
+              Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-service.exe" />
+        <ServiceInstall Id="PulsarSeatServiceInstall"
+                        Name="PulsarSeat"
+                        DisplayName="Pulsar Seat Hizmeti"
+                        Description="Bir bilgisayarda birden çok koltuğu (ekran, klavye, fare, ses) yönetir."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments="--service"
+                        Vital="yes">
+          <ServiceDependency Id="RpcSs" />
+          <ServiceDependency Id="LSM" />
+          <ServiceConfig DelayedAutoStart="no" ServiceSid="unrestricted"
+                         OnInstall="yes" OnReinstall="yes" />
+          <ServiceConfigFailureActions OnInstall="yes" OnReinstall="yes" ResetPeriod="86400">
+            <Failure Action="restartService" Delay="5000" />
+            <Failure Action="restartService" Delay="30000" />
+            <Failure Action="restartService" Delay="120000" />
+          </ServiceConfigFailureActions>
+        </ServiceInstall>
+        <!-- Stopping the service stops every seat first (service pre-shutdown path). -->
+        <ServiceControl Id="PulsarSeatServiceControl" Name="PulsarSeat"
+                        Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+
+      <Component Id="PulsarSeatHostComponent" Guid="{395E4E20-0276-45B2-8E64-DA2E60C770A2}" Win64="yes">
+        <File Id="PulsarSeatHostExe" Name="pulsar-seat-host.exe" KeyPath="yes"
+              Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-host.exe" />
+      </Component>
+      <Component Id="PulsarSeatAgentComponent" Guid="{ECD52FE0-E7B3-497C-AA8D-9E482CBF301D}" Win64="yes">
+        <File Id="PulsarSeatAgentExe" Name="pulsar-seat-agent.exe" KeyPath="yes"
+              Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-agent.exe" />
+      </Component>
+      <!-- Credential provider + filter DLL (credprov/, native for this package's arch). The
+           file only: no COM or credential-provider registration here. The service registers
+           it while the product is enabled under fast user switching and removes it on
+           disable; `uninstall` removes our keys too (seat_session::credprov). -->
+      <Component Id="PulsarSeatCredProvComponent" Guid="{2E8B5D17-9A3C-4F61-B7D4-0C5A8E1F3B26}" Win64="yes">
+        <File Id="PulsarSeatCredProvDll" Name="pulsar-seat-credprov.dll" KeyPath="yes"
+              Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-credprov.dll" />
+      </Component>
+
+      <!-- Manager autostart in every interactive session (seat sessions included). -->
+      <Component Id="PulsarSeatRunComponent" Guid="{E4955AB3-0A1F-4FFE-8D06-506D72381C31}" Win64="yes">
+        <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                       Name="PulsarSeatManager" Type="string"
+                       Value="&quot;[INSTALLDIR]pulsar-seat-manager.exe&quot; --tray" KeyPath="yes" />
+      </Component>
+
+      <!-- Install facts only (no settings in the registry). -->
+      <Component Id="PulsarSeatRegistryComponent" Guid="{7F734EDC-415D-460D-A9EC-D294BDADF8D7}" Win64="yes">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Pulsar Seat" ForceDeleteOnUninstall="yes">
+          <RegistryValue Name="InstallPath" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
+          <RegistryValue Name="Version" Type="string" Value="[ProductVersion]" />
+        </RegistryKey>
+      </Component>
+
+      <!-- Signed driver packages, one folder each (empty today: nothing is signed yet,
+           drivers/README.md). The install step stages only Microsoft-signed packages. -->
+      <Directory Id="PulsarSeatDriversDir" Name="drivers">
+        <Component Id="PulsarSeatDriversDirComponent" Guid="{647E7F87-2BA3-4547-8CCA-04B926F0298E}" Win64="yes"
+                   KeyPath="yes">
+          <CreateFolder />
+        </Component>
+      </Directory>
+
+      <!-- App API helper DLL (crates/seat-compat/apihelper), one per app architecture.
+           The component ids exist in both packages; the ARM64 / ARM64EC ones are empty
+           folders in the x64 package. -->
+      <Directory Id="PulsarSeatApiHelperDir" Name="apihelper">
+        <Directory Id="PulsarSeatApiHelperX86Dir" Name="x86">
+          <Component Id="PulsarSeatApiHelperX86Component" Guid="{3B7C1C1E-6E0B-4C33-9F0E-0E4C4F0C5A11}" Win64="yes">
+            <File Id="PulsarSeatApiX86Dll" Name="pulsar-seat-api.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\apihelper\x86\pulsar-seat-api.dll" />
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSeatApiHelperX64Dir" Name="x64">
+          <Component Id="PulsarSeatApiHelperX64Component" Guid="{9F5E2D40-1B0C-4F3A-8C6D-2A7E9B1C3D22}" Win64="yes">
+            <File Id="PulsarSeatApiX64Dll" Name="pulsar-seat-api.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\apihelper\x64\pulsar-seat-api.dll" />
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSeatApiHelperArm64Dir" Name="arm64">
+          <Component Id="PulsarSeatApiHelperArm64Component" Guid="{C2A4E6F8-3D5B-4A7C-9E1F-4B6D8A0C2E33}" Win64="yes">
+<?if $(sys.BUILDARCH) = "arm64" ?>
+            <File Id="PulsarSeatApiArm64Dll" Name="pulsar-seat-api.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\apihelper\arm64\pulsar-seat-api.dll" />
+<?else ?>
+            <CreateFolder />
+<?endif ?>
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSeatApiHelperArm64ecDir" Name="arm64ec">
+          <Component Id="PulsarSeatApiHelperArm64ecComponent" Guid="{5D7F9B1D-4E6A-4C8B-A0D2-6C8E0B2D4F44}" Win64="yes">
+<!-- bundle-config.ts -no-arm64ec rewrites the next line to "no": local test builds on a
+     toolchain without the arm64ec target (release builds always ship it, ci.yml). -->
+<?define PsArm64ec = "yes" ?>
+<?if $(sys.BUILDARCH) = "arm64" AND $(var.PsArm64ec) = "yes" ?>
+            <File Id="PulsarSeatApiArm64ecDll" Name="pulsar-seat-api.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\apihelper\arm64ec\pulsar-seat-api.dll" />
+<?else ?>
+            <CreateFolder />
+<?endif ?>
+          </Component>
+        </Directory>
+      </Directory>
+    </DirectoryRef>
+
+    <!-- ================================================================ custom actions -->
+    <!-- Exit codes (seat-compat::setup): 0 ok, 3010 reboot, 2 partial, 4 refused, 1 failed.
+         With the msi switch the binary maps 2 and 3010 to 0 (Windows Installer treats
+         any non-zero EXE exit code as fatal) and records the reboot / partial state in
+         %ProgramData%\Pulsar Seat\logs\setup.log; the manager then shows the reboot
+         prompt (ServiceStatus.reboot_pending). 4 (refused) and 1 stay fatal. -->
+    <!-- `[PulsarSeatDriversDir].`: a directory property always ends in "\", and `\"` would
+         be an escaped quote under the MSVC argv rules (the argument would end in a literal
+         quote and the folder would never be found). The trailing "." names the same folder.
+         The service also drops one stray trailing quote (win/setup.rs normalize_install_args). -->
+    <CustomAction Id="PsSetupInstall" FileKey="PulsarSeatServiceExe"
+                  ExeCommand="install --msi &quot;--restore-point=[PSRESTOREPOINT]&quot; &quot;--tweak=[PSTWEAKS]&quot; &quot;--drivers=[PulsarSeatDriversDir].&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <!-- Rollback of PsSetupInstall: if a later action fails (StartServices on the Vital
+         service, any later deferred action), Windows Installer rolls the files back;
+         this reverts the journal first so no system tweak or driver package outlives
+         the product. User data is kept. Runs while the files still exist (rollback
+         goes in reverse order and InstallFiles comes earlier). -->
+    <CustomAction Id="PsSetupRollback" FileKey="PulsarSeatServiceExe"
+                  ExeCommand="uninstall --msi --remove-user-data=0"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
+    <!-- Uninstall must not block removal: Return="ignore". -->
+    <CustomAction Id="PsSetupUninstall" FileKey="PulsarSeatServiceExe"
+                  ExeCommand="uninstall --msi --remove-user-data=[REMOVEUSERDATA]"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Rollback first (it must be scheduled before the action it undoes). Fresh
+           installs only: on a failed upgrade / repair the restored old product still owns
+           the journal and its uninstall undoes everything later. -->
+      <Custom Action="PsSetupRollback" Before="PsSetupInstall">
+        <![CDATA[NOT (REMOVE ~= "ALL") AND NOT Installed AND NOT WIX_UPGRADE_DETECTED]]>
+      </Custom>
+      <!-- Every install, upgrade and repair (idempotent): before the service starts. -->
+      <Custom Action="PsSetupInstall" After="InstallServices">
+        <![CDATA[NOT (REMOVE ~= "ALL")]]>
+      </Custom>
+      <!-- Real uninstall only (not the old product's removal during a major upgrade):
+           after the service is stopped, before its files are removed. -->
+      <Custom Action="PsSetupUninstall" After="StopServices">
+        <![CDATA[(REMOVE ~= "ALL") AND NOT UPGRADINGPRODUCTCODE]]>
+      </Custom>
+      <!-- Spec 90 §11 item 1: "reboot needed" must reach the caller as 3010. The deferred EXE
+           action cannot set a property, so a build that stages signed driver packages
+           (PSHASDRIVERS, defined by the generated PulsarSeatDrivers.wxs) always schedules
+           the reboot on install / upgrade / repair. msiexec then returns 3010 with
+           /norestart (the update path passes it); without /norestart a /qn run restarts
+           the PC at the end (installer/README.md). -->
+      <ScheduleReboot After="InstallFinalize">
+        <![CDATA[PSHASDRIVERS AND NOT (REMOVE ~= "ALL")]]>
+      </ScheduleReboot>
+    </InstallExecuteSequence>
+
+    <!-- ================================================================ UI -->
+    <UI>
+      <!-- Spec 90 §11 item 4: do not stop active seats without asking. Full UI only;
+           /qn and /qb stop them silently (documented in installer/README.md). -->
+      <Dialog Id="PsStopSeatsDlg" Width="320" Height="130" Title="[ProductName]">
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="290" Height="70"
+                 Text="Pulsar Seat hizmeti güncellenecek, onarılacak ya da kaldırılacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.&#13;&#10;&#13;&#10;Devam edilsin mi?" />
+        <Control Id="Yes" Type="PushButton" X="160" Y="100" Width="70" Height="18" Default="yes" Text="Devam">
+          <Publish Event="EndDialog" Value="Return">1</Publish>
+        </Control>
+        <Control Id="No" Type="PushButton" X="236" Y="100" Width="70" Height="18" Cancel="yes" Text="Vazgeç">
+          <Publish Event="EndDialog" Value="Exit">1</Publish>
+        </Control>
+      </Dialog>
+      <!-- Non-blocking warning (spec 90 §11 item 4: warn about other multi-seat). -->
+      <Dialog Id="PsTermSrvDlg" Width="320" Height="140" Title="[ProductName]">
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="290" Height="80"
+                 Text="Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz." />
+        <Control Id="Ok" Type="PushButton" X="160" Y="110" Width="70" Height="18" Default="yes" Text="Devam">
+          <Publish Event="EndDialog" Value="Return">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="236" Y="110" Width="70" Height="18" Cancel="yes" Text="Vazgeç">
+          <Publish Event="EndDialog" Value="Exit">1</Publish>
+        </Control>
+      </Dialog>
+      <!-- Spec 90 §1.4 / §11 item 7: restore point and system tweaks are explicit, optional
+           choices (default off). Wizard (WixUI_InstallDir, Tauri's template):
+           InstallDirDlg -> PsOptionsDlg -> VerifyReadyDlg. The later Publish (higher Order)
+           of a NewDialog event wins over the built-in one. -->
+      <Dialog Id="PsOptionsDlg" Width="370" Height="270" Title="[ProductName] Kurulumu">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}İsteğe bağlı sistem ayarları" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Hiçbiri zorunlu değil. Yapılan her değişiklik kaydedilir ve kaldırırken geri alınır." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="RestorePoint" Type="CheckBox" X="20" Y="60" Width="330" Height="18" Property="PSRESTOREPOINT"
+                 CheckBoxValue="1" Text="Sistem ayarları değişmeden önce bir Sistem Geri Yükleme noktası oluştur" />
+        <Control Id="FastStartup" Type="CheckBox" X="20" Y="90" Width="330" Height="18" Property="PSUI_FASTSTARTUP"
+                 CheckBoxValue="1" Text="Hızlı başlatmayı kapat (koltuk aygıtları her açılışta doğru tanınır)">
+          <Condition Action="hide"><![CDATA[PSHIBERBOOT = "#0"]]></Condition>
+        </Control>
+        <Control Id="Sleep" Type="CheckBox" X="20" Y="115" Width="330" Height="18" Property="PSUI_SLEEP"
+                 CheckBoxValue="1" Text="Etkin güç planında uyku modunu kapat (koltuklar kullanılırken bilgisayar uyumaz)" />
+        <Control Id="Dumps" Type="CheckBox" X="20" Y="140" Width="330" Height="18" Property="PSUI_DUMPS"
+                 CheckBoxValue="1" Text="Çökme dökümünü küçük döküm olarak ayarla (disk alanından tasarruf)" />
+        <Control Id="Note" Type="Text" X="20" Y="175" Width="330" Height="40" NoPrefix="yes"
+                 Text="İşaretlenmeyen ayarlara dokunulmaz." />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Geri">
+          <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;İleri">
+          <!-- Rebuild PSTWEAKS from the boxes ("{}" clears it; the service ignores the
+               trailing comma). Fast startup only while it is on. -->
+          <Publish Property="PSTWEAKS" Value="{}" Order="1">1</Publish>
+          <Publish Property="PSTWEAKS" Value="[PSTWEAKS]fast_startup_off," Order="2"><![CDATA[PSUI_FASTSTARTUP AND PSHIBERBOOT <> "#0"]]></Publish>
+          <Publish Property="PSTWEAKS" Value="[PSTWEAKS]sleep_off," Order="3">PSUI_SLEEP</Publish>
+          <Publish Property="PSTWEAKS" Value="[PSTWEAKS]small_crash_dumps," Order="4">PSUI_DUMPS</Publish>
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="5">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="İptal">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="PsOptionsDlg" Order="5"><![CDATA[WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID="1"]]></Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="PsOptionsDlg" Order="5">NOT Installed</Publish>
+
+      <!-- Spec 90 §11 item 11: removal offers to keep or delete %ProgramData%\Pulsar Seat.
+           Full UI only (MaintenanceTypeDlg -> Remove -> PsRemoveDataDlg -> VerifyReadyDlg).
+           Removal from Settings runs with reduced UI and keeps the data unless
+           REMOVEUSERDATA=1 is given; the update download cache is deleted always. -->
+      <Dialog Id="PsRemoveDataDlg" Width="370" Height="270" Title="[ProductName] Kurulumu">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="{\WixUI_Font_Title}Ayarlar ve günlükler" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="Pulsar Seat kaldırılırken kayıtlı verileriniz ne olsun?" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Text" Type="Text" X="20" Y="60" Width="330" Height="50" NoPrefix="yes"
+                 Text="Koltuk yapılandırması, aygıt atamaları ve günlükler %ProgramData%\Pulsar Seat klasöründedir. Saklarsanız Pulsar Seat yeniden kurulduğunda kaldığı yerden devam eder. Koltuk parolaları her durumda silinir." />
+        <Control Id="RemoveData" Type="CheckBox" X="20" Y="120" Width="330" Height="18" Property="REMOVEUSERDATA"
+                 CheckBoxValue="1" Text="Ayarları ve günlükleri de sil" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Geri">
+          <Publish Event="NewDialog" Value="MaintenanceTypeDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;İleri">
+          <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="İptal">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="PsRemoveDataDlg" Order="5">1</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="PsRemoveDataDlg" Order="6"><![CDATA[Installed AND NOT PATCH AND WixUI_InstallMode = "Remove"]]></Publish>
+
+      <InstallUISequence>
+        <Show Dialog="PsStopSeatsDlg" After="CostFinalize">
+          <![CDATA[PSSERVICEPRESENT AND (Installed OR WIX_UPGRADE_DETECTED) AND UILevel >= 5]]>
+        </Show>
+        <Show Dialog="PsTermSrvDlg" After="PsStopSeatsDlg">
+          <![CDATA[NOT Installed AND UILevel >= 5 AND PSTERMSRVDLL AND (PSTERMSRVDLL ~<> "#%SystemRoot%\System32\termsrv.dll") AND (PSTERMSRVDLL ~<> "#%windir%\System32\termsrv.dll")]]>
+        </Show>
+      </InstallUISequence>
+    </UI>
+  </Fragment>
+</Wix>

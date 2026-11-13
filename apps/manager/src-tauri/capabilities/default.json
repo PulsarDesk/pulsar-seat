@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window and the wizard's per-monitor pages: core APIs only; app commands talk to the service.",
+  "windows": ["main", "wizard-page-*"],
+  "permissions": ["core:default"]
+}

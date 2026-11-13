@@ -1,0 +1,146 @@
+# Plan and decisions
+
+Index: [../../AGENTS.md](../../AGENTS.md).
+
+## Phases
+
+| # | Scope | Output |
+| --- | --- | --- |
+| 0 | Behaviour spec of the reference local multi-seat product | `spec/` |
+| 1 | Manager app + seat service: seat model, device inventory, assign devices to seats, config, start/stop, status | Tauri app + Rust service |
+| 2 | Concurrent local interactive sessions, one per seat, with auto-logon per seat | |
+| 3 | Display: monitors / GPU outputs per seat, each session shown only on its monitors | |
+| 4 | Input isolation: keyboards, mice, gamepads, touch routed to their seat only | |
+| 5 | Audio and USB: per-seat audio endpoints, USB storage / printers / other devices per seat | |
+
+Each phase works on its own before the next starts.
+
+## Decisions (2026-11-12, maintainer)
+
+- Name **Pulsar Seat**; lives under the Pulsar umbrella next to Pulsar Split.
+- **Monorepo**: one repo `pulsar-seat` holds everything. Root Cargo workspace + root bun
+  workspace. Planned layout: `crates/` (Rust libs + service), `apps/` (manager),
+  `drivers/` (filter drivers etc.), `installer/`, `spec/`, `docs/`. One CI, one version,
+  one release.
+- Manager: **Tauri 2 + SvelteKit + Svelte 5** (latest), `adapter-static`; service and
+  drivers in **Rust** where possible. No local web server; manager and service talk over a
+  named pipe with an ACL.
+- Clean room with **two separate agents** (see [../../CLEANROOM.md](../../CLEANROOM.md)).
+- UI layout may match the reference for now; the maintainer redesigns it later.
+- Fully free: no licence keys, activation or paid tiers.
+- Native **ARM64** support from day one (the reference product has none).
+
+## Decisions for phases 1–5 (2026-11-12, maintainer: "do all phases in one run, no live test")
+
+Same calls as Pulsar Split's Phase 2 decisions, applied here until the maintainer says
+otherwise:
+
+- **Sessions:** a swappable session backend.
+  - Default: Windows Server + RDSH, using RDP loopback sessions (spec 30 option A). This is
+    licence-clean.
+  - Experimental client-SKU module (termsrv wrapper): off by default, with a clear warning
+    in the manager. It is built only from public open-source knowledge under compatible
+    licences, never from the reference product.
+  - Fallbacks: fast user switching (option C) and desktops in one session (option D,
+    kiosk / guest seat).
+  - Never modify LSM, never patch the kernel.
+- **Drivers:** no money for signing now.
+  - Default backends are user-mode or existing **signed, open-source, redistributable**
+    drivers. Verify signing and licence before use; keep their notices.
+  - Our own drivers (input device filter, IddCx display, storage minifilter) are written
+    under `drivers/` behind the same backend traits, but **not loaded or tested until
+    signed**. No test-signing on the test PC.
+  - Drivers build on the dev laptop with VS 2026 Build Tools + WDK 10.0.28000 (2026-11-13,
+    `installer/scripts/build-drivers.ps1`); the builds stay unsigned and are never loaded.
+- **Code from Pulsar Split** (our own GPL-3 code) may be copied and adapted. It must not be
+  added as a path or git dependency.
+- Nothing from the reference product is used or shipped.
+
+## Decisions (2026-11-13, fix-rdp-client)
+
+- Logon-screen seats (no password) on an NLA-only RDP-Tcp listener: design (a), a second
+  loopback-only WinStation listener with NLA off for passwordless seats (details and the
+  rejected option in architecture.md §4.1). Not built yet; until then such seats fail with
+  `nla_required`.
+- The IronRDP seat host reconnects by itself only for passwordless seats; with a stored
+  password it exits as `disconnected: transient` and the service decides (no password is
+  replayed by the host after a failure).
+
+## Decisions (2026-11-13, maintainer)
+
+- **Client SKUs:** U1 (real sessions taking turns, credential provider) plus U3 (concurrent
+  kiosk / app seats), per spec 35. Server x64 keeps concurrent `rds_loopback` seats.
+- **termsrv wrapper:** keep it behind `experimental-client-sku`, off by default, with the
+  warning. It is x64 only.
+- **Credential provider:** build it. **Second loopback listener with NLA off** for
+  passwordless seats: build it. Release blockers: clear them.
+- **Driver signing:** test-signing in a Hyper-V VM now; Microsoft attestation before the
+  release. Enabling Hyper-V on the dev laptop is a system change and needs a reboot, so
+  agree the timing with the maintainer first.
+- **USB storage:** "same as the reference". The reference uses a file-system minifilter
+  (spec 70), so the minifilter stays as an approved exception. It falls back to
+  device-security gating when not loaded. The maintainer sends the altitude request
+  (`docs/release/minifilter-altitude-request.md`).
+- **Wizard keys:** "same as the reference". The listener reports only the keys the wizard
+  uses: F1–F12, digit keys, Enter, Backspace, Esc, and Shift/Alt with F4. It does not
+  report every key code. Done 2026-11-13 (final-fix): `console_report::is_wizard_key`; `wizard_all_keys`
+  is obsolete (always false, ignored).
+- Hyper-V was enabled on the dev laptop on 2026-11-13 (maintainer OK). Windows reported no
+  restart needed.
+- **Release signing key:** generate it now. The private key goes to
+  `%USERPROFILE%\.pulsar-seat\release-key`, never into the repo; the public key goes into
+  `installer/release-signers.txt`. The maintainer keeps a backup. Run it with the round-3
+  keygen script once that exists. Done 2026-11-13 (key id 0E7EC5FC77170613); backups open.
+- **Merge with Pulsar Split into ONE product:** each seat is either "local" (physical
+  devices, this repo) or "remote" (virtual display streamed with Moonlight / Pulsar,
+  Pulsar Split). Both kinds run side by side on
+  one PC. Order:
+  1. Finish round 3.
+  2. Write a joint monorepo merge plan together with the Split session.
+  3. Merge the code.
+  The maintainer picks the product name.
+- **Publishing:** stays local. No remote and no push. Public repo plus GitHub Releases come
+  only after the hardware tests pass.
+- **First live test:** on the ARM64 dev laptop, with U1 (test accounts) and U3. No drivers
+  loaded. The maintainer starts it.
+
+## Decisions (2026-11-14, maintainer)
+
+- **Merge plan approved** ([merge-plan.md](merge-plan.md) JOINT v1, all §5 recommendations).
+  The merged product keeps the name **Pulsar Seat**; repo pulsar-seat is the base, and
+  Split is folded in with history.
+- **Gamepads per seat:** step 8 of the merge, via the shared pads crate (option B).
+- **First commit** on main now (local only, no push); then start the code merge.
+
+## Open questions
+
+- **Session backend (blocks Phase 2, from spec 30 §6.1).** The reference product creates its
+  extra local sessions by working inside Windows' session manager (LSM) and the console. The
+  analyst excluded that path. The options left are:
+  - A: RDP loopback sessions on Windows Server + RDS. Documented, but x64 / Server only and
+    needs CALs.
+  - C: fast user switching, one seat at a time.
+  - D: separate desktops inside one session. Works on client SKUs and ARM64, but has no
+    per-user isolation.
+  Maintainer to choose, or to allow a user-mode session-manager approach (no kernel patching)
+  as an explicit exception.
+- Minifilter for USB storage gating (spec 70, 90): allowed as an exception to the driver
+  list?
+- Driver signing route: attestation signing (Partner Center + EV cert) vs. a test-signing VM.
+- Live run of the reference on the test PC (needs enabling its service and probably the
+  2.70.6 upgrade, a reboot and a restore point) to confirm the enabled-state HYPOTHESIS items.
+- Gamepads per seat (open gap): Pulsar Split handles this with usbip-win2 for DualSense,
+  ViGEm only if already installed, and a per-session HID shim (`crates/split-pads` and the
+  shim crates in pulsar-split). Copy and adapt that, or decide a shared crate (2026-11-13,
+  agreed with the Split session: no cross-repo dependency for now).
+- Share code with Pulsar Split (session creation, service skeleton, manager shell)? Both
+  need several sessions on one PC. Decide once both specs exist; until then no cross-repo
+  dependency.
+
+## Known risks (to resolve before a public release)
+
+- **Driver signing:** any kernel driver needs signing to load with Secure Boot on. Free
+  option: test-signing (bad UX). Proper: attestation signing (paid EV cert). Prefer
+  designs that need few or no kernel drivers.
+- **Multiple interactive sessions on client Windows SKUs** are restricted by Microsoft's
+  licence terms. Decide the approach in Phase 2 (same question as Pulsar Split).

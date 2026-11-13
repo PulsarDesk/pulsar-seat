@@ -1,0 +1,455 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Pulsar Seat CI: Rust (native ARM64 + x64 runners), bun (manager + installer scripts),
+# drivers (WDK 10.0.28000 / msbuild, ARM64 + x64, never signed or loaded), and on tags /
+# manual runs the MSI installers (Tauri bundler + the WiX 3.14 it downloads itself).
+#
+# Release flow (tags v*): the installers job uploads unsigned MSIs + SHA256SUMS.txt as
+# artifacts. The maintainer signs them outside CI (Authenticode), recomputes the checksums
+# (installer/scripts/write-sums.ps1), signs SHA256SUMS.txt with the offline release key
+# (installer/scripts/sign-release.ps1) and publishes the GitHub release by hand
+# (docs/release/checklist.md). The update check (crates/seat-service/src/update.rs)
+# refuses unsigned installers and checksum files without a release-key signature, so
+# nothing unsigned is ever offered to users. No secret is used in CI.
+#
+# Every multi-command pwsh step sets $PSNativeCommandUseErrorActionPreference: GitHub's
+# pwsh wrapper only fails a step on the LAST native exit code. Structure and that rule are
+# checked by installer/scripts/lint-ci.ts (bun job; locally installer/scripts/ci-local.ps1).
+#
+# Not run yet: this repository has no remote; written against GitHub's documented runner
+# images (windows-11-arm, windows-2025). Runner facts marked HYPOTHESIS below.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      installers:
+        description: "Build the MSI installers"
+        type: boolean
+        default: false
+      sdv:
+        description: "Static Driver Verifier (downloads the 17 GB 22H2 EWDK)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  BUN_VERSION: "1.4.4"
+  # Pinned tools for the release gates.
+  CARGO_ABOUT_VERSION: "0.6.6"
+  # Windows SDK / WDK the driver projects target (drivers/README.md).
+  WDK_VERSION: "10.0.28000.0"
+  # SHA-256 of Microsoft's recommended driver block rules zip
+  # (https://aka.ms/VulnerableDriverBlockList). The maintainer pins it when the first
+  # signed driver package ships; with drivers staged and no pin the installers job fails.
+  DRIVER_BLOCKLIST_SHA256: ""
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  rust:
+    name: rust (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build (every crate but the Tauri app)
+        run: cargo build --locked --target ${{ matrix.target }}
+      - name: Test (native on this runner)
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Clippy
+        run: cargo clippy --locked --target ${{ matrix.target }} --all-targets --features seat-core/mock -- -D warnings
+      # The manager (Tauri) is not a default member: its build script needs the built
+      # frontend (frontendDist ../build), so build that first, then test + clippy it here.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Manager frontend (for the Tauri crate)
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location apps/manager
+          bun run build
+          $code = $LASTEXITCODE
+          Pop-Location
+          exit $code
+      - name: Manager (Rust) test + clippy
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --target ${{ matrix.target }} -p pulsar-seat-manager
+          cargo clippy --locked --target ${{ matrix.target }} -p pulsar-seat-manager --all-targets -- -D warnings
+      # Own workspace (crates/seat-compat/apihelper): not covered by the root commands.
+      - name: App API helper test + clippy (native)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target ${{ matrix.target }} --target-dir target/apihelper
+          cargo clippy --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target ${{ matrix.target }} --target-dir target/apihelper --all-targets -- -D warnings
+      # Tag builds are releases: PULSAR_SEAT_RELEASE makes the service refuse to compile
+      # while installer/release-signers.txt lists no release key
+      # (crates/seat-service/src/update.rs).
+      - name: Release binaries (static CRT)
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+          PULSAR_SEAT_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '' }}
+        # Two invocations: one joint build would unify features and compile the service
+        # against seat-rdp/client (IronRDP), which only the seat host enables.
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release --target ${{ matrix.target }} -p seat-service
+          cargo build --locked --release --target ${{ matrix.target }} -p seat-host
+      # App-facing helper DLL for every app architecture the PC can run: x64 PCs get
+      # x86 + x64, ARM64 PCs also ARM64 + ARM64EC (crates/seat-compat/apihelper).
+      - name: App API helper DLLs
+        shell: pwsh
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          $sets = [ordered]@{ x86 = "i686-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" }
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $sets.arm64 = "aarch64-pc-windows-msvc"
+            $sets.arm64ec = "arm64ec-pc-windows-msvc"
+          }
+          foreach ($k in $sets.Keys) {
+            $t = $sets[$k]
+            rustup target add $t
+            cargo build --locked --release --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $t --target-dir target/apihelper
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $dst = "target/payload/${{ matrix.arch }}/apihelper/$k"
+            New-Item -ItemType Directory -Force $dst | Out-Null
+            Copy-Item "target/apihelper/$t/release/pulsar_seat_api.dll" "$dst/pulsar-seat-api.dll"
+          }
+      - name: Collect payload and check PE machine
+        shell: pwsh
+        run: |
+          $out = "target/payload/${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe") {
+            Copy-Item "target/${{ matrix.target }}/release/$n" $out
+          }
+          bun installer/scripts/check-payload.ts --arch ${{ matrix.arch }} $out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: payload-${{ matrix.arch }}
+          path: target/payload/${{ matrix.arch }}
+
+  bun:
+    name: bun (manager + installer scripts)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: Manager check / test / build
+        working-directory: apps/manager
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          bun run check
+          bun run test
+          bun run build
+      - name: Installer scripts
+        run: bun test installer/scripts
+      - name: Workflow lint (this file)
+        run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml
+
+  drivers:
+    name: drivers (${{ matrix.platform }})
+    # WDK 10.0.28000 with Visual Studio 2026 Build Tools (18): the WDK 26100 MSBuild tasks
+    # do not load in VS 18, and the projects pin WindowsTargetPlatformVersion 10.0.28000.0.
+    # The runner image's own VS / WDK are not used. Drivers are built and checked, never
+    # signed, test-signed, installed or loaded here (drivers/README.md).
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install VS 2026 Build Tools + Windows SDK / WDK 10.0.28000
+        shell: pwsh
+        run: |
+          $vs = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools " +
+                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 " +
+                "--add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre"
+          # Order matters: the WDK installs its MSBuild content (Dev18) into the Build Tools
+          # that already exist.
+          winget install --id Microsoft.VisualStudio.BuildTools --exact --version 18.11.3 --accept-package-agreements --accept-source-agreements --disable-interactivity --override $vs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($id in "Microsoft.WindowsSDK.10.0.28000", "Microsoft.WindowsWDK.10.0.28000") {
+            winget install --id $id --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10"
+          if (-not (Test-Path (Join-Path $kits "build\10.0.28000.0\bin\Microsoft.DriverKit.Build.Tasks.18.0.dll"))) {
+            Write-Error "WDK 10.0.28000 MSBuild tasks for VS 18 not found"; exit 1
+          }
+      # Rebuild, zero warnings (msbuild /WX in the projects + the script's log check),
+      # infverif /w (and /u for the UMDF package), PE machine of every .sys / .dll.
+      - name: Build, infverif, PE machine
+        shell: pwsh
+        run: ./installer/scripts/build-drivers.ps1 -Platforms ${{ matrix.platform }} -Configurations Release,Debug
+      - name: WDK code analysis (Release)
+        shell: pwsh
+        run: ./installer/scripts/build-drivers.ps1 -Platforms ${{ matrix.platform }} -Configurations Release -Analyze -SkipInfVerif -OutRoot target/drivers-analyze
+      # Unsigned packages may lack a signed .cat, so this job checks the PE machine only; the
+      # INF + CAT package shape is the release gate's rule (installers job,
+      # `--allow-drivers` without `--machine-only`).
+      - name: Check PE machine of driver binaries (payload checker)
+        shell: pwsh
+        run: |
+          $arch = if ("${{ matrix.platform }}" -eq "ARM64") { "arm64" } else { "x64" }
+          bun installer/scripts/check-payload.ts --arch $arch --machine-only "target/drivers/${{ matrix.platform }}/Release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drivers-unsigned-${{ matrix.platform }}
+          path: |
+            target/drivers/${{ matrix.platform }}/Release/*/*/*.inf
+            target/drivers/${{ matrix.platform }}/Release/*/*/*.sys
+            target/drivers/${{ matrix.platform }}/Release/*/*/*.dll
+            target/drivers/${{ matrix.platform }}/Release/*/*/*.cat
+            target/drivers/${{ matrix.platform }}/Release/logs/**
+          if-no-files-found: error
+
+  # Credential provider DLL (credprov/, C++, msbuild v145 + SDK 10.0.28000): built and
+  # self-tested on its native runner (the self-test runs where the DLL's architecture runs),
+  # PE machine checked, never registered. The installers job puts it into the payload.
+  # HYPOTHESIS: winget and the VS 18 Build Tools installer work on windows-11-arm as on
+  # windows-2025 (not run yet).
+  credprov:
+    name: credprov (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            platform: ARM64
+            runner: windows-11-arm
+          - arch: x64
+            platform: x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install VS 2026 Build Tools + Windows SDK 10.0.28000
+        shell: pwsh
+        run: |
+          $vs = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools " +
+                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+          winget install --id Microsoft.VisualStudio.BuildTools --exact --version 18.11.3 --accept-package-agreements --accept-source-agreements --disable-interactivity --override $vs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          winget install --id Microsoft.WindowsSDK.10.0.28000 --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Release + Debug, zero warnings, self-test (exit code 0 = every check passed), PE
+      # machine of the DLL; -OutDir copies the Release DLL for the payload.
+      - name: Build + self-test
+        shell: pwsh
+        run: ./installer/scripts/build-credprov.ps1 -Platforms ${{ matrix.platform }} -Configurations Release,Debug -OutDir target/credprov/${{ matrix.arch }}
+      - name: Check PE machine (payload checker)
+        shell: pwsh
+        run: bun installer/scripts/check-payload.ts --arch ${{ matrix.arch }} --machine-only target/credprov/${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: credprov-unsigned-${{ matrix.arch }}
+          path: target/credprov/${{ matrix.arch }}/pulsar-seat-credprov.dll
+          if-no-files-found: error
+
+  # Static Driver Verifier: no longer in the WDK (none after build 26017, not in 28000).
+  # Microsoft's remaining route is the Windows 11 22H2 EWDK (10.0.22621, VS Build Tools
+  # 17.x), x64 tools only, so this runs on an x64 runner, for the x64 build of the two
+  # kernel drivers (KMDF input filter, WDM minifilter). docs/release/sdv.md.
+  # HYPOTHESIS: the windows-2025 image has room for the 17 GB ISO on D: (runner temp);
+  # the job checks before downloading. Manual / tag runs only (download size).
+  sdv:
+    name: sdv (x64, EWDK 22621)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sdv)
+    runs-on: windows-2025
+    timeout-minutes: 240
+    env:
+      EWDK_URL: https://go.microsoft.com/fwlink/?linkid=2249942
+      EWDK_ISO: EWDK_ni_release_svc_prod1_22621_230929-1800.iso
+      # SHA-256 of the ISO as downloaded from Microsoft on 2026-11-13 (docs/release/sdv.md).
+      EWDK_SHA256: "07311C772DDF22B2D6074DBAB9C9B38EAAAE3BD59C4833CE6255931AFC5F0629"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download EWDK 22621 (17 GB)
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = Join-Path $env:RUNNER_TEMP "ewdk"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $free = (Get-PSDrive ($dir.Substring(0, 1))).Free
+          if ($free -lt 20GB) { Write-Error "only $([int]($free / 1GB)) GB free for the 17 GB EWDK"; exit 1 }
+          $iso = Join-Path $dir $env:EWDK_ISO
+          curl.exe -fsSL --retry 5 -C - -o $iso $env:EWDK_URL
+          if ($env:EWDK_SHA256) {
+            $h = (Get-FileHash $iso -Algorithm SHA256).Hash
+            if ($h -ne $env:EWDK_SHA256.ToUpper()) { Write-Error "EWDK hash $h does not match the pin"; exit 1 }
+          } else { Write-Host "::warning::EWDK_SHA256 is not pinned" }
+          "EWDK_PATH=$iso" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Mount EWDK (read-only)
+        run: |
+          $img = Mount-DiskImage -ImagePath $env:EWDK_PATH -Access ReadOnly -PassThru
+          $letter = ($img | Get-Volume).DriveLetter
+          "EWDK_ROOT=${letter}:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: SDV (seat-input-filter KMDF, seat-storage-filter WDM)
+        run: ./installer/scripts/run-sdv.ps1 -EwdkRoot $env:EWDK_ROOT -Platform x64 -WorkDir target/sdv
+      - name: Unmount EWDK
+        if: always()
+        run: |
+          if ($env:EWDK_PATH) { Dismount-DiskImage -ImagePath $env:EWDK_PATH | Out-Null }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sdv-results
+          path: |
+            target/sdv/*.log
+            target/sdv/sdv-summary.txt
+            target/sdv/*/sdv/**
+            target/sdv/*/SDV.DVL.xml
+          if-no-files-found: warn
+
+  installers:
+    name: installers (${{ matrix.arch }})
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.installers)
+    needs: [rust, bun, credprov]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      # One version everywhere: the tag, the Cargo workspace (the service reports it to the
+      # update check), tauri.conf.json (MSI name + ProductVersion) and package.json. A
+      # mismatch would publish an MSI the update check cannot find (no_asset) or one that
+      # is offered again after it was installed (update loop).
+      - name: Version consistency
+        shell: pwsh
+        run: |
+          $toml = Get-Content Cargo.toml -Raw
+          if ($toml -notmatch '(?ms)^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"') { Write-Error "no [workspace.package] version"; exit 1 }
+          $v = [ordered]@{
+            cargo = $Matches[1]
+            tauri = (Get-Content apps/manager/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+            package = (Get-Content apps/manager/package.json -Raw | ConvertFrom-Json).version
+          }
+          if ("${{ github.ref_type }}" -eq "tag") { $v.tag = "${{ github.ref_name }}" -replace '^v', '' }
+          $v.GetEnumerator() | ForEach-Object { Write-Host "$($_.Key) = $($_.Value)" }
+          if (@($v.Values | Sort-Object -Unique).Count -ne 1) { Write-Error "version mismatch"; exit 1 }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: payload-${{ matrix.arch }}
+          path: target/payload/${{ matrix.arch }}
+      # Unsigned: these MSIs are for testing only. sign-release.ps1 refuses a release
+      # whose MSI carries an unsigned pulsar-seat-credprov.dll (docs/release/checklist.md §3).
+      - uses: actions/download-artifact@v4
+        with:
+          name: credprov-unsigned-${{ matrix.arch }}
+          path: target/payload/${{ matrix.arch }}
+      - run: bun install --frozen-lockfile
+      # Licence texts of every Rust crate in the shipped binaries (MIT / Apache-2.0 /
+      # similar require them) and of the manager's bundled JS packages. The bundle
+      # copies installer/licenses/ into the product; the job fails if they are missing.
+      - name: Third-party notices
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo install cargo-about --version $env:CARGO_ABOUT_VERSION --locked
+          cargo about generate --locked --config installer/licenses/about.toml `
+            installer/licenses/about.hbs -o installer/licenses/THIRD-PARTY-NOTICES-RUST.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun installer/scripts/js-notices.ts apps/manager installer/licenses/THIRD-PARTY-NOTICES-JS.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($f in "THIRD-PARTY-NOTICES-RUST.md", "THIRD-PARTY-NOTICES-JS.md") {
+            $p = "installer/licenses/$f"
+            if (-not (Test-Path $p) -or (Get-Item $p).Length -lt 1024) { Write-Error "$p missing or empty"; exit 1 }
+          }
+      # Signed driver packages are never produced in CI (signing happens at Microsoft's
+      # hardware dashboard). A maintainer who has them puts them in drivers-signed/<arch>/
+      # (not tracked) for a local build-installer.ps1 -SignedDrivers run; CI builds the
+      # MSI without drivers. The block-rules gate below runs whenever a .sys is present.
+      - name: Driver block rules
+        shell: pwsh
+        run: |
+          $sys = Get-ChildItem "target/payload/${{ matrix.arch }}" -Recurse -Filter *.sys -ErrorAction SilentlyContinue
+          if (-not $sys) { Write-Host "::notice::no driver in the payload"; exit 0 }
+          if (-not $env:DRIVER_BLOCKLIST_SHA256) { Write-Error "drivers present but DRIVER_BLOCKLIST_SHA256 is not pinned"; exit 1 }
+          Invoke-WebRequest https://aka.ms/VulnerableDriverBlockList -OutFile target/blocklist.zip
+          $h = (Get-FileHash target/blocklist.zip -Algorithm SHA256).Hash
+          if ($h -ne $env:DRIVER_BLOCKLIST_SHA256.ToUpper()) { Write-Error "blocklist hash $h does not match the pin"; exit 1 }
+          Expand-Archive target/blocklist.zip target/blocklist -Force
+          $xml = Get-ChildItem target/blocklist -Recurse -Filter *.xml | Where-Object { $_.Name -match "Enforced|Driver" } | Select-Object -First 1
+          if (-not $xml) { Write-Error "no SiPolicy XML in the blocklist zip"; exit 1 }
+          bun installer/scripts/check-payload.ts --arch ${{ matrix.arch }} --allow-drivers --blocklist $xml.FullName "target/payload/${{ matrix.arch }}"
+      # MSI only: msiexec runs natively on both architectures. Tauri's NSIS stub is a
+      # 32-bit x86 program (emulated on ARM64), which the "native everywhere" rule
+      # (docs/agents/rules.md) does not allow. The script also extracts the MSI and runs
+      # the payload gate on every file inside it, and writes dist/SHA256SUMS.txt.
+      # Release gates (tags): a release key in installer/release-signers.txt (the rust
+      # job's release build already refuses to compile without one; this says why), and
+      # -Release checks that the source-offer tag exists on the public repository.
+      - name: Release key list
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cargo run --locked -p seat-release --bin pulsar-seat-release -- check-signers installer/release-signers.txt --require
+      - name: Build MSI (Tauri bundler, WiX 3.14)
+        shell: pwsh
+        run: |
+          $release = @(); if ("${{ github.ref_type }}" -eq "tag") { $release = @("-Release") }
+          ./installer/scripts/build-installer.ps1 -Arch ${{ matrix.arch }} -SkipCargo @release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-unsigned-${{ matrix.arch }}
+          path: target/installer/dist/*
+          if-no-files-found: error

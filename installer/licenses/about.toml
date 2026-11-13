@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# cargo-about configuration (version pinned in .github/workflows/ci.yml). Run from the
+# repository root:
+#   cargo about generate --locked --config installer/licenses/about.toml \
+#     installer/licenses/about.hbs -o installer/licenses/THIRD-PARTY-NOTICES-RUST.md
+# Every accepted licence is GPL-3.0-compatible; a crate under any other licence fails
+# the generation (and with it the installers job).
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "0BSD",
+    "GPL-3.0",
+    "LGPL-2.1",
+    "LGPL-3.0",
+]
+targets = [
+    "aarch64-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "arm64ec-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

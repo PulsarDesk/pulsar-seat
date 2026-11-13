@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Release signing keys accepted by the update check (crates/seat-service/src/update.rs,
+# ACCEPTED_SIGNERS; compiled in with include_str!). PUBLIC KEYS ONLY: one minisign
+# Ed25519 public key (the `RWQ...` base64 line of minisign.pub) per line. Lines starting
+# with `#` and `untrusted comment:` lines are ignored.
+#
+# A release's SHA256SUMS.txt must carry SHA256SUMS.txt.minisig signed by one of these keys,
+# or no client offers that release.
+#
+# The real release key, created 2026-11-13 (key id 0E7EC5FC77170613; secret key outside the repo,
+# never committed). To create a key again
+# (docs/release/checklist.md, "Release signing key"):
+#   powershell -ExecutionPolicy Bypass -File installer\scripts\release-keygen.ps1
+# writes the secret key to %USERPROFILE%\.pulsar-seat\release-key\ (outside the repo,
+# never printed) and prints the public key line to paste below.
+# A build with PULSAR_SEAT_RELEASE set refuses to compile while this list is empty.
+# Rotating keys: ship one release that lists both the old and the new key first.
+untrusted comment: Pulsar Seat release key 0E7EC5FC77170613
+RWQTBhd3/MV+Dp38lxpGJ+yxnt+tTCUgHD7heOasu2G1EpT8kzyPPXRe

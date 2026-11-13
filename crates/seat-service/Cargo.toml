@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-service"
+description = "Pulsar Seat service (LocalSystem, session 0): config, seat state machine, pipe server, secrets, boot sequence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pulsar-seat-service"
+path = "src/main.rs"
+
+[features]
+# The experimental client-SKU session module (termsrv wrapper, plan.md "Decisions for
+# phases 1-5") is compiled in so the manager can offer it behind its warning. It stays off at
+# run time: never chosen by default, and it refuses to run until the admin acknowledged the
+# current warning version (`settings.backends.experimental_ack`). Build without it with
+# `--no-default-features`.
+default = ["experimental-client-sku"]
+experimental-client-sku = ["seat-session/experimental-client-sku"]
+
+[dependencies]
+seat-core.workspace = true
+seat-proto.workspace = true
+seat-session.workspace = true
+seat-display.workspace = true
+seat-input.workspace = true
+seat-media.workspace = true
+seat-compat.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+zeroize.workspace = true
+# Update check: streamed SHA-256 of the downloaded installer (same version as seat-compat).
+sha2 = "0.10.9"
+# Listener certificate thumbprints for the seat host (pin helpers only). Without the
+# `client` feature this pulls no IronRDP, but only when seat-service is built in its own
+# cargo invocation: a joint build with seat-host unifies features (build-installer.ps1 and
+# ci.yml build the service separately for that reason).
+seat-rdp = { path = "../seat-rdp", default-features = false }
+# Release signature of SHA256SUMS.txt (minisign Ed25519). Verification only: the
+# `sign` feature (key generation, signing) stays in the maintainer tool.
+seat-release = { path = "../seat-release", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-service.workspace = true
+winreg.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Display",
+    "Win32_Devices_Properties",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_NetManagement",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Environment",
+    "Win32_System_EventLog",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_Shutdown",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+seat-core = { workspace = true, features = ["mock"] }
+seat-release = { path = "../seat-release" }
+tempfile = "3.27.0"

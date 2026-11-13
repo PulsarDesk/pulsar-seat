@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-media"
+description = "Pulsar Seat audio routing (RDP audio bridge to seat endpoints) and device gates (USB, storage, cameras); PnP tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+seat-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+# Flat Win32 APIs (CfgMgr32, SetupAPI, volumes, Filter Manager client, SCM) via windows-sys
+# (the workspace pin); COM (MMDevice API, WASAPI, property store) via the `windows` crate,
+# pinned to the version already in Cargo.lock (0.62.2) so offline resolution works.
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Registry",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_InstallableFileSystems",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Services",
+] }
+# `#[implement]` expands to paths in `windows_core`, so it is a direct dependency too.
+windows-core = "=0.62.2"
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[dev-dependencies]
+seat-core = { workspace = true, features = ["mock"] }

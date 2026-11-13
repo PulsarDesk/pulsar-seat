@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-core"
+description = "Pulsar Seat core model: config, validation, seat/device model, backend traits, mocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# In-memory mock backends for other crates' tests (`seat-core = { workspace = true, features = ["mock"] }`).
+mock = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true

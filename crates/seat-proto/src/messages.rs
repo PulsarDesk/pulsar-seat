@@ -1,0 +1,938 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Request, response and event bodies. Wire shape: `{"type": "<snake_case>", "data": …}`
+//! (unit variants have no `data`).
+
+use seat_core::assign::MaskSource;
+use seat_core::backend::audio::AudioRoute;
+use seat_core::backend::display::SeatOutputs;
+use seat_core::backend::gate::IsolationStatus;
+use seat_core::backend::input::InputPacket;
+use seat_core::backend::session::RdpConnection;
+use seat_core::backend::{
+    AudioBackendKind, BackendInfo, DisplayBackendKind, DriverId, GateBackendKind, InputBackendKind,
+    SessionBackendKind,
+};
+use seat_core::config::Config;
+use seat_core::device::Device;
+use seat_core::state::{ProductState, SeatRuntime};
+use seat_core::validate::Issue;
+use seat_core::{DeviceKey, SeatMask, SeatNumber, Secret};
+use serde::{Deserialize, Serialize};
+
+/// Who is connecting (declared in `hello`, verified by the service).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientKind {
+    /// apps/manager, any interactive session.
+    Manager,
+    /// `pulsar-seat-host.exe`, started by the service; PID + one-time token checked.
+    SeatHost,
+    /// `pulsar-seat-agent.exe` in a seat session (user token).
+    Agent,
+    /// Third-party "which seat am I on" API.
+    AppApi,
+    /// `pulsar-seat-service.exe <subcommand>` talking to the running service.
+    Cli,
+    /// `pulsar-seat-host.exe --console-listener --token T` in the console / host session,
+    /// started by the service under `raw_input_host`; PID + one-time token checked.
+    /// Reports activity, hotkeys and wizard keys (`console_input_report`). Added
+    /// 2026-11-13 (additive, protocol 1).
+    ConsoleListener,
+    /// The Pulsar credential provider / filter DLL inside LogonUI (`credprov/`). The service
+    /// verifies it in `hello`: SYSTEM token, process image `%SystemRoot%\System32\LogonUI.exe`,
+    /// token session = process session. Added 2026-11-13 (additive, protocol 1).
+    CredentialProvider,
+    /// `pulsar-seat-host.exe --kiosk-shell --seat N` in the console session, started by the
+    /// `desktops` backend (spec 35 §5.1 U3). `hello` carries `seat`; the service verifies the
+    /// PID + session against the shells it started. A verified shell keeps `status` access
+    /// under `admin_only` and may subscribe to the `host` topic, receiving only its own
+    /// seat's `input_packets` (input filter). Added 2026-11-13 (additive, protocol 1).
+    KioskShell,
+}
+
+/// What a request needs from its caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "level", content = "seat", rename_all = "snake_case")]
+pub enum Access {
+    /// Any connected local client.
+    Any,
+    /// Interactive users may read status unless the admin-only policy is on.
+    Status,
+    /// An elevated administrator, or the user signed in on this seat when
+    /// `users_may_control_own_seat` is on (and admin-only is off).
+    OwnSeat(SeatNumber),
+    /// An elevated administrator (token has Administrators enabled) or SYSTEM.
+    Admin,
+    /// The seat host the service started for this seat (PID + token verified).
+    Host(SeatNumber),
+    /// A session agent; acts only on its own session.
+    Agent,
+    /// The console raw-input listener the service started (PID + token verified).
+    /// Added 2026-11-13 (additive).
+    ConsoleListener,
+    /// The verified credential provider in LogonUI; acts only on its own session.
+    /// Added 2026-11-13 (additive).
+    CredentialProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum RequestBody {
+    // ---- connection ----
+    /// Must be first. Answered with [`ResponseBody::Hello`].
+    Hello(Hello),
+    /// Switch this connection to also receive pushed events of these topics.
+    Subscribe { topics: Vec<Topic> },
+    /// For clients that cannot hold a subscription: events with `seq > after`, waiting up
+    /// to `wait_ms` (≤ [`crate::MAX_POLL_WAIT_MS`]) when there are none.
+    PollEvents {
+        after: u64,
+        #[serde(default)]
+        wait_ms: u32,
+        #[serde(default)]
+        topics: Vec<Topic>,
+    },
+
+    // ---- status ----
+    GetStatus,
+    /// Backends, their availability and capabilities, our drivers' state.
+    GetBackends,
+    /// OS build, Secure Boot, Memory Integrity, edition, coexistence checks (spec 80 §11.4).
+    Preflight,
+
+    // ---- configuration ----
+    /// The config document plus which seats have a stored password.
+    GetConfig,
+    ValidateConfig { config: Box<Config> },
+    /// Replace the config. `base_revision` = the revision the edit started from;
+    /// `force` = save despite `Conflict` issues (user confirmed).
+    ApplyConfig {
+        config: Box<Config>,
+        base_revision: u64,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Restore defaults (double-confirmed in the UI); reverts every tweak and gate.
+    ResetConfig { confirm: bool },
+    /// Optional importer of the reference product's `default_configuration.json`
+    /// (spec 10 §3.8 field names). Returns a config to review; nothing is saved.
+    ImportReference { json: String },
+    /// Write-only: set (`Some`) or clear (`None`) a seat's auto-logon password.
+    SetSeatPassword { seat: SeatNumber, password: Option<Secret> },
+    ListLocalUsers,
+    /// CPU sets for the cores-per-seat grid (spec 10 ARM64 notes, spec 80 §11.2).
+    ListCpuSets,
+
+    // ---- devices ----
+    ListDevices,
+    /// Live devices vs. saved assignments (spec 10 §3.8).
+    CompareSaved,
+    /// Indication on/off: monitor overlay, speaker tone, camera preview (spec 10 §3.5.1).
+    IdentifyDevice { key: DeviceKey, on: bool },
+    /// Move an assignment to the device's new key (known device on a new port).
+    MoveAssignment { from: DeviceKey, to: DeviceKey },
+
+    // ---- product and seats ----
+    /// Product switch (service state; reboot only when a driver package changes).
+    SetEnabled { enabled: bool },
+    /// Confirm (`accept`: save as assignments) or decline (back to the saved routes) the
+    /// pending hotkey input moves (notice `input_move_pending`, spec 50 §4.1.9). Answers
+    /// `ack`. Added 2026-11-12 (additive, protocol 1).
+    ResolveInputMove { accept: bool },
+    /// Start these seats (`None` = every autostart seat). Asynchronous: answered when the
+    /// starts are queued; progress arrives as `seat_state` events.
+    StartSeats { seats: Option<Vec<SeatNumber>> },
+    StopSeat { seat: SeatNumber },
+    /// Log the seat's session off and start it again (spec 10 §8.5).
+    RelogonSeat { seat: SeatNumber },
+    /// Ask the service to restart Windows (it asks nothing itself; the manager confirmed).
+    RequestReboot,
+
+    // ---- first-run wizard (spec 10 §9.2) ----
+    WizardStart { variant: WizardVariant },
+    WizardCommand { command: WizardCommand },
+    WizardStop { save: bool },
+
+    // ---- diagnostics ----
+    /// Write a diagnostic report (no secrets; user names masked unless `mask_users` false).
+    DiagnosticReport { mask_users: bool },
+
+    // ---- updates (spec 90 §11 item 10; added 2026-11-13, additive, protocol 1) ----
+    /// Last known update state (no network access). Answers `update_status`.
+    GetUpdateStatus,
+    /// Ask GitHub Releases for the latest release. Only when `settings.updates.check` is
+    /// on (opt-in); refused with `disabled` otherwise. Asynchronous: answers the status
+    /// with `state: checking`; the result arrives through `get_update_status`.
+    CheckForUpdate,
+    /// Download the installer of the release found by the last check into the service's
+    /// private folder and verify it (SHA-256 from the release's checksum file +
+    /// Authenticode signature by an accepted publisher). Asynchronous like the check.
+    DownloadUpdate,
+    /// Run the verified installer (`version` must equal the verified one; `confirm` =
+    /// the administrator confirmed that running seats stop). The file is verified again
+    /// right before it starts. Never automatic.
+    InstallUpdate { version: String, confirm: bool },
+
+    // ---- app API ----
+    /// Seat of the caller's session.
+    MySeat,
+    /// Launcher (spec 80 §11.2; added 2026-11-13, additive, protocol 1): start `path`
+    /// (absolute, local) with `args` in the **caller's own** seat session, as that
+    /// session's signed-in user, inside the seat's job (the seat's CPU limits) and with the
+    /// seat's source-IP variable when its rule picks the program. Only the session's
+    /// signed-in user may ask. Answers [`ResponseBody::AppStarted`]. Programs started from
+    /// Explorer / the Start menu and UAC-elevated programs are not limited.
+    StartSeatApp {
+        path: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    SeatOfSession { session_id: u32 },
+    SeatOfProcess { pid: u32 },
+
+    // ---- seat host only ----
+    /// Connection, outputs, audio route and input interfaces for this host.
+    HostGetAssignment { seat: SeatNumber },
+    /// The seat's credentials, once per host launch (then refused).
+    HostTakeCredentials { seat: SeatNumber },
+    HostReport {
+        seat: SeatNumber,
+        state: HostState,
+        /// RDP client the host runs: `"ironrdp"` or `"activex"` (added 2026-11-13,
+        /// additive). Only the ActiveX client may be bound by the "newest new loopback
+        /// session" fallback; others bind by their reported session id or exact client name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rdp_client: Option<String>,
+    },
+
+    /// The seat host refused a clipboard / drive / smart-card request of the seat session
+    /// (rate-limited per reason by the host). Answered with `Ack`. Added 2026-11-13
+    /// (additive, protocol 1): an older service answers an error the host ignores.
+    HostRedirectRefusal {
+        seat: SeatNumber,
+        channel: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        detail: String,
+        #[serde(default)]
+        suppressed: u32,
+    },
+
+    // ---- session agent only ----
+    AgentReport { report: AgentReport },
+
+    // ---- console listener only (raw_input_host; added 2026-11-13, additive, protocol 1) ----
+    /// What the console raw-input listener saw since its last report (also sent empty as
+    /// a heartbeat, at least every [`crate::CONSOLE_REPORT_HEARTBEAT_MS`]). Answered with
+    /// [`ResponseBody::ConsoleListenerState`].
+    ConsoleInputReport {
+        #[serde(default)]
+        events: Vec<ConsoleInputEvent>,
+    },
+
+    // ---- credential provider only (fast_user_switch, spec 35 §5.4 / §5.5; added
+    // 2026-11-13, additive, protocol 1). Every request acts on the caller's own session. ----
+    /// What the provider and the filter should do in this LogonUI session. Answered with
+    /// [`ResponseBody::CredprovSession`]. Never contains a secret.
+    CredprovQuery {
+        #[serde(default)]
+        scenario: CredprovScenario,
+    },
+    /// The armed seat credential of this session, **once** (then refused with reason
+    /// `credentials_taken`). Answered with [`ResponseBody::Credentials`].
+    CredprovTakeCredentials,
+    /// Result of the logon LogonUI attempted with the auto-submitted credential
+    /// (`ICredentialProviderCredential::ReportResult`). A failure marks the stored password
+    /// failing (no retry loop: lockout risk).
+    CredprovReport {
+        /// NTSTATUS of the logon (0 = success).
+        status: i32,
+        #[serde(default)]
+        sub_status: i32,
+    },
+    /// The "switch seat" link on the logon / lock screen: bring seat `seat` onto the console
+    /// (same rules as a manual start under `fast_user_switch`). Answers `ack` when queued.
+    CredprovSwitch { seat: SeatNumber },
+
+    // ---- session agent: seat switch (fast_user_switch, spec 35 §5.5(a); added 2026-11-13,
+    // additive, protocol 1). They act on the agent's own session only. ----
+    /// Seats the agent's session may switch to (same rule as the credential provider's
+    /// switch links). Answered with [`ResponseBody::SwitchTargets`].
+    AgentSwitchTargets,
+    /// Bring seat `seat` onto the console from the agent's own (locked) seat session. No
+    /// stored password is used: nobody authenticated for the target. Answers `ack`.
+    AgentSwitch { seat: SeatNumber },
+}
+
+impl RequestBody {
+    /// Authorisation table. The service enforces it; clients may use it to grey out UI.
+    pub fn access(&self) -> Access {
+        use RequestBody as R;
+        match self {
+            // `start_seat_app`: the service checks the caller's own seat and user itself.
+            R::Hello(_) | R::MySeat | R::SeatOfSession { .. } | R::SeatOfProcess { .. } | R::StartSeatApp { .. } => {
+                Access::Any
+            }
+            R::Subscribe { .. } | R::PollEvents { .. } | R::GetStatus | R::GetBackends | R::ListDevices => Access::Status,
+            R::RelogonSeat { seat } => Access::OwnSeat(*seat),
+            R::HostGetAssignment { seat }
+            | R::HostTakeCredentials { seat }
+            | R::HostReport { seat, .. }
+            | R::HostRedirectRefusal { seat, .. } => {
+                Access::Host(*seat)
+            }
+            R::AgentReport { .. } | R::AgentSwitchTargets | R::AgentSwitch { .. } => Access::Agent,
+            R::ConsoleInputReport { .. } => Access::ConsoleListener,
+            R::CredprovQuery { .. } | R::CredprovTakeCredentials | R::CredprovReport { .. } | R::CredprovSwitch { .. } => {
+                Access::CredentialProvider
+            }
+            R::Preflight
+            | R::GetConfig
+            | R::ValidateConfig { .. }
+            | R::ApplyConfig { .. }
+            | R::ResetConfig { .. }
+            | R::ImportReference { .. }
+            | R::SetSeatPassword { .. }
+            | R::ListLocalUsers
+            | R::ListCpuSets
+            | R::CompareSaved
+            | R::IdentifyDevice { .. }
+            | R::MoveAssignment { .. }
+            | R::SetEnabled { .. }
+            | R::ResolveInputMove { .. }
+            | R::StartSeats { .. }
+            | R::StopSeat { .. }
+            | R::RequestReboot
+            | R::WizardStart { .. }
+            | R::WizardCommand { .. }
+            | R::WizardStop { .. }
+            | R::DiagnosticReport { .. }
+            | R::GetUpdateStatus
+            | R::CheckForUpdate
+            | R::DownloadUpdate
+            | R::InstallUpdate { .. } => Access::Admin,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hello {
+    pub client: ClientKind,
+    /// Client build version (`CARGO_PKG_VERSION` / package.json).
+    pub client_version: String,
+    /// Protocol the client speaks (normally [`crate::PROTOCOL_VERSION`]).
+    pub protocol_version: u32,
+    /// Seat hosts: their seat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<SeatNumber>,
+    /// Seat hosts: the one-time token from their command line (`--token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<Secret>,
+}
+
+/// Event topics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Topic {
+    /// Product and seat states, config changes, notices.
+    Status,
+    /// Device arrival / removal / change.
+    Devices,
+    /// Per-device activity (identify by touch); high rate.
+    Activity,
+    Wizard,
+    /// Seat host only: input packets and host commands for its seat.
+    Host,
+    /// Agent only: tasks for its session.
+    Agent,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum ResponseBody {
+    Hello(HelloReply),
+    Ack,
+    Status(ServiceStatus),
+    Backends(BackendReport),
+    Checks(Vec<Check>),
+    Config(ConfigView),
+    Issues(Vec<Issue>),
+    Applied(ApplyResult),
+    Users(Vec<LocalUser>),
+    CpuSets(Vec<CpuSetInfo>),
+    Devices(Vec<DeviceView>),
+    Diff(ConfigDiff),
+    Events(EventBatch),
+    Report { path: String },
+    Seat { seat: Option<SeatNumber>, session_id: Option<u32> },
+    HostAssignment(HostAssignment),
+    Credentials(Credentials),
+    AgentTasks(Vec<AgentTask>),
+    /// Reply to `console_input_report` (added 2026-11-13, additive).
+    ConsoleListenerState(ConsoleListenerState),
+    /// Reply to `credprov_query` (added 2026-11-13, additive).
+    CredprovSession(CredprovSession),
+    /// Answer of the update requests (added 2026-11-13).
+    UpdateStatus(UpdateStatus),
+    /// Answer of `start_seat_app` (added 2026-11-13, additive).
+    AppStarted { pid: u32 },
+    /// Answer of `agent_switch_targets` (added 2026-11-13, additive).
+    SwitchTargets(Vec<SeatNumber>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HelloReply {
+    pub service_version: String,
+    pub protocol_version: u32,
+    pub min_protocol_version: u32,
+    pub caller: CallerInfo,
+}
+
+/// What the service determined about the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerInfo {
+    pub client: ClientKind,
+    pub session_id: u32,
+    /// Seat of the caller's session, if it is a seat session.
+    pub seat: Option<SeatNumber>,
+    /// Token has Administrators enabled (elevated) or is SYSTEM.
+    pub is_admin: bool,
+    /// Admin-only policy is on and the caller is not admin: only `Any` requests work.
+    pub restricted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceStatus {
+    pub service_version: String,
+    pub product: ProductState,
+    pub seats: Vec<SeatRuntime>,
+    /// Backends actually in use (may differ from the config when one is unavailable and
+    /// the service fell back; `fallback_notes` says why).
+    pub active: ActiveBackends,
+    pub fallback_notes: Vec<String>,
+    pub config_revision: u64,
+    /// A saved change needs a reboot (driver package install / removal only).
+    pub reboot_pending: bool,
+    /// Windows build changed since the config was last applied (re-check prompt).
+    pub os_build_changed: bool,
+    pub wizard_running: bool,
+    /// Last event `seq` (for `poll_events`).
+    pub last_event_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveBackends {
+    pub session: SessionBackendKind,
+    pub display: DisplayBackendKind,
+    pub input: InputBackendKind,
+    pub audio: AudioBackendKind,
+    pub gates: Vec<GateBackendKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackendReport {
+    pub session: Vec<BackendInfo>,
+    pub display: Vec<BackendInfo>,
+    pub input: Vec<BackendInfo>,
+    pub audio: Vec<BackendInfo>,
+    pub gates: Vec<BackendInfo>,
+    pub drivers: Vec<DriverReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverReport {
+    pub driver: DriverId,
+    pub status: seat_core::backend::DriverStatus,
+}
+
+/// One pre-flight check (`os_build`, `secure_boot`, `memory_integrity`, `edition`,
+/// `rdsh_role`, `termservice_stock`, `reference_product`, `foreign_input_filters`,
+/// `arch_native`, …). Security states are reported, never changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Check {
+    pub id: String,
+    pub outcome: CheckOutcome,
+    /// English detail for logs; the manager shows Turkish copy by `id` + `outcome`.
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckOutcome {
+    Pass,
+    Warn,
+    Fail,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigView {
+    pub config: Config,
+    /// Seats with a stored password (marker in the seat table).
+    pub password_set: Vec<SeatNumber>,
+    /// Seats whose stored password failed at the last logon.
+    pub password_failing: Vec<SeatNumber>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApplyResult {
+    pub revision: u64,
+    /// Warnings / confirmed conflicts that remain.
+    pub issues: Vec<Issue>,
+    /// Seats that must restart for the change to apply (display moves while started).
+    pub restart_seats: Vec<SeatNumber>,
+    pub reboot_needed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalUser {
+    pub name: String,
+    pub full_name: String,
+    pub sid: String,
+    pub disabled: bool,
+    pub is_admin: bool,
+}
+
+/// One CPU set (`GetSystemCpuSetInformation`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CpuSetInfo {
+    pub id: u32,
+    pub group: u16,
+    pub logical_index: u8,
+    pub core_index: u8,
+    /// Higher = faster core class (0 = efficiency on hybrid CPUs).
+    pub efficiency_class: u8,
+    pub numa_node: u32,
+}
+
+/// A device as the manager draws it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceView {
+    pub device: Device,
+    pub effective: SeatMask,
+    pub source: MaskSource,
+    /// Which enforcement applies (`None` = not handled by any gate / router).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<IsolationStatus>,
+    /// Service clock ms of arrival (for the "just connected" frame).
+    pub arrived_ms: u64,
+    /// Assignment key of the USB port this device is plugged into (`port;loc=...`), so the
+    /// manager can assign that one port of a shared hub (spec 70 §5.1). Added 2026-11-13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_key: Option<DeviceKey>,
+    /// Assignment key of the device's container (`cont;id=...`), present when the container
+    /// groups more than one live device (spec 70 §5.1). Added 2026-11-13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_key: Option<DeviceKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigDiff {
+    pub matches: bool,
+    pub added: Vec<DeviceKey>,
+    pub changed: Vec<MaskChange>,
+    pub missing: Vec<DeviceKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaskChange {
+    pub key: DeviceKey,
+    pub saved: SeatMask,
+    pub live: SeatMask,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventBatch {
+    pub events: Vec<crate::EventFrame>,
+    /// Highest seq known to the service (may exceed the batch when topics filter).
+    pub last_seq: u64,
+}
+
+/// Wizard variants (spec 10 §9.2 step 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WizardVariant {
+    /// External mice on every seat; capture seats 1..N.
+    AllSeats,
+    /// Keep the detected seat-1 devices; capture seats 2..N.
+    KeepSeatOne,
+    /// Seat-1 devices on seat 1, everything else on seat 2, no capture.
+    QuickTwoSeats,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum WizardCommand {
+    /// The user picked seat 1's monitor (overlay number).
+    PickConsoleMonitor { key: DeviceKey },
+    /// Extend the desktop to every connected monitor (user consented).
+    ExtendDesktop,
+    ConfirmSeat { seat: SeatNumber },
+    ResetSeat { seat: SeatNumber },
+    ResetAll,
+    /// Main keyboard / mouse found by touch before the wizard (spec 10 §9.1 "gather",
+    /// "Pulsar Seat approach": main-device capture by touch). They stay on seat 1 for
+    /// `keep_seat_one` and `quick_two_seats`. Added 2026-11-13 (additive).
+    SetMainDevices { keys: Vec<DeviceKey> },
+    /// A mouse target on seat `seat`'s page was clicked (the page saw the click). The
+    /// service credits the click to the unassigned mouse that clicked last (spec 10 §9.2
+    /// step 5). Added 2026-11-13 (additive).
+    TargetHit { seat: SeatNumber },
+}
+
+/// Seat host connection state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HostState {
+    Connecting,
+    Connected,
+    /// Session id as reported by the RDP server (if known).
+    SignedIn { session_id: Option<u32> },
+    Disconnected { reason: String },
+    /// `client_auth`, `cert_mismatch`, `display`, `audio`, …
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HostAssignment {
+    pub seat: SeatNumber,
+    pub connection: RdpConnection,
+    pub outputs: SeatOutputs,
+    pub audio: AudioRoute,
+    pub input_backend: InputBackendKind,
+    /// `RawInputHost`: device-interface paths of this seat's units (match raw input
+    /// handles via `RIDI_DEVICENAME`). Empty for `KmdfFilter` (packets come as events).
+    pub input_interfaces: Vec<String>,
+    /// SHA-1 thumbprints (hex) of the certificates the RDP-Tcp listener may present
+    /// (`seat_rdp::pin`); the seat host pins its TLS connection to them and fails closed.
+    /// Added 2026-11-13 (additive, protocol 1); empty from an older service.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listener_cert_sha1: Vec<String>,
+    /// The owner's input settings (switch hotkey, system buttons) for the host's own input
+    /// forwarder. Added 2026-11-13 (additive, protocol 1); defaults from an older service.
+    #[serde(default)]
+    pub input: seat_core::config::InputSettings,
+    /// Clipboard / drive / smart-card redirection for the IronRDP backend (spec 70),
+    /// resolved by the service (`seat_rdp::policy::host_redirection`). Added 2026-11-13
+    /// (additive, protocol 1); all off from an older service. Boxed: keeps the response
+    /// frame small.
+    #[serde(default)]
+    pub redirection: Box<seat_core::backend::session::HostRedirection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Credentials {
+    pub domain: String,
+    pub user: String,
+    pub password: Option<Secret>,
+}
+
+/// LogonUI usage scenario the credential provider runs in (subset of
+/// `CREDENTIAL_PROVIDER_USAGE_SCENARIO`). Added 2026-11-13.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredprovScenario {
+    /// `CPUS_LOGON`: the logon screen of a session.
+    #[default]
+    Logon,
+    /// `CPUS_UNLOCK_WORKSTATION`: the lock screen. Never auto-submitted (spec 35 §5.4).
+    Unlock,
+}
+
+/// Answer of `credprov_query`: what the Pulsar credential provider and filter do in the
+/// caller's LogonUI session (spec 35 §5.4). Added 2026-11-13. Never contains a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CredprovSession {
+    /// Seat of this session (`None` = not a Pulsar seat session: show nothing, hide nothing).
+    #[serde(default)]
+    pub seat: Option<SeatNumber>,
+    /// A one-time credential is armed for this session: show one default tile with
+    /// auto-logon and take it with `credprov_take_credentials` (logon scenario only).
+    #[serde(default)]
+    pub auto_submit: bool,
+    /// The filter hides every other provider (only together with `auto_submit`, only in
+    /// the logon scenario).
+    #[serde(default)]
+    pub hide_others: bool,
+    /// Seat account shown on the tile (`DOMAIN\user`); no secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// Account SID for `ICredentialProviderCredential2::GetUserSid`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_sid: Option<String>,
+    /// Seats the "switch seat" links offer (empty = no link tile).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub switch_targets: Vec<SeatNumber>,
+    /// A `fast_user_switch` hand-over to this console session is under way and no grant
+    /// is armed yet: ask again shortly (logon scenario only; the provider polls for a
+    /// bounded time and refreshes its tiles). Added 2026-11-13, additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+}
+
+/// What a session agent reports (its session id and SIDs come from the pipe token, these
+/// fields are cross-checked).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReport {
+    pub session_id: u32,
+    pub event: AgentEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentEvent {
+    Started,
+    TaskDone { task_id: u64 },
+    TaskFailed { task_id: u64, reason: String, win32: Option<u32> },
+    Stopping,
+}
+
+/// One observation of the console raw-input listener. `interface` is the unit's
+/// device-interface path as raw input reports it (`RIDI_DEVICENAME`); the service maps it
+/// to the unit key. Key codes are reported only while the capture wizard runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConsoleInputEvent {
+    /// The unit was used (throttled per unit). `key_sc`: only while the wizard runs, only
+    /// the wizard keys F1..F12, top-row digits 1..0 and Esc / Backspace / Enter / Shift /
+    /// Alt (set 1, no auto-repeat; maintainer decision 2026-11-13: never every key).
+    /// `click`: a mouse button went down.
+    Activity {
+        interface: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_sc: Option<u16>,
+        #[serde(default)]
+        click: bool,
+    },
+    /// Ctrl + the configured hotkey on this unit (spec 50 §4.1.9).
+    Hotkey { interface: String },
+    /// Ctrl+Shift + the hotkey (F12 when the hotkey is off) three times on this unit:
+    /// every unit back to seat 1. Acted on even while the move hotkey is off.
+    Emergency { interface: String },
+}
+
+/// What the console listener needs to know, returned on every report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleListenerState {
+    /// The capture wizard runs: report the wizard keys' make codes.
+    #[serde(default)]
+    pub wizard_running: bool,
+    /// Current input settings (hotkey scan code).
+    #[serde(default)]
+    pub input: seat_core::config::InputSettings,
+    /// The service no longer wants a listener (backend changed, product off): exit.
+    #[serde(default)]
+    pub stop: bool,
+    /// Obsolete (kept so old peers still parse): the service always sends `false` and the
+    /// listener ignores it. Maintainer decision 2026-11-13: the listener reports only the
+    /// wizard keys (F1..F12, digits, Enter, Backspace, Esc, Shift, Alt), never every key.
+    #[serde(default)]
+    pub wizard_all_keys: bool,
+}
+
+/// Work the service gives a session agent (pushed as `agent_task` events, or returned by
+/// `agent_report`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTask {
+    pub id: u64,
+    pub task: AgentTaskKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentTaskKind {
+    /// `DefineDosDevice` in this logon session (spec 70 §5.2(3)).
+    DefineDriveLetter { letter: char, volume: String },
+    RemoveDriveLetter { letter: char },
+    SetWallpaper { path: String },
+    /// Show a Turkish notice by code (`same_account_warning`, `seat_starting`, …).
+    ShowNotice { code: String },
+    /// Log this session off after a notice (same-account deny).
+    LogOff { after_ms: u32 },
+    SetPalmCheck { threshold: u32 },
+    /// `fast_user_switch` (spec 35 §5.6): this session just became the console; keep only
+    /// these display targets (the seat's monitors) in the desktop and turn the others off.
+    /// LUIDs are this boot's (from the service inventory). Added 2026-11-13, additive.
+    ApplyTopology { targets: Vec<DisplayTargetRef> },
+}
+
+/// A CCD display target of this boot (adapter LUID + target id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayTargetRef {
+    pub adapter_luid: u64,
+    pub target_id: u32,
+}
+
+/// Pushed events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum Event {
+    // Status topic
+    ProductState { state: ProductState },
+    SeatState { runtime: SeatRuntime },
+    ConfigChanged { revision: u64 },
+    /// Turkish copy by `code` (`service_gap_no_input`, `os_build_changed`, …).
+    Notice {
+        code: String,
+        seat: Option<SeatNumber>,
+        detail: String,
+    },
+    // Devices topic
+    DeviceArrived { view: Box<DeviceView> },
+    DeviceRemoved { key: DeviceKey },
+    DeviceChanged { view: Box<DeviceView> },
+    // Activity topic
+    DeviceActivity { key: DeviceKey },
+    // Wizard topic
+    WizardProgress(WizardProgress),
+    // Host topic
+    InputPackets { seat: SeatNumber, packets: Vec<InputPacket> },
+    HostCommand { seat: SeatNumber, command: HostCommand },
+    // Agent topic
+    AgentTask { session_id: u32, task: AgentTask },
+}
+
+impl Event {
+    pub fn topic(&self) -> Topic {
+        match self {
+            Self::ProductState { .. } | Self::SeatState { .. } | Self::ConfigChanged { .. } | Self::Notice { .. } => {
+                Topic::Status
+            }
+            Self::DeviceArrived { .. } | Self::DeviceRemoved { .. } | Self::DeviceChanged { .. } => Topic::Devices,
+            Self::DeviceActivity { .. } => Topic::Activity,
+            Self::WizardProgress(_) => Topic::Wizard,
+            Self::InputPackets { .. } | Self::HostCommand { .. } => Topic::Host,
+            Self::AgentTask { .. } => Topic::Agent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WizardProgress {
+    /// `pick_console_monitor`, `keyboard`, `mouse`, `waiting`, `done`, `cancelled`,
+    /// `invalid` (save refused, wizard still running; see `issues`).
+    pub step: String,
+    pub seat: Option<SeatNumber>,
+    /// F-key presses counted for the current seat (needs 2).
+    pub key_presses: u8,
+    /// Mouse targets hit (needs 2).
+    pub clicks: u8,
+    pub assigned: Vec<(SeatNumber, DeviceKey)>,
+    /// Monitor of each seat, index 0 = seat 1 (the per-monitor pages and the number
+    /// overlays use this order). Added 2026-11-13 (additive).
+    #[serde(default)]
+    pub monitors: Vec<DeviceKey>,
+    /// Seats the user confirmed (Enter); they show the waiting page.
+    #[serde(default)]
+    pub confirmed: Vec<SeatNumber>,
+    /// The service has seen keys other than F1..F12 from the units (filter path, or the
+    /// console listener's digits / control keys), so it handles the any-keyboard control
+    /// keys itself (spec 10 §9.2 step 6). The
+    /// manager then only acts on keys pressed in its own window that the service cannot
+    /// see. Added 2026-11-13 (additive).
+    #[serde(default)]
+    pub keys_seen: bool,
+    /// The unit whose key / click was counted last (feedback on the pages).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_unit: Option<DeviceKey>,
+    /// The running variant (pages of kept seat 1 say so). Added 2026-11-13 (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<WizardVariant>,
+    /// Step `invalid`: error issue codes (snake_case) that stopped the save. The wizard
+    /// keeps running so the user can fix the assignment. Added 2026-11-13 (additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
+}
+
+/// Commands to a running seat host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum HostCommand {
+    /// Outputs changed (hot-plug, mode): re-run `host_get_assignment`.
+    Reconfigure,
+    /// Audio endpoints changed: re-read the audio route.
+    RebindAudio { route: AudioRoute },
+    /// Show the idle frame / blank (monitor power policy).
+    Blank { on: bool },
+    /// Disconnect and exit (seat stop).
+    Exit,
+}
+
+// ---- updates (spec 90 §11 item 10; added 2026-11-13) ----------------------------------
+
+/// Where the update flow stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateState {
+    /// Nothing checked since the service started (or the opt-in is off).
+    #[default]
+    Idle,
+    Checking,
+    /// The latest release is not newer than this build.
+    UpToDate,
+    /// A newer release with an installer for this PC's architecture exists.
+    Available,
+    Downloading,
+    /// Downloaded and verified; waiting for the administrator's confirmation.
+    Ready,
+    /// The installer was started (the service stops during the upgrade).
+    Installing,
+    /// The last step failed (`reason` / `error`).
+    Failed,
+}
+
+/// A release found on the update feed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateRelease {
+    /// `1.2.3` (tag without the leading `v`).
+    pub version: String,
+    pub tag: String,
+    /// Release page (shown as a link; notes are not rendered).
+    #[serde(default)]
+    pub page_url: String,
+    #[serde(default)]
+    pub published_at: String,
+    /// Installer asset for this PC, e.g. `PulsarSeat_1.2.3_arm64.msi`.
+    pub asset_name: String,
+    #[serde(default)]
+    pub size: u64,
+    /// SHA-256 from the release's checksum file (lowercase hex), when it lists the asset.
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UpdateStatus {
+    /// `settings.updates.check` (opt-in): no network access while false.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub weekly: bool,
+    pub current_version: String,
+    /// `arm64` or `x64` (native machine).
+    #[serde(default)]
+    pub arch: String,
+    #[serde(default)]
+    pub state: UpdateState,
+    #[serde(default)]
+    pub latest: Option<UpdateRelease>,
+    /// Unix seconds of the last finished check.
+    #[serde(default)]
+    pub checked_unix_s: Option<u64>,
+    /// Bytes downloaded so far (state `downloading`).
+    #[serde(default)]
+    pub downloaded: u64,
+    /// Publisher of the verified installer (state `ready`).
+    #[serde(default)]
+    pub signer: Option<String>,
+    /// Stable id of the last failure for the UI (`network`, `feed`, `no_asset`,
+    /// `no_checksum`, `hash_mismatch`, `unsigned`, `untrusted_signer` (Authenticode of the
+    /// installer), `sums_unsigned`, `sums_untrusted`, `sums_mismatch`, `sums_rollback`,
+    /// `no_release_key` (release signature of the checksum file), `too_large`, `launch`,
+    /// `busy`, `not_ready`, `unsupported`).
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// English detail for logs.
+    #[serde(default)]
+    pub error: Option<String>,
+}

@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-rdp"
+description = "Pulsar Seat loopback RDP client engine on IronRDP (graphics, input, audio, NLA with pinned certificate)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+# IronRDP 0.12 / 0.13 crates need Rust 1.94.
+rust-version = "1.94"
+
+# `client` (default): the IronRDP engine. Without it only the listener-certificate pin
+# helpers (`pin`) are built, so a crate that only needs the thumbprint (the service) does
+# not pull IronRDP in.
+[features]
+default = ["client"]
+client = [
+    "dep:ironrdp-connector",
+    "dep:ironrdp-session",
+    "dep:ironrdp-blocking",
+    "dep:ironrdp-pdu",
+    "dep:ironrdp-core",
+    "dep:ironrdp-graphics",
+    "dep:ironrdp-svc",
+    "dep:ironrdp-dvc",
+    "dep:ironrdp-rdpsnd",
+    "dep:ironrdp-rdpeai",
+    "dep:ironrdp-rdpei",
+    "dep:ironrdp-displaycontrol",
+    "dep:ironrdp-egfx",
+    "dep:windows",
+    "dep:native-tls",
+    "dep:x509-cert",
+    "dep:num-traits",
+    "dep:seat-input",
+    "dep:ironrdp-cliprdr",
+    "dep:ironrdp-rdpdr",
+    "dep:ironrdp-cliprdr-native",
+    "dep:ironrdp-rdpdr-native",
+    "dep:zeroize",
+]
+
+[dependencies]
+sha1 = "0.10"
+thiserror.workspace = true
+
+# IronRDP (Devolutions, MIT OR Apache-2.0): https://github.com/Devolutions/IronRDP
+ironrdp-connector = { version = "0.12", optional = true }
+ironrdp-session = { version = "0.13", optional = true }
+ironrdp-blocking = { version = "0.12", optional = true }
+ironrdp-pdu = { version = "0.11", optional = true }
+ironrdp-core = { version = "0.3", optional = true }
+ironrdp-graphics = { version = "0.11", optional = true }
+ironrdp-svc = { version = "0.10", optional = true }
+ironrdp-dvc = { version = "0.10", optional = true }
+ironrdp-rdpsnd = { version = "0.11", optional = true }
+ironrdp-rdpeai = { version = "0.2", optional = true }
+ironrdp-rdpei = { version = "0.3", optional = true }
+ironrdp-displaycontrol = { version = "0.10", optional = true }
+# Clipboard (MS-RDPECLIP) and device redirection (MS-RDPEFS drives, MS-RDPESC smart cards).
+ironrdp-cliprdr = { version = "0.9", optional = true }
+ironrdp-rdpdr = { version = "0.9", optional = true }
+# Graphics pipeline (MS-RDPEGFX): the same version ironrdp-session 0.13 composites.
+ironrdp-egfx = { version = "0.5", optional = true }
+# TLS through SChannel (native on ARM64 and x64, no C toolchain needed).
+native-tls = { version = "0.2", optional = true }
+x509-cert = { version = "0.2", default-features = false, features = ["std"], optional = true }
+num-traits = { version = "0.2", optional = true }
+# Also without `client`: the redirection policy (`policy`) is resolved by the service.
+seat-core = { workspace = true }
+seat-input = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+
+# Listener certificate lookup (registry + "Remote Desktop" machine store).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+    "Win32_System_Registry",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Windows clipboard back-end (hidden window + OLE) and the Windows drive / WinSCard
+# back-end of the redirection channels (IronRDP, MIT OR Apache-2.0).
+ironrdp-cliprdr-native = { version = "0.9", optional = true }
+ironrdp-rdpdr-native = { version = "0.9", optional = true }
+# H.264 decode for the graphics pipeline (src/h264/mf.rs): Media Foundation + D3D11.
+windows = { version = "0.62.2", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+] }

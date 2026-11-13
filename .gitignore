@@ -1,0 +1,8 @@
+docs/local/
+node_modules/
+target/
+build/
+.svelte-kit/
+# msbuild run without the build script's OutDir
+drivers/*/ARM64/
+drivers/*/x64/
