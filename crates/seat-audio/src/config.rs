@@ -94,7 +94,7 @@ impl RdpAudioFlags {
         INFO_REMOTECONSOLEAUDIO | INFO_NOAUDIOPLAYBACK
     }
 
-    /// Arguments for `pulsar-split-rdp-helper` (contracts §6 integration).
+    /// Arguments for the headless session hold (`pulsar-seat-host --headless-hold`, contracts §6 integration).
     pub fn helper_args(&self) -> Vec<String> {
         let mut v = Vec::new();
         if self.playback {

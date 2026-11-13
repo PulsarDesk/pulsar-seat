@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 [package]
 name = "seat-session"
-description = "Pulsar Seat session backends: RDS loopback, experimental termsrv wrapper, fast user switch, desktops; WTS, accounts, launch"
+description = "Pulsar Seat session backends: RDS loopback (local + remote seats), experimental termsrv wrapper, fast user switch, desktops; WTS, accounts, launch"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,6 +18,8 @@ fake = []
 
 [dependencies]
 seat-core.workspace = true
+# Headless hold protocol only (`seat_rdp::headless::proto`); no IronRDP without `client`.
+seat-rdp = { path = "../seat-rdp", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -39,22 +41,29 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Environment",
     "Win32_System_JobObjects",
+    "Win32_System_Pipes",
     "Win32_System_RemoteDesktop",
     "Win32_System_Services",
     "Win32_System_StationsAndDesktops",
     "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
-# Firewall rule read-back through INetFwPolicy2 (src/win/loopback_listener.rs); same
+# Firewall rule read-back through INetFwPolicy2 (src/win/loopback_listener.rs) and WMI
+# (src/win/wmi.rs: RDSH role, listener certificate thumbprint, licensing grace days); same
 # version as seat-host / seat-media.
 windows = { version = "=0.62.2", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    "Win32_System_Wmi",
 ] }
 
 [dev-dependencies]

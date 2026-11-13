@@ -107,7 +107,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn client_name_for(&self, seat_id: &str, taken: &[String]) -> String {
-        split_session::discover::unique_client_name(seat_id, taken)
+        seat_session::remote::discover::unique_client_name(seat_id, taken)
     }
 
     fn listening_ports(&self) -> Vec<u16> {
@@ -126,7 +126,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn test_logon(&self, user: &str, password: &Secret) -> Result<Result<(), u32>, ProtoError> {
-        Ok(split_session::win::accounts::test_logon(user, password))
+        Ok(seat_session::remote::win::accounts::test_logon(user, password))
     }
 
     fn win32_message(&self, code: u32) -> String {
@@ -149,7 +149,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn enable_unlock_account(&mut self, user: &str, enable: bool, unlock: bool) -> Result<(), ProtoError> {
-        split_session::win::accounts::enable_unlock(user, enable, unlock)
+        seat_session::remote::win::accounts::enable_unlock(user, enable, unlock)
             .map_err(|e| ProtoError::new(ErrorCode::InvalidUser, format!("account: {e}")).with_reason("account"))?;
         crate::log::info(&format!("account '{user}': enable={enable} unlock={unlock} (operator confirmed)"));
         Ok(())

@@ -4756,6 +4756,8 @@ dependencies = [
  "num-traits",
  "seat-core",
  "seat-input",
+ "serde",
+ "serde_json",
  "sha1 0.10.7",
  "thiserror 2.0.21",
  "windows",
@@ -4800,8 +4802,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "split-display",
- "split-session",
- "split-termwrap",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
@@ -4817,6 +4817,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "seat-core",
+ "seat-rdp",
  "serde",
  "serde_json",
  "tempfile",
@@ -5361,56 +5362,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "windows",
-]
-
-[[package]]
-name = "split-rdp-helper"
-version = "0.1.0"
-dependencies = [
- "ironrdp-blocking",
- "ironrdp-connector",
- "ironrdp-core",
- "ironrdp-graphics",
- "ironrdp-pdu",
- "ironrdp-rdpsnd",
- "ironrdp-session",
- "native-tls",
- "seat-proto",
- "serde_json",
- "sha1 0.10.7",
- "split-session",
- "x509-cert 0.2.5",
- "zeroize",
-]
-
-[[package]]
-name = "split-session"
-version = "0.1.0"
-dependencies = [
- "log",
- "seat-core",
- "seat-proto",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "windows",
- "windows-sys 0.61.2",
- "winreg",
- "zeroize",
-]
-
-[[package]]
-name = "split-termwrap"
-version = "0.1.0"
-dependencies = [
- "log",
- "seat-proto",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "windows-sys 0.61.2",
- "winreg",
 ]
 
 [[package]]

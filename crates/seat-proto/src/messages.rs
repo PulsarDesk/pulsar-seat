@@ -584,7 +584,7 @@ pub enum ResponseBody {
     SwitchTargets(Vec<SeatNumber>),
     // ---- protocol 3 (Pulsar Split v2 bodies) ----
     HostInfo(remote::HostInfo),
-    /// `split_termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
+    /// `seat_session::termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
     TermwrapStatus(serde_json::Value),
     RemoteRuntime(remote::SeatRuntime),
     /// `split_display::RenderAdapter` values.

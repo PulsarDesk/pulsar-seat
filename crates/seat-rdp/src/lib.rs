@@ -18,13 +18,17 @@
 //! - clipboard, drives and smart cards ([`channels`]) only as far as the seat's
 //!   redirection policy allows ([`policy`]); every refusal is logged.
 //!
-//! Feature `client` (default) builds the engine; without it only [`pin`] and [`policy`]
-//! are built.
+//! - a headless hold mode ([`headless`], merge-plan.md step 7): no frame sink, one
+//!   remote seat's session held open; replaces Pulsar Split's RDP helper.
+//!
+//! Feature `client` (default) builds the engine; without it only [`pin`], [`policy`] and
+//! the pure [`headless::proto`] are built.
 //!
 //! Known limit (same as Pulsar Split's helper): IronRDP takes the password as a plain
 //! `String` inside its configuration and CredSSP state; only our own `Zeroizing` copy is
 //! wiped. The seat host is a SYSTEM-only process (no user can read its memory).
 
+pub mod headless;
 pub mod pin;
 pub mod policy;
 

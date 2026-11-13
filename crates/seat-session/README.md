@@ -34,10 +34,13 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   (else `foreign_service_dll`), reference product (`reference_product_present`), TermService
   running, listener port, `fDenyTSConnections` policy (`rdp_denied_by_policy`), licensing
   notes (`rds_licensing_not_configured`), listener cap → `caps().max_seats`.
-- **prepare_host** (RDP backends): journaled rows `fDenyTSConnections=0`,
-  `fSingleSessionPerUser=0` (machine-wide, spec 30 §6.2.13), `RDP-Tcp\UserAuthentication=1`,
-  `RDP-Tcp\Shadow=0` in `journal\session.jsonl`; policies reported, never fought.
-  **restore_host** = guarded reverse replay (only these rows; values changed after us stay).
+- **prepare_host** (RDP backends): claims the one Terminal Server writer (`rds`,
+  `Claim::Local`): journaled rows `fDenyTSConnections=0`, `fSingleSessionPerUser=0`
+  (machine-wide, spec 30 §6.2.13), `RDP-Tcp\UserAuthentication=1`, `RDP-Tcp\Shadow=0` in
+  `journal\session.jsonl`; policies reported, never fought. **restore_host** releases the
+  claim: guarded reverse replay of the rows no remote seat still needs (values changed
+  after us stay). Writer order with the second listener and the wrapper: `rds.rs` module
+  doc and architecture §10.4.
 - **Seat ↔ session matching**: the documented RDP ActiveX control cannot set a client name, so
   `wait_session` takes the loopback remote session with our `PSEAT-NN` name **or** the newest
   loopback session that did not exist when the start began, not claimed by another seat, with
@@ -46,7 +49,37 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   seat 1 / console sessions are never logged off by us.
 - **adopt** after a service restart: same id, still remote loopback, same user SID.
 
+### Remote seats (`remote`, merged from Pulsar Split's `split-session` at step 7)
+
+Server + RDSH (or the wrapper kind) only; `fast_user_switch` and `desktops` are local only.
+The remote seat worker in `seat-service` uses `remote::manager::SessionManager`:
+
+| Module | Job |
+| --- | --- |
+| `remote::manager` | `Manager` over trait objects + `WindowsSessionManager`. Start: listener re-read → headless hold spawn (`pulsar-seat-host --headless-hold`, password on its stdin pipe) → wait for `Connected` (fails at once on `client_auth` / `cert_mismatch`) → discover the session → run state. Seat cap = min(host class cap, listener `MaxInstanceCount`). The console user's SID and the SIDs of other running seats are refused. Stop: ownership check while the hold is connected, kill it, end the seat job, log off by id and wait. `tick` restarts the hold after an unexpected exit (3 failures in 5 min → `Failed(client_exited)`). `prepare_host` / `restore_host` = `Claim::Remote` on the shared writer; a created seat account is journaled (kind `account`). |
+| `remote::discover` | `PSS` + 8 hex client names (FNV-1a of the seat id + salt), match on client name + user + loopback, never Services / console / listeners; session model = `crate::wts::WtsSession`. |
+| `remote::sweep` | `run\remote-sessions.json` (atomic, ACL-checked), `plan_sweep_for(kind, …)`: both prefixes, never the other kind's sessions, only PIDs whose (pid, creation time) match a record. |
+| `remote::users` | seat user checks via Net* APIs only (facts, SID, create, password, Remote Desktop Users from `S-1-5-32-555`), profiles in the service. |
+| `remote::launch` | launch into the seat session (SYSTEM-in-session or the seat user's token), job `PulsarSeat.RemoteSeat.<seat-id>`; quoting / environment helpers are `crate::launch`'s. |
+| `remote::acl` | trust rules for `run\` files the service reads back. |
+| `remote::error` | `SessionError` + `FailureReason` codes (`edition_unsupported`, `coexistence`, `rds_not_ready`, `seat_limit`, `account`, `password_expired`, `rdu_membership`, `profile`, `client_auth`, `cert_mismatch`, `session_timeout`, `client_exited`, `token`). |
+| `remote::win` | accounts, files, hold spawner (restricted Low-integrity token, three inherited handles, kill-on-close job, shared `seat_core::spawn` lock), launcher, process table, WTS (over `crate::win::wts`). |
+| `remote::fake` | fakes for every remote trait + `fake_deps()` (feature `fake`). |
+
+Security notes kept from Split: the password never goes to argv, environment, files or
+logs; the hold inherits exactly three handles; it runs with a `DISABLE_MAX_PRIVILEGE`
+restricted copy of the service token at Low integrity (fail closed with `token`); WMI
+never calls `CoInitializeSecurity`; log-off only after `WTSIsRemoteSession` and a
+name + user + loopback check. **Everything in `remote::win` is untested on hardware.**
+
 ### Experimental client-SKU module (`termwrap`, adapted from pulsar-split)
+
+One module for both seat kinds (step 7: `split-termwrap` removed; its tests were the same
+tests as this module's). Always compiled (status, disable, boot gate and uninstall restore
+work in every build); `enable` needs the cargo feature `experimental-client-sku`
+(`TermwrapPolicy::enable_built_in`) and an **x64 host** (ARM64 hosts are refused with
+`wrapper_arch`). It owns `ServiceDll` and the two wrapper rows; the RDS writer never
+writes them.
 
 Ships no wrapper, no patch, no offsets; never modifies Windows files, the kernel or LSM.
 Detects an operator-installed Apache-2.0 RDP Wrapper layout, refuses an unknown
@@ -74,8 +107,8 @@ hardware.**
 
 ```
 set CARGO_TARGET_DIR=target\agent-session
-cargo test   -p seat-session --features experimental-client-sku     (116 tests)
-cargo test   -p seat-session                                         (67 tests)
+cargo test   -p seat-session --features experimental-client-sku     (254 tests, 2026-11-14)
+cargo test   -p seat-session                                         (253 tests)
 cargo clippy -p seat-session --all-targets --features experimental-client-sku,fake -- -D warnings
 cargo check  -p seat-session --all-targets --target x86_64-pc-windows-msvc
 ```
@@ -129,7 +162,8 @@ desktop that is never switched to).
 
 ## Third-party
 
-`serde`, `serde_json`, `thiserror`, `log`, `zeroize`, `windows-sys`, `winreg` (MIT/Apache-2.0).
-No Microsoft DLL is shipped. The RDP Wrapper Library (github.com/stascorp/rdpwrap, Apache-2.0)
+`serde`, `serde_json`, `thiserror`, `log`, `zeroize`, `windows-sys`, `windows` (WMI, firewall), `winreg`
+(MIT/Apache-2.0; Microsoft's Rust bindings, no Microsoft DLL shipped).
+The RDP Wrapper Library (github.com/stascorp/rdpwrap, Apache-2.0)
 was consulted only for public file names, install locations and config section naming; it is
 not bundled.

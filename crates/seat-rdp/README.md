@@ -75,6 +75,34 @@ does not work against a real Server build (untested, see below).
   for transient network failures, at most 4 times (1, 2, 4, 8 s). Every attempt runs
   the listener check, the peer check and the pin again.
 
+## Headless hold mode (`headless`, merge step 7)
+
+Replaces Pulsar Split's `pulsar-split-rdp-helper.exe`. The service starts
+`pulsar-seat-host.exe --headless-hold <args>` per running **remote** seat; the seat host
+dispatches the sub-command before anything else (`crates/seat-host/src/headless.rs`).
+
+- `headless::proto` (always built, also without `client`; the service uses it):
+  `HelperArgs` argv (`--protocol 1 --port <u16> --address 127.0.0.1|::1 --client-name <PSS…>
+  --user <sam> --width --height --layout <KLID hex> --cert-sha1 <40 hex> [--audio-playback]
+  [--audio-capture] [--dry-run]`; `--password` / `-p` / `/p` are refused), one stdin
+  password frame (`u32` LE length + UTF-8, at most 512 bytes, then EOF), JSON Lines
+  `HelperEvent`s on stdout (`connecting`, `authenticated`, `connected {session_id}`,
+  `disconnected {reason}`, `failed {code, detail}`, `exited {code}`), exit 0 / 1 / 2. This
+  is Split's helper contract, unchanged; Seat's `host_report` pipe is not used (a hold
+  has no seat pipe, token or monitors).
+- `headless::client` (`client`): X.224 with NLA only → TLS (SChannel) → the server
+  certificate's SHA-1 must equal `--cert-sha1` → CredSSP / NTLM → active stage that only
+  answers the server. No frame sink: frames are decoded into a scratch image and dropped.
+  `rdpsnd` is joined (plain PCM offered, every wave PDU acknowledged, samples dropped) so
+  the session gets its Remote Audio endpoint. The password copy is dropped after CredSSP
+  and the reactivation factory is rebuilt without it (same IronRDP plain-`String` limit as
+  below). The session id is not reported (`connected{session_id: null}`); the service
+  finds the session by client name + user + loopback.
+- Tests: proto units (argv round trip, sub-command, password frame, events), client units
+  (config, pin, audio formats, error mapping) and `crates/seat-host/tests/headless.rs`
+  (runs the built seat host with `--dry-run` over the real argv / stdin / stdout).
+  **A real connection is untested** (needs a Server + RDSH box).
+
 ## Known limits
 
 - **Untested on hardware.** No RDP target exists on the dev box. The first real run needs

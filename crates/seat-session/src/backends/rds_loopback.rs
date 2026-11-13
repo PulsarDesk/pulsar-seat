@@ -24,7 +24,7 @@ use super::SessionDeps;
 use super::rdp::RdpCore;
 use crate::edition::{HostClass, arch_name, classify};
 use crate::error::{err, reason};
-use crate::rds::{RdsApplier, rdp_denied, termservice_is_stock};
+use crate::rds::{Claim, rdp_denied, termservice_is_stock};
 
 /// RDP session cap when the listener sets none (the seat model has 16 seats; seat 1 is
 /// the console under the default topology).
@@ -354,7 +354,7 @@ impl SessionBackend for RdsLoopbackBackend {
         if let Availability::Unavailable { reason } = &p.availability {
             return Err(err(ErrorKind::Unsupported, reason, "rds_loopback is not available on this PC"));
         }
-        let rep = RdsApplier::new(self.d.registry.clone(), self.d.journal.clone(), self.d.wall_clock.clone()).apply()?;
+        let rep = self.d.rds_applier().claim(Claim::Local)?;
         let mut notes = rep.notes;
         *lock(&self.second.settings) = settings.backends.loopback_listener.clone();
         self.second.prepared.store(true, Ordering::SeqCst);
@@ -378,7 +378,7 @@ impl SessionBackend for RdsLoopbackBackend {
             }
             *lock(&self.second.state) = ListenerState::Unknown;
         }
-        let rep = RdsApplier::new(self.d.registry.clone(), self.d.journal.clone(), self.d.wall_clock.clone()).restore_all()?;
+        let rep = self.d.rds_applier().release(Claim::Local)?;
         for s in rep.skipped_changed {
             log::warn!("rds: {s} was changed after us; left as it is");
         }

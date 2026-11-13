@@ -14,6 +14,7 @@ pub mod loopback_listener;
 pub mod probes;
 pub mod process;
 pub mod registry;
+pub mod wmi;
 pub mod wts;
 
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
@@ -151,6 +152,7 @@ impl SessionDeps {
             rds: Arc::new(probes::WindowsRdsProbe::new(reg)),
             wts: wts.clone(),
             journal: Arc::new(JsonlRestoreLog::in_data_root(data_dir, crate::rds::PACKAGE)),
+            ts_claims: crate::rds::TsClaims::process(),
             loopback: Arc::new(loopback_listener::WindowsLoopbackHost),
             listener_journal: Arc::new(JsonlRestoreLog::in_data_root(data_dir, crate::loopback_listener::PACKAGE)),
             launcher: Arc::new(launch::WindowsLauncher::new(wts)),

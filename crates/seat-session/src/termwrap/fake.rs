@@ -235,7 +235,15 @@ impl FakeWorld {
         w
     }
 
-    pub fn termwrap(&self, policy: TermwrapPolicy) -> WindowsTermwrap {
+    /// The engine over these fakes. Tests exercise `enable` in every build, so the fake
+    /// always counts as built with the feature (see `enable_needs_the_feature`).
+    pub fn termwrap(&self, mut policy: TermwrapPolicy) -> WindowsTermwrap {
+        policy.enable_built_in = true;
+        self.termwrap_as_built(policy)
+    }
+
+    /// The engine with `policy` exactly as given.
+    pub fn termwrap_as_built(&self, policy: TermwrapPolicy) -> WindowsTermwrap {
         let files: Arc<dyn FileInspector> = self.files.clone();
         WindowsTermwrap::new(
             TermwrapDeps {

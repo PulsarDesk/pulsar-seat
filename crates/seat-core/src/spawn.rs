@@ -2,7 +2,7 @@
 //! Process-wide spawn lock shared by every crate that starts child processes inside the
 //! service process (contracts §0 "spawn rule").
 //!
-//! `split_session` briefly makes the RDP helper's password-pipe handle inheritable while it
+//! `seat_session::remote` briefly makes the RDP helper's password-pipe handle inheritable while it
 //! calls `CreateProcess` with an explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. A
 //! `std::process::Command` spawn inherits *every* inheritable handle of the process, so a
 //! concurrent `Command::spawn` could pick up that pipe. Rule: every spawn in the service

@@ -431,6 +431,31 @@ fn architecture_must_match_host() {
 }
 
 #[test]
+fn enable_needs_the_feature() {
+    assert_eq!(TermwrapPolicy::default().enable_built_in, cfg!(feature = "experimental-client-sku"));
+    let w = FakeWorld::with_wrapper();
+    let off = w.termwrap_as_built(TermwrapPolicy { enable_built_in: false, ..TermwrapPolicy::default() });
+    assert_eq!(code(off.enable(Path::new(FAKE_WRAPPER), WARNING_VERSION)), "unsupported");
+    assert_untouched(&w);
+    // Disable and status still work in such a build.
+    assert!(off.status().is_ok());
+    assert!(off.disable().is_ok());
+}
+
+#[test]
+fn x64_only_even_with_a_native_arm64_wrapper() {
+    // Merge step 7: the wrapper kind is x64 only. An ARM64 host with an ARM64 wrapper DLL
+    // is still refused, with nothing written.
+    let w = FakeWorld::with_wrapper();
+    w.host.machine.store(u32::from(pe::IMAGE_FILE_MACHINE_ARM64), Ordering::SeqCst);
+    w.files.edit(FAKE_WRAPPER, |f| f.machine = Some(pe::IMAGE_FILE_MACHINE_ARM64));
+    let e = tw(&w).enable(Path::new(FAKE_WRAPPER), WARNING_VERSION).unwrap_err();
+    assert_eq!(e.code(), "wrapper_arch");
+    assert!(e.to_string().contains("x64 only"), "{e}");
+    assert_untouched(&w);
+}
+
+#[test]
 fn insecure_acl_is_refused() {
     let w = FakeWorld::with_wrapper();
     w.files.edit(FAKE_INI, |f| f.writable_by_users = true);
@@ -494,7 +519,7 @@ fn works_with_the_jsonl_journal() {
             journal: journal.clone(),
             clock: w.clock.clone(),
         },
-        TermwrapPolicy::default(),
+        TermwrapPolicy { enable_built_in: true, ..TermwrapPolicy::default() },
     );
     t.enable(Path::new(FAKE_WRAPPER), WARNING_VERSION).unwrap();
     let text = std::fs::read_to_string(journal.path()).unwrap();

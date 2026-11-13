@@ -222,6 +222,35 @@ impl TermwrapError {
     }
 }
 
+/// Remote seats' control requests (`set_termwrap`, from Pulsar Split's `split-termwrap`).
+impl From<TermwrapError> for seat_core::error::ProtoError {
+    fn from(e: TermwrapError) -> Self {
+        use seat_core::error::ErrorCode;
+        let code = match &e {
+            TermwrapError::WarningNotAcknowledged { .. }
+            | TermwrapError::WrapperMissing(_)
+            | TermwrapError::WrapperUnsigned(_)
+            | TermwrapError::WrapperArch(_)
+            | TermwrapError::WrapperInsecureAcl(_)
+            | TermwrapError::WrapperPath(_)
+            | TermwrapError::WrapperConfig(_) => ErrorCode::InvalidValue,
+            TermwrapError::NotClientSku
+            | TermwrapError::EditionUnsupported(_)
+            | TermwrapError::UnknownTermsrvBuild(_)
+            | TermwrapError::TermsrvVersionUnreadable(_)
+            | TermwrapError::Unsupported(_) => ErrorCode::NotImplemented,
+            TermwrapError::ForeignWrapper(_) | TermwrapError::ReferenceProductPresent => ErrorCode::ServiceUnavailable,
+            _ => ErrorCode::Internal,
+        };
+        let field = matches!(e, TermwrapError::WrapperPath(_) | TermwrapError::WrapperMissing(_)).then_some("wrapper_path");
+        let p = seat_core::error::ProtoError::new(code, format!("{}: {e}", e.code()));
+        match field {
+            Some(f) => p.with_field(f),
+            None => p,
+        }
+    }
+}
+
 impl From<TermwrapError> for BackendError {
     fn from(e: TermwrapError) -> Self {
         let kind = match &e {
@@ -280,6 +309,19 @@ mod tests {
         let b: BackendError = TermwrapError::UnknownTermsrvBuild(FileVersion::new(10, 0, 1, 2)).into();
         assert_eq!((b.kind, b.reason.as_str()), (ErrorKind::Unsupported, "unknown_termsrv_build"));
         assert_eq!(BlockReason::WrapperWrongArchitecture.code(), "wrapper_arch");
+    }
+
+    #[test]
+    fn error_maps_to_proto_with_code_first() {
+        use seat_core::error::{ErrorCode, ProtoError};
+        let p: ProtoError = TermwrapError::ForeignWrapper(r"C:\x.dll".into()).into();
+        assert_eq!(p.code, ErrorCode::ServiceUnavailable);
+        assert!(p.message.starts_with("foreign_wrapper: "));
+        let p: ProtoError = TermwrapError::WrapperPath("x".into()).into();
+        assert_eq!(p.field.as_deref(), Some("wrapper_path"));
+        let p: ProtoError = TermwrapError::WarningNotAcknowledged { got: 1, expected: WARNING_VERSION }.into();
+        assert_eq!(p.code, ErrorCode::InvalidValue);
+        assert!(p.message.starts_with("experimental_not_acknowledged: "));
     }
 
     #[test]

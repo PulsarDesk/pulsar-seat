@@ -16,7 +16,7 @@
 use seat_setup::cli::SetupCommand;
 use seat_setup::layout::Layout;
 use seat_setup::{InstallOptions, ReconcileHook, RestoreHook, SetupError};
-use split_session::manager::SessionManager;
+use seat_session::remote::manager::SessionManager;
 use std::path::PathBuf;
 
 fn other(e: impl std::fmt::Display) -> SetupError {
@@ -33,7 +33,7 @@ impl RestoreHook for SessionHook {
         "session"
     }
     fn restore_all(&self) -> Result<(), SetupError> {
-        let m = split_session::manager::WindowsSessionManager::new(&self.data_root, &self.helper, Default::default())
+        let m = seat_session::remote::manager::WindowsSessionManager::new(&self.data_root, &self.helper, Default::default())
             .map_err(other)?;
         m.restore_host().map(|_| ()).map_err(other)
     }
@@ -48,7 +48,7 @@ impl RestoreHook for TermwrapHook {
         "termwrap"
     }
     fn restore_all(&self) -> Result<(), SetupError> {
-        split_termwrap::WindowsTermwrap::system(self.data_root.clone(), Default::default()).restore_all().map_err(other)
+        seat_session::termwrap::WindowsTermwrap::system(&self.data_root, Default::default()).restore_all().map_err(other)
     }
     fn needs_termservice_restart(&self) -> bool {
         true
@@ -140,13 +140,15 @@ pub fn run(cmd: SetupCommand) -> i32 {
     let layout = Layout::from_env();
     let data_root = layout.data_root.clone();
     let install_dir = layout.install_root.clone();
+    // Terminal Server writers restore in the fixed reverse order of seat_session::rds:
+    // termwrap (ServiceDll + wrapper rows) before the session rows.
     let hooks: Vec<Box<dyn RestoreHook>> = vec![
-        Box::new(SessionHook { data_root: data_root.clone(), helper: install_dir.join("pulsar-split-rdp-helper.exe") }),
+        Box::new(TermwrapHook { data_root: data_root.clone() }),
+        Box::new(SessionHook { data_root: data_root.clone(), helper: install_dir.join(seat_core::consts::HOST_EXE) }),
         Box::new(ShimHook { install_dir: install_dir.clone() }),
         Box::new(StreamHook { data_root: data_root.clone() }),
         Box::new(PadsHook { data_root: data_root.clone() }),
         Box::new(display_hook(data_root.clone())),
-        Box::new(TermwrapHook { data_root: data_root.clone() }),
     ];
     let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(display_hook(data_root))];
     let ctx = seat_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);

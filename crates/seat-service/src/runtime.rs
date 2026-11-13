@@ -284,7 +284,7 @@ impl Running {
             self.service.on_session_change(c, session_id);
         }
         if let Some(e) = &self.engine {
-            e.on_session_change(split_session::manager::SessionChange::from_raw(raw_reason, session_id));
+            e.on_session_change(seat_session::remote::manager::SessionChange::from_raw(raw_reason, session_id));
         }
     }
 

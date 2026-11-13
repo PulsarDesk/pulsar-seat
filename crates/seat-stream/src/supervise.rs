@@ -37,7 +37,7 @@ pub struct Launched {
     pub creation_time: u64,
 }
 
-/// Implemented by the integrator with split-session's launcher, or by
+/// Implemented by the integrator with seat_session::remote's launcher, or by
 /// `crate::win::launch::SessionLauncher`.
 pub trait ServerLauncher: Send + Sync {
     fn launch_system_in_session(

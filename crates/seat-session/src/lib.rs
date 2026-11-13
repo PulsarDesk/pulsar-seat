@@ -12,6 +12,12 @@
 //! | `fast_user_switch` | [`backends::fast_user_switch`] | everywhere (runtime fallback) |
 //! | `desktops` | [`backends::desktops`] | kiosk seats in the console session |
 //!
+//! Remote seats (merge-plan.md step 7) run on the same `rds_loopback` path: [`remote`]
+//! holds their session manager (headless hold, `PSS…` discovery, sweeps) and shares the
+//! edition probe, the one Terminal Server settings writer + journal ([`rds`]) and the WTS
+//! model ([`wts`]) with the local backends. `fast_user_switch` and `desktops` are local
+//! only.
+//!
 //! Layout: pure decision logic in the public modules (runs and is tested on any host);
 //! every system access goes through a trait ([`registry::Registry`], [`wts::Wts`],
 //! [`edition::EditionProbe`], [`rds::RdsProbe`], [`launch::SessionLauncher`],
@@ -38,10 +44,15 @@ pub mod loopback_listener;
 pub mod pe;
 pub mod rds;
 pub mod registry;
+pub mod remote;
 pub mod version;
 pub mod wts;
 
-#[cfg(feature = "experimental-client-sku")]
+/// The one termsrv-wrapper integration (Seat's port merged with Pulsar Split's
+/// `split-termwrap` at step 7). Always compiled so that status, disable, the boot gate and
+/// the uninstall restore work in every build; turning it **on** needs the cargo feature
+/// `experimental-client-sku` ([`termwrap::TermwrapPolicy::enable_built_in`]), an x64 host
+/// and the admin's warning ack. Off by default.
 pub mod termwrap;
 
 #[cfg(windows)]

@@ -155,7 +155,7 @@ impl SessionBackend for TermsrvWrapperBackend {
                     notes.push("termsrv_wrapper_enabled".into());
                 }
             }
-            let rep = crate::rds::RdsApplier::new(self.d().registry.clone(), self.d().journal.clone(), self.d().wall_clock.clone()).apply()?;
+            let rep = self.d().rds_applier().claim(crate::rds::Claim::Local)?;
             notes.extend(rep.notes);
             Ok(notes)
         }

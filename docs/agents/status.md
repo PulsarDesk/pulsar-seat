@@ -676,6 +676,52 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     uses `git status --untracked-files=no`; generated notices are untracked).
   - Untested on hardware: FAT / exFAT refusal of keygen (NTFS path tested by a unit test
     and a scratch keygen + sign + verify run); SDV result parsing (SDV never completed a run).
+- 2026-11-14: **merge step 7 done** (session layer, architecture.md 10.4). `split-session`,
+  `split-rdp-helper` and `split-termwrap` are gone. `seat_session::remote` holds Split's
+  session manager (seat users, start / stop / tick, `PSS…` discovery, launch, run state
+  `run\remote-sessions.json`, job `PulsarSeat.RemoteSeat.<id>`, sweeps); edition probe,
+  `HostClass`, real probes (WMI role first, listener TCP table + certificate thumbprint,
+  grace days), registry, WTS model, launch helpers are one implementation for both kinds.
+  **One Terminal Server writer + one journal** (`rds::RdsApplier`, `journal\session.jsonl`):
+  `Claim::Local` / `Claim::Remote`, rows = union of claims, releasing one kind keeps the
+  other kind's rows, created accounts journaled as kind `account`; Split's `Originals` key
+  and its "path B" rows are gone (the wrapper owns those two rows). Fixed order: rows →
+  second NLA-off listener → wrapper; restore reversed (setup `uninstall` hooks now run
+  termwrap before session). **Headless hold**: `seat_rdp::headless` (proto always built,
+  IronRDP client behind `client`) and `pulsar-seat-host --headless-hold`; protocol = Split's
+  helper contract unchanged (argv after the sub-command, one stdin password frame, JSON Lines
+  on stdout). **Sweep**: `plan_sweep_for(kind, …)` knows `PSEAT-NN` and `PSS…` and never
+  plans the other kind's sessions (also with a stale record); the local newest-session
+  fallback never takes a `PSS…` session. **termwrap**: one module `seat_session::termwrap`,
+  always compiled, `enable` needs feature `experimental-client-sku` + an x64 host + ack
+  version 2 (split-manager now shows Seat's warning text, version 2; its state no longer
+  uses `HKLM\SOFTWARE\PulsarSplit\Termwrap`). Gates green: cargo 1489 passed (was 1566;
+  **97 tests deleted on purpose with their code**, every one with an identical or
+  rewritten copy in the merged crate: all 73 `split_termwrap` tests (the same tests as
+  `seat_session::termwrap` / `acl` / `journal` / `pe` / `version` / `win::files`, Seat's
+  port of that crate) and 24 `split_session` tests: edition `classify_matrix`,
+  `product_type_parse`, `file_version_from_fixed_info`, `reads_live_box_values_from_registry`,
+  `missing_or_unknown_values_are_errors`; journal `record_shape_matches_contract`, `rfc3339`,
+  `jsonl_file_appends_with_sequence_and_skips_torn_lines`; win registry
+  `encode_decode_round_trip`; rds `rows_are_the_write_rows_only`,
+  `apply_saves_originals_once_and_restore_puts_them_back`,
+  `restore_skips_values_changed_after_us`, `policy_values_are_reported_not_fought`,
+  `gpo_change_after_our_write_is_reported_not_rewritten`, `wrapper_rows_only_on_request`
+  (the RDS writer no longer writes the wrapper rows), `addins_are_verified_only`,
+  `listener_values`, `licensing_mode_policy_first`, `stock_service_dll`; launch
+  `quoting_matches_crt_rules`, `command_line_quotes_exe`, `env_block_merges_and_sorts`,
+  `non_ascii_first_char_does_not_panic` (shared `crate::launch` copies); win wts
+  `client_address_decoding`. 20 added (rds claims / both kinds / remote rows / GPO /
+  add-ins, edition wire name + live box values, wts kinds + local fallback, sweep both
+  prefixes, termwrap x64-only / feature gate / proto mapping, remote launch + WTS, headless
+  sub-command, seat-host stdin round trip + no-sub-command); the other 53 Split session
+  tests, 5 protocol units, 4 client units and 5 dry-run tests moved unchanged.
+  clippy aarch64 + x86_64 clean, vitest 115 + 45, installer scripts 29 (+ Split's 15), shim 8
+  (host; x64 check only). Untested on hardware (no Server + RDSH box): every
+  `seat_session::{win, remote::win}` path, the headless hold against a real TermService.
+  Open: `installer/split/` (WiX, NSIS conf, README) still names
+  `pulsar-split-rdp-helper.exe` (step 10: the MSI ships only `pulsar-seat-host.exe`).
+  **Next:** step 8 (audio, pads + shim, display traits).
 - 2026-11-14: **merge steps 5 + 6 done** (merge-plan.md section 3). Step 5: `SecretStore`
   gained the remote seats' Pulsar slots (`RemoteSecretSlot` identity / connect password /
   relay key, `set_remote` / `get_remote`, LSA names `L$PulsarSeat.Remote.<seat-id>.<slot>`,

@@ -25,8 +25,8 @@ use seat_proto::remote::{
     DisplayBackendPref, ErrorCode, RemoteSettings, HostInfo, IsolationStatus, PadBackendPref, PairMode, PairState, PairedClient,
     PendingPair, ProtoError, RemoteSeatRecord, SeatRuntime, Secret, ShimTargetDto, StopAction, StreamBackendInfo, StreamBackendKind,
 };
-use split_session::launch::{DEFAULT_DESKTOP, LaunchSpec, TokenKind};
-use split_session::manager::{CancelToken, SeatSession, SessionChange, SessionManager, SessionNotice, SessionRequest};
+use seat_session::remote::launch::{DEFAULT_DESKTOP, LaunchSpec, TokenKind};
+use seat_session::remote::manager::{CancelToken, SeatSession, SessionChange, SessionManager, SessionNotice, SessionRequest};
 use seat_shim_core::{SeatFlags, SeatMapEntry, SeatMapWriter, ShimHealth, ShimTarget};
 use seat_stream::StreamError;
 use seat_stream::apps::{AppEntry, default_apps, parse_apps_json, render_apps_json, validate_apps, wrap_with_launcher};
@@ -34,7 +34,7 @@ use seat_stream::backend::{PeerEvent, Prepared, SeatStream, SeatStreamSpec, Stre
 use seat_stream::control::ServerEvent;
 use seat_stream::seatdir::{SecureFs, SeatDir};
 use seat_stream::supervise::StreamNotice;
-use split_termwrap::{Termwrap, TermwrapState};
+use seat_session::termwrap::{Termwrap, TermwrapState};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1246,7 +1246,7 @@ impl Engine {
         }
         let tw = &self.d().termwrap;
         let st = if enabled {
-            if ack != split_termwrap::WARNING_VERSION {
+            if ack != seat_session::termwrap::WARNING_VERSION {
                 return Err(err(ErrorCode::WarningNotAcknowledged, "warning_not_acknowledged", "read and accept the warning first"));
             }
             let path = match wrapper {
@@ -1683,10 +1683,10 @@ pub fn redact(l: &str) -> String {
     if pin_word || MARKERS.iter().any(|m| lower.contains(m)) { "[satır gizlendi]".to_string() } else { l.trim_end().to_string() }
 }
 
-fn termwrap_json(s: &split_termwrap::TermwrapStatus) -> serde_json::Value {
+fn termwrap_json(s: &seat_session::termwrap::TermwrapStatus) -> serde_json::Value {
     let mut v = json(s);
     if let Some(o) = v.as_object_mut() {
-        o.insert("warning_text".into(), serde_json::Value::String(split_termwrap::WARNING_TR.into()));
+        o.insert("warning_text".into(), serde_json::Value::String(seat_session::termwrap::WARNING_TR.into()));
     }
     v
 }

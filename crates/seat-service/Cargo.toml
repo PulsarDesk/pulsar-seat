@@ -24,7 +24,7 @@ experimental-client-sku = ["seat-session/experimental-client-sku"]
 [dependencies]
 seat-core.workspace = true
 seat-proto.workspace = true
-seat-session.workspace = true
+seat-session = { workspace = true }
 seat-display.workspace = true
 seat-input.workspace = true
 seat-media.workspace = true
@@ -46,8 +46,6 @@ seat-rdp = { path = "../seat-rdp", default-features = false }
 seat-release = { path = "../seat-release", default-features = false }
 # Remote seat worker (Pulsar Split's engine, merge step 6).
 uuid.workspace = true
-split-session.workspace = true
-split-termwrap.workspace = true
 split-display.workspace = true
 seat-audio.workspace = true
 seat-stream.workspace = true
@@ -94,8 +92,7 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 seat-core = { workspace = true, features = ["mock"] }
-split-session = { workspace = true, features = ["fake"] }
-split-termwrap = { workspace = true, features = ["fake"] }
+seat-session = { workspace = true, features = ["fake"] }
 split-display = { workspace = true, features = ["fake"] }
 seat-audio = { workspace = true, features = ["fake"] }
 seat-stream = { workspace = true, features = ["fake"] }

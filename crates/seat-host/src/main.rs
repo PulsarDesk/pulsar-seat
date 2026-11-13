@@ -25,6 +25,10 @@
 //!      service restarts it with back-off, seat_session::autologon::after_session_end)
 //! ```
 //!
+//! Headless hold (`--headless-hold …`, `headless.rs`): remote seats only. Holds one seat's
+//! RDS session without frames (password over stdin, JSON Lines on stdout); replaces
+//! Pulsar Split's `pulsar-split-rdp-helper.exe`.
+//!
 //! RDP backends (`--rdp-backend` / `PULSAR_SEAT_RDP_BACKEND`):
 //!
 //! - `ironrdp` (default, `ironrdp.rs` over `seat_rdp`): pinned listener certificate,
@@ -36,6 +40,9 @@
 //! - `activex` (fallback, `host.rs` above): the Remote Desktop ActiveX control. It plays
 //!   audio on the host session's default endpoint, has no certificate pinning, touch or
 //!   relative mouse. Never chosen automatically.
+
+// `--headless-hold …`: remote seat session hold (no frames), started by the service.
+mod headless;
 
 // Start-up containment checks and the `--desktop-acl` helper (host-containment).
 mod containment;
@@ -77,6 +84,10 @@ fn main() {
         std::process::exit(code);
     }
     let args: Vec<String> = std::env::args().collect();
+    // `--headless-hold …`: the service's per-remote-seat session hold (JSON Lines on stdout).
+    if let Some(code) = headless::dispatch(args.get(1..).unwrap_or_default()) {
+        std::process::exit(code);
+    }
     // `--desktop-acl grant|revoke --sid S`: window-station / desktop ACEs for a contained
     // host, run by the service in the target session.
     if let Some(code) = containment::dispatch_acl(&args) {

@@ -36,8 +36,7 @@ client = [
     "dep:ironrdp-cliprdr",
     "dep:ironrdp-rdpdr",
     "dep:ironrdp-cliprdr-native",
-    "dep:ironrdp-rdpdr-native",
-    "dep:zeroize",
+    "dep:ironrdp-rdpdr-native"
 ]
 
 [dependencies]
@@ -69,7 +68,10 @@ num-traits = { version = "0.2", optional = true }
 # Also without `client`: the redirection policy (`policy`) is resolved by the service.
 seat-core = { workspace = true }
 seat-input = { workspace = true, optional = true }
-zeroize = { workspace = true, optional = true }
+# Headless hold protocol (`headless::proto`, also without `client`): password frame, events.
+zeroize = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Listener certificate lookup (registry + "Remote Desktop" machine store).
 [target.'cfg(windows)'.dependencies]

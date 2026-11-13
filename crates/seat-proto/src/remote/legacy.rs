@@ -179,7 +179,7 @@ pub enum ResponseBody {
     Ack,
     // ---- v2 ----
     HostInfo(HostInfo),
-    /// `split_termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
+    /// `seat_session::termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
     TermwrapStatus(serde_json::Value),
     SeatRuntime(SeatRuntime),
     /// `split_display::RenderAdapter` values.

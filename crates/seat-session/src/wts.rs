@@ -24,6 +24,30 @@ use crate::error::SysError;
 /// Session ids at or above this are listeners, never user sessions.
 pub const LISTENER_ID_MIN: u32 = 65_536;
 
+/// Client-name prefix of remote seats (`PSS` + 8 upper-case hex, Pulsar Split's scheme).
+pub const REMOTE_CLIENT_NAME_PREFIX: &str = "PSS";
+
+/// A remote seat's client name: `PSS` + exactly 8 upper-case hex digits.
+pub fn is_remote_client_name(name: &str) -> bool {
+    name.len() == 11
+        && name.starts_with(REMOTE_CLIENT_NAME_PREFIX)
+        && name[3..].bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+}
+
+/// Which seat kind a client name belongs to: `PSEAT-NN` = local, `PSS…` = remote, anything
+/// else (the ActiveX client's computer name, a person's own RDP client) = none. The
+/// session sweep and the local newest-session fallback use this so one kind never takes
+/// or logs off the other kind's sessions (merge-plan.md §4 risk 3).
+pub fn client_name_kind(name: &str) -> Option<seat_core::config::SeatKind> {
+    if seat_of_client_name(name).is_some() {
+        Some(seat_core::config::SeatKind::Local)
+    } else if is_remote_client_name(name) {
+        Some(seat_core::config::SeatKind::Remote)
+    } else {
+        None
+    }
+}
+
 /// `PSEAT-NN` (8 chars, below the 15-character RDP client-name limit).
 pub fn client_name_for(seat: SeatNumber) -> String {
     format!("{}{}", seat_core::consts::RDP_CLIENT_NAME_PREFIX, seat.two_digits())
@@ -95,6 +119,19 @@ impl WtsSession {
 
     pub fn is_console_winstation(&self) -> bool {
         self.winstation.eq_ignore_ascii_case("Console")
+    }
+
+    /// Services, listeners and the console winstation are never a remote seat's session.
+    pub fn is_never_seat(&self) -> bool {
+        self.is_system_or_listener() || self.is_console_winstation()
+    }
+
+    /// Remote seat match: exact client name AND user (case-insensitive) AND loopback.
+    pub fn matches(&self, client_name: &str, user: &str) -> bool {
+        !self.is_never_seat()
+            && self.client_name.eq_ignore_ascii_case(client_name)
+            && self.user.eq_ignore_ascii_case(user)
+            && self.client_address.is_some_and(|a| a.is_loopback())
     }
 
     /// An interactive session (local or remote) that can belong to a seat.
@@ -196,6 +233,9 @@ pub fn find_rdp_seat_session(all: &[WtsSession], m: &SeatMatch<'_>) -> Option<u3
     let base = |s: &&WtsSession| {
         s.is_loopback_remote()
             && !m.claimed.contains(&s.id)
+            // A remote seat's session (`PSS…`) is never a local seat's, also not as the
+            // "newest new session" fallback while a remote seat starts at the same time.
+            && client_name_kind(&s.client_name) != Some(seat_core::config::SeatKind::Remote)
             && match m.account {
                 // The user name is empty while the session is still at the logon / NLA stage.
                 Some((d, u)) => s.user.is_empty() || s.user_matches(d, u),
@@ -304,6 +344,32 @@ mod tests {
         // Remote address is required.
         let m4 = SeatMatch { before: &[0, 1, 2, 4, 5], ..m.clone() };
         assert_eq!(find_rdp_seat_session(&all, &m4), None);
+    }
+
+    #[test]
+    fn client_name_kinds_and_the_local_fallback_skip_remote_seats() {
+        use seat_core::config::SeatKind;
+        assert_eq!(client_name_kind("PSEAT-02"), Some(SeatKind::Local));
+        assert_eq!(client_name_kind("PSS00AA11BB"), Some(SeatKind::Remote));
+        for other in ["HOSTPC", "PSS00aa11bb", "PSS00AA11B", "PSEAT-99", ""] {
+            assert_eq!(client_name_kind(other), None, "{other}");
+        }
+        // A remote seat started meanwhile: its session is newer, unclaimed and loopback,
+        // but the local seat's newest fallback must not take it.
+        let all = vec![
+            session(1, "", "owner", "", WtsState::Active),
+            session(4, "HOSTPC", "", "127.0.0.1", WtsState::Connected),
+            session(7, "PSS00AA11BB", "", "127.0.0.1", WtsState::Connected),
+        ];
+        let m = SeatMatch { client_name: "PSEAT-02", account: None, before: &[1], claimed: &[], reported: None, newest_fallback: true };
+        assert_eq!(find_rdp_seat_session(&all, &m), Some(4));
+        assert_eq!(find_rdp_seat_session(&all[..1].iter().chain(&all[2..]).cloned().collect::<Vec<_>>(), &m), None);
+        // The remote match needs its exact name, user and loopback; never the console.
+        let mut s = session(7, "PSS00AA11BB", "koltuk", "127.0.0.1", WtsState::Active);
+        assert!(s.matches("pss00aa11bb", "KOLTUK"));
+        assert!(!s.matches("PSEAT-02", "koltuk"));
+        s.winstation = "Console".into();
+        assert!(!s.matches("PSS00AA11BB", "koltuk") && s.is_never_seat());
     }
 
     #[test]

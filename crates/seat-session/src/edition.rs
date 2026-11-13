@@ -59,7 +59,9 @@ pub enum HostClass {
     /// Home: no Remote Desktop host at all.
     Home,
     /// Pro / Enterprise / Education: one interactive session at a time through documented
-    /// paths (the experimental wrapper module is separate).
+    /// paths (the experimental wrapper module is separate). Wire name kept from Pulsar
+    /// Split's remote host info (`client_multi_session_unavailable`).
+    #[serde(rename = "client_multi_session_unavailable", alias = "client")]
     Client,
     /// Windows Server without the RD Session Host role (two admin sessions only).
     ServerWithoutRdsh,
@@ -180,5 +182,33 @@ mod tests {
         assert!(edition_from_registry(&reg, None).is_err());
         assert!(edition_from_registry(&MemoryRegistry::default(), None).is_err());
         assert_eq!(arch_name(0xAA64), "arm64");
+    }
+
+    // From Pulsar Split's split-session::edition (merge step 7).
+
+    #[test]
+    fn product_type_parse() {
+        assert_eq!(ProductType::parse("WinNT"), Some(ProductType::WinNt));
+        assert_eq!(ProductType::parse(" servernt "), Some(ProductType::ServerNt));
+        assert_eq!(ProductType::parse("LanmanNT"), Some(ProductType::LanmanNt));
+        assert_eq!(ProductType::parse("x"), None);
+        assert_eq!(serde_json::to_string(&HostClass::Client).unwrap(), r#""client_multi_session_unavailable""#);
+        assert_eq!(serde_json::from_str::<HostClass>(r#""client""#).unwrap(), HostClass::Client);
+    }
+
+    #[test]
+    fn reads_live_box_values_and_ignores_product_name() {
+        let reg = MemoryRegistry::default();
+        reg.put(CURRENT_VERSION_KEY, "EditionID", RegValue::Sz("Professional".into()));
+        reg.put(CURRENT_VERSION_KEY, "InstallationType", RegValue::Sz("Client".into()));
+        reg.put(CURRENT_VERSION_KEY, "DisplayVersion", RegValue::Sz("26H2".into()));
+        reg.put(CURRENT_VERSION_KEY, "ProductName", RegValue::Sz("Windows 10 Pro".into()));
+        reg.put(CURRENT_VERSION_KEY, "CurrentBuild", RegValue::Sz("26300".into()));
+        reg.put(PRODUCT_OPTIONS_KEY, "ProductType", RegValue::Sz("WinNT".into()));
+        let tv = FileVersion::new(10, 0, 26100, 9818);
+        let e = edition_from_registry(&reg, Some(tv)).unwrap();
+        assert_eq!((e.installation_type.as_str(), e.display_version.as_str(), e.build), ("Client", "26H2", 26300));
+        assert_eq!(e.termsrv_version, Some(tv));
+        assert_eq!(classify(&e, true), HostClass::Client, "the RDSH role does not make a client SKU a server");
     }
 }

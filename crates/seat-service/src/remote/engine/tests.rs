@@ -5,8 +5,8 @@
 use super::*;
 use seat_pads::{PadKind, PadManagerConfig};
 use seat_proto::remote::SeatAudioSettings;
-use split_session::fake::{FakeHost, HelperScript, fake_deps, loopback_session};
-use split_session::manager::{Manager, SessionTimeouts};
+use seat_session::remote::fake::{FakeHost, HelperScript, fake_deps, loopback_session};
+use seat_session::remote::manager::{Manager, SessionTimeouts};
 use seat_stream::backend::pulsar::{HostDistSource, PulsarEnv, SecretKind};
 use seat_stream::backend::sunshine::SunshineEnv;
 use seat_stream::backend::{PulsarHostBackend, SunshineBackend};
@@ -84,7 +84,7 @@ struct World {
     seatmap: Arc<seat_shim_core::fake::FakeSeatMap>,
     isolation: Arc<FakeIsolation>,
     passive: Arc<AtomicBool>,
-    termwrap: split_termwrap::fake::FakeWorld,
+    termwrap: seat_session::termwrap::fake::FakeWorld,
     ports: Arc<sf::FakeProbe>,
     bt: Arc<seat_pads::fake::FakeUserServices>,
     pipes: sf::FakeHostPipes,
@@ -191,7 +191,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     let isolation = Arc::new(FakeIsolation::default());
     let passive = Arc::new(AtomicBool::new(false));
     let p2 = passive.clone();
-    let termwrap = split_termwrap::fake::FakeWorld::default();
+    let termwrap = seat_session::termwrap::fake::FakeWorld::default();
     let engine = Engine::new(Deps {
         session: Arc::new(manager),
         displays: vec![Arc::new(rdp)],
@@ -206,7 +206,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
         )))),
         isolation: isolation.clone(),
         seatmap: seatmap.clone(),
-        termwrap: Arc::new(termwrap.termwrap(split_termwrap::TermwrapPolicy::default())),
+        termwrap: Arc::new(termwrap.termwrap(seat_session::termwrap::TermwrapPolicy::default())),
         coexist: Arc::new(move || CoexistOutcome {
             passive: p2.load(Ordering::SeqCst),
             report: Some(serde_json::json!({"mode": "normal"})),
@@ -226,7 +226,7 @@ fn seat() -> RemoteSeatRecord {
         display_name: "Salon PC".into(),
         user_name: "seat1".into(),
         port: 48100,
-        rdp_client_name: split_session::discover::client_name_for(SEAT_ID, 0),
+        rdp_client_name: seat_session::remote::discover::client_name_for(SEAT_ID, 0),
         audio: SeatAudioSettings::default(),
         ..Default::default()
     }
@@ -375,7 +375,7 @@ fn display_timeout_fails_the_seat_and_undoes_the_session() {
 #[test]
 fn rejected_logon_fails_with_the_session_reason() {
     let w = world();
-    w.session.helper.push(HelperScript::fails(split_session::helper_proto::HelperFailure::ClientAuth));
+    w.session.helper.push(HelperScript::fails(seat_session::remote::helper_proto::HelperFailure::ClientAuth));
     w.engine.start_seat(&seat(), &global(), Some(Secret("nope".into()))).unwrap();
     let seen = wait_for(&w, |e| matches!(e, SeatEvent::Failed { .. }));
     let reason = seen.iter().find_map(|e| if let SeatEvent::Failed { reason, .. } = e { Some(reason.clone()) } else { None });
@@ -420,7 +420,7 @@ fn session_failure_from_tick_takes_the_seat_down() {
     for _ in 0..4 {
         let n = w.session.helper.spawn_count();
         w.session.helper.child(n - 1).crash();
-        w.session.helper.push(HelperScript::fails(split_session::helper_proto::HelperFailure::Network));
+        w.session.helper.push(HelperScript::fails(seat_session::remote::helper_proto::HelperFailure::Network));
         w.session.clock.advance(Duration::from_secs(1));
         w.engine.tick(w.clock.advance(1_000));
         if w.engine.take_reports().iter().any(|(_, e)| matches!(e, SeatEvent::Failed { .. })) {
@@ -539,9 +539,9 @@ fn termwrap_enable_needs_the_current_warning_ack() {
     assert_eq!(e.code, ErrorCode::WarningNotAcknowledged);
     // The fake host is a client SKU without a wrapper on disk: enable is refused by the
     // package (fail closed), never forced by the service.
-    let e = w.engine.set_termwrap(true, Some(r"C:\nowhere\rdpwrap.dll"), split_termwrap::WARNING_VERSION).unwrap_err();
+    let e = w.engine.set_termwrap(true, Some(r"C:\nowhere\rdpwrap.dll"), seat_session::termwrap::WARNING_VERSION).unwrap_err();
     assert!(e.reason.is_some(), "{e:?}");
-    assert_eq!(w.termwrap.service_dll().to_ascii_lowercase(), split_termwrap::fake::FakeWorld::default().service_dll().to_ascii_lowercase());
+    assert_eq!(w.termwrap.service_dll().to_ascii_lowercase(), seat_session::termwrap::fake::FakeWorld::default().service_dll().to_ascii_lowercase());
 }
 
 #[test]

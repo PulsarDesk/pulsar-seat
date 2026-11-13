@@ -100,11 +100,11 @@ pub struct HostInfo {
     /// `{mode, grace_days_left}`.
     pub licensing: Option<serde_json::Value>,
     pub max_seats: Option<u32>,
-    /// `split_session::HostWarning` values (`{kind, …}`).
+    /// `seat_session::remote::manager::HostWarning` values (`{kind, …}`).
     pub warnings: Vec<serde_json::Value>,
     /// `seat_setup::CoexistReport` (`{mode, findings[], …}`).
     pub coexistence: Option<serde_json::Value>,
-    /// `split_termwrap::TermwrapStatus`.
+    /// `seat_session::termwrap::TermwrapStatus`.
     pub termwrap: Option<serde_json::Value>,
     /// `split_display::BackendInfo[]`: driver backend status and HDR availability.
     pub display_backends: Vec<serde_json::Value>,

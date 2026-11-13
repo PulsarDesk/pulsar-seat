@@ -330,6 +330,7 @@ impl FakeWorld {
             rds: Arc::new(RegistryRdsProbe { reg: self.registry.clone(), running: self.termservice_running, grace_days_left: None }),
             wts: self.wts.clone(),
             journal: self.journal.clone(),
+            ts_claims: Default::default(),
             loopback: self.loopback.clone(),
             listener_journal: self.listener_journal.clone(),
             launcher: self.launcher.clone(),

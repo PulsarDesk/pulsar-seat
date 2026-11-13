@@ -386,11 +386,12 @@ pub fn build(
     pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore>,
 ) -> Result<Deps, String> {
     use split_display::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
-    let helper = install_dir.join("pulsar-split-rdp-helper.exe");
-    let session = split_session::manager::WindowsSessionManager::new(
+    // The headless session hold is `pulsar-seat-host.exe --headless-hold` (merge step 7).
+    let helper = install_dir.join(seat_core::consts::HOST_EXE);
+    let session = seat_session::remote::manager::WindowsSessionManager::new(
         data_root,
         &helper,
-        split_session::manager::SessionTimeouts::default(),
+        seat_session::remote::manager::SessionTimeouts::default(),
     )
     .map_err(|e| format!("session manager ({}): {e}", helper.display()))?;
 
@@ -466,16 +467,16 @@ pub fn build(
         bluetooth: Some(Arc::new(Mutex::new(bluetooth(data_root)))),
         isolation: Arc::new(WinIsolation { install_dir: install_dir.to_path_buf() }),
         seatmap: Arc::new(seat_shim_core::win::RegSeatMap),
-        termwrap: Arc::new(split_termwrap::WindowsTermwrap::system(
-            data_root.to_path_buf(),
-            split_termwrap::TermwrapPolicy::default(),
+        termwrap: Arc::new(seat_session::termwrap::WindowsTermwrap::system(
+            data_root,
+            seat_session::termwrap::TermwrapPolicy::default(),
         )),
         coexist,
         console_session: Arc::new(console_session),
         audio_cleanup: Arc::new(|| {
-            use split_session::discover::Wts;
+            use seat_session::remote::discover::Wts;
             let live = || {
-                split_session::win::wts::WindowsWts
+                seat_session::remote::win::wts::WindowsWts
                     .sessions()
                     .map(|v| v.into_iter().map(|s| s.id).collect())
                     .map_err(|e| seat_audio::AudioError::Probe(e.to_string()))

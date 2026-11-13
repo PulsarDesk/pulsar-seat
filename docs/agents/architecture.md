@@ -55,8 +55,8 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | --- | --- | --- | --- |
 | (removed) `crates/split-proto`, `crates/split-core` | lib | Split IPC v2 and model | step 4 (done 2026-11-14): `seat_proto::remote`, `seat_core::remote`, `seat_core::error` (§10) |
 | (removed) `crates/split-service` | bin `pulsar-split-service` | Split service | step 6 (done 2026-11-14): `seat-service/src/remote/` (§10.5); DPAPI + HKLM store + own pipe deleted |
-| `crates/split-session`, `crates/split-termwrap` | lib | Server + RDSH sessions, wrapper integration | step 7 into `seat-session` |
-| `crates/split-rdp-helper` | bin `pulsar-split-rdp-helper` | headless IronRDP client (same IronRDP crate versions as `seat-rdp`) | step 7: replaced by a `seat-rdp` headless mode |
+| (removed) `crates/split-session`, `crates/split-termwrap` | lib | Server + RDSH sessions, wrapper integration | step 7 (done 2026-11-14): `seat_session::remote`, shared `edition` / `rds` / `wts` / `launch`; one `seat_session::termwrap` (§10.4) |
+| (removed) `crates/split-rdp-helper` | bin `pulsar-split-rdp-helper` | headless IronRDP client | step 7 (done 2026-11-14): `seat_rdp::headless` + `pulsar-seat-host --headless-hold` (§10.4) |
 | `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8, one display trait |
 | `crates/seat-audio` | lib | Session Remote Audio discovery, stream-server audio keys (was `split-audio`; target name for the audio merge with `seat-media` discovery at step 8) | — |
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
@@ -1201,14 +1201,60 @@ every value is short, so no value needs the "encrypted file in the protected dat
 LSA" fallback. Every store refuses values over `MAX_SECRET_CHARS` (4096 UTF-16 units) instead;
 if a future secret is bigger, add that fallback then. Untested on hardware: LSA needs SYSTEM.
 
-### 10.4 Sessions for remote seats (`SessionBackend`, step 7)
+### 10.4 Sessions for remote seats (`SessionBackend`, step 7, done 2026-11-14)
 
-Remote seats use the same `SessionBackend` as local RDP seats: `rds_loopback` (one
-implementation) or the experimental `termsrv_wrapper` kind (off by default;
-`SessionBackendKind::hosts_remote_seats()`). The seat host of a remote seat is `seat-rdp`
-in headless hold mode (no frame sink; the password goes over stdin, never argv); it
-replaces `split-rdp-helper`. During the migration the startup sweep recognises both
-client-name prefixes (`PSEAT-NN`, `PSS...`). The `pulsar-host` pipe contract
+Remote seats use the same session path as local RDP seats: `rds_loopback` (Server + RDSH)
+or the experimental `termsrv_wrapper` kind (off by default;
+`SessionBackendKind::hosts_remote_seats()`). One crate, `seat-session`:
+
+- `seat_session::remote` = Split's session manager (seat users, start / stop / tick,
+  `PSS` + 8 hex client names, WTS discovery by name + user + loopback, launch into the
+  seat session with job `PulsarSeat.RemoteSeat.<seat-id>`, run state
+  `run\remote-sessions.json`, sweeps). The remote seat worker in `seat-service` drives it
+  through its `SessionManager` trait (the per-seat start / stop is not the local
+  `SessionBackend::start` because a remote seat has no seat host, monitors or token).
+- Shared with the local backends, one implementation each: edition probe and
+  `HostClass` (wire name of `Client` stays `client_multi_session_unavailable`), the real
+  probes (`win::probes`: WMI `TerminalServerMode` first, `TSAppCompat` fallback; listener
+  TCP table + certificate thumbprint; licensing grace days), the registry trait, the WTS
+  session model and both client-name prefixes (`wts::client_name_kind`), command-line and
+  environment helpers.
+- **One Terminal Server settings writer** (`seat_session::rds::RdsApplier`) and **one
+  journal** (`journal\session.jsonl`, package `session`). Each kind claims it
+  (`Claim::Local` from `prepare_host`, `Claim::Remote` from the remote worker's
+  `prepare_host`); the rows written are the union of the current claims (`rows_for`);
+  releasing one kind restores only the rows no other claim needs. Claims are per process
+  (`TsClaims::process()`), the journal outlives them, so an uninstall restores everything.
+  Created seat accounts are journaled there too (kind `account`, never replayed).
+  Rows: common `fDenyTSConnections=0`, `RDP-Tcp\UserAuthentication=1`, `RDP-Tcp\Shadow=0`;
+  local `fSingleSessionPerUser=0`; remote `SetGpuRealtimePriority=1` (optional),
+  `RDP-Tcp\SecurityLayer=2`, `IgnoreRemoteKeyboardLayout=1`, policy
+  `bEnumerateHWBeforeSW=1` / `Shadow=0` (only while absent). Split's `Originals` key is gone.
+- **Fixed order** of the three Terminal Server writers: (1) these rows, (2) the second NLA-off
+  listener `PulsarSeat-Loopback` (local passwordless seats; sets its own
+  `UserAuthentication` / `SecurityLayer` / `Shadow`), (3) the termsrv wrapper (owns
+  `ServiceDll` and the two wrapper rows `EnableConcurrentSessions` /
+  `AllowMultipleTSSessions`, own journal `termwrap.jsonl`; the RDS writer no longer writes
+  them). Restore runs in reverse; the setup `uninstall` hooks run termwrap before session.
+- **Headless hold**: `pulsar-seat-host.exe --headless-hold <args>` (`seat_rdp::headless`;
+  IronRDP without a frame sink) replaces `pulsar-split-rdp-helper.exe`. Protocol chosen:
+  **Split's helper contract**, unchanged (argv `--protocol 1 …` after the sub-command,
+  one stdin password frame then EOF, JSON Lines `HelperEvent`s on stdout, exit 0 / 1 / 2),
+  not Seat's `host_report` pipe: a hold has no seat pipe, token or monitors. The service
+  still starts it with a restricted Low-integrity token in a kill-on-close job; the
+  seat host dispatches the sub-command before its containment checks.
+- **Sweep**: `plan_sweep_for(kind, …)` recognises both prefixes. The remote worker sweeps
+  `PSS…` sessions of remote seat users (or recorded id + SID) and never a `PSEAT-NN`
+  session, also when a stale record names its id. The local kind keeps `adopt` and does
+  not sweep. The local newest-session fallback never takes a `PSS…` session.
+- **termsrv wrapper**: one module, `seat_session::termwrap` (Seat's port of
+  `split-termwrap`; the two test suites were the same tests). Always compiled (status,
+  disable, boot gate, uninstall restore work in every build); `enable` needs the cargo
+  feature `experimental-client-sku` (`TermwrapPolicy::enable_built_in`, a default of
+  `seat-service`), an **x64 host** (ARM64 is refused, `wrapper_arch`) and the warning ack
+  (`EXPERIMENTAL_WARNING_VERSION` = 2 for both kinds; Split's version-1 text is gone).
+
+The `pulsar-host` pipe contract
 ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)) is
 unchanged; its `PulsarSplit\seat\<id>` name prefix stays until pulsar-desktop changes with it.
 

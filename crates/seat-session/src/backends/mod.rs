@@ -57,8 +57,12 @@ pub struct SessionDeps {
     pub edition: Arc<dyn EditionProbe>,
     pub rds: Arc<dyn RdsProbe>,
     pub wts: Arc<dyn Wts>,
-    /// Journal of the `session` package (`journal\session.jsonl`).
+    /// Journal of the `session` package (`journal\session.jsonl`), shared with the remote
+    /// seat worker (one Terminal Server settings writer, [`crate::rds`]).
     pub journal: Arc<dyn RestoreLog>,
+    /// Claims on the Terminal Server writer, shared with the remote seat worker
+    /// ([`crate::rds::TsClaims::process`] in the real wiring).
+    pub ts_claims: Arc<crate::rds::TsClaims>,
     /// Second listener for passwordless seats (`rds_loopback`): firewall, TCP table,
     /// TermService restart. Added 2026-11-13.
     pub loopback: Arc<dyn crate::loopback_listener::LoopbackHost>,
@@ -81,6 +85,11 @@ pub struct SessionDeps {
 }
 
 impl SessionDeps {
+    /// The Terminal Server settings writer over this registry, journal and claim set.
+    pub fn rds_applier(&self) -> crate::rds::RdsApplier {
+        crate::rds::RdsApplier::new(self.registry.clone(), self.journal.clone(), self.wall_clock.clone()).with_claims(self.ts_claims.clone())
+    }
+
     pub(crate) fn geometry_of(&self, seat: SeatNumber) -> Vec<Rect> {
         self.geometry.as_ref().map(|g| g(seat)).unwrap_or_default()
     }

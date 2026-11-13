@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { errorMessage, failureText, t } from './i18n.ts';
 
-// Seat failure reasons of split-session (FailureReason) plus display / stream / service ones.
+// Seat failure reasons of seat_session::remote (FailureReason) plus display / stream / service ones.
 const reasons = [
   'edition_unsupported', 'coexistence', 'rds_not_ready', 'seat_limit', 'account', 'password_expired',
   'rdu_membership', 'profile', 'client_auth', 'cert_mismatch', 'session_timeout', 'client_exited', 'token',

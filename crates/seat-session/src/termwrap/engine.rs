@@ -63,11 +63,15 @@ pub struct TermwrapPolicy {
     pub allow_unsigned: bool,
     /// Per SCM wait (each stop, the start).
     pub restart_timeout: Duration,
+    /// `enable` is allowed at all: only builds with the cargo feature
+    /// `experimental-client-sku` (default of this field). Status, disable, the boot gate
+    /// and `restore_all` work either way.
+    pub enable_built_in: bool,
 }
 
 impl Default for TermwrapPolicy {
     fn default() -> Self {
-        Self { allow_unsigned: false, restart_timeout: Duration::from_secs(60) }
+        Self { allow_unsigned: false, restart_timeout: Duration::from_secs(60), enable_built_in: cfg!(feature = "experimental-client-sku") }
     }
 }
 
@@ -139,6 +143,14 @@ impl WindowsTermwrap {
             return Err((BlockReason::WrapperConfigInvalid, format!("{shown}: unknown wrapper, no support table")));
         }
         let host = self.d.host.native_machine();
+        // x64 only (merge-plan.md step 7): the operator-installed wrappers are x64 / x86
+        // builds; an ARM64 host is refused before any file of the wrapper is trusted.
+        if host != pe::IMAGE_FILE_MACHINE_AMD64 {
+            return Err((
+                BlockReason::WrapperWrongArchitecture,
+                format!("the termsrv wrapper integration is x64 only (host {})", pe::machine_name(host)),
+            ));
+        }
         match f.pe_machine(dll) {
             Some(m) if m == host => {}
             m => {
@@ -438,6 +450,9 @@ impl Termwrap for WindowsTermwrap {
     }
 
     fn enable(&self, wrapper: &Path, ack_warning_version: u32) -> Result<TermwrapStatus, TermwrapError> {
+        if !self.policy.enable_built_in {
+            return Err(TermwrapError::Unsupported("built without the experimental-client-sku feature".into()));
+        }
         if ack_warning_version != WARNING_VERSION {
             return Err(TermwrapError::WarningNotAcknowledged { got: ack_warning_version, expected: WARNING_VERSION });
         }
