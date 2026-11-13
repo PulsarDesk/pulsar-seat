@@ -32,7 +32,7 @@ this repository: the installer writes `<install>\stream-server.json`
 - **Fork (preferred, spec 80 §8.4):** `pulsar_web_ui = disabled`, so the server opens no
   HTTP listener at all; the service talks to `\\.\pipe\PulsarSplit\seat\<seat-id>\server`
   (SYSTEM-only DACL, server pid verified with `GetNamedPipeServerProcessId`).
-- **Unmodified upstream (Phase 2 default, OQ 28):** upstream cannot turn its web-UI
+- **Unmodified upstream (default; OQ 28 accepted 2026-11-13):** upstream cannot turn its web-UI
   listener off. The service, and nothing else, uses that listener's JSON API on
   `127.0.0.1:<base+1>`:
   - it is the stream server's own listener; Pulsar Split adds **no** HTTP server and the

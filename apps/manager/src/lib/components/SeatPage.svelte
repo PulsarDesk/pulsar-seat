@@ -10,9 +10,12 @@
     SeatRuntime,
     SeatStatus,
     StreamBackendInfo,
-    StreamBackendKind
+    StreamBackendKind,
+    UserPicture
   } from '#lib/types.ts';
   import AppsEditor from './AppsEditor.svelte';
+  import Avatar from './Avatar.svelte';
+  import { gpuWarnings } from '#lib/gpu.ts';
   import CredentialTestDialog from './CredentialTestDialog.svelte';
   import { displayNameError, portError, portOverlapError, type FieldError } from '#lib/validation.ts';
 
@@ -40,6 +43,10 @@
     onEnableUnlock?: (enable: boolean, unlock: boolean) => Promise<void>;
     /** Availability of each stream backend (`get_stream_backends`); empty = unknown. */
     backends?: StreamBackendInfo[];
+    /** Seat user's account picture (null = initial). */
+    picture?: UserPicture | null;
+    /** Native file dialog for an .exe; null = cancelled. */
+    onPickExe?: (title: string) => Promise<string | null>;
   }
   let {
     seat,
@@ -61,7 +68,9 @@
     onRegenerate,
     onTestCredentials,
     onEnableUnlock,
-    backends = []
+    backends = [],
+    picture = null,
+    onPickExe
   }: Props = $props();
   let credOpen = $state(false);
 
@@ -195,6 +204,22 @@
     });
   }
 
+  const gpuWarn = $derived(gpuWarnings(adapters, draft.display.render_adapter_id));
+
+  function gpuText(w: ReturnType<typeof gpuWarnings>[number]): string {
+    if (w.kind === 'no_hardware') return t.seat.gpuNoHardware;
+    if (w.kind === 'hybrid') return t.seat.gpuHybrid;
+    return t.seat.gpuNoEncoder(w.name);
+  }
+
+  async function browseApp(i: number) {
+    if (!onPickExe) return;
+    const p = await onPickExe(t.seat.pickAutostart).catch(() => null);
+    if (!p) return;
+    draft.autostart[i].path = p;
+    save();
+  }
+
   function addApp() {
     draft.autostart.push({ id: '', path: '', arguments: '', run_as_system: false });
   }
@@ -206,7 +231,7 @@
 </script>
 
 <section class="page">
-  <h1>{seat.name}</h1>
+  <h1 class="title"><Avatar name={seat.name} {picture} size={40} /> {seat.name}</h1>
   <p class="state state-{seatState}">
     {t.seatState[seatState]}
     {#if status && status.crash_count > 0}· {t.seat.crashes(status.crash_count)}{/if}
@@ -364,6 +389,7 @@
         {/if}
       </select>
     </label>
+    {#each gpuWarn as w (w.kind)}<p class="hint warn">{gpuText(w)}</p>{/each}
     <label class="field">
       <span>{t.seat.refresh}</span>
       <input type="number" min="15" max="500" bind:value={draft.display.refresh_hz} onchange={save} />
@@ -427,9 +453,10 @@
       {t.seat.streamAudio}
     </label>
     <label class="toggle">
-      <input type="checkbox" checked={false} disabled />
+      <input type="checkbox" bind:checked={draft.audio.microphone} onchange={save} />
       {t.seat.microphone}
     </label>
+    <p class="hint">{t.seat.microphoneHint}</p>
   </fieldset>
 
   <fieldset disabled={locked}>
@@ -489,6 +516,7 @@
           <span>{t.seat.autostartPath}</span>
           <input bind:value={app.path} onchange={() => app.path.trim() && save()} />
         </label>
+        {#if onPickExe}<button type="button" onclick={() => browseApp(i)}>{t.seat.browse}</button>{/if}
         <label class="field">
           <span>{t.seat.autostartArgs}</span>
           <input bind:value={app.arguments} onchange={() => app.path.trim() && save()} />
@@ -518,3 +546,15 @@
     </fieldset>
   {/if}
 </section>
+
+<style>
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .warn {
+    color: orange;
+  }
+</style>

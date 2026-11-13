@@ -14,7 +14,34 @@ export const t = {
     settings: 'Ayarlar',
     host: 'Ana bilgisayar',
     logs: 'Günlükler',
-    noSeats: 'Henüz koltuk yok'
+    dxvk: 'DXVK oyunları',
+    noSeats: 'Henüz koltuk yok',
+    session: (id: number) => `Oturum ${id}`,
+    streaming: 'yayında',
+    streamingTo: (client: string) => `yayında: ${client}`
+  },
+  dxvk: {
+    title: 'DXVK oyunları',
+    intro:
+      'DXVK, eski Direct3D 8/9 oyunlarını Vulkan üzerinden çalıştırır. Dosyalar yalnızca oyunun klasörüne kopyalanır; kapatınca eski dosyalar geri gelir.',
+    release: (v: string) => `İndirilmiş DXVK sürümü: ${v}`,
+    noRelease: 'DXVK henüz indirilmedi. Önce yönetici komut isteminde "pulsar-split-shimctl dxvk download" çalıştırın.',
+    games: 'Oyunlar',
+    noGames: 'Henüz DXVK açılmış oyun yok.',
+    exe: 'Oyun dosyası (.exe)',
+    browse: 'Gözat…',
+    pickTitle: 'Oyunun .exe dosyasını seçin',
+    dlls: 'Yönlendirilecek Direct3D sürümleri',
+    enable: 'DXVK aç',
+    disable: 'DXVK kapat',
+    deployed: (v: string | null, dlls: string) => `Açık (${dlls}${v ? `, sürüm ${v}` : ''})`,
+    notDeployed: 'Kapalı (dosyalar kaldırılmış)',
+    markerUnreadable: 'İşaret dosyası okunamadı; dosyalar elle kontrol edilmeli.',
+    enabled: 'DXVK açıldı.',
+    disabled: 'DXVK kapatıldı.',
+    needDll: 'En az bir Direct3D sürümü seçin.',
+    needExe: 'Oyunun tam .exe yolunu girin.',
+    refresh: 'Yenile'
   },
   logs: {
     title: 'Günlükler',
@@ -145,7 +172,15 @@ export const t = {
     maxFullFrame: 'Tam ekran en yüksek (nit)',
     audioSection: 'Ses',
     streamAudio: 'Koltuğun sesini akışa ekle',
-    microphone: 'Mikrofon (henüz desteklenmiyor)',
+    microphone: 'Mikrofon (yalnızca Pulsar istemcisi)',
+    microphoneHint:
+      'Ayar saklanır; mikrofon sesinin koltuğa aktarılması henüz yapılmadı (Uzak Masaüstü ses girişi kanalı ve Pulsar istemci akışı eksik). Moonlight mikrofon taşımaz.',
+    browse: 'Gözat…',
+    pickAutostart: 'Başlatılacak programı seçin',
+    gpuNoHardware: 'Donanım ekran kartı bulunamadı: görüntü işlemcide kodlanır, yayın yavaş olabilir.',
+    gpuNoEncoder: (name: string) => `${name} için donanım video kodlayıcısı bilinmiyor; kodlama işlemciye düşebilir.`,
+    gpuHybrid:
+      'Birden çok ekran kartı var (hibrit sistem). Kodlayıcısı olan kartı burada elle seçin; otomatik seçim en çok belleği olanı alır.',
     streamSection: 'Akış',
     gamepad: 'Kumanda türü',
     gamepadAuto: 'Otomatik',
@@ -194,6 +229,15 @@ export const t = {
   } as Record<string, string>,
   host: {
     title: 'Ana bilgisayar',
+    audioCleanup: 'Eski ses aygıtları',
+    audioCleanupHint:
+      'Biten Uzak Masaüstü oturumlarından kalan, artık bağlı olmayan "Uzak Ses" aygıt kayıtlarını siler. Bağlı aygıtlara ve konsol aygıtlarına dokunmaz.',
+    audioCleanupRun: 'Eski ses aygıtlarını temizle',
+    audioCleanupConfirm: 'Kalan aygıt kayıtları kalıcı olarak silinsin mi? Her silme servis günlüğüne yazılır.',
+    audioCleanupYes: 'Evet, temizle',
+    audioCleanupNo: 'Vazgeç',
+    audioCleanupDone: (removed: number, failed: number) =>
+      removed === 0 && failed === 0 ? 'Silinecek eski aygıt yok.' : `${removed} aygıt silindi, ${failed} aygıt bırakıldı.`,
     edition: 'Windows sürümü',
     class: 'Çoklu koltuk durumu',
     rdsReady: 'Uzak Masaüstü hizmeti',
@@ -316,6 +360,8 @@ export const t = {
     mic_policy_blocked: 'Grup ilkesi mikrofon yönlendirmeyi engelliyor.'
   } as Record<string, string>,
   failure: {
+    seat_booting: 'Bir koltuk açılıyor; bitince yeniden deneyin.',
+    dxvk_hash_mismatch: 'DXVK dosyaları beklenen sürümle eşleşmiyor; yeniden indirin.',
     backend_missing: 'Seçilen yayın sunucusu bu bilgisayarda kurulu değil.',
     backend_pulsar: 'Bu işlem Pulsar yayın sunucusunda yok.',
     backend_sunshine: 'Bu işlem Sunshine yayın sunucusunda yok.',
@@ -404,6 +450,8 @@ export const t = {
     step4: 'PIN’i buraya yazıp gönderin.',
     addresses: 'Adresler',
     recommended: 'önerilen',
+    qr: (a: string) => `Adres için QR kodu: ${a}`,
+    qrHint: 'Telefonla okutarak adresi kopyalayabilirsiniz.',
     noAddress: 'Yerel ağ adresi bulunamadı.',
     pin: 'PIN',
     clientName: 'Cihaz adı',

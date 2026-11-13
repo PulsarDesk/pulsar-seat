@@ -32,12 +32,12 @@ Each phase works on its own before the next starts.
     app lists and settings are done in the manager, which talks to the stream server
     through the service.
   - Only the network ports the Moonlight/Pulsar streaming protocol needs stay open.
-  - **Pending exception (OQ 28 / final-7, maintainer decision, release blocker):** the
-    default *upstream* stream-server flavour still runs its HTTPS web-UI/API listener on
-    base+1. The service drives it over loopback only (pairing), with per-seat hashed
-    credentials, a pinned certificate, `origin_web_ui_allowed = pc` and no firewall rule.
-    Not accepted yet. If rejected, the fork flavour (seat pipe, web UI off) becomes the
-    default and upstream an opt-in.
+  - **Accepted exception (OQ 28 / final-7, maintainer, 2026-11-13):** Sunshine seats on
+    the default *upstream* flavour keep its HTTPS web-UI/API listener on base+1. Only the
+    service uses it, over loopback (`/api/pin`, client list), with credentials hashed per
+    server start, a pinned certificate, `origin_web_ui_allowed = pc` and no firewall rule
+    (rules.md "Local services"). The fork flavour (seat pipe, web UI off) stays preferred
+    when it exists.
 - **Monorepo** (2026-11-12): one repo `pulsar-split` holds everything — unlike Pulsar's
   multi-repo split. Root Cargo workspace + root bun workspace. Layout:
   `crates/` (Rust libs + service), `apps/` (manager, later tools), `drivers/` (IDD, pad

@@ -13,8 +13,11 @@
     SeatRuntime,
     ServiceRunState,
     ServiceStatus,
-    StreamBackendInfo
+    StreamBackendInfo,
+    UserPicture
   } from '#lib/types.ts';
+  import Avatar from '#lib/components/Avatar.svelte';
+  import DxvkPage from '#lib/components/DxvkPage.svelte';
   import HostPage from '#lib/components/HostPage.svelte';
   import LogPage from '#lib/components/LogPage.svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
@@ -38,7 +41,9 @@
   let isolation = $state<IsolationStatus | null>(null);
   /** Which page: `settings`, `host`, or a seat id. */
   let selected = $state<string | null>(null);
-  let page = $state<'settings' | 'host' | 'logs'>('host');
+  let page = $state<'settings' | 'host' | 'logs' | 'dxvk'>('host');
+  /** Account pictures by user name (loaded once per user and manager run). */
+  let pictures = $state<Record<string, UserPicture | null>>({});
   let dialog = $state<'new' | 'delete' | 'pair' | null>(null);
   let progress = $state<string | null>(null);
   let banner = $state<string | null>(null);
@@ -60,7 +65,20 @@
       status = null;
     }
     if (selected && !seats.some((s) => s.id === selected)) selected = null;
+    loadPictures();
     await refreshDetails();
+  }
+
+  function loadPictures() {
+    for (const s of seats) {
+      const u = s.user_name;
+      if (!u || u in pictures) continue;
+      pictures[u] = null;
+      api
+        .userPicture(u)
+        .then((p) => (pictures[u] = p.data ? p : null))
+        .catch(() => {});
+    }
   }
 
   /** Data of the page on screen only (keeps the 3 s poll light). */
@@ -128,9 +146,6 @@
     dialog = 'pair';
   }
 
-  function initial(name: string) {
-    return name.slice(0, 1).toUpperCase();
-  }
 </script>
 
 <div class="shell">
@@ -170,8 +185,16 @@
         {@const st = status?.seats.find((x) => x.name.toLowerCase() === s.name.toLowerCase())}
         <li>
           <button type="button" class:active={selected === s.id} onclick={() => (selected = s.id)}>
-            <span class="avatar">{initial(s.name)}</span>
-            <span class="name">{s.name}</span>
+            <Avatar name={s.name} picture={s.user_name ? pictures[s.user_name] : null} />
+            <span class="name">
+              {s.name}
+              {#if st?.session_id !== null && st?.session_id !== undefined || st?.streaming}
+                <small class="sub">
+                  {#if st?.session_id !== null && st?.session_id !== undefined}{t.nav.session(st.session_id)}{/if}
+                  {#if st?.streaming}· {st.stream_client ? t.nav.streamingTo(st.stream_client) : t.nav.streaming}{/if}
+                </small>
+              {/if}
+            </span>
             <span class="dot dot-{st?.state ?? 'stopped'}" title={t.seatState[st?.state ?? 'stopped']}></span>
           </button>
         </li>
@@ -203,6 +226,18 @@
       }}
     >
       ☰ {t.nav.logs}
+    </button>
+    <button
+      type="button"
+      class="settings-link"
+      class:active={selected === null && page === 'dxvk'}
+      disabled={!reachable}
+      onclick={() => {
+        selected = null;
+        page = 'dxvk';
+      }}
+    >
+      ◈ {t.nav.dxvk}
     </button>
     <button
       type="button"
@@ -247,6 +282,8 @@
         {runtime}
         {adapters}
         {backends}
+        picture={current.user_name ? pictures[current.user_name] : null}
+        onPickExe={(title) => api.pickExe(title)}
         onLoadApps={() => api.apps(current.name)}
         onSaveApps={(apps) => api.setApps(current.name, apps)}
         onRegenerate={() => api.regenerateIdentity(current.name)}
@@ -266,6 +303,14 @@
           settings = await api.globalSettings();
         }}
         onTermwrap={(on, path, ack) => api.setTermwrap(on, path, ack)}
+        onAudioCleanup={reachable ? () => api.cleanupAudioEndpoints() : undefined}
+      />
+    {:else if page === 'dxvk'}
+      <DxvkPage
+        load={() => api.dxvkStatus()}
+        onSet={(exe, on, dlls) => api.setDxvk(exe, on, dlls)}
+        onPickExe={(title) => api.pickExe(title)}
+        disabled={!reachable || (status?.passive ?? false)}
       />
     {:else if page === 'logs'}
       <LogPage seatNames={seats.map((s) => s.name)} onLoad={(src, n) => api.logTail(src, n)} />
@@ -388,22 +433,17 @@
     background: var(--bg);
   }
 
-  .avatar {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    flex: none;
-  }
-
   .name {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 0.75rem;
   }
 
   .dot {

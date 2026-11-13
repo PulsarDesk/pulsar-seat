@@ -349,6 +349,10 @@ pub struct SeatStatus {
     pub session_id: Option<u32>,
     /// v2: boot step while `state == booting` (`user`, `session`, `display`, `stream`, …).
     pub phase: Option<String>,
+    /// A client is streaming from the seat (between `stream_started` and `stream_ended`).
+    pub streaming: bool,
+    /// Name of the streaming client when the stream server reports one.
+    pub stream_client: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -505,6 +509,53 @@ pub struct IsolationStatus {
     pub modules: Vec<String>,
     /// The shim module exists for this host architecture (x64 / x86 only, spec 50 §14).
     pub supported: bool,
+}
+
+/// One game with a DXVK redirect managed by Pulsar Split (spec 50 §10.2).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DxvkGame {
+    /// Full path of the game executable.
+    pub exe: String,
+    /// Our marker file sits next to the game: DXVK files are in place.
+    pub deployed: bool,
+    /// DXVK version of the deployed files.
+    pub version: Option<String>,
+    /// Redirected Direct3D DLLs without extension (`d3d8`, `d3d9`).
+    pub dlls: Vec<String>,
+    /// The marker exists but could not be read (`marker_unreadable`).
+    pub error: Option<String>,
+}
+
+/// `dxvk_status`: the pinned DXVK release and the games the service has deployed it to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DxvkStatus {
+    /// Version of the downloaded, pinned release; `None` = not downloaded yet
+    /// (`pulsar-split-shimctl dxvk download`).
+    pub release: Option<String>,
+    pub games: Vec<DxvkGame>,
+}
+
+/// Seat user's Windows account picture (spec 10 §2.1), small enough for the nav list.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserPicture {
+    /// `image/png` | `image/jpeg` | `image/bmp` | `image/gif`; empty with `data` = no picture.
+    pub mime: String,
+    /// Base64 of the image file; empty = the user has no picture (the manager shows the
+    /// initial).
+    pub data: String,
+}
+
+/// Result of the operator-triggered stale RDP audio endpoint cleanup (spec 70 §2.6).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioCleanup {
+    /// Device instance ids removed.
+    pub removed: Vec<String>,
+    /// `(instance id, reason code)` of nodes kept.
+    pub failed: Vec<(String, String)>,
 }
 
 /// One entry of the service event ring (`poll_events`).

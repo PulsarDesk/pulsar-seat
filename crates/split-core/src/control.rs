@@ -197,6 +197,18 @@ pub trait Platform: Send {
     fn answer_relay_auth(&mut self, _seat: &SeatConfig, _password: &Secret, _totp: Option<&Secret>) -> Result<(), ProtoError> {
         Err(unsupported("relay sign-in"))
     }
+    /// Pinned DXVK release and the games with a DXVK redirect (spec 50 §10.2).
+    fn dxvk_status(&mut self) -> Result<split_proto::DxvkStatus, ProtoError> {
+        Err(unsupported("DXVK"))
+    }
+    /// Account picture of a local user (spec 10 §2.1); empty when there is none.
+    fn user_picture(&mut self, _user: &str) -> Result<split_proto::UserPicture, ProtoError> {
+        Ok(split_proto::UserPicture::default())
+    }
+    /// Spec 70 §2.6 stale RDP audio endpoint cleanup (operator-triggered).
+    fn cleanup_audio_endpoints(&mut self) -> Result<split_proto::AudioCleanup, ProtoError> {
+        Err(unsupported("audio endpoint cleanup"))
+    }
 }
 
 /// `unsupported` with reason `backend_<kind>`: the request does not exist for the seat's
@@ -204,6 +216,13 @@ pub trait Platform: Send {
 pub fn wrong_backend(kind: StreamBackendKind) -> ProtoError {
     let reason = format!("backend_{}", kind.as_str());
     ProtoError::new(ErrorCode::Unsupported, format!("{reason}: not available for this seat's stream server")).with_reason(reason)
+}
+
+/// Client name of a `stream_started` notice (`client` or `client_name`, 1-64 printable
+/// characters), if the stream server sent one.
+fn stream_client_name(data: &serde_json::Value) -> Option<String> {
+    let n = data.get("client").or_else(|| data.get("client_name"))?.as_str()?.trim();
+    (!n.is_empty() && n.chars().count() <= 64 && !n.chars().any(char::is_control)).then(|| n.to_string())
 }
 
 /// Pulsar secrets typed by the operator: 1-128 characters, no control characters.
@@ -223,6 +242,9 @@ struct Runtime {
     last_error: Option<String>,
     session_id: Option<u32>,
     crash_count: u32,
+    /// Between `stream_started` and `stream_ended` / seat stop.
+    streaming: bool,
+    stream_client: Option<String>,
 }
 
 impl Runtime {
@@ -467,6 +489,27 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                 }
                 self.platform.answer_relay_auth(&seat, &password, totp.as_ref()).map(|_| ResponseBody::Ack)
             }
+            RequestBody::GetDxvkStatus => self.platform.dxvk_status().map(ResponseBody::DxvkStatus),
+            RequestBody::GetUserPicture { user } => {
+                let u = user.trim();
+                if u.is_empty() || u.chars().count() > 256 || u.chars().any(|c| c.is_control() || matches!(c, '\\' | '/' | '@')) {
+                    return Err(ProtoError::new(ErrorCode::InvalidUser, "local account name expected").with_field("user"));
+                }
+                self.platform.user_picture(u).map(ResponseBody::UserPicture)
+            }
+            RequestBody::CleanupAudioEndpoints { confirm } => {
+                if !confirm {
+                    return Err(ProtoError::new(ErrorCode::BadRequest, "confirm must be true").with_field("confirm"));
+                }
+                if self.platform.passive() {
+                    return Err(passive_err());
+                }
+                if self.runtime.values().any(|r| r.state == SeatState::Booting) {
+                    return Err(ProtoError::new(ErrorCode::SeatRunning, "seat_booting: wait until every seat finished starting")
+                        .with_reason("seat_booting"));
+                }
+                self.platform.cleanup_audio_endpoints().map(ResponseBody::AudioCleanup)
+            }
             RequestBody::RebootHost { confirm } => {
                 if !confirm {
                     return Err(ProtoError::new(ErrorCode::BadRequest, "confirm must be true").with_field("confirm"));
@@ -553,6 +596,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                     failure: rt.and_then(|r| r.failure.clone()),
                     session_id: rt.and_then(|r| r.session_id),
                     phase: rt.and_then(|r| r.phase.clone()),
+                    streaming: rt.is_some_and(|r| r.streaming),
+                    stream_client: rt.and_then(|r| r.stream_client.clone()),
                 }
             })
             .collect();
@@ -847,6 +892,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                 rt.session_id = None;
                 rt.failure = Some(reason.clone());
                 rt.last_error = Some(message);
+                rt.streaming = false;
+                rt.stream_client = None;
                 ("seat_failed", serde_json::json!({"reason": reason}))
             }
             SeatEvent::Stopped => {
@@ -856,6 +903,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                 rt.state = SeatState::Stopped;
                 rt.phase = None;
                 rt.session_id = None;
+                rt.streaming = false;
+                rt.stream_client = None;
                 ("seat_phase", serde_json::json!({"state": "stopped"}))
             }
             SeatEvent::Crashes(n) => {
@@ -882,6 +931,17 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                 return;
             }
             SeatEvent::Notice { kind, data } => {
+                match kind.as_str() {
+                    "stream_started" => {
+                        rt.streaming = true;
+                        rt.stream_client = stream_client_name(&data);
+                    }
+                    "stream_ended" => {
+                        rt.streaming = false;
+                        rt.stream_client = None;
+                    }
+                    _ => {}
+                }
                 let kind: &'static str = match kind.as_str() {
                     "pair_pending" => "pair_pending",
                     "pair_ended" => "pair_ended",
@@ -1234,6 +1294,52 @@ mod tests {
         b.user_name.clear();
         b.id = "other".into();
         assert_eq!(code(call(&mut c, RequestBody::UpdateSeat { name: "B".into(), seat: b, stream_backend: None })), ErrorCode::BadRequest);
+    }
+
+    #[test]
+    fn streaming_notices_show_in_status_and_reset_on_stop() {
+        let mut c = ctl();
+        let mut s = create(&mut c, "A");
+        s.user_name = "ali".into();
+        call(&mut c, RequestBody::UpdateSeat { name: "A".into(), seat: s.clone(), stream_backend: None }).unwrap();
+        call(&mut c, RequestBody::SetSeatPassword { name: "A".into(), password: Secret("pw".into()) }).unwrap();
+        call(&mut c, RequestBody::StartSeat { name: "A".into() }).unwrap();
+        // Cleanup is refused while a seat boots, and needs confirm.
+        assert_eq!(code(call(&mut c, RequestBody::CleanupAudioEndpoints { confirm: false })), ErrorCode::BadRequest);
+        let e = call(&mut c, RequestBody::CleanupAudioEndpoints { confirm: true }).unwrap_err();
+        assert_eq!(e.reason.as_deref(), Some("seat_booting"));
+        c.platform_mut().reports.push((s.id.clone(), SeatEvent::Running { session_id: 3 }));
+        let notice = |client: serde_json::Value| SeatEvent::Notice { kind: "stream_started".into(), data: client };
+        c.platform_mut().reports.push((s.id.clone(), notice(serde_json::json!({"app": null, "client": "Salon TV"}))));
+        c.drain_reports();
+        let st = &c.status().unwrap().seats[0];
+        assert!(st.streaming);
+        assert_eq!(st.stream_client.as_deref(), Some("Salon TV"));
+        c.platform_mut().reports.push((s.id.clone(), notice(serde_json::json!({"client": "bad\u{7}"}))));
+        c.drain_reports();
+        assert_eq!(c.status().unwrap().seats[0].stream_client, None);
+        c.platform_mut().reports.push((s.id.clone(), SeatEvent::Notice { kind: "stream_ended".into(), data: serde_json::json!({}) }));
+        c.drain_reports();
+        assert!(!c.status().unwrap().seats[0].streaming);
+        c.platform_mut().reports.push((s.id.clone(), notice(serde_json::json!({}))));
+        c.platform_mut().reports.push((s.id.clone(), SeatEvent::Stopped));
+        c.drain_reports();
+        assert!(!c.status().unwrap().seats[0].streaming);
+        // Default platform: no cleanup, no DXVK.
+        assert_eq!(code(call(&mut c, RequestBody::CleanupAudioEndpoints { confirm: true })), ErrorCode::Unsupported);
+        assert_eq!(code(call(&mut c, RequestBody::GetDxvkStatus)), ErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn user_picture_validates_the_name() {
+        let mut c = ctl();
+        for bad in ["", "  ", r"a\b", "x/y", "u@domain", "a\u{1}"] {
+            assert_eq!(code(call(&mut c, RequestBody::GetUserPicture { user: bad.into() })), ErrorCode::InvalidUser, "{bad:?}");
+        }
+        assert_eq!(
+            call(&mut c, RequestBody::GetUserPicture { user: "ali".into() }).unwrap(),
+            ResponseBody::UserPicture(split_proto::UserPicture::default())
+        );
     }
 
     #[test]

@@ -23,9 +23,13 @@ Index: [../../AGENTS.md](../../AGENTS.md).
 ## Local services
 
 - No local web server or HTTP API of ours; manager ↔ service is the named pipe
-  `\.\pipe\PulsarSplit.Control` only. One **pending** exception: the upstream stream
-  server's own loopback web-UI listener (plan.md, OQ 28 / final-7). Do not ship a release
-  until the maintainer decided it.
+  `\.\pipe\PulsarSplit.Control` only. One **accepted** exception (maintainer,
+  2026-11-13, OQ 28): for Sunshine seats the service, and only the service, uses the
+  upstream stream server's own web-UI listener for `/api/pin` and the client list. Keep it
+  strict: connect to `127.0.0.1:<base+1>` only, `origin_web_ui_allowed = pc`, never a
+  firewall rule for base+1, credentials random per server start (memory only, zeroised,
+  written to `credentials_file` as upstream's salted hash, never argv / env / log /
+  manager), the seat server's own certificate pinned, no system proxy, no browser.
 - Every child process started inside the service takes `split_proto::spawn` (contracts §0).
 
 ## HDR

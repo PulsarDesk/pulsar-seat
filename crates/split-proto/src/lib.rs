@@ -173,6 +173,17 @@ pub enum RequestBody {
         #[serde(default)]
         totp: Option<Secret>,
     },
+    // ---- v2 additions (2026-11-13, final-10) ----
+    /// Pinned DXVK release and the games with a DXVK redirect; answered with
+    /// [`ResponseBody::DxvkStatus`].
+    GetDxvkStatus,
+    /// Account picture of a local user (spec 10 §2.1); answered with
+    /// [`ResponseBody::UserPicture`] (empty when the user has none).
+    GetUserPicture { user: String },
+    /// Spec 70 §2.6 maintenance: remove non-present RDP audio endpoint nodes of ended
+    /// sessions. Refused while a seat is starting; `confirm` must be true. Answered with
+    /// [`ResponseBody::AudioCleanup`].
+    CleanupAudioEndpoints { confirm: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -220,6 +231,9 @@ pub enum ResponseBody {
     StreamBackends(Vec<StreamBackendInfo>),
     /// One-time password of a Pulsar seat.
     Otp { otp: Secret },
+    DxvkStatus(DxvkStatus),
+    UserPicture(UserPicture),
+    AudioCleanup(AudioCleanup),
 }
 
 /// Machine-readable error. The manager maps `reason` (if set) or `code` to Turkish copy;

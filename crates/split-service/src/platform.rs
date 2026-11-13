@@ -291,6 +291,18 @@ impl Platform for WindowsPlatform {
         self.engine()?.set_dxvk(game_exe, enabled, dlls)
     }
 
+    fn dxvk_status(&mut self) -> Result<split_proto::DxvkStatus, ProtoError> {
+        self.engine()?.dxvk_status()
+    }
+
+    fn user_picture(&mut self, user: &str) -> Result<split_proto::UserPicture, ProtoError> {
+        Ok(crate::picture::read(user))
+    }
+
+    fn cleanup_audio_endpoints(&mut self) -> Result<split_proto::AudioCleanup, ProtoError> {
+        self.engine()?.cleanup_audio_endpoints()
+    }
+
     fn stream_backends(&mut self) -> Result<Vec<StreamBackendInfo>, ProtoError> {
         Ok(self.engine()?.stream_backends())
     }

@@ -76,6 +76,8 @@ pub trait IsolationPort: Send + Sync {
     fn set_targets(&self, targets: &[ShimTarget]) -> Result<(), ProtoError>;
     fn set_mask(&self, exe_lower: &str, enabled: bool) -> Result<(), ProtoError>;
     fn dxvk(&self, game: &Path, enabled: bool, dlls: &[String]) -> Result<(), ProtoError>;
+    /// Pinned DXVK release + the games with a DXVK redirect (spec 50 §10.2).
+    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError>;
     /// `pulsar-split-launch.exe` when shipped (x64 hosts only).
     fn launcher_path(&self) -> Option<PathBuf>;
     /// Seat-map kill switch etc. live in the module; nothing else needed here.
@@ -112,6 +114,9 @@ pub struct Deps {
     pub coexist: Arc<dyn Fn() -> CoexistOutcome + Send + Sync>,
     /// Session attached to the physical console, if any.
     pub console_session: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
+    /// Spec 70 §2.6 operator-triggered stale RDP audio endpoint cleanup
+    /// (`split_audio::remove_stale_endpoints` over the real probe, remover and WTS list).
+    pub audio_cleanup: Arc<dyn Fn() -> Result<split_audio::StaleReport, split_audio::AudioError> + Send + Sync>,
     /// `%ProgramData%\PulsarSplit`.
     pub data_root: PathBuf,
     pub service_version: String,
@@ -1558,7 +1563,65 @@ impl Engine {
                 return Err(ProtoError::new(ErrorCode::InvalidValue, "dlls: d3d8 or d3d9").with_field("dlls"));
             }
         }
-        self.d().isolation.dxvk(Path::new(game_exe), enabled, dlls)
+        if enabled && dlls.is_empty() {
+            return Err(ProtoError::new(ErrorCode::InvalidValue, "dlls: choose d3d8 and / or d3d9").with_field("dlls"));
+        }
+        let p = game_exe.trim();
+        if p.is_empty() || !Path::new(p).is_absolute() || !p.to_ascii_lowercase().ends_with(".exe") || p.chars().any(char::is_control) {
+            return Err(ProtoError::new(ErrorCode::InvalidValue, "full path of the game's .exe file expected").with_field("game_exe"));
+        }
+        self.d().isolation.dxvk(Path::new(p), enabled, dlls)
+    }
+
+    pub fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+        self.d().isolation.dxvk_status()
+    }
+
+    /// Spec 70 §2.6: refused while a seat is starting (a new session could take a node's
+    /// session id between the plan and the removal).
+    pub fn cleanup_audio_endpoints(&self) -> Result<split_proto::AudioCleanup, ProtoError> {
+        if lock(&self.0.seats).values().any(|r| r.stage == Stage::Booting) {
+            return Err(err(ErrorCode::SeatRunning, "seat_booting", "wait until every seat finished starting"));
+        }
+        let r = (self.d().audio_cleanup)().map_err(|e| err(ErrorCode::Internal, e.code(), e))?;
+        Ok(split_proto::AudioCleanup { removed: r.removed, failed: r.failed })
+    }
+}
+
+/// Status row of one DXVK game from its marker file (`None` = no marker = not deployed).
+pub fn dxvk_game(exe: &str, marker: Option<std::io::Result<Vec<u8>>>) -> split_proto::DxvkGame {
+    let mut g = split_proto::DxvkGame { exe: exe.to_string(), ..Default::default() };
+    match marker {
+        None => {}
+        Some(Err(_)) => g.error = Some("marker_unreadable".into()),
+        Some(Ok(b)) => match serde_json::from_slice::<split_shim_core::dxvk::GameMarker>(&b) {
+            Ok(m) => {
+                g.deployed = true;
+                g.version = Some(m.version);
+                let mut dlls: Vec<String> = m
+                    .files
+                    .iter()
+                    .filter_map(|f| f.name.to_ascii_lowercase().strip_suffix(".dll").map(str::to_owned))
+                    .collect();
+                dlls.sort();
+                dlls.dedup();
+                g.dlls = dlls;
+            }
+            Err(_) => g.error = Some("marker_unreadable".into()),
+        },
+    }
+    g
+}
+
+/// Keeps the remembered DXVK game list (case-insensitive, at most 256 entries): a deploy adds
+/// the game, an undo removes it.
+pub fn dxvk_games_update(list: &mut Vec<String>, exe: &str, enabled: bool) {
+    list.retain(|x| !x.eq_ignore_ascii_case(exe));
+    if enabled {
+        list.push(exe.to_string());
+        if list.len() > 256 {
+            list.remove(0);
+        }
     }
 }
 

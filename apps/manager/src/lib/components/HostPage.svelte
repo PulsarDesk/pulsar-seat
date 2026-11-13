@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <script lang="ts">
   import { errorMessage, t } from '#lib/i18n.ts';
-  import type { DisplayBackendInfo, HostInfo, TermwrapStatus } from '#lib/types.ts';
+  import type { AudioCleanup, DisplayBackendInfo, HostInfo, TermwrapStatus } from '#lib/types.ts';
   import ExperimentalDialog from './ExperimentalDialog.svelte';
 
   interface Props {
@@ -10,8 +10,22 @@
     onRefresh: () => Promise<void>;
     onMultiSession: (enabled: boolean) => Promise<void>;
     onTermwrap: (enabled: boolean, wrapperPath: string | null, ack: number) => Promise<TermwrapStatus>;
+    /** Spec 70 §2.6 stale RDP audio endpoint cleanup (after an in-page confirmation). */
+    onAudioCleanup?: () => Promise<AudioCleanup>;
   }
-  let { info, passive, onRefresh, onMultiSession, onTermwrap }: Props = $props();
+  let { info, passive, onRefresh, onMultiSession, onTermwrap, onAudioCleanup }: Props = $props();
+  let confirmCleanup = $state(false);
+  let cleanupResult = $state<string | null>(null);
+
+  async function cleanup() {
+    if (!onAudioCleanup) return;
+    confirmCleanup = false;
+    cleanupResult = null;
+    await run(async () => {
+      const r = await onAudioCleanup();
+      cleanupResult = t.host.audioCleanup + ': ' + t.host.audioCleanupDone(r.removed.length, r.failed.length);
+    });
+  }
 
   let error = $state<string | null>(null);
   let busy = $state(false);
@@ -144,6 +158,19 @@
     {/if}
   {:else}
     <p class="hint">{t.common.loading}</p>
+  {/if}
+
+  {#if onAudioCleanup}
+    <h2>{t.host.audioCleanup}</h2>
+    <p class="hint">{t.host.audioCleanupHint}</p>
+    {#if confirmCleanup}
+      <p class="error">{t.host.audioCleanupConfirm}</p>
+      <button type="button" class="danger-btn" disabled={busy} onclick={cleanup}>{t.host.audioCleanupYes}</button>
+      <button type="button" onclick={() => (confirmCleanup = false)}>{t.host.audioCleanupNo}</button>
+    {:else}
+      <button type="button" disabled={busy || passive} onclick={() => (confirmCleanup = true)}>{t.host.audioCleanupRun}</button>
+    {/if}
+    {#if cleanupResult}<p class="ok" role="status">{cleanupResult}</p>{/if}
   {/if}
 </section>
 

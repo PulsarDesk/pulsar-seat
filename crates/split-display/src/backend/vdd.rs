@@ -444,7 +444,15 @@ impl<P: VddPipe, F: VddSettingsFile> VddBackend<P, F> {
                     Some(text.as_bytes()),
                     Status::Done,
                 ))?;
-                self.pipe.command("RELOAD_DRIVER")?;
+                match self.pipe.command("RELOAD_DRIVER") {
+                    Ok(_) => {}
+                    // Uninstall / reconcile after the driver is gone: the file is back,
+                    // the driver reads it at its next load.
+                    Err(DisplayError::DriverNotInstalled(m)) => {
+                        log::warn!("vdd: settings restored, driver not reachable for reload: {m}");
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         if touched {
@@ -728,6 +736,18 @@ mod tests {
         pipe.link_monitors(mons.clone());
         let modes = FakeModeSetter::linked(mons.clone());
         let journal = FakeRestoreLog::default();
+        rig_on(console, pipe, file, mons, modes, journal)
+    }
+
+    /// A backend over existing fakes (a second process reading the same file + journal).
+    fn rig_on(
+        console: u32,
+        pipe: FakeVddPipe,
+        file: FakeVddSettings,
+        mons: FakeVddMonitors,
+        modes: FakeModeSetter,
+        journal: FakeRestoreLog,
+    ) -> Rig {
         let clock = Arc::new(FakeClock::default());
         let gpu = RenderAdapter {
             pnp_instance_id: "PCI\\X".into(),
@@ -966,6 +986,48 @@ mod tests {
         let lines = r.journal.lines().unwrap();
         assert!(lines.last().unwrap().contains("\"restored\""));
         assert!(journal::plan_restore(&lines).is_empty());
+    }
+
+    #[test]
+    fn crashed_run_is_restored_by_a_fresh_process() {
+        let r = rig(1);
+        let a = AdapterChoice::Pinned(Luid { low: 42, high: 0 });
+        r.b.attach(&seat(A, 1, a)).unwrap();
+        assert_ne!(r.file.content(), vdd_xml::SAMPLE);
+        // the service dies here; setup (uninstall / reconcile) builds its own backend
+        let s = rig_on(1, r.pipe.clone(), r.file.clone(), r.mons.clone(), r.modes.clone(), r.journal.clone());
+        s.b.restore_all().unwrap();
+        assert_eq!(s.file.content(), vdd_xml::SAMPLE);
+        assert_eq!(
+            vdd_xml::get(&s.file.content(), &["vdd_settings", "monitors", "count"]),
+            vdd_xml::get(vdd_xml::SAMPLE, &["vdd_settings", "monitors", "count"])
+        );
+        assert_eq!(s.pipe.commands().last().map(String::as_str), Some("RELOAD_DRIVER"));
+        // a second run has nothing left to do and writes nothing
+        let n = s.journal.lines().unwrap().len();
+        let t = rig_on(1, s.pipe.clone(), s.file.clone(), s.mons.clone(), s.modes.clone(), s.journal.clone());
+        t.b.restore_all().unwrap();
+        assert_eq!(t.journal.lines().unwrap().len(), n);
+    }
+
+    #[test]
+    fn restore_without_driver_still_restores_the_file() {
+        let r = rig(1);
+        r.b.attach(&seat(A, 1, AdapterChoice::Pinned(Luid { low: 42, high: 0 }))).unwrap();
+        r.pipe.set_absent(true);
+        let s = rig_on(1, r.pipe.clone(), r.file.clone(), r.mons.clone(), r.modes.clone(), r.journal.clone());
+        s.b.restore_all().unwrap();
+        assert_eq!(s.file.content(), vdd_xml::SAMPLE);
+        assert!(journal::plan_restore(&s.journal.lines().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn restore_with_empty_journal_touches_nothing() {
+        let r = rig(1);
+        r.b.restore_all().unwrap();
+        assert!(r.journal.lines().unwrap().is_empty());
+        assert!(r.pipe.commands().is_empty());
+        assert_eq!(r.file.content(), vdd_xml::SAMPLE);
     }
 
     fn last_mode_call(r: &Rig) -> String {

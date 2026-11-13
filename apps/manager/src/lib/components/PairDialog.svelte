@@ -9,6 +9,7 @@
   import { onMount } from 'svelte';
   import { errorMessage, failureText, t } from '#lib/i18n.ts';
   import type { Events, PairState, PairedClient, StreamBackendKind } from '#lib/types.ts';
+  import QrCode from './QrCode.svelte';
 
   interface Props {
     seatName: string;
@@ -199,7 +200,10 @@
           <li>{t.pair.pulsarStep2}</li>
           <li>{t.pair.pulsarStep3}</li>
         </ol>
-        {#if relayId}<p>{t.seat.relayId}: <code>{relayId}</code></p>{/if}
+        {#if relayId}
+          <p>{t.seat.relayId}: <code>{relayId}</code></p>
+          <QrCode text={relayId} label={t.pair.qr(relayId)} />
+        {/if}
 
         {#if !running}
           <p class="error">{t.pair.notRunning}</p>
@@ -282,11 +286,17 @@
         {#if addresses.length === 0}
           <p class="hint">{t.pair.noAddress}</p>
         {:else}
-          <ul class="addresses">
-            {#each addresses as a, i (a)}
-              <li><code>{a}:{port}</code>{#if i === 0 && addresses.length > 1} <strong>({t.pair.recommended})</strong>{/if}</li>
-            {/each}
-          </ul>
+          <div class="qr-row">
+            <ul class="addresses">
+              {#each addresses as a, i (a)}
+                <li><code>{a}:{port}</code>{#if i === 0 && addresses.length > 1} <strong>({t.pair.recommended})</strong>{/if}</li>
+              {/each}
+            </ul>
+            <figure>
+              <QrCode text={`${addresses[0]}:${port}`} label={t.pair.qr(`${addresses[0]}:${port}`)} />
+              <figcaption class="hint">{t.pair.qrHint}</figcaption>
+            </figure>
+          </div>
         {/if}
 
         {#if !running}
@@ -340,3 +350,21 @@
     {/if}
   </div>
 </div>
+
+<style>
+  .qr-row {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .qr-row figure {
+    margin: 0;
+  }
+
+  .qr-row figcaption {
+    max-width: 168px;
+    margin-top: 0.25rem;
+  }
+</style>

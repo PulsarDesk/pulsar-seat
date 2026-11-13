@@ -24,6 +24,7 @@ struct FakeIsolation {
     uninstalls: AtomicU32,
     foreign: Mutex<Option<String>>,
     masks: Mutex<Vec<String>>,
+    dxvk_games: Mutex<Vec<String>>,
 }
 
 impl IsolationPort for FakeIsolation {
@@ -54,8 +55,14 @@ impl IsolationPort for FakeIsolation {
         }
         Ok(())
     }
-    fn dxvk(&self, _g: &Path, _e: bool, _d: &[String]) -> Result<(), ProtoError> {
+    fn dxvk(&self, g: &Path, e: bool, _d: &[String]) -> Result<(), ProtoError> {
+        let mut l = lock(&self.dxvk_games);
+        super::dxvk_games_update(&mut l, &g.display().to_string(), e);
         Ok(())
+    }
+    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+        let games = lock(&self.dxvk_games).iter().map(|g| super::dxvk_game(g, None)).collect();
+        Ok(split_proto::DxvkStatus { release: None, games })
     }
     fn launcher_path(&self) -> Option<PathBuf> {
         None
@@ -205,6 +212,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
             report: Some(serde_json::json!({"mode": "normal"})),
         }),
         console_session: Arc::new(|| Some(1)),
+        audio_cleanup: Arc::new(|| Ok(split_audio::StaleReport { removed: vec![r"SWD\MMDEVAPI\X".into()], failed: vec![] })),
         data_root: PathBuf::from(r"C:\ProgramData\PulsarSplitTest"),
         service_version: "0.1.0".into(),
     });
@@ -477,6 +485,51 @@ fn isolation_toggle_installs_and_refuses_foreign_shim() {
     assert_eq!(st.mask_apps, [r"c:\games\game.exe"]);
     assert!(w.engine.set_app_masking("notepad", true).is_err());
     assert!(w.engine.set_dxvk(r"C:\Games\g.exe", true, &["d3d11".into()]).is_err());
+}
+
+#[test]
+fn dxvk_requests_validate_and_list_games() {
+    let w = world();
+    assert!(w.engine.set_dxvk(r"C:\Games\g.exe", true, &[]).is_err(), "enable needs a dll");
+    assert!(w.engine.set_dxvk("g.exe", true, &["d3d9".into()]).is_err(), "relative path");
+    assert!(w.engine.set_dxvk(r"C:\Games\g.bat", true, &["d3d9".into()]).is_err());
+    w.engine.set_dxvk(r"C:\Games\g.exe", true, &["d3d9".into()]).unwrap();
+    w.engine.set_dxvk(r"C:\Games\h.exe", true, &["d3d8".into()]).unwrap();
+    w.engine.set_dxvk(r"c:\games\G.EXE", true, &["d3d9".into()]).unwrap();
+    let st = w.engine.dxvk_status().unwrap();
+    let games: Vec<&str> = st.games.iter().map(|g| g.exe.as_str()).collect();
+    assert_eq!(games, [r"C:\Games\h.exe", r"c:\games\G.EXE"]);
+    w.engine.set_dxvk(r"C:\Games\h.exe", false, &[]).unwrap();
+    assert_eq!(w.engine.dxvk_status().unwrap().games.len(), 1);
+}
+
+#[test]
+fn dxvk_game_rows_come_from_the_marker() {
+    let m = serde_json::json!({"version": "2.7.1", "files": [
+        {"name": "d3d9.dll", "sha256": "aa", "backup": null},
+        {"name": "D3D8.dll", "sha256": "bb", "backup": "D3D8.dll.pulsarsplit-orig"}
+    ]});
+    let g = super::dxvk_game(r"C:\G\g.exe", Some(Ok(serde_json::to_vec(&m).unwrap())));
+    assert!(g.deployed);
+    assert_eq!(g.version.as_deref(), Some("2.7.1"));
+    assert_eq!(g.dlls, ["d3d8", "d3d9"]);
+    let none = super::dxvk_game(r"C:\G\g.exe", None);
+    assert!(!none.deployed && none.error.is_none());
+    let bad = super::dxvk_game(r"C:\G\g.exe", Some(Ok(b"{".to_vec())));
+    assert_eq!(bad.error.as_deref(), Some("marker_unreadable"));
+    let mut l = Vec::new();
+    for i in 0..300 {
+        super::dxvk_games_update(&mut l, &format!(r"C:\G\{i}.exe"), true);
+    }
+    assert_eq!(l.len(), 256);
+    assert_eq!(l[0], r"C:\G\44.exe");
+}
+
+#[test]
+fn audio_cleanup_runs_when_no_seat_boots() {
+    let w = world();
+    let r = w.engine.cleanup_audio_endpoints().unwrap();
+    assert_eq!(r.removed, [r"SWD\MMDEVAPI\X"]);
 }
 
 #[test]

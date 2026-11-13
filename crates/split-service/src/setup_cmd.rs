@@ -5,9 +5,12 @@
 //!
 //! Hooks: `session` (RDS rows), `termwrap` (ServiceDll + path-B rows; restarts TermService,
 //! so it runs last), `shim` (AppHelp database, module copies, DXVK files), `stream`
-//! (firewall rules), `pads` (Bluetooth per-user service start types). Display (VDD
-//! settings copy) has no hook yet: its journal is replayed by `split_setup`'s generic
-//! applier (open question integrator-3).
+//! (firewall rules), `pads` (Bluetooth per-user service start types), `display`
+//! (Virtual-Display-Driver `vdd_settings.xml`: the journaled original, which also holds
+//! the display count, is written back and the driver reloaded).
+//!
+//! Reconcile hooks: `config` (schema), `display` (gives back a VDD settings change left
+//! by a service that died with seats attached; setup runs with the service stopped).
 
 use split_setup::cli::SetupCommand;
 use split_setup::layout::Layout;
@@ -98,6 +101,40 @@ impl RestoreHook for PadsHook {
     }
 }
 
+/// `display`: restores the Virtual-Display-Driver settings file from
+/// `journal\display.jsonl` (spec 90 §9.2). Nothing journaled = nothing touched; a driver
+/// that is already gone only skips the reload. The restore closure is the real
+/// `VddBackend::restore_all` in production and a fake one in tests.
+struct DisplayHook<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> {
+    restore: R,
+}
+
+impl<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> RestoreHook for DisplayHook<R> {
+    fn name(&self) -> &str {
+        split_display::journal::PACKAGE
+    }
+    fn restore_all(&self) -> Result<(), SetupError> {
+        (self.restore)().map_err(other)
+    }
+}
+
+impl<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> ReconcileHook for DisplayHook<R> {
+    fn name(&self) -> &str {
+        split_display::journal::PACKAGE
+    }
+    fn reconcile(&self) -> Result<(), SetupError> {
+        (self.restore)().map_err(other)
+    }
+}
+
+fn display_hook(data_root: PathBuf) -> DisplayHook<impl Fn() -> Result<(), split_display::DisplayError> + Send + Sync> {
+    DisplayHook {
+        restore: move || {
+            crate::wiring::vdd_backend(&data_root, std::sync::Arc::new(split_display::SystemClock::default())).restore_all()
+        },
+    }
+}
+
 /// `reconcile`: opening the registry store writes the current schema version (v2 fields
 /// read as defaults when missing, nothing else to migrate).
 struct ConfigHook;
@@ -120,8 +157,78 @@ pub fn run(cmd: SetupCommand) -> i32 {
         Box::new(ShimHook { install_dir: install_dir.clone() }),
         Box::new(StreamHook { data_root: data_root.clone() }),
         Box::new(PadsHook { data_root: data_root.clone() }),
-        Box::new(TermwrapHook { data_root }),
+        Box::new(display_hook(data_root.clone())),
+        Box::new(TermwrapHook { data_root: data_root.clone() }),
     ];
-    let ctx = split_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, vec![Box::new(ConfigHook)]);
+    let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(ConfigHook), Box::new(display_hook(data_root))];
+    let ctx = split_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);
     split_setup::cli::run(cmd, ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use split_display::fake::{FakeAdapters, FakeClock, FakeConsole, FakeModeSetter, FakeRestoreLog, FakeVddMonitors, FakeVddPipe, FakeVddSettings};
+    use split_display::journal::RestoreLog;
+    use split_display::{AdapterChoice, DisplayBackend, Luid, ModeLimits, SeatDisplay, VddBackend, VddEnv};
+    use std::sync::Arc;
+
+    const XML: &str = "<vdd_settings><monitors><count>1</count></monitors><gpu><friendlyname>default</friendlyname></gpu><resolutions><resolution><width>1920</width><height>1080</height><refresh_rate>60</refresh_rate></resolution></resolutions><colour><SDR10bit>false</SDR10bit><HDRPlus>false</HDRPlus></colour></vdd_settings>";
+
+    fn backend(pipe: &FakeVddPipe, file: &FakeVddSettings, mons: &FakeVddMonitors, journal: &FakeRestoreLog) -> VddBackend<FakeVddPipe, FakeVddSettings> {
+        let clock = Arc::new(FakeClock::default());
+        let gpu = split_display::RenderAdapter {
+            pnp_instance_id: r"PCI\X".into(),
+            description: "GPU X".into(),
+            luid: Luid { low: 42, high: 0 },
+            dedicated_video_memory: 1,
+            hardware: true,
+            vendor_id: 0,
+            device_id: 0,
+        };
+        VddBackend::new(
+            pipe.clone(),
+            file.clone(),
+            VddEnv {
+                monitors: Box::new(mons.clone()),
+                modes: Box::new(FakeModeSetter::linked(mons.clone())),
+                console: Box::new(FakeConsole(Some(1))),
+                adapters: Box::new(FakeAdapters(vec![gpu])),
+                journal: Box::new(journal.clone()),
+                clock: clock.clone(),
+                sleeper: clock,
+                os_build: 26100,
+                server: false,
+                limits: ModeLimits::default(),
+            },
+        )
+    }
+
+    #[test]
+    fn display_hook_restores_a_crashed_runs_settings_on_uninstall_and_reconcile() {
+        let (pipe, file, mons, journal) =
+            (FakeVddPipe::default(), FakeVddSettings::new(XML), FakeVddMonitors::default(), FakeRestoreLog::default());
+        pipe.link_monitors(mons.clone());
+        let service = backend(&pipe, &file, &mons, &journal);
+        let seat = split_proto::SeatConfig { id: "aaaaaaaa-0000-4000-8000-000000000001".into(), ..Default::default() };
+        service.attach(&SeatDisplay::from_seat(&seat, 1, AdapterChoice::Pinned(Luid { low: 42, high: 0 }))).unwrap();
+        assert_ne!(file.content(), XML);
+        drop(service); // the service died with the seat attached
+
+        let hook = DisplayHook { restore: || backend(&pipe, &file, &mons, &journal).restore_all() };
+        assert_eq!(RestoreHook::name(&hook), "display");
+        RestoreHook::restore_all(&hook).unwrap();
+        assert_eq!(file.content(), XML);
+        assert_eq!(pipe.commands().last().map(String::as_str), Some("RELOAD_DRIVER"));
+        // reconcile afterwards: nothing left, nothing written
+        let lines = journal.lines().unwrap().len();
+        ReconcileHook::reconcile(&hook).unwrap();
+        assert_eq!(journal.lines().unwrap().len(), lines);
+    }
+
+    #[test]
+    fn display_hook_reports_failures() {
+        let hook = DisplayHook { restore: || Err(split_display::DisplayError::Io("access denied".into())) };
+        assert!(RestoreHook::restore_all(&hook).is_err());
+    }
 }

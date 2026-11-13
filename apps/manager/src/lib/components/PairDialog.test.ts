@@ -50,6 +50,12 @@ const pulsarPending: PairState = {
 };
 
 describe('PairDialog', () => {
+  it('shows a QR code of the recommended address', async () => {
+    const st: PairState = { available: true, backend: 'sunshine', last_result: null, pending: null };
+    setup(st, 'sunshine');
+    expect(await screen.findByRole('img', { name: t.pair.qr('192.168.1.20:48100') })).toBeInTheDocument();
+  });
+
   it('Sunshine seats keep the PIN form', async () => {
     const pending: PairState = {
       available: true,

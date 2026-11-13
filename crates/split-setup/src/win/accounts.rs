@@ -15,7 +15,7 @@ use windows_sys::Win32::UI::Shell::DeleteProfileW;
 pub struct WinAccounts;
 
 /// String SID of a local user account; `None` when there is no such account.
-fn local_user_sid(name: &str) -> Result<Option<String>, SetupError> {
+pub fn local_user_sid(name: &str) -> Result<Option<String>, SetupError> {
     // `.\name` restricts the lookup to the local machine's account database.
     let w = wide(&format!(r".\{name}"));
     let mut sid = vec![0u8; 256];

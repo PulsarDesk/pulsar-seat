@@ -87,7 +87,7 @@ spec questions are collected here.
     available, otherwise the service alone talks HTTPS to `127.0.0.1:<base+1>` with
     per-seat DPAPI-kept credentials written hashed into `credentials_file` (never
     `--creds` argv), pinned cert, firewall closed. Is this exception to "browser UI not
-    used" accepted for Phase 2? Maintainer.
+    used" accepted for Phase 2? Maintainer. **Resolved 2026-11-13: accepted** (final-7).
 29. **Port allocation + give-up rule.** Spec 80 §7.2 allocates 48100 + k·100 and avoids
     47984–48010; `split_core::ports` starts at 47989. Spec 80 §10 gives up after 5 failures
     in 5 min; `split_core::watchdog` counts 8 consecutive. Integrator decides; recommend
@@ -165,7 +165,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   package generates random credentials per server start (memory only, zeroised) and writes
   only upstream's salted hash into `state.json` before launch. No `Secrets` entry is needed.
   Hash format from source: upper-case hex of SHA-256(password + salt), last byte first.
-  Accept? Maintainer.
+  Accept? Maintainer. **Accepted 2026-11-13** with OQ 28 (final-7).
 - stream-5. **Upstream pending-pair signal.** Upstream logs nothing at `info` when a pair
   request waits; at `debug` it logs the query (`phrase -- getservercert`, plus the client
   cert hex). With the default `info`, the upstream path emits no `pair.pending`; the manager
@@ -631,13 +631,13 @@ Resolved by implementation (entries above stay as history):
 
 Still open:
 
-- final-7. **OQ 28 (maintainer, release blocker).** The default upstream flavour still
-  runs Sunshine's HTTPS web-UI/API listener on base+1 (bound on all interfaces; only
-  `origin_web_ui_allowed = pc`, a pinned cert, per-seat credentials and the absent
-  firewall rule keep it off the LAN). The service uses it over loopback for pairing.
-  This is an exception to plan.md's "no local web server / browser UI not exposed". It
-  is recorded in rules.md as pending. If rejected, the fork flavour (seat pipe,
-  `pulsar_web_ui = disabled`) must become the default and upstream an opt-in.
+- final-7. **OQ 28 resolved (maintainer, 2026-11-13): accepted.** Sunshine seats on the
+  unmodified upstream flavour keep Sunshine's HTTPS web-UI/API listener on base+1; only
+  the service talks to it, over `127.0.0.1`, for `/api/pin` and the client list.
+  Credentials are hashed per server start (stream-4, accepted with it), the seat server's
+  certificate is pinned, `origin_web_ui_allowed = pc`, and base+1 never gets a firewall
+  rule (rules.md "Local services"). The fork flavour (seat pipe, web UI off) stays the
+  preferred path once it exists (final-8). No longer a release blocker.
 - final-8. **Stream-server fork patch set missing (high).** Spec 80 §0's four patches
   (pulsar_idd capture, seat control pipe + web UI off, pairing timeout, pulsar_pad
   backend) do not exist; `installer/stream-server.json` pins only `upstream`. Without
@@ -650,16 +650,34 @@ Still open:
   provider; no provider component exists, so `pulsar_idd` cannot attach to a seat
   session and HDR (40 §8.4) is blocked. Once decided, add a provider crate / driver dir
   (written, not loaded).
-- final-10. **Deferred low items** (not implemented, measure first): "Deny log on
-  locally" per-seat opt-in (spec 30 §10, LSA rights + journal); per-seat environment
-  (`HKU\<SID>\Environment` + `WM_SETTINGCHANGE`, spec 50 §9.2); Steam legacy proxy-DLL
-  report (50 §6.2); configurable SDL VID/PID hint list (50 §7.2); physical console pad
-  scoping opt-in (50 §4.4); stale RDP audio endpoint cleanup request + button (70 §2.6,
-  planner exists in split-audio); GPU encoder / hybrid-laptop / DPI readback warnings
-  (40 §5, 40 §4.4); seat avatar from the Windows account picture (10 §2.1); QR code in
-  the pair dialog (10 §5.3); file-open dialog for autostart paths (10 §4.3, needs
-  tauri-plugin-dialog); DXVK per-game UI (50 §10.2, API exists); connected-client name
-  and session id in the nav list (10 §10).
+- final-10. **Deferred low items.** Done 2026-11-13 (final-low-items, untested on a host):
+  stale RDP audio endpoint cleanup (`cleanup_audio_endpoints`, host page button with
+  confirm; refused while a seat boots); GPU warnings on the seat page (no hardware
+  adapter, hybrid Intel + dGPU without a manual choice, chosen adapter vendor without a
+  known encoder: NVIDIA / AMD / Intel only, HYPOTHESIS for others); seat avatar from the
+  account picture (`get_user_picture`, nav + seat page, initial fallback); QR code in the
+  pair dialog; file-open dialog for autostart paths and DXVK games (tauri-plugin-dialog,
+  Rust-side `pick_exe` command); DXVK per-game page (`get_dxvk_status`); session id and
+  "yayında" (+ client name when the server reports one) in the nav list.
+  Still open (each needs more than a UI change):
+  - "Deny log on locally" per-seat opt-in (spec 30 §10): LSA account rights, journal,
+    seat delete / user change revert and an uninstall hook. Medium; not started.
+  - DPI readback warning (40 §4.4): the service does not read the effective DPI back yet.
+  - Per-seat environment (50 §9.2), Steam legacy proxy-DLL report (50 §6.2), SDL VID/PID
+    hint list (50 §7.2), physical console pad scoping (50 §4.4): not in this step.
+  - Connected client **name**: Sunshine upstream logs no client name with
+    `CLIENT CONNECTED`, so the nav shows only "yayında"; `stream_client` fills once a
+    backend's `stream.started` carries `client` / `client_name`.
+- final-12. **Microphone (spec 70 §5.1): plumbing only.** The per-seat toggle is now
+  editable in the manager and stored (`Microphone`); `split_audio::rdp_client_flags`
+  already sets `INFO_AUDIOCAPTURE` only when the path exists, and the status reports
+  `no_microphone` / `mic_policy_blocked`. Remaining gap, in order: (1) the headless RDP
+  helper must implement the MS-RDPEAI audio-input dynamic channel (format negotiation,
+  PCM 16-bit 48 kHz) and set `INFO_AUDIOCAPTURE`; (2) a service-only named pipe from the
+  stream server to that helper for the samples; (3) a mic extension stream between the
+  Pulsar client and `pulsar-host` (Sunshine / Moonlight have none), inside the existing
+  ports; (4) flip `split_audio::MICROPHONE_PATH_AVAILABLE`. Needs the RDP library's DVC
+  support checked and a host test; Moonlight seats stay mic-less.
 - final-11. **Credential test logon type.** `test_seat_credentials` uses a *network*
   logon (validates the password without needing a logon right or loading a profile);
   spec 10 §4.4 says "interactive". A seat user denied local logon would fail an

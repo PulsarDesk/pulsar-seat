@@ -103,6 +103,34 @@ export interface SeatStatus {
   failure: string | null;
   session_id: number | null;
   phase: string | null;
+  /** A client is streaming from the seat. */
+  streaming?: boolean;
+  stream_client?: string | null;
+}
+
+export interface DxvkGame {
+  exe: string;
+  deployed: boolean;
+  version: string | null;
+  dlls: string[];
+  error: string | null;
+}
+
+export interface DxvkStatus {
+  /** Pinned, downloaded DXVK release; null = not downloaded yet. */
+  release: string | null;
+  games: DxvkGame[];
+}
+
+export interface UserPicture {
+  mime: string;
+  /** Base64; empty = no picture. */
+  data: string;
+}
+
+export interface AudioCleanup {
+  removed: string[];
+  failed: [string, string][];
 }
 
 export interface ServiceStatus {
@@ -200,6 +228,9 @@ export interface RenderAdapter {
   description: string;
   dedicated_video_memory: number;
   hardware: boolean;
+  /** PCI vendor id (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, …). */
+  vendor_id?: number;
+  device_id?: number;
 }
 
 export interface PadStatus {
@@ -392,7 +423,10 @@ export type RequestBody =
   | { type: 'set_seat_connect_password'; data: { name: string; password: string } }
   | { type: 'get_seat_otp'; data: { name: string } }
   | { type: 'rotate_seat_otp'; data: { name: string } }
-  | { type: 'answer_relay_auth'; data: { name: string; password: string; totp: string | null } };
+  | { type: 'answer_relay_auth'; data: { name: string; password: string; totp: string | null } }
+  | { type: 'get_dxvk_status' }
+  | { type: 'get_user_picture'; data: { user: string } }
+  | { type: 'cleanup_audio_endpoints'; data: { confirm: boolean } };
 
 export type ResponseBody =
   | { type: 'hello'; data: { service_version: string; protocol_version: number } }
@@ -416,7 +450,10 @@ export type ResponseBody =
   | { type: 'credential_test'; data: CredentialTest }
   | { type: 'log_lines'; data: string[] }
   | { type: 'stream_backends'; data: StreamBackendInfo[] }
-  | { type: 'otp'; data: { otp: string } };
+  | { type: 'otp'; data: { otp: string } }
+  | { type: 'dxvk_status'; data: DxvkStatus }
+  | { type: 'user_picture'; data: UserPicture }
+  | { type: 'audio_cleanup'; data: AudioCleanup };
 
 /** Result of `test_seat_credentials` (spec 10 §4.4); the password never comes back. */
 export interface CredentialTest {

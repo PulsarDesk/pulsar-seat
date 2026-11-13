@@ -1024,7 +1024,8 @@ The crate implements the `SeatControl` trait twice and picks at run time:
      to the server **without argv**: written into the seat's `credentials_file` in
      upstream's hashed format (salt + SHA-256; HYPOTHESIS until checked against the pinned
      tag's GPL source). Never `--creds` (it takes the password on argv). If the format
-     cannot be produced, upstream pairing stays `unsupported` and OQ 28 decides.
+     cannot be produced, upstream pairing stays `unsupported`. OQ 28 accepted this path
+     (maintainer, 2026-11-13; rules.md "Local services").
    - TLS: pin the seat server's own certificate (`cert` path we configured), reject
      anything else. HTTP client: `ureq` + `rustls` (explicit versions) with a custom
      verifier; no system proxy.
@@ -1419,6 +1420,12 @@ installed, recorded in the journal), devnodes with our markers, shim DB.
 | `set_seat_connect_password` | {`name`, `password`: Secret} (empty = clear; 1–128 chars) | `ack` | Pulsar secret store, then `secrets.load` live; seat may be stopped |
 | `get_seat_otp` / `rotate_seat_otp` | {`name`} | `otp` {`otp`: Secret} | Pulsar `auth.otp.get` / `.rotate` (running seat) |
 | `answer_relay_auth` | {`name`, `password`: Secret, `totp`?: Secret (6 digits)} | `ack` | Pulsar `relay.auth` (running seat) |
+| `get_dxvk_status` (final-low-items) | – | `dxvk_status` {`release`?, `games`: [{`exe`, `deployed`, `version`?, `dlls`[], `error`?}]} | `load_pin` + `Shim\DxvkGames` list + each game's marker file |
+| `get_user_picture` | {`user`} (local SAM name, no `\` `/` `@`) | `user_picture` {`mime`, `data` base64; empty = none} | `AccountPicture\Users\<SID>` `Image96`… inside `%PUBLIC%\AccountPictures\<SID>\`, ≤ 512 KiB |
+| `cleanup_audio_endpoints` | {`confirm`: true} | `audio_cleanup` {`removed`[], `failed`[[id, reason]]} | `split_audio::remove_stale_endpoints`; refused (`seat_booting`) while a seat starts, passive mode refused |
+
+`SeatStatus` gains `streaming` (between `stream_started` and `stream_ended` / stop) and
+`stream_client` (from `stream_started` data `client` / `client_name`, when sent).
 
 `ServiceEvent` = {`seq`, `time`, `seat`?, `kind`: `seat_phase` \| `seat_failed` \|
 `pair_pending` \| `pair_ended` \| `stream_started` \| `stream_ended` \| `host_warning`

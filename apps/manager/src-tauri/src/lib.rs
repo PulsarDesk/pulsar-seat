@@ -66,6 +66,26 @@ fn lan_addresses() -> Vec<String> {
     order_addresses(list)
 }
 
+/// Native file-open dialog for one `.exe` (autostart apps, DXVK games). Runs in the
+/// manager only; the path goes to the service in a normal request. `None` = cancelled.
+#[tauri::command]
+async fn pick_exe(app: tauri::AppHandle, title: String) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let title: String = title.chars().filter(|c| !c.is_control()).take(120).collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(title)
+            .add_filter("Program", &["exe"])
+            .blocking_pick_file()
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.display().to_string())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -76,7 +96,8 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![service_request, service_state, service_control, lan_addresses])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![service_request, service_state, service_control, lan_addresses, pick_exe])
         .run(tauri::generate_context!())
         .expect("error while running the manager");
 }

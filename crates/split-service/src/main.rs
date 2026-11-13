@@ -24,6 +24,8 @@ mod log;
 #[cfg(windows)]
 mod pipe;
 #[cfg(windows)]
+mod picture;
+#[cfg(windows)]
 mod platform;
 #[cfg(windows)]
 mod registry_store;

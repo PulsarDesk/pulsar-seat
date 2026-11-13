@@ -99,7 +99,26 @@ impl WinIsolation {
             _ => Vec::new(),
         }
     }
+
+    /// Games the service deployed DXVK to (manager list, spec 50 §10.2).
+    fn dxvk_games(&self, sys: &dyn ShimSystem) -> Vec<String> {
+        match sys.reg_read(split_shim_core::REG_SHIM, DXVK_GAMES) {
+            Ok(Some(RegValue::MultiSz(v))) => v,
+            _ => Vec::new(),
+        }
+    }
+
+    fn remember_dxvk(&self, sys: &dyn ShimSystem, game: &Path, enabled: bool) {
+        let mut list = self.dxvk_games(sys);
+        crate::engine::dxvk_games_update(&mut list, &game.display().to_string(), enabled);
+        if let Err(e) = sys.reg_write(split_shim_core::REG_SHIM, DXVK_GAMES, &RegValue::MultiSz(list)) {
+            log::warn!("dxvk game list not stored: {e}");
+        }
+    }
 }
+
+/// `HKLM\SOFTWARE\PulsarSplit\Shim\DxvkGames` (REG_MULTI_SZ): games with a DXVK redirect.
+const DXVK_GAMES: &str = "DxvkGames";
 
 impl IsolationPort for WinIsolation {
     fn status(&self) -> Result<IsolationStatus, ProtoError> {
@@ -191,15 +210,34 @@ impl IsolationPort for WinIsolation {
             let rel = release_dir(&root, &pin.version);
             split_shim_core::winfs::check_tree(&rel).map_err(shim_err)?;
             let which: Vec<DxvkDll> = dlls.iter().map(|d| if d == "d3d8" { DxvkDll::D3d8 } else { DxvkDll::D3d9 }).collect();
-            FsDxvkDeployer { fs: &StdFs, pin: &pin, log: &log, clock: &clock_text }.deploy(game, &rel, &which).map_err(shim_err)
+            FsDxvkDeployer { fs: &StdFs, pin: &pin, log: &log, clock: &clock_text }.deploy(game, &rel, &which).map_err(shim_err)?;
+            self.remember_dxvk(&sys, game, true);
+            Ok(())
         } else {
             let pin = load_pin(&sys).map_err(shim_err)?.unwrap_or(ReleasePin {
                 version: String::new(),
                 source_sha256: String::new(),
                 manifest_sha256: String::new(),
             });
-            FsDxvkDeployer { fs: &StdFs, pin: &pin, log: &log, clock: &clock_text }.undo(game).map_err(shim_err)
+            FsDxvkDeployer { fs: &StdFs, pin: &pin, log: &log, clock: &clock_text }.undo(game).map_err(shim_err)?;
+            self.remember_dxvk(&sys, game, false);
+            Ok(())
         }
+    }
+
+    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+        let sys = split_shim_core::win::WinShimSystem;
+        let release = split_shim_core::dxvk::load_pin(&sys).map_err(shim_err)?.map(|p| p.version);
+        let games = self
+            .dxvk_games(&sys)
+            .iter()
+            .map(|g| {
+                let marker = Path::new(g).parent().map(|d| d.join(split_shim_core::dxvk::GAME_MARKER));
+                let read = marker.filter(|m| m.exists()).map(std::fs::read);
+                crate::engine::dxvk_game(g, read)
+            })
+            .collect();
+        Ok(split_proto::DxvkStatus { release, games })
     }
 
     fn launcher_path(&self) -> Option<PathBuf> {
@@ -310,6 +348,31 @@ fn console_session() -> Option<u32> {
     (id != u32::MAX).then_some(id)
 }
 
+/// Virtual-Display-Driver backend on the real machine; also used by the `display` restore
+/// hook of the setup sub-commands. Journal: `<data_root>\journal\display.jsonl`.
+pub type WinVdd = split_display::VddBackend<split_display::win::vdd::WinVddPipe, split_display::win::vdd::WinVddSettingsFile>;
+
+pub fn vdd_backend(data_root: &Path, clock: Arc<split_display::SystemClock>) -> WinVdd {
+    use split_display::win::{dxgi::DxgiAdapters, journal::FileRestoreLog, os, vdd};
+    let (build, server) = os::os_version();
+    split_display::VddBackend::new(
+        vdd::WinVddPipe::default(),
+        vdd::WinVddSettingsFile::discover(),
+        split_display::VddEnv {
+            monitors: Box::new(vdd::WinVddMonitors),
+            modes: Box::new(vdd::WinModeSetter),
+            console: Box::new(os::WinConsole),
+            adapters: Box::new(DxgiAdapters),
+            journal: Box::new(FileRestoreLog::new(data_root.join("journal").join("display.jsonl"))),
+            clock: clock.clone(),
+            sleeper: clock,
+            os_build: build,
+            server,
+            limits: split_display::ModeLimits::default(),
+        },
+    )
+}
+
 /// Every dependency on the real machine. `install_dir` = folder of the service exe
 /// (helper, stream-server manifest, shim payload). `registry` = the HKLM config store is in
 /// use; otherwise (dev file store) Pulsar secrets stay in memory and HKLM is not touched.
@@ -320,7 +383,7 @@ pub fn build(
     service_version: &str,
     registry: bool,
 ) -> Result<Deps, String> {
-    use split_display::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, journal::FileRestoreLog, os, vdd};
+    use split_display::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
     let helper = install_dir.join("pulsar-split-rdp-helper.exe");
     let session = split_session::manager::WindowsSessionManager::new(
         data_root,
@@ -333,22 +396,7 @@ pub fn build(
     let (build, server) = os::os_version();
     let displays: Vec<Arc<dyn split_display::DisplayBackend>> = vec![
         Arc::new(split_display::RdpSessionDisplay::new(WinSessionProbe, dclock.clone(), dclock.clone())),
-        Arc::new(split_display::VddBackend::new(
-            vdd::WinVddPipe::default(),
-            vdd::WinVddSettingsFile::discover(),
-            split_display::VddEnv {
-                monitors: Box::new(vdd::WinVddMonitors),
-                modes: Box::new(vdd::WinModeSetter),
-                console: Box::new(os::WinConsole),
-                adapters: Box::new(DxgiAdapters),
-                journal: Box::new(FileRestoreLog::new(FileRestoreLog::default_path())),
-                clock: dclock.clone(),
-                sleeper: dclock.clone(),
-                os_build: build,
-                server,
-                limits: split_display::ModeLimits::default(),
-            },
-        )),
+        Arc::new(vdd_backend(data_root, dclock.clone())),
         Arc::new(split_display::PulsarIdd::new(WinDeviceIo, dclock.clone(), dclock, build, server)),
     ];
 
@@ -434,6 +482,16 @@ pub fn build(
         )),
         coexist,
         console_session: Arc::new(console_session),
+        audio_cleanup: Arc::new(|| {
+            use split_session::discover::Wts;
+            let live = || {
+                split_session::win::wts::WindowsWts
+                    .sessions()
+                    .map(|v| v.into_iter().map(|s| s.id).collect())
+                    .map_err(|e| split_audio::AudioError::Probe(e.to_string()))
+            };
+            split_audio::remove_stale_endpoints(&split_audio::system_probe(), &split_audio::CfgMgrRemover, &live)
+        }),
         data_root: data_root.to_path_buf(),
         service_version: service_version.to_string(),
     })

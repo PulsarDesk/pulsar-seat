@@ -134,15 +134,12 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     restart, SCM power events, event-log writes, Bluetooth SCM calls, MSI / NSIS builds
     with the merged config (Tauri template assumptions still HYPOTHESIS), crt-static
     release builds, plus everything already listed untested above.
-  - **Missing:** OQ 28 maintainer decision (release blocker, final-7); stream-server fork
-    patch set (final-8, high); WRDS protocol provider for the own IDD (final-9); low
-    items in final-10 (deny-local-logon right, per-seat environment, Steam proxy report,
-    SDL hint list, console pad scoping, stale audio endpoint cleanup, GPU / DPI
-    warnings, account-picture avatars, QR code, autostart file dialog, DXVK UI,
-    connected client in the nav list); microphone (spec 70 §5.1, later feature);
-    display restore hook (integrator-3 remainder).
-  - **Next:** maintainer decides OQ 28 and final-9; maintainer test on a Windows Server +
-    RDSH host (one seat, then two; check the pipe identity check and port checks first).
+  - **Missing:** stream-server fork patch set (final-8, high); WRDS protocol provider
+    for the own IDD (final-9); remaining final-10 items and the microphone path
+    (final-12). OQ 28, most final-10 items and the display restore hook were done on
+    2026-11-13 (entry below).
+  - **Next:** maintainer decides final-9; maintainer test on a Windows Server + RDSH host
+    (one seat, then two; check the pipe identity check and port checks first).
 - 2026-11-12: maintainer: Pulsar becomes a second stream-server backend per seat (Sunshine stays, unforked, for Moonlight). Own drivers stay optional, never default. Workflow `pulsar-split-stream-backends` (run `wf_e22fa7f9-77a`): design note docs/agents/pulsar-host-backend.md, `StreamBackend` trait (Sunshine + PulsarHost), manager selector, review, fix. pulsar-core / pulsar-desktop read-only. Resume with the run id if interrupted.
 - 2026-11-12: design note [pulsar-host-backend.md](pulsar-host-backend.md) done (contract service <-> `pulsar-host`; launch, per-seat isolation, control pipe + message set, manager mapping, capture unknowns, pads owned by split-pads, change list for pulsar-core / pulsar-desktop). Open: pulsar-host-1..12. Design only.
 - 2026-11-13: **stream backends implemented (impl-stream-backends), nothing committed, nothing run on a real host.**
@@ -188,3 +185,35 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     exists).
 - 2026-11-13: stream-backends workflow done (708 cargo tests, 32 vitest, clippy 0; verified by orchestrator). Own termsrv wrapper workflow `pulsar-split-own-termwrap` (run `wf_20718968-e91`) running: research (RDP Wrapper Apache-2.0, community ini licence) -> termwrap/ x64 DLL + ini parser + split-termwrap default-on + manager/installer notice -> 2-lens review -> fix. Resume with the run id if interrupted.
 - 2026-11-13: own termsrv wrapper workflow (`wf_20718968-e91`) **stopped by the model provider's safety system**; research and implementation agents produced nothing, no files changed. Not retried. Current state unchanged: `split-termwrap` only integrates an RDP Wrapper the operator installed (experimental). Server + RDSH stays the supported multi-session path. Plan.md 'own wrapper / default on' decisions are recorded but **not implemented**.
+- 2026-11-13: **final low items (final-low-items), committed locally on `main`, nothing run
+  on a real host.**
+  - OQ 28 **accepted** by the maintainer: the loopback upstream `/api/pin` path is the
+    Sunshine default (service-only client, credentials hashed per server start, pinned
+    certificate, `127.0.0.1` only, no firewall rule for base+1). No longer a release
+    blocker; rules.md "Local services" keeps the strict rules.
+  - Display restore hook: `setup_cmd::DisplayHook` (uninstall **and** reconcile) restores
+    the journaled `vdd_settings.xml` (which holds the display count) and reloads the
+    driver; a missing driver only skips the reload. `wiring::vdd_backend` is shared with
+    the service. Closes the integrator-3 remainder.
+  - IPC (protocol 2, new variants only): `get_dxvk_status`, `get_user_picture`,
+    `cleanup_audio_endpoints`; `SeatStatus.streaming` / `stream_client`. DXVK games are
+    remembered in `HKLM\SOFTWARE\PulsarSplit\Shim\DxvkGames`.
+  - Manager: pair dialog QR code (pure TS encoder `src/lib/qr.ts`, checked module for
+    module against qrcodegen 1.8.0 for 48 cases); account-picture avatars (nav + seat
+    page, initial fallback); DXVK page; microphone toggle stored (path not built,
+    final-12); `pick_exe` file dialog (tauri-plugin-dialog 2.8, MIT / Apache-2.0) for
+    autostart apps and DXVK games; session id + "yayında" in the nav; GPU warnings; host
+    page stale audio endpoint cleanup with confirm.
+  - Skipped: deny-log-on-locally seat option (LSA rights + journal + uninstall hook; medium),
+    DPI readback warning (needs a service-side readback), connected client *name* for
+    Sunshine (upstream logs none). Listed in open-questions final-10 / final-12.
+  - Progress notes of the 2026-11-12 package runs (architect-contracts, audio, display,
+    installer, pads, phase1-core, session, shim, stream, termwrap, third-party-research)
+    merged here and deleted: their results are in the entries above, their build / test
+    commands and "Untested" lists in each package README (`crates/*/README.md`,
+    `shim/README.md`, `installer/README.md`, `drivers/*/README.md`), their open points in
+    open-questions.md (audio-*, display-*, setup-*, pads-*, session-*, shim-*, stream-*,
+    termwrap-*, 19-30). Still true from them: nothing under any `win/` module ran on a
+    real seat host; driver sources (`drivers/split-idd`, `drivers/split-pad`) are unbuilt.
+  - Untested: `picture::read` (registry + file), `pick_exe`, `CfgMgrRemover` through the
+    new request, DXVK list on a real game folder, `DisplayHook` against the real VDD.

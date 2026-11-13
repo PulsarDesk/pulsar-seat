@@ -5,6 +5,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   AppEntry,
+  AudioCleanup,
+  DxvkStatus,
+  UserPicture,
   CredentialTest,
   Events,
   GlobalSettings,
@@ -183,6 +186,22 @@ export const api = {
   /** Start / stop / restart the Windows service through the SCM. */
   async serviceControl(action: 'start' | 'stop' | 'restart'): Promise<void> {
     await invoke('service_control', { action });
+  },
+  /** Pinned DXVK release and the games with a DXVK redirect. */
+  async dxvkStatus(): Promise<DxvkStatus> {
+    return expect(await call({ type: 'get_dxvk_status' }), 'dxvk_status').data;
+  },
+  /** Windows account picture of a local user (empty when none). */
+  async userPicture(user: string): Promise<UserPicture> {
+    return expect(await call({ type: 'get_user_picture', data: { user } }), 'user_picture').data;
+  },
+  /** Spec 70 §2.6: remove stale RDP audio endpoints of ended sessions (operator-confirmed). */
+  async cleanupAudioEndpoints(): Promise<AudioCleanup> {
+    return expect(await call({ type: 'cleanup_audio_endpoints', data: { confirm: true } }), 'audio_cleanup').data;
+  },
+  /** Native file-open dialog for an .exe; null when cancelled. */
+  async pickExe(title: string): Promise<string | null> {
+    return invoke<string | null>('pick_exe', { title });
   },
   /** Private IPv4 addresses of this PC, for the pairing dialog. */
   async lanAddresses(): Promise<string[]> {
