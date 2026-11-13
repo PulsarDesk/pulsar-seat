@@ -4,7 +4,7 @@
 //! [`SeatServer`] owns one seat's server process: it writes `server.conf` (and `apps.json`
 //! if missing), rotates `server.log`, hands upstream its per-start web-UI hash, launches
 //! the binary as SYSTEM inside the seat session, connects the control channel, restarts
-//! with exponential back-off (`split_core::watchdog`, 1 s doubling to 60 s), gives up and
+//! with exponential back-off (`seat_core::remote::watchdog`, 1 s doubling to 60 s), gives up and
 //! reports the last log lines, and stops gracefully (`server.shutdown`, wait `grace` + 1 s,
 //! then terminate).
 //!
@@ -25,7 +25,7 @@ use crate::control::{Hello, SeatControl, ServerEvent, ServerStatus};
 use crate::dist::{ServerDist, ServerFlavour};
 use crate::seatdir::{last_lines, SecureFs, SeatDir, LOG_KEEP};
 use crate::{Clock, StreamError};
-use split_core::watchdog::{Action, Phase, Policy, Watchdog};
+use seat_core::remote::watchdog::{Action, Phase, Policy, Watchdog};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;

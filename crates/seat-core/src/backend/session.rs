@@ -53,6 +53,12 @@ impl SessionBackendKind {
     pub const fn uses_rdp(self) -> bool {
         matches!(self, Self::RdsLoopback | Self::TermsrvWrapper)
     }
+    /// Remote seats need concurrent per-user sessions: Server + RDSH (`rds_loopback`) or the
+    /// wrapper kind. `fast_user_switch` (U1) and `desktops` (U3) are local only; a remote
+    /// seat start under them fails with `session_unavailable` (architecture.md section 10).
+    pub const fn hosts_remote_seats(self) -> bool {
+        self.uses_rdp()
+    }
 }
 
 /// Where seat hosts run under the RDP backends (spec 00 T6, spec 30 §6.1.1 point 1).

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Crate error type with stable snake_case reason codes (contract §3.1).
 
-use split_proto::{ErrorCode, ProtoError};
+use seat_proto::remote::{ErrorCode, ProtoError};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DisplayError {

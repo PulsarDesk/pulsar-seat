@@ -15,7 +15,7 @@ use crate::users::{Accounts, Profiles, UserCheck, check_password};
 use crate::wait::poll_until;
 use crate::{Clock, FailureReason, SessionError, Sleeper};
 use serde::{Deserialize, Serialize};
-use split_proto::{Secret, StopAction};
+use seat_proto::remote::{Secret, StopAction};
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -779,7 +779,7 @@ impl SessionManager for Manager {
     }
 
     fn create_seat_user(&self, user: &str, password: &Secret) -> Result<(), SessionError> {
-        split_core::validate::user_name(user).map_err(|e| SessionError::InvalidArgument(e.message))?;
+        seat_core::remote::validate::user_name(user).map_err(|e| SessionError::InvalidArgument(e.message))?;
         if user.is_empty() {
             return Err(SessionError::InvalidArgument("user name is empty".into()));
         }

@@ -4,7 +4,7 @@
 
 use crate::ports::ListenerProbe;
 use crate::StreamError;
-use split_core::ports::Proto;
+use seat_core::remote::ports::Proto;
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6TABLE_OWNER_PID, MIB_TCPTABLE_OWNER_PID,

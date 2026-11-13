@@ -7,7 +7,7 @@
 
 use crate::SessionError;
 use serde::{Deserialize, Serialize};
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use zeroize::Zeroizing;
@@ -168,7 +168,7 @@ impl HelperArgs {
         if cn.is_empty() || cn.len() > 15 || !cn.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             return Err(bad("client name must be 1-15 ASCII letters/digits"));
         }
-        if self.user.is_empty() || split_core::validate::user_name(&self.user).is_err() {
+        if self.user.is_empty() || seat_core::remote::validate::user_name(&self.user).is_err() {
             return Err(bad("bad user name"));
         }
         for (n, v) in [("width", self.width), ("height", self.height)] {

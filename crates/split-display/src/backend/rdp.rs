@@ -153,10 +153,10 @@ mod tests {
     use super::*;
     use crate::adapters::AdapterChoice;
     use crate::fake::{FakeClock, FakeSessionProbe};
-    use split_proto::SeatConfig;
+    use seat_proto::remote::RemoteSeatRecord;
 
     fn seat(session: u32) -> SeatDisplay {
-        let s = SeatConfig {
+        let s = RemoteSeatRecord {
             id: "11111111-2222-4333-8444-555555555555".into(),
             ..Default::default()
         };

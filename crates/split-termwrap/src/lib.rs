@@ -210,9 +210,9 @@ impl TermwrapError {
     }
 }
 
-impl From<TermwrapError> for split_proto::ProtoError {
+impl From<TermwrapError> for seat_proto::remote::ProtoError {
     fn from(e: TermwrapError) -> Self {
-        use split_proto::ErrorCode;
+        use seat_proto::remote::ErrorCode;
         let code = match &e {
             TermwrapError::WarningNotAcknowledged { .. }
             | TermwrapError::WrapperMissing(_)
@@ -235,7 +235,7 @@ impl From<TermwrapError> for split_proto::ProtoError {
         };
         let field = matches!(e, TermwrapError::WrapperPath(_) | TermwrapError::WrapperMissing(_))
             .then_some("wrapper_path");
-        let p = split_proto::ProtoError::new(code, format!("{}: {e}", e.code()));
+        let p = seat_proto::remote::ProtoError::new(code, format!("{}: {e}", e.code()));
         match field {
             Some(f) => p.with_field(f),
             None => p,
@@ -258,12 +258,12 @@ mod tests {
 
     #[test]
     fn error_maps_to_proto_with_code_first() {
-        let p: split_proto::ProtoError = TermwrapError::ForeignWrapper(r"C:\x.dll".into()).into();
-        assert_eq!(p.code, split_proto::ErrorCode::ServiceUnavailable);
+        let p: seat_proto::remote::ProtoError = TermwrapError::ForeignWrapper(r"C:\x.dll".into()).into();
+        assert_eq!(p.code, seat_proto::remote::ErrorCode::ServiceUnavailable);
         assert!(p.message.starts_with("foreign_wrapper: "));
-        let p: split_proto::ProtoError = TermwrapError::WrapperPath("x".into()).into();
+        let p: seat_proto::remote::ProtoError = TermwrapError::WrapperPath("x".into()).into();
         assert_eq!(p.field.as_deref(), Some("wrapper_path"));
-        let p: split_proto::ProtoError = TermwrapError::UnknownTermsrvBuild(FileVersion::new(10, 0, 1, 2)).into();
+        let p: seat_proto::remote::ProtoError = TermwrapError::UnknownTermsrvBuild(FileVersion::new(10, 0, 1, 2)).into();
         assert_eq!(p.message, "unknown_termsrv_build: termsrv.dll build 10.0.1.2 is not listed by the wrapper's support file");
     }
 

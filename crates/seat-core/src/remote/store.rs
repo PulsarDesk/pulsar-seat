@@ -7,7 +7,8 @@
 //! passwords to disk: they keep them in process memory only (wiped on drop), so a
 //! `--console` service can start a seat until it exits.
 
-use split_proto::{GlobalSettings, SeatConfig, Secret};
+use crate::Secret;
+use crate::remote::{RemoteSeatRecord, RemoteSettings};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
@@ -25,21 +26,21 @@ pub enum StoreError {
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub global: GlobalSettings,
-    pub seats: Vec<SeatConfig>,
+    pub global: RemoteSettings,
+    pub seats: Vec<RemoteSeatRecord>,
 }
 
 impl Config {
-    pub fn seat(&self, name: &str) -> Option<&SeatConfig> {
+    pub fn seat(&self, name: &str) -> Option<&RemoteSeatRecord> {
         self.seats.iter().find(|s| s.name.eq_ignore_ascii_case(name))
     }
 }
 
 pub trait ConfigStore: Send {
     fn load(&self) -> Result<Config, StoreError>;
-    fn put_global(&mut self, global: &GlobalSettings) -> Result<(), StoreError>;
+    fn put_global(&mut self, global: &RemoteSettings) -> Result<(), StoreError>;
     /// Insert or replace the seat with the same name.
-    fn put_seat(&mut self, seat: &SeatConfig) -> Result<(), StoreError>;
+    fn put_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), StoreError>;
     fn delete_seat(&mut self, name: &str) -> Result<(), StoreError>;
     /// Rename a seat key, keeping its stored password. The caller writes the new values
     /// with [`ConfigStore::put_seat`] afterwards.
@@ -54,10 +55,10 @@ impl<T: ConfigStore + ?Sized> ConfigStore for Box<T> {
     fn load(&self) -> Result<Config, StoreError> {
         (**self).load()
     }
-    fn put_global(&mut self, global: &GlobalSettings) -> Result<(), StoreError> {
+    fn put_global(&mut self, global: &RemoteSettings) -> Result<(), StoreError> {
         (**self).put_global(global)
     }
-    fn put_seat(&mut self, seat: &SeatConfig) -> Result<(), StoreError> {
+    fn put_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), StoreError> {
         (**self).put_seat(seat)
     }
     fn delete_seat(&mut self, name: &str) -> Result<(), StoreError> {
@@ -84,8 +85,8 @@ fn key(name: &str) -> String {
 
 #[derive(Debug, Default)]
 pub struct MemoryStore {
-    global: GlobalSettings,
-    seats: BTreeMap<String, SeatConfig>,
+    global: RemoteSettings,
+    seats: BTreeMap<String, RemoteSeatRecord>,
     /// In memory only; wiped when replaced or dropped.
     passwords: BTreeMap<String, Zeroizing<String>>,
 }
@@ -113,12 +114,12 @@ impl ConfigStore for MemoryStore {
         Ok(self.snapshot())
     }
 
-    fn put_global(&mut self, global: &GlobalSettings) -> Result<(), StoreError> {
+    fn put_global(&mut self, global: &RemoteSettings) -> Result<(), StoreError> {
         self.global = global.clone();
         Ok(())
     }
 
-    fn put_seat(&mut self, seat: &SeatConfig) -> Result<(), StoreError> {
+    fn put_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), StoreError> {
         self.seats.insert(key(&seat.name), seat.clone());
         Ok(())
     }
@@ -198,12 +199,12 @@ impl ConfigStore for FileStore {
         self.mem.load()
     }
 
-    fn put_global(&mut self, global: &GlobalSettings) -> Result<(), StoreError> {
+    fn put_global(&mut self, global: &RemoteSettings) -> Result<(), StoreError> {
         self.mem.put_global(global)?;
         self.flush()
     }
 
-    fn put_seat(&mut self, seat: &SeatConfig) -> Result<(), StoreError> {
+    fn put_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), StoreError> {
         self.mem.put_seat(seat)?;
         self.flush()
     }
@@ -236,8 +237,8 @@ impl ConfigStore for FileStore {
 mod tests {
     use super::*;
 
-    fn seat(name: &str) -> SeatConfig {
-        SeatConfig { name: name.into(), display_name: name.into(), port: 47989, ..Default::default() }
+    fn seat(name: &str) -> RemoteSeatRecord {
+        RemoteSeatRecord { name: name.into(), display_name: name.into(), port: 47989, ..Default::default() }
     }
 
     #[test]
@@ -263,7 +264,7 @@ mod tests {
         let path = dir.path().join("sub").join("config.json");
         {
             let mut s = FileStore::open(&path).unwrap();
-            s.put_global(&GlobalSettings { hid_isolation: true, ..Default::default() }).unwrap();
+            s.put_global(&RemoteSettings { hid_isolation: true, ..Default::default() }).unwrap();
             s.put_seat(&seat("Salon")).unwrap();
             s.set_password("Salon", &Secret("very-secret-pw".into())).unwrap();
         }

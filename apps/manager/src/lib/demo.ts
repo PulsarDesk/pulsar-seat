@@ -312,7 +312,7 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       await step('hello');
       return {
         service_version: '0.1.0-demo',
-        protocol_version: 1,
+        protocol_version: 3,
         min_protocol_version: 1,
         caller: { client: 'manager', session_id: 1, seat: 1, is_admin: admin, restricted: !!opts.restricted }
       };

@@ -91,6 +91,23 @@ pub enum IssueCode {
     /// the tweak writes the `HideFastUserSwitching` policy, which turns that backend off
     /// (`fsu_disabled`). Added 2026-11-13 (final-fix), error.
     HideFsuWithFastUserSwitch,
+    /// The seat's `kind` does not match its sub-struct: `local` / `remote` missing, or the
+    /// other kind's part set (architecture.md §10.1). Added 2026-11-14 (schema 2), error.
+    SeatKindMismatch,
+    /// Seat 1 is the console seat and always local. Added 2026-11-14, error.
+    ConsoleSeatRemote,
+    /// A device assignment names a remote seat (remote seats have no physical devices).
+    /// Added 2026-11-14, error.
+    DeviceOnRemoteSeat,
+    /// A remote seat failed Pulsar Split's model checks; `reason` = Split's error code
+    /// (`invalid_name`, `invalid_port`, `port_overlap`, `duplicate_name`, `user_in_use`,
+    /// `invalid_user`, `invalid_value`, ...), `field` = the Split field. Added 2026-11-14,
+    /// error.
+    RemoteSeatInvalid,
+    /// A remote seat while the session backend has no concurrent sessions
+    /// (`fast_user_switch`, `desktops`): it cannot start (`session_unavailable`). Added
+    /// 2026-11-14, warning.
+    SessionUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,11 +121,19 @@ pub struct Issue {
     /// JSON path of the offending field (`settings.timings.seat_start_timeout_s`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// Finer snake_case reason (`remote_seat_invalid`: Split's error code). Added
+    /// 2026-11-14 (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl Issue {
     fn new(severity: Severity, code: IssueCode) -> Self {
-        Self { severity, code, seat: None, device: None, field: None }
+        Self { severity, code, seat: None, device: None, field: None, reason: None }
+    }
+    fn reason(mut self, r: &str) -> Self {
+        self.reason = Some(r.into());
+        self
     }
     fn seat(mut self, s: SeatNumber) -> Self {
         self.seat = Some(s);
@@ -219,6 +244,7 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
     }
     ip_checks(config, &mut out);
     kiosk_checks(config, &mut out);
+    kind_checks(config, &mut out);
     for d in &config.devices {
         if d.options.outputs.len() > 1 && !config.settings.outputs.allow_clone {
             out.push(Issue::new(Severity::Error, IssueCode::CloneNotAllowed).device(&d.key).field("options.outputs"));
@@ -245,7 +271,7 @@ pub fn is_absolute_windows_path(p: &str) -> bool {
 /// Kiosk shells (spec 35 §5.1 U3).
 fn kiosk_checks(config: &Config, out: &mut Vec<Issue>) {
     for s in &config.seats {
-        let Some(k) = &s.kiosk_shell else { continue };
+        let Some(k) = &s.local_settings().kiosk_shell else { continue };
         let text_ok = |t: &str, max: usize| {
             let n = t.trim().chars().count();
             n > 0 && n <= max && !t.chars().any(char::is_control)
@@ -257,10 +283,60 @@ fn kiosk_checks(config: &Config, out: &mut Vec<Issue>) {
         });
         let bad_idle = k.idle_reset_minutes > 1440;
         if k.apps.len() > crate::config::MAX_KIOSK_APPS || bad_app || bad_idle {
-            out.push(Issue::new(Severity::Error, IssueCode::InvalidKioskShell).seat(s.number).field("kiosk_shell"));
+            out.push(Issue::new(Severity::Error, IssueCode::InvalidKioskShell).seat(s.number).field("local.kiosk_shell"));
         }
         if s.number.is_console() && config.settings.kiosk.seat1_desktop {
-            out.push(Issue::new(Severity::Warning, IssueCode::KioskShellIgnoredOnSeatOne).seat(s.number).field("kiosk_shell"));
+            out.push(Issue::new(Severity::Warning, IssueCode::KioskShellIgnoredOnSeatOne).seat(s.number).field("local.kiosk_shell"));
+        }
+    }
+}
+
+/// Seat kinds (architecture.md §10.1): sub-structs, seat 1, devices, Split's model checks.
+fn kind_checks(config: &Config, out: &mut Vec<Issue>) {
+    use crate::config::SeatKind;
+    for s in &config.seats {
+        if !s.kind_consistent() {
+            out.push(Issue::new(Severity::Error, IssueCode::SeatKindMismatch).seat(s.number).field(s.kind.as_str()));
+        }
+        if s.number.is_console() && s.kind != SeatKind::Local {
+            out.push(Issue::new(Severity::Error, IssueCode::ConsoleSeatRemote).seat(s.number).field("kind"));
+        }
+    }
+    let remote: Vec<(SeatNumber, crate::remote::RemoteSeatRecord)> =
+        config.seats.iter().filter_map(|s| s.remote_record().map(|r| (s.number, r))).collect();
+    if remote.is_empty() {
+        return;
+    }
+    for d in &config.devices {
+        if !d.mask.is_shared() && remote.iter().any(|(n, _)| d.mask.contains(*n)) {
+            out.push(Issue::new(Severity::Error, IssueCode::DeviceOnRemoteSeat).device(&d.key).field("mask"));
+        }
+    }
+    for (i, (n, rec)) in remote.iter().enumerate() {
+        let others: Vec<crate::remote::RemoteSeatRecord> =
+            remote.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, (_, r))| r.clone()).collect();
+        let seat = config.seat(*n).expect("listed above");
+        let domain = matches!(seat.account, crate::config::SeatAccount::Domain { .. });
+        let result = if domain {
+            Err(crate::error::ProtoError::new(crate::error::ErrorCode::InvalidUser, "remote seats use local accounts")
+                .with_field("account"))
+        } else {
+            crate::remote::validate::seat_against(rec, &others)
+        };
+        if let Err(e) = result {
+            let mut issue = Issue::new(Severity::Error, IssueCode::RemoteSeatInvalid).seat(*n).reason(e.code.as_str());
+            issue.field = Some(format!("remote.{}", e.field.unwrap_or_default()));
+            out.push(issue);
+        }
+    }
+    if let Err(e) = crate::remote::validate::global(&config.settings.remote) {
+        let mut issue = Issue::new(Severity::Error, IssueCode::RemoteSeatInvalid).reason(e.code.as_str());
+        issue.field = Some(format!("settings.remote.{}", e.field.unwrap_or_default()));
+        out.push(issue);
+    }
+    if !config.settings.backends.session.hosts_remote_seats() {
+        for (n, _) in &remote {
+            out.push(Issue::new(Severity::Warning, IssueCode::SessionUnavailable).seat(*n).field("settings.backends.session"));
         }
     }
 }
@@ -295,7 +371,7 @@ fn device_checks(config: &Config, inv: &[Device], out: &mut Vec<Issue>) {
         eff.iter().any(|e| e.kind == kind && e.mask.contains(seat) && present.contains_key(&e.key))
     };
     let any_monitor = inv.iter().any(|d| d.kind == DeviceKind::Monitor);
-    for s in &config.seats {
+    for s in config.seats.iter().filter(|s| s.is_local()) {
         let seat = s.number;
         if !has(seat, DeviceKind::Monitor) {
             if seat.is_console() {
@@ -521,34 +597,137 @@ mod tests {
         let app = |t: &str, c: &str| KioskShellApp { title: t.into(), command: c.into(), args: vec![], autostart: false, monitor: 0 };
         let mut c = Config::default();
         let mut s2 = SeatConfig::new(s(2));
-        s2.kiosk_shell = Some(KioskShell { apps: vec![app("Not defteri", r"C:\Windows\notepad.exe")], idle_reset_minutes: 10 });
+        s2.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![app("Not defteri", r"C:\Windows\notepad.exe")], idle_reset_minutes: 10 });
         c.seats.push(s2);
         let codes = |c: &Config| validate(c, None).into_iter().map(|i| i.code).collect::<Vec<_>>();
         assert!(!codes(&c).contains(&IssueCode::InvalidKioskShell));
-        c.seats[1].kiosk_shell.as_mut().unwrap().idle_reset_minutes = 2000;
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().idle_reset_minutes = 2000;
         assert!(codes(&c).contains(&IssueCode::InvalidKioskShell));
-        c.seats[1].kiosk_shell.as_mut().unwrap().idle_reset_minutes = 0;
-        c.seats[1].kiosk_shell.as_mut().unwrap().apps.push(app(" ", r"C:\x.exe"));
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().idle_reset_minutes = 0;
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps.push(app(" ", r"C:\x.exe"));
         assert!(codes(&c).contains(&IssueCode::InvalidKioskShell));
         // Relative or untrimmed commands are refused (no PATH search in the shell).
         for bad in ["x.exe", r" C:\x.exe", r"C:\x.exe ", r"\x.exe", r"C:x.exe", r"\\srv", r"\\srv\\x"] {
-            c.seats[1].kiosk_shell.as_mut().unwrap().apps = vec![app("a", bad)];
+            c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = vec![app("a", bad)];
             assert!(codes(&c).contains(&IssueCode::InvalidKioskShell), "{bad}");
         }
         for good in [r"C:\x.exe", "d:/a/b.exe", r"\\srv\pay\a.exe"] {
-            c.seats[1].kiosk_shell.as_mut().unwrap().apps = vec![app("a", good)];
+            c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = vec![app("a", good)];
             assert!(!codes(&c).contains(&IssueCode::InvalidKioskShell), "{good}");
         }
-        c.seats[1].kiosk_shell.as_mut().unwrap().apps = (0..17).map(|i| app(&format!("a{i}"), r"C:\x.exe")).collect();
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = (0..17).map(|i| app(&format!("a{i}"), r"C:\x.exe")).collect();
         assert!(codes(&c).contains(&IssueCode::InvalidKioskShell));
-        c.seats[1].kiosk_shell = None;
-        c.seats[0].kiosk_shell = Some(KioskShell::default());
+        c.seats[1].local_mut().unwrap().kiosk_shell = None;
+        c.seats[0].local_mut().unwrap().kiosk_shell = Some(KioskShell::default());
         assert!(codes(&c).contains(&IssueCode::KioskShellIgnoredOnSeatOne));
         c.settings.kiosk.seat1_desktop = false;
         assert!(!codes(&c).contains(&IssueCode::KioskShellIgnoredOnSeatOne));
         // Old documents without the new fields keep working.
         let old = Config::from_json(r#"{"seats":[{"number":2,"name":"x"}]}"#).unwrap();
         assert!(old.settings.kiosk.seat1_desktop);
-        assert!(old.seats.iter().all(|s| s.kiosk_shell.is_none()));
+        assert!(old.seats.iter().all(|s| s.local_settings().kiosk_shell.is_none()));
+    }
+
+    fn remote_seat(n: u8, name: &str, port: u16) -> SeatConfig {
+        let r = crate::remote::RemoteSeat { display_name: name.into(), port, ..Default::default() };
+        let mut seat = SeatConfig::new_remote(s(n), r);
+        seat.name = name.into();
+        seat
+    }
+
+    #[test]
+    fn exactly_the_kinds_sub_struct_is_set() {
+        let mut c = Config::default();
+        c.seats.push(remote_seat(2, "Salon", 48100));
+        assert!(!codes(&validate(&c, None)).contains(&IssueCode::SeatKindMismatch));
+        // Remote seat without its part, local seat with the remote part too, local without.
+        c.seats[1].remote = None;
+        let mut l = SeatConfig::new(s(3));
+        l.remote = Some(crate::remote::RemoteSeat::default());
+        c.seats.push(l);
+        let mut bare = SeatConfig::new(s(4));
+        bare.local = None;
+        c.seats.push(bare);
+        let i = validate(&c, None);
+        let bad: Vec<SeatNumber> =
+            i.iter().filter(|x| x.code == IssueCode::SeatKindMismatch).filter_map(|x| x.seat).collect();
+        assert_eq!(bad, vec![s(2), s(3), s(4)]);
+        assert!(has_errors(&i));
+    }
+
+    #[test]
+    fn seat_one_is_local_and_remote_seats_have_no_devices() {
+        let mut c = Config::default();
+        c.seats[0] = remote_seat(1, "Konsol", 48100);
+        assert!(codes(&validate(&c, None)).contains(&IssueCode::ConsoleSeatRemote));
+        let mut c = Config::default();
+        c.seats.push(remote_seat(2, "Salon", 48100));
+        c.devices.push(assign("kbd;a", DeviceKind::Keyboard, SeatMask(0b10)));
+        let i = validate(&c, None);
+        let d = i.iter().find(|x| x.code == IssueCode::DeviceOnRemoteSeat).expect("issue");
+        assert_eq!(d.device.as_ref().map(|k| k.as_str()), Some("kbd;a"));
+        // Readiness warnings (no monitor / keyboard / mouse) are for local seats only.
+        let inv = vec![dev("mon;1", DeviceKind::Monitor)];
+        let mut c = Config::default();
+        c.seats.push(remote_seat(2, "Salon", 48100));
+        c.devices.push(assign("mon;1", DeviceKind::Monitor, SeatMask(0b1)));
+        let i = validate(&c, Some(&inv));
+        assert!(!i.iter().any(|x| x.seat == Some(s(2)) && matches!(x.code, IssueCode::SeatWithoutDisplay | IssueCode::SeatWithoutKeyboard | IssueCode::SeatWithoutMouse)), "{i:?}");
+    }
+
+    #[test]
+    fn remote_seats_pass_splits_model_checks() {
+        let mut c = Config::default();
+        c.seats.push(remote_seat(2, "Salon", 48100));
+        c.seats.push(remote_seat(3, "Oda", 48200));
+        assert!(!has_errors(&validate(&c, None)), "{:?}", validate(&c, None));
+        // Overlapping port blocks.
+        c.seats[2].remote.as_mut().unwrap().port = 48110;
+        let i = validate(&c, None);
+        let r = i.iter().find(|x| x.code == IssueCode::RemoteSeatInvalid).expect("issue");
+        assert_eq!(r.reason.as_deref(), Some("port_overlap"));
+        assert_eq!(r.field.as_deref(), Some("remote.port"));
+        c.seats[2].remote.as_mut().unwrap().port = 48200;
+        // Split's seat name rule (ASCII letters / digits) applies to remote seats.
+        c.seats[2].name = "Çocuk odası".into();
+        let i = validate(&c, None);
+        assert!(i.iter().any(|x| x.code == IssueCode::RemoteSeatInvalid && x.reason.as_deref() == Some("invalid_name")), "{i:?}");
+        c.seats[2].name = "Oda".into();
+        // Same user on two remote seats, and domain accounts.
+        c.seats[1].account = SeatAccount::Local { user: "ali".into() };
+        c.seats[2].account = SeatAccount::Local { user: "ALI".into() };
+        let i = validate(&c, None);
+        assert!(i.iter().any(|x| x.reason.as_deref() == Some("user_in_use")), "{i:?}");
+        c.seats[2].account = SeatAccount::Domain { domain: "EV".into(), user: "veli".into() };
+        let i = validate(&c, None);
+        assert!(i.iter().any(|x| x.reason.as_deref() == Some("invalid_user") && x.field.as_deref() == Some("remote.account")), "{i:?}");
+        c.seats[2].account = SeatAccount::LogonScreen;
+        // Remote machine settings.
+        c.settings.remote.steam_isolation = true;
+        let i = validate(&c, None);
+        assert!(i.iter().any(|x| x.field.as_deref() == Some("settings.remote.steam_isolation")), "{i:?}");
+        c.settings.remote.steam_isolation = false;
+        assert!(!has_errors(&validate(&c, None)));
+    }
+
+    #[test]
+    fn remote_seats_need_concurrent_sessions() {
+        let mut c = Config::default();
+        c.seats.push(remote_seat(2, "Salon", 48100));
+        for (kind, warn) in [
+            (crate::backend::SessionBackendKind::RdsLoopback, false),
+            (crate::backend::SessionBackendKind::FastUserSwitch, true),
+            (crate::backend::SessionBackendKind::Desktops, true),
+        ] {
+            c.settings.backends.session = kind;
+            let i = validate(&c, None);
+            let w = i.iter().find(|x| x.code == IssueCode::SessionUnavailable);
+            assert_eq!(w.is_some(), warn, "{kind:?}");
+            assert!(w.is_none_or(|w| w.severity == Severity::Warning && w.seat == Some(s(2))));
+        }
+        // No remote seat: no warning.
+        let mut c = Config::default();
+        c.settings.backends.session = crate::backend::SessionBackendKind::Desktops;
+        assert!(!codes(&validate(&c, None)).contains(&IssueCode::SessionUnavailable));
     }
 }

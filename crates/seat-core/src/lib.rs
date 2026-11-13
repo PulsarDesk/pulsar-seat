@@ -12,6 +12,10 @@
 //! - [`backend`]: the swappable backend traits (session, display, input, audio, device gate).
 //! - [`mock`]: in-memory implementations of every trait (feature `mock`, and in tests).
 //! - [`consts`]: names shared by service, manager, installer, hosts and drivers.
+//! - [`error`]: the one wire error ([`error::ProtoError`], [`error::ErrorCode`]).
+//! - [`remote`]: the remote seat kind (from Pulsar Split): `RemoteSeat`, Split model,
+//!   validation, ports, stream-server config, watchdog.
+//! - [`spawn`]: the process-wide spawn lock (handle-inheritance rule).
 //!
 //! No platform code lives here; the crate builds and tests on any host. Contract summary:
 //! `docs/agents/architecture.md`.
@@ -21,9 +25,12 @@ pub mod backend;
 pub mod config;
 pub mod consts;
 pub mod device;
+pub mod error;
 pub mod ids;
 pub mod pnp;
+pub mod remote;
 pub mod secret;
+pub mod spawn;
 pub mod state;
 pub mod store;
 pub mod validate;

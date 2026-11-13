@@ -11,9 +11,9 @@ use crate::pipe::{Handler, PipeServer, Shutdown};
 use crate::platform::WindowsPlatform;
 use crate::registry_store::RegistryStore;
 use crate::security;
-use split_core::control::Controller;
-use split_core::store::{ConfigStore, FileStore};
-use split_proto::{MAX_POLL_WAIT_MS, PIPE_NAME, RequestBody, Response, ResponseBody};
+use crate::control::Controller;
+use seat_core::remote::store::{ConfigStore, FileStore};
+use seat_proto::remote::legacy::{MAX_POLL_WAIT_MS, PIPE_NAME, RequestBody, Response, ResponseBody};
 use split_session::manager::SessionChange;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -124,9 +124,9 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
 }
 
 /// `poll_events` waits outside the controller lock (≤ 2 s) so other requests keep flowing.
-fn handle(c: &SharedController, req: split_proto::Request) -> Response {
+fn handle(c: &SharedController, req: seat_proto::remote::legacy::Request) -> Response {
     if let RequestBody::PollEvents { after, wait_ms } = &req.body
-        && req.version == split_proto::PROTOCOL_VERSION
+        && req.version == seat_proto::PROTOCOL_VERSION
     {
         let (after, wait) = (*after, (*wait_ms).min(MAX_POLL_WAIT_MS));
         let end = std::time::Instant::now() + Duration::from_millis(wait as u64);

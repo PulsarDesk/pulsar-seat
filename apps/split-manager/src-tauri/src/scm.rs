@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Start / stop the seat service through the Service Control Manager.
 
-use split_proto::{ErrorCode, ProtoError};
+use seat_proto::remote::{ErrorCode, ProtoError};
 
 pub const SERVICE_NAME: &str = "PulsarSplit";
 

@@ -5,10 +5,11 @@
 //! - `PIPE_REJECT_REMOTE_CLIENTS`: local callers only.
 //! - The first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so the service
 //!   refuses to start if somebody else already owns the pipe name (name squatting).
-//! - Byte mode; framing from `split_proto::framing`. One thread per connection.
+//! - Byte mode; framing from `seat_proto::remote::framing`. One thread per connection.
 
 use crate::security::{SecurityDescriptor, wide};
-use split_proto::{ErrorCode, ProtoError, Request, Response};
+use seat_proto::remote::legacy::{Request, Response};
+use seat_proto::remote::{ErrorCode, ProtoError};
 use std::fs::File;
 use std::io;
 use std::os::windows::io::FromRawHandle;
@@ -138,10 +139,10 @@ fn serve(pipe: OwnedPipe, handler: Handler) {
     // SAFETY: we own the handle; File closes it on drop.
     let mut file = unsafe { File::from_raw_handle(h as _) };
     loop {
-        match split_proto::read_message::<_, Request>(&mut file) {
+        match seat_proto::remote::read_message::<_, Request>(&mut file) {
             Ok(Some(req)) => {
                 let resp = handler(req);
-                if let Err(e) = split_proto::write_message(&mut file, &resp) {
+                if let Err(e) = seat_proto::remote::write_message(&mut file, &resp) {
                     crate::log::warn(&format!("pipe write failed (pid {pid}): {e}"));
                     break;
                 }
@@ -150,7 +151,7 @@ fn serve(pipe: OwnedPipe, handler: Handler) {
             Err(e) => {
                 crate::log::warn(&format!("bad frame from pid {pid}: {e}"));
                 let resp = Response::new(0, Err(ProtoError::new(ErrorCode::BadRequest, e.to_string())));
-                let _ = split_proto::write_message(&mut file, &resp);
+                let _ = seat_proto::remote::write_message(&mut file, &resp);
                 break;
             }
         }
@@ -166,7 +167,7 @@ fn serve(pipe: OwnedPipe, handler: Handler) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_proto::{RequestBody, ResponseBody};
+    use seat_proto::remote::legacy::{RequestBody, ResponseBody};
 
     /// End-to-end over a real pipe. The test process is the creator, so the DACL also
     /// grants the current user (like `--allow-current-user`).
@@ -194,14 +195,14 @@ mod tests {
         }
         let mut c = client.expect("connect");
         for id in 1..=3 {
-            split_proto::write_message(&mut c, &Request::new(id, RequestBody::Hello)).unwrap();
-            let resp: Response = split_proto::read_message(&mut c).unwrap().unwrap();
+            seat_proto::remote::write_message(&mut c, &Request::new(id, RequestBody::Hello)).unwrap();
+            let resp: Response = seat_proto::remote::read_message(&mut c).unwrap().unwrap();
             assert_eq!(resp.id, id);
             assert!(resp.result.is_ok());
         }
         // Garbage frame gets a BadRequest and the connection closes.
-        split_proto::write_frame(&mut c, b"{nope").unwrap();
-        let resp: Response = split_proto::read_message(&mut c).unwrap().unwrap();
+        seat_proto::remote::write_frame(&mut c, b"{nope").unwrap();
+        let resp: Response = seat_proto::remote::read_message(&mut c).unwrap().unwrap();
         assert_eq!(resp.result.unwrap_err().code, ErrorCode::BadRequest);
         drop(c);
 

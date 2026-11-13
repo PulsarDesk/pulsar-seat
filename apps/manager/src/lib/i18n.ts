@@ -1081,6 +1081,8 @@ const errorText: Record<string, string> = {
   os: 'Windows işlemi başarısız oldu.',
   store: 'Ayar dosyası yazılamadı.',
   not_implemented: 'Bu işlem hizmetin bu sürümünde henüz yok.',
+  wrong_seat_kind: 'Bu işlem bu tür koltukta yapılamaz (yerel / uzak koltuk).',
+  session_unavailable: 'Uzak koltuklar için aynı anda birden fazla oturum gerekir; seçili oturum yöntemi bunu sağlamıyor.',
   bad_request: 'Geçersiz istek.',
   internal: 'Beklenmeyen bir hata oluştu.'
 };
@@ -1132,6 +1134,11 @@ export const issueText: Record<string, string> = {
   same_account_fast_user_switch: 'Hızlı kullanıcı geçişinde her koltuğun ayrı bir hesabı olmalı.',
   invalid_kiosk_shell: 'Kiosk koltuğunun ayarları geçersiz (en çok 16 uygulama, adı ve yolu dolu, boşta sıfırlama 0–1440 dakika).',
   kiosk_shell_ignored_on_seat_one: '1. koltuk normal masaüstü olarak kaldığı için kiosk ayarı bu koltukta kullanılmaz.',
+  seat_kind_mismatch: 'Koltuğun türü (yerel / uzak) ayarlarıyla uyuşmuyor.',
+  console_seat_remote: '1. koltuk her zaman yerel koltuktur.',
+  device_on_remote_seat: 'Uzak koltuğa aygıt atanamaz.',
+  remote_seat_invalid: 'Uzak koltuğun ayarlarında hata var.',
+  session_unavailable: 'Uzak koltuklar seçili oturum yöntemiyle başlatılamaz (aynı anda birden fazla oturum gerekir).',
 
   store_failed: 'Ayarlar dosyaya yazılamadı.'
 };

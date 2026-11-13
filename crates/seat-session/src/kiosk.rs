@@ -43,7 +43,7 @@ pub struct KioskPlan {
 /// The seat runs as a kiosk shell seat: it has a shell config, and seat 1 only when it is
 /// not kept as the normal desktop.
 pub fn wants_shell(seat: SeatNumber, config: &SeatConfig, settings: &GlobalSettings) -> bool {
-    config.kiosk_shell.is_some() && (!seat.is_console() || !settings.kiosk.seat1_desktop)
+    config.local_settings().kiosk_shell.is_some() && (!seat.is_console() || !settings.kiosk.seat1_desktop)
 }
 
 /// The plan of a seat (`None` when the seat is not a kiosk shell seat).
@@ -51,7 +51,7 @@ pub fn plan_for(seat: SeatNumber, config: &SeatConfig, settings: &GlobalSettings
     if !wants_shell(seat, config, settings) {
         return None;
     }
-    let k = config.kiosk_shell.as_ref()?;
+    let k = config.local_settings().kiosk_shell.as_ref()?;
     Some(KioskPlan {
         seat,
         // Trimmed, absolute commands only: the shell launches `command` as
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn plan_roundtrip_through_the_command_line() {
         let mut c = SeatConfig::new(seat(2));
-        c.kiosk_shell = Some(KioskShell { apps: vec![app("Tarayıcı")], idle_reset_minutes: 15 });
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![app("Tarayıcı")], idle_reset_minutes: 15 });
         let g = GlobalSettings::default();
         let p = plan_for(seat(2), &c, &g, vec![Rect { x: 1920, y: 0, width: 1280, height: 1024 }]).unwrap();
         assert!(p.seat1_desktop);
@@ -188,7 +188,7 @@ mod tests {
         let mut c = SeatConfig::new(SeatNumber::CONSOLE);
         let mut g = GlobalSettings::default();
         assert!(!wants_shell(SeatNumber::CONSOLE, &c, &g));
-        c.kiosk_shell = Some(KioskShell::default());
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell::default());
         assert!(!wants_shell(SeatNumber::CONSOLE, &c, &g));
         g.kiosk.seat1_desktop = false;
         assert!(wants_shell(SeatNumber::CONSOLE, &c, &g));
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn oversized_plans_are_refused_and_lists_capped() {
         let mut c = SeatConfig::new(seat(2));
-        c.kiosk_shell = Some(KioskShell { apps: (0..40).map(|i| app(&format!("a{i}"))).collect(), idle_reset_minutes: 99_999 });
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: (0..40).map(|i| app(&format!("a{i}"))).collect(), idle_reset_minutes: 99_999 });
         let p = plan_for(seat(2), &c, &GlobalSettings::default(), vec![]).unwrap();
         assert_eq!(p.apps.len(), seat_core::config::MAX_KIOSK_APPS);
         assert_eq!(p.idle_reset_minutes, 1440);
@@ -208,7 +208,7 @@ mod tests {
         rel.command = "notepad.exe".into();
         let mut pad = app("p");
         pad.command = r"  C:\a.exe ".into();
-        c.kiosk_shell = Some(KioskShell { apps: vec![rel, pad], idle_reset_minutes: 0 });
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![rel, pad], idle_reset_minutes: 0 });
         let p2 = plan_for(seat(2), &c, &GlobalSettings::default(), vec![]).unwrap();
         assert_eq!(p2.apps.iter().map(|a| a.command.as_str()).collect::<Vec<_>>(), vec![r"C:\a.exe"]);
         let mut big = p.clone();

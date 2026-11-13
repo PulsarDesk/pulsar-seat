@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 [package]
 name = "seat-proto"
-description = "Pulsar Seat IPC: versioned pipe messages and length-prefixed framing"
+description = "Pulsar Seat IPC: versioned pipe messages (both seat kinds) and length-prefixed framing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,3 +13,4 @@ seat-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+zeroize.workspace = true

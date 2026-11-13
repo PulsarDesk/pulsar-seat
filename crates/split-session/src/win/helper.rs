@@ -9,7 +9,7 @@ use crate::helper_proto::{HelperArgs, HelperEvent, write_password_frame};
 use crate::launch::command_line;
 use crate::manager::{HelperChild, HelperSpawner};
 use crate::SessionError;
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use std::io::BufRead;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};

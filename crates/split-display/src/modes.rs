@@ -214,11 +214,11 @@ pub fn resolve_mode(
 mod tests {
     use super::*;
     use crate::hdr::IDDCX_VERSION_24H2;
-    use split_proto::SeatConfig;
+    use seat_proto::remote::RemoteSeatRecord;
 
     fn seat(ss: u16, scale: ScaleMode, hdr_allowed: bool) -> SeatDisplay {
         let mut s = SeatDisplay::from_seat(
-            &SeatConfig::default(),
+            &RemoteSeatRecord::default(),
             2,
             AdapterChoice::Default { warning: None },
         );

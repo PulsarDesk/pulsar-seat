@@ -52,7 +52,7 @@ pub struct PadManagerConfig {
     pub max_slots: u8,
     pub linger_ms: u64,
     pub detach_timeout_ms: u64,
-    /// `GlobalSettings::pad_backend`.
+    /// `RemoteSettings::pad_backend`.
     pub preferred: Option<BackendId>,
     /// The creating process (the service) for the ownership registry.
     pub creator_pid: u32,

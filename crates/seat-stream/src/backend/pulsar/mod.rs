@@ -31,8 +31,8 @@ use crate::supervise::{
     server_policy, AppsReload, Launched, ServerLauncher, StreamNotice, CONNECT_WINDOW_MS, SHUTDOWN_GRACE_MS, STATUS_EVERY_MS,
 };
 use crate::{Clock, StreamError};
-use split_core::watchdog::{Action, Phase, Watchdog};
-use split_proto::{CapturePref, SeatConfig, Secret, StreamBackendInfo, StreamBackendKind};
+use seat_core::remote::watchdog::{Action, Phase, Watchdog};
+use seat_proto::remote::{CapturePref, RemoteSeatRecord, Secret, StreamBackendInfo, StreamBackendKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,7 +69,7 @@ pub fn host_args(seat_id: &str, data_dir: &Path, log: &Path) -> Result<Vec<Strin
 
 /// `config.apply` from the seat record (§2, §3.3). Seat options for relay, network mode,
 /// port mapping and discovery are not in the seat record yet: contract defaults.
-pub fn host_config(seat: &SeatConfig) -> HostConfig {
+pub fn host_config(seat: &RemoteSeatRecord) -> HostConfig {
     HostConfig {
         display_name: seat.display_name.clone(),
         relay: None,

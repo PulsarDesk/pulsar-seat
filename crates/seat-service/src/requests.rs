@@ -9,7 +9,7 @@ use crate::service::{SERVICE_VERSION, Service};
 use crate::wizard::Wizard;
 use crate::{diag, log};
 use seat_core::backend::DriverId;
-use seat_core::config::{AssignmentOptions, Config, DeviceAssignment};
+use seat_core::config::{AssignmentOptions, Config, DeviceAssignment, SeatKind};
 use seat_core::device::{Device, DeviceKind};
 use seat_core::state::SeatState;
 use seat_core::validate::{IssueCode, Severity, has_conflicts, has_errors, validate};
@@ -36,6 +36,13 @@ pub const MAX_PASSWORD_CHARS: usize = 256;
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> ProtoError {
     ProtoError::new(code, msg)
+}
+
+/// Reason of every remote-kind answer until the remote seat worker exists (merge step 6).
+pub const REMOTE_WORKER_PENDING: &str = "remote_worker_pending";
+
+fn remote_pending(what: &str) -> ProtoError {
+    err(ErrorCode::NotImplemented, format!("{what}: remote seats are served from merge step 6")).with_reason(REMOTE_WORKER_PENDING)
 }
 
 fn store_err(e: seat_core::store::StoreError) -> ProtoError {
@@ -96,6 +103,17 @@ impl Service {
         }
         let seat = self.caller_seat(caller);
         authorize(access, caller, &settings, seat)?;
+        if body.min_protocol() > caller.protocol {
+            return Err(err(
+                ErrorCode::VersionMismatch,
+                format!("request needs protocol {} (client said {})", body.min_protocol(), caller.protocol),
+            )
+            .with_reason("protocol_too_old"));
+        }
+        self.check_seat_kind(&body)?;
+        if body.is_remote_kind_request() {
+            return self.remote_kind_request(&body);
+        }
         use RequestBody as B;
         match body {
             B::Hello(_) => unreachable!("handled above"),
@@ -109,7 +127,14 @@ impl Service {
                 let wait = Duration::from_millis(u64::from(wait_ms.min(seat_proto::MAX_POLL_WAIT_MS)));
                 Ok(ResponseBody::Events(self.events.poll(after, &topics, scope, wait)))
             }
-            B::GetStatus => Ok(ResponseBody::Status(self.status())),
+            B::GetStatus => {
+                let mut status = self.status();
+                // Remote seat status is admin only (merge-plan.md section 5).
+                if !caller.admin() {
+                    status.seats.retain(|r| r.kind == SeatKind::Local);
+                }
+                Ok(ResponseBody::Status(status))
+            }
             B::GetBackends => {
                 let settings = self.lock().config.settings.clone();
                 let mut r = backends::report(self.factory.as_ref(), &settings, &self.backends());
@@ -180,10 +205,14 @@ impl Service {
                     }
                 }
                 let list = match seats {
-                    Some(l) => l,
+                    Some(l) => {
+                        self.refuse_remote_starts(&l)?;
+                        l
+                    }
                     None => {
                         let st = self.lock();
-                        st.config.seats.iter().filter(|s| s.autostart).map(|s| s.number).collect()
+                        // Remote seats are started by the remote seat worker (step 6).
+                        st.config.seats.iter().filter(|s| s.autostart && s.is_local()).map(|s| s.number).collect()
                     }
                 };
                 // start_sequence skips seats the service does not start (the console seat 1
@@ -297,6 +326,38 @@ impl Service {
             B::CredprovSwitch { seat } => self.credprov_switch(caller, seat),
             B::AgentSwitchTargets => self.agent_switch_targets(caller),
             B::AgentSwitch { seat } => self.agent_switch(caller, seat),
+            B::TestSeatCredentials { .. }
+            | B::EnableUnlockAccount { .. }
+            | B::GetRemoteRuntime { .. }
+            | B::SubmitPin { .. }
+            | B::GetPairState { .. }
+            | B::CancelPair { .. }
+            | B::ListPairedClients { .. }
+            | B::UnpairClient { .. }
+            | B::UnpairAll { .. }
+            | B::RegenerateSeatIdentity { .. }
+            | B::GetApps { .. }
+            | B::SetApps { .. }
+            | B::AnswerPeerRequest { .. }
+            | B::SetSeatConnectPassword { .. }
+            | B::GetSeatOtp { .. }
+            | B::RotateSeatOtp { .. }
+            | B::AnswerRelayAuth { .. }
+            | B::GetHostInfo
+            | B::SetMultiSession { .. }
+            | B::GetTermwrapStatus
+            | B::SetTermwrap { .. }
+            | B::ListRenderAdapters
+            | B::GetPadBackends
+            | B::GetShimStatus
+            | B::SetShimTargets { .. }
+            | B::SetAppMasking { .. }
+            | B::SetDxvk { .. }
+            | B::GetDxvkStatus
+            | B::GetLogTail { .. }
+            | B::GetStreamBackends
+            | B::GetUserPicture { .. }
+            | B::CleanupAudioEndpoints { .. } => unreachable!("answered by remote_kind_request above"),
             B::AgentReport { report } => {
                 if caller.agent_session != Some(report.session_id) {
                     return Err(err(ErrorCode::AccessDenied, "agent may report only its own session"));
@@ -388,6 +449,7 @@ impl Service {
             caller.kiosk_seat = h.seat;
         }
         caller.client = Some(h.client);
+        caller.protocol = h.protocol_version;
         let st = self.lock();
         let seat = self.seat_of_session(&st, caller.session_id);
         let admin = caller.admin();
@@ -415,11 +477,60 @@ impl Service {
         if topics.contains(&Topic::Agent) && caller.agent_session.is_none() {
             return Err(err(ErrorCode::AccessDenied, "agent topic is for agents"));
         }
+        // Remote seat status (pairing, streams) is admin only.
+        if topics.contains(&Topic::Stream) && !caller.admin() {
+            return Err(err(ErrorCode::AccessDenied, "stream topic is for administrators"));
+        }
         Ok(Scope {
             host_seat: if host { caller.host_seat } else { None },
             agent_session: if agent { caller.agent_session } else { None },
             kiosk_seat: if host { caller.kiosk_seat } else { None },
         })
+    }
+
+    /// `wrong_seat_kind` when the request names a configured seat of the other kind
+    /// (architecture.md section 10.2). Unknown seats are left to the handler.
+    fn check_seat_kind(&self, body: &RequestBody) -> Result<(), ProtoError> {
+        let Some((seat, need)) = body.seat_kind() else { return Ok(()) };
+        let have = self.lock().config.seat(seat).map(|s| s.kind);
+        match have {
+            Some(k) if k != need => Err(err(
+                ErrorCode::WrongSeatKind,
+                format!("seat {seat} is a {} seat; this request needs a {} seat", k.as_str(), need.as_str()),
+            )
+            .with_reason(need.as_str())),
+            _ => Ok(()),
+        }
+    }
+
+    /// Explicit starts of remote seats: `session_unavailable` without concurrent sessions,
+    /// else `not_implemented` until the remote seat worker exists (merge step 6).
+    fn refuse_remote_starts(&self, seats: &[SeatNumber]) -> Result<(), ProtoError> {
+        let st = self.lock();
+        let Some(seat) = seats.iter().copied().find(|n| st.config.seat(*n).is_some_and(|s| s.is_remote())) else {
+            return Ok(());
+        };
+        if !st.config.settings.backends.session.hosts_remote_seats() {
+            return Err(err(ErrorCode::SessionUnavailable, format!("seat {seat}: remote seats need concurrent sessions"))
+                .with_reason("session_unavailable"));
+        }
+        Err(remote_pending(&format!("start of remote seat {seat}")))
+    }
+
+    /// Protocol 3 requests from Pulsar Split. The seat-scoped ones check the seat (the kind
+    /// was checked before); every one answers `not_implemented` until merge step 6.
+    fn remote_kind_request(&self, body: &RequestBody) -> R {
+        let seat = match body {
+            RequestBody::TestSeatCredentials { seat } | RequestBody::EnableUnlockAccount { seat, .. } => Some(*seat),
+            other => other.seat_kind().map(|(s, _)| s),
+        };
+        if let Some(seat) = seat
+            && self.lock().config.seat(seat).is_none()
+        {
+            return Err(err(ErrorCode::NotFound, format!("seat {seat} is not configured")));
+        }
+        let name = serde_json::to_value(body).ok().and_then(|v| v["type"].as_str().map(str::to_owned)).unwrap_or_default();
+        Err(remote_pending(&name))
     }
 
     pub fn status(&self) -> ServiceStatus {
@@ -861,7 +972,7 @@ impl Service {
                 let volume_of = seat_rdp::policy::volume::name_of_letter;
                 #[cfg(not(windows))]
                 let volume_of = |_: char| None::<String>;
-                seat_rdp::policy::host_redirection(seat, &cfg.redirect, &st.inventory.effective(&st.config), &live, &volume_of)
+                seat_rdp::policy::host_redirection(seat, &cfg.local_settings().redirect, &st.inventory.effective(&st.config), &live, &volume_of)
             }
             None => Default::default(),
         };
@@ -952,7 +1063,7 @@ pub(crate) fn cpu_issues(cfg: &Config, infos: &[seat_proto::CpuSetInfo]) -> Vec<
                 // Informational only (supported / allowed).
                 CpuIssueCode::HardLimitMultiGroup | CpuIssueCode::SharedCore => return None,
             };
-            Some(Issue { severity, code, seat: Some(i.seat), device: None, field: Some("seats.cpu_sets".into()) })
+            Some(Issue { severity, code, seat: Some(i.seat), device: None, field: Some("seats.cpu_sets".into()), reason: None })
         })
         .collect()
 }

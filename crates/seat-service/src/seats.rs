@@ -323,7 +323,8 @@ impl Service {
             if self.may_start(&st, false).is_err() {
                 return;
             }
-            st.config.seats.iter().filter(|s| s.autostart && Self::managed(&st, s.number)).map(|s| s.number).collect()
+            // Remote seats are started by the remote seat worker (merge step 6).
+            st.config.seats.iter().filter(|s| s.autostart && s.is_local() && Self::managed(&st, s.number)).map(|s| s.number).collect()
         };
         self.start_sequence(seats);
     }
@@ -687,7 +688,7 @@ impl Service {
         }
         let st = self.lock();
         let Some(cfg) = st.config.seat(seat) else { return false };
-        let d = cfg.redirect.clipboard.direction;
+        let d = cfg.local_settings().redirect.clipboard.direction;
         d.to_seat() || d.from_seat()
     }
 

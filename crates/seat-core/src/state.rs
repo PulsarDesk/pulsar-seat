@@ -116,6 +116,9 @@ pub enum FailureReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeatRuntime {
     pub seat: SeatNumber,
+    /// Kind of the seat (protocol 3, architecture.md section 10.2). Missing = local.
+    #[serde(default)]
+    pub kind: crate::config::SeatKind,
     pub state: SeatState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<u32>,
@@ -162,6 +165,7 @@ impl SeatRuntime {
     pub fn off(seat: SeatNumber) -> Self {
         Self {
             seat,
+            kind: crate::config::SeatKind::Local,
             state: SeatState::Off,
             session_id: None,
             user_sid: None,

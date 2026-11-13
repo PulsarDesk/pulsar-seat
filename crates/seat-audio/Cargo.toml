@@ -13,7 +13,7 @@ rust-version.workspace = true
 fake = []
 
 [dependencies]
-split-proto.workspace = true
+seat-proto.workspace = true
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 log = "0.4"

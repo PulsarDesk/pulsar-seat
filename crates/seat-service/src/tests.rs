@@ -135,6 +135,8 @@ fn admin() -> Caller {
         console_listener: false,
         credprov_session: None,
         kiosk_seat: None,
+        // Overwritten by `hello`; callers built with a client kind count as current.
+        protocol: seat_proto::PROTOCOL_VERSION,
     }
 }
 
@@ -143,7 +145,7 @@ fn user(session: u32) -> Caller {
 }
 
 fn hello_body(client: ClientKind) -> RequestBody {
-    RequestBody::Hello(Hello { client, client_version: "t".into(), protocol_version: 1, seat: None, token: None })
+    RequestBody::Hello(Hello { client, client_version: "t".into(), protocol_version: seat_proto::PROTOCOL_VERSION, seat: None, token: None })
 }
 
 fn call(h: &Harness, c: &mut Caller, body: RequestBody) -> Result<ResponseBody, seat_proto::ProtoError> {
@@ -1659,6 +1661,8 @@ fn logonui(h: &Harness, pid: u32, session: u32) -> Caller {
         console_listener: false,
         credprov_session: None,
         kiosk_seat: None,
+        // Overwritten by `hello`; callers built with a client kind count as current.
+        protocol: seat_proto::PROTOCOL_VERSION,
     }
 }
 
@@ -2038,4 +2042,110 @@ fn kiosk_shell_hello_is_verified_and_survives_admin_only() {
     assert_eq!(call(&h, &mut u, RequestBody::ListDevices).unwrap_err().code, ErrorCode::AdminOnly);
     // The host topic is allowed (own seat's input packets only).
     assert!(call(&h, &mut shell, RequestBody::Subscribe { topics: vec![Topic::Host] }).is_ok());
+}
+
+// ---- seat kinds (merge step 4, architecture.md section 10) ----
+
+/// `two_seat_config` plus remote seat 3 (no devices).
+fn with_remote_seat() -> Config {
+    let mut c = two_seat_config();
+    let r = seat_core::remote::RemoteSeat { display_name: "Salon".into(), port: 48100, ..Default::default() };
+    let mut three = SeatConfig::new_remote(s(3), r);
+    three.name = "Salon".into();
+    c.seats.push(three);
+    c
+}
+
+#[test]
+fn remote_requests_check_kind_and_wait_for_the_worker() {
+    let h = harness_with(with_remote_seat(), None);
+    h.s.boot();
+    let mut a = admin();
+    // Local-only request on the remote seat, remote-only request on a local seat.
+    let e = call(&h, &mut a, RequestBody::RelogonSeat { seat: s(3) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::WrongSeatKind);
+    assert_eq!(e.reason.as_deref(), Some("local"));
+    let e = call(&h, &mut a, RequestBody::GetPairState { seat: s(2) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::WrongSeatKind);
+    assert_eq!(e.reason.as_deref(), Some("remote"));
+    // Right kind / host-wide: not implemented until the remote seat worker (step 6).
+    for body in [RequestBody::GetPairState { seat: s(3) }, RequestBody::GetHostInfo, RequestBody::TestSeatCredentials { seat: s(2) }] {
+        let e = call(&h, &mut a, body).unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotImplemented);
+        assert_eq!(e.reason.as_deref(), Some(crate::requests::REMOTE_WORKER_PENDING));
+    }
+    // Unknown seat.
+    assert_eq!(call(&h, &mut a, RequestBody::GetSeatOtp { seat: s(9) }).unwrap_err().code, ErrorCode::NotFound);
+    // Admin only.
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::GetHostInfo).unwrap_err().code, ErrorCode::AccessDenied);
+}
+
+#[test]
+fn remote_seats_are_not_started_by_the_local_worker() {
+    let h = harness_with(with_remote_seat(), None);
+    h.s.boot();
+    let mut a = admin();
+    let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotImplemented);
+    // Autostart (`None`) starts the local seat 2 only.
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    assert_ne!(state(&h, s(2)), SeatState::Off);
+    assert_eq!(state(&h, s(3)), SeatState::Off);
+    // Without concurrent sessions a remote start is `session_unavailable`.
+    let mut c = with_remote_seat();
+    c.settings.backends.session = seat_core::backend::SessionBackendKind::FastUserSwitch;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::SessionUnavailable);
+}
+
+#[test]
+fn remote_seat_status_is_admin_only() {
+    let h = harness_with(with_remote_seat(), None);
+    h.s.boot();
+    let mut a = admin();
+    let ResponseBody::Status(st) = call(&h, &mut a, RequestBody::GetStatus).unwrap() else { panic!() };
+    let kinds: Vec<_> = st.seats.iter().map(|r| (r.seat, r.kind)).collect();
+    use seat_core::config::SeatKind;
+    assert_eq!(kinds, vec![(s(1), SeatKind::Local), (s(2), SeatKind::Local), (s(3), SeatKind::Remote)]);
+    let mut u = user(1);
+    let ResponseBody::Status(st) = call(&h, &mut u, RequestBody::GetStatus).unwrap() else { panic!() };
+    assert!(st.seats.iter().all(|r| r.kind == SeatKind::Local) && st.seats.len() == 2);
+    assert_eq!(call(&h, &mut u, RequestBody::Subscribe { topics: vec![Topic::Stream] }).unwrap_err().code, ErrorCode::AccessDenied);
+    assert!(call(&h, &mut a, RequestBody::Subscribe { topics: vec![Topic::Stream] }).is_ok());
+}
+
+#[test]
+fn config_requests_need_protocol_3() {
+    let h = harness();
+    let mut old = admin();
+    let hello = RequestBody::Hello(Hello { client: ClientKind::Manager, client_version: "t".into(), protocol_version: 1, seat: None, token: None });
+    call(&h, &mut old, hello).unwrap();
+    assert!(call(&h, &mut old, RequestBody::GetStatus).is_ok());
+    let e = call(&h, &mut old, RequestBody::GetConfig).unwrap_err();
+    assert_eq!(e.code, ErrorCode::VersionMismatch);
+    assert_eq!(e.reason.as_deref(), Some("protocol_too_old"));
+    let mut cur = admin();
+    assert!(matches!(call(&h, &mut cur, RequestBody::GetConfig), Ok(ResponseBody::Config(_))));
+}
+
+#[test]
+fn apply_config_accepts_remote_seats_and_validates_them() {
+    let h = harness();
+    let mut a = admin();
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let base = view.config.revision;
+    let mut cfg = with_remote_seat();
+    cfg.revision = base;
+    let r = call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(cfg.clone()), base_revision: base, force: false });
+    assert!(r.is_ok(), "{r:?}");
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    assert!(view.config.seat(s(3)).is_some_and(|x| x.is_remote()));
+    // A device on the remote seat is refused.
+    let mut bad = view.config.clone();
+    bad.devices.push(assign("kbd;9", DeviceKind::Keyboard, s(3).mask()));
+    let r = call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(bad), base_revision: view.config.revision, force: false });
+    assert_eq!(r.unwrap_err().code, ErrorCode::InvalidConfig);
 }

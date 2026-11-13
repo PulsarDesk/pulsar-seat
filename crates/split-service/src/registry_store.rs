@@ -29,10 +29,10 @@
 //! ```
 
 use crate::dpapi;
-use split_core::store::{Config, ConfigStore, StoreError};
-use split_proto::{
-    AutostartApp, CapturePref, DisplaySettings, GamepadPref, GlobalSettings, HdrLuminanceSettings, SeatAudioSettings,
-    SeatConfig, SeatStreamSettings, Secret, StopAction, StreamBackendKind, Verbosity,
+use seat_core::remote::store::{Config, ConfigStore, StoreError};
+use seat_proto::remote::{
+    AutostartApp, CapturePref, DisplaySettings, GamepadPref, RemoteSettings, HdrLuminanceSettings, SeatAudioSettings,
+    RemoteSeatRecord, SeatStreamSettings, Secret, StopAction, StreamBackendKind, Verbosity,
 };
 use std::io;
 use winreg::RegKey;
@@ -129,7 +129,7 @@ impl RegistryStore {
         self.root.open_subkey_with_flags(SECRETS, winreg::enums::KEY_ALL_ACCESS).map_err(io_err)
     }
 
-    fn read_seat(name: &str, k: &RegKey) -> Result<SeatConfig, StoreError> {
+    fn read_seat(name: &str, k: &RegKey) -> Result<RemoteSeatRecord, StoreError> {
         let mut autostart = Vec::new();
         if let Ok(apps) = k.open_subkey(APPS) {
             for id in apps.enum_keys() {
@@ -150,7 +150,7 @@ impl RegistryStore {
         let adapter = get_str(k, "RenderAdapter")?;
         let adapter_id = get_str(k, "RenderAdapterId")?;
         let display_name = get_str(k, "DisplayName")?;
-        Ok(SeatConfig {
+        Ok(RemoteSeatRecord {
             id: get_str(k, "Id")?,
             name: name.to_string(),
             display_name: if display_name.is_empty() { name.to_string() } else { display_name },
@@ -199,7 +199,7 @@ impl RegistryStore {
             },
             stream_backend: get_enum::<StreamBackendKind>(k, "StreamBackend")?.unwrap_or_default(),
             last_mode: {
-                let m = split_proto::LastMode {
+                let m = seat_proto::remote::LastMode {
                     width: get_u32(k, "LastWidth", 0)?,
                     height: get_u32(k, "LastHeight", 0)?,
                     hz: get_u32(k, "LastRefreshRate", 0)?,
@@ -209,7 +209,7 @@ impl RegistryStore {
         })
     }
 
-    fn write_seat(k: &RegKey, s: &SeatConfig) -> io::Result<()> {
+    fn write_seat(k: &RegKey, s: &RemoteSeatRecord) -> io::Result<()> {
         k.set_value("Id", &s.id)?;
         k.set_value("DisplayName", &s.display_name)?;
         k.set_value("UserName", &s.user_name)?;
@@ -284,7 +284,7 @@ impl RegistryStore {
 impl ConfigStore for RegistryStore {
     fn load(&self) -> Result<Config, StoreError> {
         let r = &self.root;
-        let global = GlobalSettings {
+        let global = RemoteSettings {
             start_with_windows: get_bool(r, "StartWithWindows", false)?,
             hid_isolation: get_bool(r, "HidIsolation", false)?,
             process_patching: get_bool(r, "ProcessPatching", false)?,
@@ -307,7 +307,7 @@ impl ConfigStore for RegistryStore {
         Ok(Config { global, seats })
     }
 
-    fn put_global(&mut self, g: &GlobalSettings) -> Result<(), StoreError> {
+    fn put_global(&mut self, g: &RemoteSettings) -> Result<(), StoreError> {
         let r = &self.root;
         (|| -> io::Result<()> {
             r.set_value("StartWithWindows", &(g.start_with_windows as u32))?;
@@ -323,7 +323,7 @@ impl ConfigStore for RegistryStore {
         .map_err(io_err)
     }
 
-    fn put_seat(&mut self, seat: &SeatConfig) -> Result<(), StoreError> {
+    fn put_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), StoreError> {
         let (k, _) = self.seats_key()?.create_subkey(&seat.name).map_err(io_err)?;
         Self::write_seat(&k, seat).map_err(io_err)
     }
@@ -522,17 +522,17 @@ mod tests {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let mut s = RegistryStore::open_at(&hkcu, &path, None).unwrap();
 
-        let g = GlobalSettings {
+        let g = RemoteSettings {
             hid_isolation: true,
             verbosity: Verbosity::Debug,
             multi_session: true,
-            pad_backend: Some(split_proto::PadBackendPref::UsbipDs5),
+            pad_backend: Some(seat_proto::remote::PadBackendPref::UsbipDs5),
             bluetooth_console_only: false,
-            display_backend: Some(split_proto::DisplayBackendPref::Vdd),
+            display_backend: Some(seat_proto::remote::DisplayBackendPref::Vdd),
             ..Default::default()
         };
         s.put_global(&g).unwrap();
-        let seat = SeatConfig {
+        let seat = RemoteSeatRecord {
             id: "id-1".into(),
             name: "Salon".into(),
             display_name: "Salon PC".into(),
@@ -552,7 +552,7 @@ mod tests {
                 keep_pairing_on_delete: true,
             },
             stream_backend: StreamBackendKind::Pulsar,
-            last_mode: Some(split_proto::LastMode { width: 2560, height: 1440, hz: 120 }),
+            last_mode: Some(seat_proto::remote::LastMode { width: 2560, height: 1440, hz: 120 }),
         };
         s.put_seat(&seat).unwrap();
         s.set_password("Salon", &Secret("pw-123".into())).unwrap();

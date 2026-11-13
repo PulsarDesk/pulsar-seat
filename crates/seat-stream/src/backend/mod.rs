@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Stream-server backends (contracts §7.4, docs/split/agents/pulsar-host-backend.md).
 //!
-//! Each seat runs exactly one backend, picked by `SeatConfig::stream_backend`:
+//! Each seat runs exactly one backend, picked by `RemoteSeatRecord::stream_backend`:
 //!
 //! | Kind | Type | Server | Control |
 //! | --- | --- | --- | --- |
@@ -29,7 +29,7 @@ use crate::seatdir::SeatDir;
 use crate::supervise::{AppsReload, StreamNotice};
 use crate::StreamError;
 use serde::{Deserialize, Serialize};
-use split_proto::{GlobalSettings, SeatConfig, Secret, StreamBackendInfo, StreamBackendKind};
+use seat_proto::remote::{RemoteSettings, RemoteSeatRecord, Secret, StreamBackendInfo, StreamBackendKind};
 use std::path::{Path, PathBuf};
 
 pub use pulsar::PulsarHostBackend;
@@ -37,8 +37,8 @@ pub use sunshine::SunshineBackend;
 
 /// Inputs to [`StreamBackend::prepare`] for one seat start.
 pub struct SeatStreamSpec<'a> {
-    pub seat: &'a SeatConfig,
-    pub global: &'a GlobalSettings,
+    pub seat: &'a RemoteSeatRecord,
+    pub global: &'a RemoteSettings,
     /// `%ProgramData%\PulsarSplit`.
     pub data_root: &'a Path,
     /// Audio keys for the server config (Sunshine; `seat_audio::server_keys`).

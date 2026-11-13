@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Crate error type with stable snake_case reason codes (contracts §0.3, §7.2).
 
-use split_proto::{ErrorCode, ProtoError, StreamBackendKind};
+use seat_proto::remote::{ErrorCode, ProtoError, StreamBackendKind};
 use std::path::PathBuf;
 
 /// Errors never carry secrets (PINs, passwords, request bodies).

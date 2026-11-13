@@ -1,53 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pulsar Split control protocol: the messages the manager and the seat service exchange
-//! over a local named pipe, and the framing used on that pipe.
-//!
-//! Wire format: every message is one frame = 4-byte little-endian payload length followed
-//! by a UTF-8 JSON payload (at most [`MAX_FRAME_LEN`] bytes). One request frame is answered
-//! by exactly one response frame carrying the same `id`. Every frame carries
-//! [`PROTOCOL_VERSION`]; the service rejects requests with another version.
-//!
-//! Version history: 1 = Phase 1. 2 = contracts §9 (host info, multi-session, termwrap,
-//! seat runtime, pairing, apps, isolation, event polling; new error codes + `reason`).
+//! Pulsar Split's protocol 2 request and response enums, kept for `split-service`'s own
+//! pipe (`\\.\pipe\PulsarSplit.Control`) and `apps/split-manager` until merge steps 6 / 9.
+//! **Transitional**: new code uses the v3 [`crate::RequestBody`] on the one Pulsar Seat
+//! pipe (architecture.md section 10.2). Frames are stamped with [`crate::PROTOCOL_VERSION`]
+//! (3), the one protocol version of the product.
 
-pub mod framing;
-pub mod model;
-pub mod spawn;
-
+use super::*;
+use crate::PROTOCOL_VERSION;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-
-pub use framing::{FrameError, MAX_FRAME_LEN, read_frame, read_message, write_frame, write_message};
-pub use model::*;
-
-/// Bumped on every incompatible change to [`Request`] / [`Response`].
-pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Name of the control pipe. Only Administrators and SYSTEM may open it (see the service).
 pub const PIPE_NAME: &str = r"\\.\pipe\PulsarSplit.Control";
 
 /// Longest `poll_events` wait the service accepts.
 pub const MAX_POLL_WAIT_MS: u32 = 2_000;
-
-/// A string whose content is never printed by `Debug` (passwords, PINs) and is wiped
-/// (zeroized) when dropped, so copies do not linger in service memory. Avoid needless
-/// clones; every clone is wiped on its own drop.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Secret(pub String);
-
-impl Drop for Secret {
-    fn drop(&mut self) {
-        use zeroize::Zeroize;
-        self.0.zeroize();
-    }
-}
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret(***)")
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
@@ -76,7 +42,7 @@ pub enum RequestBody {
     /// before stream backends) the stored one is kept and `seat.stream_backend` is ignored.
     UpdateSeat {
         name: String,
-        seat: SeatConfig,
+        seat: RemoteSeatRecord,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stream_backend: Option<StreamBackendKind>,
     },
@@ -88,7 +54,7 @@ pub enum RequestBody {
     StartSeat { name: String },
     StopSeat { name: String },
     GetGlobalSettings,
-    SetGlobalSettings(GlobalSettings),
+    SetGlobalSettings(RemoteSettings),
     ListLocalUsers,
     /// Forward a pairing PIN to the seat's stream server. Answered with `ack` once the PIN
     /// is on its way; the outcome arrives as a `pair_ended` event / in `pair_state`.
@@ -204,9 +170,9 @@ impl Response {
 pub enum ResponseBody {
     Hello { service_version: String, protocol_version: u32 },
     Status(ServiceStatus),
-    Seats(Vec<SeatConfig>),
-    Seat(SeatConfig),
-    GlobalSettings(GlobalSettings),
+    Seats(Vec<RemoteSeatRecord>),
+    Seat(RemoteSeatRecord),
+    GlobalSettings(RemoteSettings),
     Users(Vec<LocalUser>),
     /// Generic success without data.
     Ack,
@@ -236,128 +202,6 @@ pub enum ResponseBody {
     AudioCleanup(AudioCleanup),
 }
 
-/// Machine-readable error. The manager maps `reason` (if set) or `code` to Turkish copy;
-/// `message` is an English diagnostic for logs only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[error("{code:?}: {message}")]
-pub struct ProtoError {
-    pub code: ErrorCode,
-    pub message: String,
-    /// Name of the offending field, when the error is about one input field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// v2: package reason code (`client_auth`, `wrapper_unsigned`, …), contracts §9.3.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-impl ProtoError {
-    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), field: None, reason: None }
-    }
-
-    pub fn with_field(mut self, field: impl Into<String>) -> Self {
-        self.field = Some(field.into());
-        self
-    }
-
-    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = Some(reason.into());
-        self
-    }
-
-    /// Packages put their reason code first in `message` (`"client_auth: NLA failed"`).
-    /// Fills `reason` from that prefix when it is a snake_case word and `reason` is unset.
-    pub fn with_reason_from_message(mut self) -> Self {
-        if self.reason.is_none()
-            && let Some((head, _)) = self.message.split_once(':')
-            && !head.is_empty()
-            && head.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        {
-            self.reason = Some(head.to_string());
-        }
-        self
-    }
-
-    /// `reason` if set, else the snake_case name of `code`.
-    pub fn reason_or_code(&self) -> String {
-        self.reason.clone().unwrap_or_else(|| self.code.as_str().to_string())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-    VersionMismatch,
-    BadRequest,
-    NotFound,
-    InvalidName,
-    DuplicateName,
-    InvalidDisplayName,
-    InvalidPort,
-    PortOverlap,
-    NoFreePort,
-    InvalidValue,
-    InvalidUser,
-    UserInUse,
-    MissingCredentials,
-    SeatRunning,
-    NotImplemented,
-    Store,
-    ServiceUnavailable,
-    Internal,
-    // ---- v2 (contracts §9.3) ----
-    Unsupported,
-    EditionUnsupported,
-    Coexistence,
-    SeatFailed,
-    Timeout,
-    DriverMissing,
-    PolicyBlocked,
-    WarningNotAcknowledged,
-    NoPendingRequest,
-    WrongPin,
-    HashMismatch,
-    Firewall,
-}
-
-impl ErrorCode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::VersionMismatch => "version_mismatch",
-            Self::BadRequest => "bad_request",
-            Self::NotFound => "not_found",
-            Self::InvalidName => "invalid_name",
-            Self::DuplicateName => "duplicate_name",
-            Self::InvalidDisplayName => "invalid_display_name",
-            Self::InvalidPort => "invalid_port",
-            Self::PortOverlap => "port_overlap",
-            Self::NoFreePort => "no_free_port",
-            Self::InvalidValue => "invalid_value",
-            Self::InvalidUser => "invalid_user",
-            Self::UserInUse => "user_in_use",
-            Self::MissingCredentials => "missing_credentials",
-            Self::SeatRunning => "seat_running",
-            Self::NotImplemented => "not_implemented",
-            Self::Store => "store",
-            Self::ServiceUnavailable => "service_unavailable",
-            Self::Internal => "internal",
-            Self::Unsupported => "unsupported",
-            Self::EditionUnsupported => "edition_unsupported",
-            Self::Coexistence => "coexistence",
-            Self::SeatFailed => "seat_failed",
-            Self::Timeout => "timeout",
-            Self::DriverMissing => "driver_missing",
-            Self::PolicyBlocked => "policy_blocked",
-            Self::WarningNotAcknowledged => "warning_not_acknowledged",
-            Self::NoPendingRequest => "no_pending_request",
-            Self::WrongPin => "wrong_pin",
-            Self::HashMismatch => "hash_mismatch",
-            Self::Firewall => "firewall",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,7 +210,7 @@ mod tests {
     fn request_json_shape_is_stable() {
         let req = Request::new(7, RequestBody::StartSeat { name: "seatA".into() });
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, r#"{"version":2,"id":7,"body":{"type":"start_seat","data":{"name":"seatA"}}}"#);
+        assert_eq!(json, r#"{"version":3,"id":7,"body":{"type":"start_seat","data":{"name":"seatA"}}}"#);
         let unit = serde_json::to_string(&RequestBody::GetStatus).unwrap();
         assert_eq!(unit, r#"{"type":"get_status"}"#);
         let unit = serde_json::to_string(&RequestBody::GetHostInfo).unwrap();
@@ -386,16 +230,8 @@ mod tests {
         assert_eq!(back, resp);
     }
 
-    #[test]
-    fn reason_from_message_prefix() {
-        let e = ProtoError::new(ErrorCode::ServiceUnavailable, "client_auth: NLA failed").with_reason_from_message();
-        assert_eq!(e.reason.as_deref(), Some("client_auth"));
-        let e = ProtoError::new(ErrorCode::Internal, "Writing seat files: x").with_reason_from_message();
-        assert_eq!(e.reason, None);
-        assert_eq!(e.reason_or_code(), "internal");
-        let json = serde_json::to_string(&ProtoError::new(ErrorCode::WrongPin, "x").with_reason("wrong_pin")).unwrap();
-        assert!(json.contains(r#""reason":"wrong_pin""#), "{json}");
-    }
+    // Moved from split-proto (merge step 4): `reason_from_message_prefix` is now
+    // `seat_core::error::tests::reason_from_message_prefix`.
 
     #[test]
     fn error_code_names_match_serde() {
@@ -404,13 +240,23 @@ mod tests {
         }
     }
 
+    /// Moved from split-proto `framing::tests::message_roundtrip`.
+    #[test]
+    fn message_roundtrip() {
+        let req = Request::new(1, RequestBody::DeleteSeat { name: "x1".into() });
+        let mut buf = Vec::new();
+        crate::write_message(&mut buf, &req).unwrap();
+        let back: Request = crate::read_message(&mut std::io::Cursor::new(buf)).unwrap().unwrap();
+        assert_eq!(back, req);
+    }
+
     #[test]
     fn v1_config_json_still_loads_with_v2_defaults() {
-        let seat: SeatConfig = serde_json::from_str(r#"{"id":"x","name":"A","port":47989}"#).unwrap();
+        let seat: RemoteSeatRecord = serde_json::from_str(r#"{"id":"x","name":"A","port":47989}"#).unwrap();
         assert_eq!(seat.display.refresh_hz, 60);
         assert!(seat.audio.stream_audio);
         assert_eq!(seat.stream.min_fps, 1);
-        let g: GlobalSettings = serde_json::from_str(r#"{"hid_isolation":true}"#).unwrap();
+        let g: RemoteSettings = serde_json::from_str(r#"{"hid_isolation":true}"#).unwrap();
         assert!(g.bluetooth_console_only && !g.multi_session && g.hid_isolation);
     }
 
@@ -423,11 +269,11 @@ mod tests {
 
     #[test]
     fn stream_backend_defaults_to_sunshine() {
-        let seat: SeatConfig = serde_json::from_str(r#"{"id":"x","name":"A","port":48100}"#).unwrap();
+        let seat: RemoteSeatRecord = serde_json::from_str(r#"{"id":"x","name":"A","port":48100}"#).unwrap();
         assert_eq!(seat.stream_backend, StreamBackendKind::Sunshine);
-        let seat: SeatConfig = serde_json::from_str(r#"{"name":"A","stream_backend":"pulsar"}"#).unwrap();
+        let seat: RemoteSeatRecord = serde_json::from_str(r#"{"name":"A","stream_backend":"pulsar"}"#).unwrap();
         assert_eq!(seat.stream_backend, StreamBackendKind::Pulsar);
-        assert!(serde_json::from_str::<SeatConfig>(r#"{"stream_backend":"other"}"#).is_err());
+        assert!(serde_json::from_str::<RemoteSeatRecord>(r#"{"stream_backend":"other"}"#).is_err());
         for k in StreamBackendKind::ALL {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
             assert_eq!(StreamBackendKind::parse(k.as_str()), Some(k));

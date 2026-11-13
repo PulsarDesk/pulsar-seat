@@ -14,6 +14,8 @@
 //! ```
 
 #[cfg_attr(not(windows), allow(dead_code))]
+mod control;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod engine;
 #[cfg(windows)]
 mod dpapi;

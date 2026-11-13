@@ -12,11 +12,12 @@ use seat_core::backend::{
     AudioBackendKind, BackendInfo, DisplayBackendKind, DriverId, GateBackendKind, InputBackendKind,
     SessionBackendKind,
 };
-use seat_core::config::Config;
+use seat_core::config::{Config, SeatKind};
 use seat_core::device::Device;
 use seat_core::state::{ProductState, SeatRuntime};
 use seat_core::validate::Issue;
 use seat_core::{DeviceKey, SeatMask, SeatNumber, Secret};
+use crate::remote;
 use serde::{Deserialize, Serialize};
 
 /// Who is connecting (declared in `hello`, verified by the service).
@@ -262,6 +263,90 @@ pub enum RequestBody {
     /// Bring seat `seat` onto the console from the agent's own (locked) seat session. No
     /// stored password is used: nobody authenticated for the target. Answers `ack`.
     AgentSwitch { seat: SeatNumber },
+
+    // ---- protocol 3: Pulsar Split's v2 requests (architecture.md section 10.2). All
+    // `Access::Admin`; seat-scoped ones answer `wrong_seat_kind` on the other kind. ----
+    /// Logon test with the stored password (any kind); answers `credential_test`.
+    TestSeatCredentials { seat: SeatNumber },
+    /// Enable and / or unlock the seat user after the operator confirmed (any kind).
+    EnableUnlockAccount { seat: SeatNumber, enable: bool, unlock: bool, confirm: bool },
+    /// Remote seat runtime (display, audio, pads, stream, isolation); answers
+    /// `remote_runtime`. Split's `get_seat_runtime`.
+    GetRemoteRuntime { seat: SeatNumber },
+    /// Forward a pairing PIN to the remote seat's stream server; the outcome arrives as a
+    /// `stream` event (`pair_ended`) and in `pair_state`.
+    SubmitPin {
+        seat: SeatNumber,
+        pin: Secret,
+        client_name: String,
+        #[serde(default)]
+        request_id: Option<u32>,
+    },
+    GetPairState { seat: SeatNumber },
+    CancelPair { seat: SeatNumber },
+    ListPairedClients { seat: SeatNumber },
+    UnpairClient { seat: SeatNumber, uuid: String },
+    UnpairAll { seat: SeatNumber },
+    /// New certificate / identity; stops the seat and unpairs every client.
+    RegenerateSeatIdentity { seat: SeatNumber, confirm: bool },
+    /// `seat_stream::apps::AppEntry` values; answers `apps`.
+    GetApps { seat: SeatNumber },
+    SetApps { seat: SeatNumber, apps: Vec<serde_json::Value> },
+    /// Pulsar backend: allow / deny a pending connect or pair request.
+    AnswerPeerRequest {
+        seat: SeatNumber,
+        request_id: u32,
+        allow: bool,
+        #[serde(default)]
+        view_only: bool,
+    },
+    /// Pulsar backend, write-only: the permanent connect password (empty = none).
+    SetSeatConnectPassword { seat: SeatNumber, password: Secret },
+    /// Pulsar backend: the current one-time password; answers `otp`.
+    GetSeatOtp { seat: SeatNumber },
+    RotateSeatOtp { seat: SeatNumber },
+    /// Pulsar backend: credentials the relay asked for.
+    AnswerRelayAuth {
+        seat: SeatNumber,
+        password: Secret,
+        #[serde(default)]
+        totp: Option<Secret>,
+    },
+    /// Session host facts for remote seats (edition, RDS, licensing, coexistence, display /
+    /// pad backends); answers `host_info`.
+    GetHostInfo,
+    /// Prepare (or undo) the host for several remote seat sessions (RDS settings).
+    SetMultiSession { enabled: bool },
+    GetTermwrapStatus,
+    /// EXPERIMENTAL wrapper integration. Stops every remote seat first.
+    SetTermwrap {
+        enabled: bool,
+        #[serde(default)]
+        wrapper_path: Option<String>,
+        #[serde(default)]
+        ack_warning_version: u32,
+    },
+    ListRenderAdapters,
+    GetPadBackends,
+    /// Per-process HID shim state; answers `shim_status`. Split's `get_isolation_status`.
+    GetShimStatus,
+    SetShimTargets { targets: Vec<remote::ShimTargetDto> },
+    SetAppMasking { exe_path: String, enabled: bool },
+    /// `dlls`: `d3d8` | `d3d9`.
+    SetDxvk {
+        game_exe: String,
+        enabled: bool,
+        #[serde(default)]
+        dlls: Vec<String>,
+    },
+    GetDxvkStatus,
+    /// Last `lines` (1-1000) redacted log lines; `source`: `service` or `seat:<N>`.
+    GetLogTail { source: String, lines: u32 },
+    GetStreamBackends,
+    /// Account picture of a local user; answers `user_picture`.
+    GetUserPicture { user: String },
+    /// Remove non-present RDP audio endpoint nodes of ended sessions; `confirm` must be true.
+    CleanupAudioEndpoints { confirm: bool },
 }
 
 impl RequestBody {
@@ -311,7 +396,123 @@ impl RequestBody {
             | R::CheckForUpdate
             | R::DownloadUpdate
             | R::InstallUpdate { .. } => Access::Admin,
+            // Protocol 3 (Pulsar Split v2): admin only, remote seat status included.
+            R::TestSeatCredentials { .. }
+            | R::EnableUnlockAccount { .. }
+            | R::GetRemoteRuntime { .. }
+            | R::SubmitPin { .. }
+            | R::GetPairState { .. }
+            | R::CancelPair { .. }
+            | R::ListPairedClients { .. }
+            | R::UnpairClient { .. }
+            | R::UnpairAll { .. }
+            | R::RegenerateSeatIdentity { .. }
+            | R::GetApps { .. }
+            | R::SetApps { .. }
+            | R::AnswerPeerRequest { .. }
+            | R::SetSeatConnectPassword { .. }
+            | R::GetSeatOtp { .. }
+            | R::RotateSeatOtp { .. }
+            | R::AnswerRelayAuth { .. }
+            | R::GetHostInfo
+            | R::SetMultiSession { .. }
+            | R::GetTermwrapStatus
+            | R::SetTermwrap { .. }
+            | R::ListRenderAdapters
+            | R::GetPadBackends
+            | R::GetShimStatus
+            | R::SetShimTargets { .. }
+            | R::SetAppMasking { .. }
+            | R::SetDxvk { .. }
+            | R::GetDxvkStatus
+            | R::GetLogTail { .. }
+            | R::GetStreamBackends
+            | R::GetUserPicture { .. }
+            | R::CleanupAudioEndpoints { .. } => Access::Admin,
         }
+    }
+
+    /// The seat and the kind this request needs (`None` = no seat, or any kind). The
+    /// service answers `wrong_seat_kind` when the seat has the other kind.
+    pub fn seat_kind(&self) -> Option<(SeatNumber, SeatKind)> {
+        use RequestBody as R;
+        match self {
+            R::RelogonSeat { seat }
+            | R::HostGetAssignment { seat }
+            | R::HostTakeCredentials { seat }
+            | R::HostReport { seat, .. }
+            | R::HostRedirectRefusal { seat, .. }
+            | R::CredprovSwitch { seat }
+            | R::AgentSwitch { seat } => Some((*seat, SeatKind::Local)),
+            R::GetRemoteRuntime { seat }
+            | R::SubmitPin { seat, .. }
+            | R::GetPairState { seat }
+            | R::CancelPair { seat }
+            | R::ListPairedClients { seat }
+            | R::UnpairClient { seat, .. }
+            | R::UnpairAll { seat }
+            | R::RegenerateSeatIdentity { seat, .. }
+            | R::GetApps { seat }
+            | R::SetApps { seat, .. }
+            | R::AnswerPeerRequest { seat, .. }
+            | R::SetSeatConnectPassword { seat, .. }
+            | R::GetSeatOtp { seat }
+            | R::RotateSeatOtp { seat }
+            | R::AnswerRelayAuth { seat, .. } => Some((*seat, SeatKind::Remote)),
+            _ => None,
+        }
+    }
+
+    /// Lowest client protocol (from its `hello`) that may send this request: 3 for the
+    /// config requests (the seat shape changed in schema 2) and every protocol 3 request,
+    /// else [`crate::MIN_PROTOCOL_VERSION`].
+    pub fn min_protocol(&self) -> u32 {
+        use RequestBody as R;
+        match self {
+            R::GetConfig | R::ValidateConfig { .. } | R::ApplyConfig { .. } | R::ResetConfig { .. } | R::ImportReference { .. } => 3,
+            _ if self.is_remote_kind_request() => 3,
+            _ => crate::MIN_PROTOCOL_VERSION,
+        }
+    }
+
+    /// One of the protocol 3 requests that came from Pulsar Split.
+    pub fn is_remote_kind_request(&self) -> bool {
+        use RequestBody as R;
+        matches!(
+            self,
+            R::TestSeatCredentials { .. }
+                | R::EnableUnlockAccount { .. }
+                | R::GetRemoteRuntime { .. }
+                | R::SubmitPin { .. }
+                | R::GetPairState { .. }
+                | R::CancelPair { .. }
+                | R::ListPairedClients { .. }
+                | R::UnpairClient { .. }
+                | R::UnpairAll { .. }
+                | R::RegenerateSeatIdentity { .. }
+                | R::GetApps { .. }
+                | R::SetApps { .. }
+                | R::AnswerPeerRequest { .. }
+                | R::SetSeatConnectPassword { .. }
+                | R::GetSeatOtp { .. }
+                | R::RotateSeatOtp { .. }
+                | R::AnswerRelayAuth { .. }
+                | R::GetHostInfo
+                | R::SetMultiSession { .. }
+                | R::GetTermwrapStatus
+                | R::SetTermwrap { .. }
+                | R::ListRenderAdapters
+                | R::GetPadBackends
+                | R::GetShimStatus
+                | R::SetShimTargets { .. }
+                | R::SetAppMasking { .. }
+                | R::SetDxvk { .. }
+                | R::GetDxvkStatus
+                | R::GetLogTail { .. }
+                | R::GetStreamBackends
+                | R::GetUserPicture { .. }
+                | R::CleanupAudioEndpoints { .. }
+        )
     }
 }
 
@@ -345,6 +546,9 @@ pub enum Topic {
     Host,
     /// Agent only: tasks for its session.
     Agent,
+    /// Remote seats: pairing and stream start / end (`stream` events). Admin only.
+    /// Added in protocol 3.
+    Stream,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -378,6 +582,28 @@ pub enum ResponseBody {
     AppStarted { pid: u32 },
     /// Answer of `agent_switch_targets` (added 2026-11-13, additive).
     SwitchTargets(Vec<SeatNumber>),
+    // ---- protocol 3 (Pulsar Split v2 bodies) ----
+    HostInfo(remote::HostInfo),
+    /// `split_termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
+    TermwrapStatus(serde_json::Value),
+    RemoteRuntime(remote::SeatRuntime),
+    /// `split_display::RenderAdapter` values.
+    RenderAdapters(Vec<serde_json::Value>),
+    /// `seat_pads::BackendAvailability` values.
+    PadBackends(Vec<serde_json::Value>),
+    PairState(remote::PairState),
+    PairedClients(Vec<remote::PairedClient>),
+    /// `seat_stream::apps::AppEntry` values.
+    Apps(Vec<serde_json::Value>),
+    ShimStatus(remote::IsolationStatus),
+    CredentialTest(remote::CredentialTest),
+    LogLines(Vec<String>),
+    StreamBackends(Vec<remote::StreamBackendInfo>),
+    /// One-time password of a Pulsar-backend remote seat.
+    Otp { otp: Secret },
+    DxvkStatus(remote::DxvkStatus),
+    UserPicture(remote::UserPicture),
+    AudioCleanup(remote::AudioCleanup),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -790,6 +1016,19 @@ pub enum Event {
     HostCommand { seat: SeatNumber, command: HostCommand },
     // Agent topic
     AgentTask { session_id: u32, task: AgentTask },
+    // Stream topic (protocol 3)
+    Stream { seat: SeatNumber, event: StreamEvent },
+}
+
+/// Pairing and streaming on a remote seat (Split's `pair_pending`, `pair_ended`,
+/// `stream_started`, `stream_ended`; payloads as the stream backend reports them).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum StreamEvent {
+    PairPending(serde_json::Value),
+    PairEnded(serde_json::Value),
+    StreamStarted(serde_json::Value),
+    StreamEnded(serde_json::Value),
 }
 
 impl Event {
@@ -803,6 +1042,7 @@ impl Event {
             Self::WizardProgress(_) => Topic::Wizard,
             Self::InputPackets { .. } | Self::HostCommand { .. } => Topic::Host,
             Self::AgentTask { .. } => Topic::Agent,
+            Self::Stream { .. } => Topic::Stream,
         }
     }
 }

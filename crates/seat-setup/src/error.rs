@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `SetupError`: one enum for the crate, each variant with a stable snake_case reason code.
 
-use split_proto::{ErrorCode, ProtoError};
+use seat_proto::remote::{ErrorCode, ProtoError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SetupError {

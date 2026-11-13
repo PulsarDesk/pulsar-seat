@@ -726,7 +726,7 @@ mod tests {
     use super::*;
     use crate::adapters::RenderAdapter;
     use crate::fake::*;
-    use split_proto::SeatConfig;
+    use seat_proto::remote::RemoteSeatRecord;
 
     struct Rig {
         b: VddBackend<FakeVddPipe, FakeVddSettings>,
@@ -791,7 +791,7 @@ mod tests {
 
     fn seat(id: &str, session: u32, adapter: AdapterChoice) -> SeatDisplay {
         SeatDisplay::from_seat(
-            &SeatConfig {
+            &RemoteSeatRecord {
                 id: id.into(),
                 ..Default::default()
             },

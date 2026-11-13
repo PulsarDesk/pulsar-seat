@@ -4154,9 +4154,9 @@ name = "pulsar-split-manager"
 version = "0.1.0"
 dependencies = [
  "if-addrs",
+ "seat-proto",
  "serde",
  "serde_json",
- "split-proto",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4610,10 +4610,10 @@ name = "seat-audio"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-proto",
  "seat-stream",
  "serde",
  "serde_json",
- "split-proto",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
  "winreg",
@@ -4639,6 +4639,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "zeroize",
 ]
@@ -4709,10 +4710,11 @@ name = "seat-pads"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-core",
+ "seat-proto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "split-proto",
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -4726,6 +4728,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -4820,10 +4823,11 @@ name = "seat-setup"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-core",
+ "seat-proto",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "split-proto",
  "tempfile",
  "thiserror 2.0.21",
  "windows",
@@ -4837,10 +4841,10 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "log",
+ "seat-core",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "split-proto",
  "tar",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -4855,11 +4859,11 @@ dependencies = [
  "log",
  "rustls",
  "seat-audio",
+ "seat-core",
+ "seat-proto",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "split-core",
- "split-proto",
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
@@ -5339,38 +5343,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "split-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "split-proto",
- "tempfile",
- "thiserror 2.0.21",
- "uuid",
- "zeroize",
-]
-
-[[package]]
 name = "split-display"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-proto",
  "serde",
  "serde_json",
- "split-proto",
  "thiserror 2.0.21",
  "windows",
-]
-
-[[package]]
-name = "split-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "zeroize",
 ]
 
 [[package]]
@@ -5385,9 +5366,9 @@ dependencies = [
  "ironrdp-rdpsnd",
  "ironrdp-session",
  "native-tls",
+ "seat-proto",
  "serde_json",
  "sha1 0.10.7",
- "split-proto",
  "split-session",
  "x509-cert 0.2.5",
  "zeroize",
@@ -5399,15 +5380,15 @@ version = "0.1.0"
 dependencies = [
  "log",
  "seat-audio",
+ "seat-core",
  "seat-pads",
+ "seat-proto",
  "seat-setup",
  "seat-shim-core",
  "seat-stream",
  "serde",
  "serde_json",
- "split-core",
  "split-display",
- "split-proto",
  "split-session",
  "split-termwrap",
  "uuid",
@@ -5422,10 +5403,10 @@ name = "split-session"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-core",
+ "seat-proto",
  "serde",
  "serde_json",
- "split-core",
- "split-proto",
  "thiserror 2.0.21",
  "windows",
  "windows-sys 0.61.2",
@@ -5438,9 +5419,9 @@ name = "split-termwrap"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-proto",
  "serde",
  "serde_json",
- "split-proto",
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",

@@ -8,7 +8,7 @@
 //! own pad driver only reports itself (unsigned). Nothing here loads or installs a driver.
 
 use crate::engine::{CoexistOutcome, Deps, IsolationPort, StreamEnv, from_target};
-use split_proto::{ErrorCode, GlobalSettings, IsolationStatus, ProtoError};
+use seat_proto::remote::{ErrorCode, RemoteSettings, IsolationStatus, ProtoError};
 use seat_shim_core::install::{AppHelpInstaller, ModulePaths, ShimInstaller, ShimSystem, SystemRestoreApplier};
 use seat_shim_core::{RegValue, ShimError, ShimTarget};
 use std::path::{Path, PathBuf};
@@ -225,7 +225,7 @@ impl IsolationPort for WinIsolation {
         }
     }
 
-    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+    fn dxvk_status(&self) -> Result<seat_proto::remote::DxvkStatus, ProtoError> {
         let sys = seat_shim_core::win::WinShimSystem;
         let release = seat_shim_core::dxvk::load_pin(&sys).map_err(shim_err)?.map(|p| p.version);
         let games = self
@@ -237,7 +237,7 @@ impl IsolationPort for WinIsolation {
                 crate::engine::dxvk_game(g, read)
             })
             .collect();
-        Ok(split_proto::DxvkStatus { release, games })
+        Ok(seat_proto::remote::DxvkStatus { release, games })
     }
 
     fn launcher_path(&self) -> Option<PathBuf> {
@@ -296,7 +296,7 @@ pub fn bluetooth(data_root: &Path) -> seat_pads::bluetooth::BtController {
     )
 }
 
-fn pads(data_root: &Path, global: &GlobalSettings) -> Arc<Mutex<seat_pads::PadManager>> {
+fn pads(data_root: &Path, global: &RemoteSettings) -> Arc<Mutex<seat_pads::PadManager>> {
     use seat_pads::win::{devtree::CmDeviceTree, process::WinProcessProbe, swdevice::WinSwDevice, usbip::*, vigem::WinVigemDriver};
     use seat_pads::{PadBackend, PadManagerConfig};
     let tree: Arc<dyn seat_pads::DeviceTree> = Arc::new(CmDeviceTree);
@@ -379,7 +379,7 @@ pub fn vdd_backend(data_root: &Path, clock: Arc<split_display::SystemClock>) -> 
 pub fn build(
     data_root: &Path,
     install_dir: &Path,
-    global: &GlobalSettings,
+    global: &RemoteSettings,
     service_version: &str,
     registry: bool,
 ) -> Result<Deps, String> {

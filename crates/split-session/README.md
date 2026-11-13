@@ -42,9 +42,9 @@ ready 120 s, client restart window 5 min / 3 failures.
   `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. The pipes and files are created non-inheritable;
   `win::process::spawn` makes them inheritable only around the one `CreateProcess` call,
   under the process-wide `win::process::spawn_lock()`, which is the shared
-  `split_proto::spawn` lock. **Every other spawner in the service process holds it**
+  `seat_core::spawn` lock. **Every other spawner in the service process holds it**
   (contracts §0.1a): `usbip.exe`, `sdbinst.exe` and the setup runner spawn through
-  `split_proto::spawn::spawn_locked`, so no `Command` can inherit the pipe in that window.
+  `seat_core::spawn::spawn_locked`, so no `Command` can inherit the pipe in that window.
 - The helper runs with a `DISABLE_MAX_PRIVILEGE` restricted copy of the service token at
   Low integrity. If that token cannot be made or used, the start fails with `token`
   (fail closed); the full service token is used only after an explicit

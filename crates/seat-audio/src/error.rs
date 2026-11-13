@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Error type of the audio package.
 
-use split_proto::{ErrorCode, ProtoError};
+use seat_proto::remote::{ErrorCode, ProtoError};
 
 /// Errors of `seat-audio`. Every variant has a stable snake_case reason code
 /// (`AudioError::code`), see docs/split/agents/contracts.md §0.3 / §6.

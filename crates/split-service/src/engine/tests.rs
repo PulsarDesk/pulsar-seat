@@ -4,7 +4,7 @@
 
 use super::*;
 use seat_pads::{PadKind, PadManagerConfig};
-use split_proto::SeatAudioSettings;
+use seat_proto::remote::SeatAudioSettings;
 use split_session::fake::{FakeHost, HelperScript, fake_deps, loopback_session};
 use split_session::manager::{Manager, SessionTimeouts};
 use seat_stream::backend::pulsar::{HostDistSource, PulsarEnv, SecretKind};
@@ -60,9 +60,9 @@ impl IsolationPort for FakeIsolation {
         super::dxvk_games_update(&mut l, &g.display().to_string(), e);
         Ok(())
     }
-    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+    fn dxvk_status(&self) -> Result<seat_proto::remote::DxvkStatus, ProtoError> {
         let games = lock(&self.dxvk_games).iter().map(|g| super::dxvk_game(g, None)).collect();
-        Ok(split_proto::DxvkStatus { release: None, games })
+        Ok(seat_proto::remote::DxvkStatus { release: None, games })
     }
     fn launcher_path(&self) -> Option<PathBuf> {
         None
@@ -219,8 +219,8 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     World { engine, session, probe, fs, launcher, connector, clock, firewall, seatmap, isolation, passive, termwrap, ports, bt, pipes, secrets }
 }
 
-fn seat() -> SeatConfig {
-    SeatConfig {
+fn seat() -> RemoteSeatRecord {
+    RemoteSeatRecord {
         id: SEAT_ID.into(),
         name: "Salon".into(),
         display_name: "Salon PC".into(),
@@ -232,8 +232,8 @@ fn seat() -> SeatConfig {
     }
 }
 
-fn global() -> GlobalSettings {
-    GlobalSettings { multi_session: true, ..Default::default() }
+fn global() -> RemoteSettings {
+    RemoteSettings { multi_session: true, ..Default::default() }
 }
 
 fn pw() -> Option<Secret> {
@@ -255,15 +255,15 @@ fn wait_for(w: &World, f: impl Fn(&SeatEvent) -> bool) -> Vec<SeatEvent> {
     panic!("report not seen; got {seen:?}");
 }
 
-fn pulsar_seat() -> SeatConfig {
-    SeatConfig { stream_backend: StreamBackendKind::Pulsar, ..seat() }
+fn pulsar_seat() -> RemoteSeatRecord {
+    RemoteSeatRecord { stream_backend: StreamBackendKind::Pulsar, ..seat() }
 }
 
 fn start_ok(w: &World) -> Vec<SeatEvent> {
     start_seat_ok(w, seat())
 }
 
-fn start_seat_ok(w: &World, s: SeatConfig) -> Vec<SeatEvent> {
+fn start_seat_ok(w: &World, s: RemoteSeatRecord) -> Vec<SeatEvent> {
     w.session.helper.push(HelperScript::connects(loopback_session(3, &s.rdp_client_name, "seat1")));
     w.probe.appear_after(3, 1);
     w.engine.start_seat(&s, &global(), pw()).unwrap();
@@ -341,7 +341,7 @@ fn bluetooth_instance_of_a_seat_session_is_disabled_and_restored() {
 #[test]
 fn taken_port_fails_with_port_in_use_before_launch() {
     let w = world();
-    *w.ports.0.lock().unwrap() = vec![(48110, split_core::ports::Proto::Udp)];
+    *w.ports.0.lock().unwrap() = vec![(48110, seat_core::remote::ports::Proto::Udp)];
     let seen = start_ok(&w);
     match seen.iter().find(|e| matches!(e, SeatEvent::Failed { .. })).expect("failed") {
         SeatEvent::Failed { reason, message } => {
@@ -387,7 +387,7 @@ fn rejected_logon_fails_with_the_session_reason() {
 #[test]
 fn start_preconditions() {
     let w = world();
-    let off = GlobalSettings::default();
+    let off = RemoteSettings::default();
     assert_eq!(w.engine.start_seat(&seat(), &off, pw()).unwrap_err().reason.as_deref(), Some("multi_session_off"));
     assert_eq!(w.engine.start_seat(&seat(), &global(), None).unwrap_err().code, ErrorCode::MissingCredentials);
     w.passive.store(true, Ordering::SeqCst);
@@ -399,7 +399,7 @@ fn start_preconditions() {
 #[test]
 fn service_start_prepares_the_host_only_when_multi_seat_is_on() {
     let w = world();
-    w.engine.service_start(&GlobalSettings::default(), &[]);
+    w.engine.service_start(&RemoteSettings::default(), &[]);
     assert!(w.session.registry.snapshot().is_empty(), "no RDS writes while multi-seat is off");
     w.engine.service_start(&global(), &[]);
     assert!(!w.session.registry.snapshot().is_empty(), "RDS rows written");
@@ -462,18 +462,18 @@ fn apps_roundtrip_and_validation() {
     let apps = w.engine.get_apps(&s).unwrap();
     assert_eq!(apps[0]["name"], "Masaüstü");
     let new = vec![serde_json::json!({"name": "Oyun", "cmd": r"C:\Games\x.exe", "output": "keep-me"})];
-    let got = w.engine.set_apps(&s, new, &GlobalSettings::default()).unwrap();
+    let got = w.engine.set_apps(&s, new, &RemoteSettings::default()).unwrap();
     assert_eq!(got[0]["output"], "keep-me", "unknown upstream keys survive");
     assert_eq!(w.engine.get_apps(&s).unwrap()[0]["name"], "Oyun");
     let bad = vec![serde_json::json!({"name": "x\ny"})];
-    assert!(w.engine.set_apps(&s, bad, &GlobalSettings::default()).is_err());
+    assert!(w.engine.set_apps(&s, bad, &RemoteSettings::default()).is_err());
 }
 
 #[test]
 fn isolation_toggle_installs_and_refuses_foreign_shim() {
     let w = world();
-    let off = GlobalSettings::default();
-    let on = GlobalSettings { process_patching: true, ..Default::default() };
+    let off = RemoteSettings::default();
+    let on = RemoteSettings { process_patching: true, ..Default::default() };
     w.engine.apply_isolation(&off, &on).unwrap();
     assert_eq!(w.isolation.installs.load(Ordering::SeqCst), 1);
     w.engine.apply_isolation(&on, &off).unwrap();
@@ -627,7 +627,7 @@ fn pulsar_app_launch_runs_as_the_seat_user() {
     let w = world();
     start_seat_ok(&w, pulsar_seat());
     let apps = vec![serde_json::json!({"name": "Masaüstü"}), serde_json::json!({"name": "Oyun", "cmd": r#""C:\Games\x.exe" -fullscreen"#})];
-    w.engine.set_apps(&pulsar_seat(), apps, &GlobalSettings::default()).unwrap();
+    w.engine.set_apps(&pulsar_seat(), apps, &RemoteSettings::default()).unwrap();
     w.engine.tick(w.clock.advance(1_000));
     let pipe = w.pipes.pipe(0);
     assert_eq!(pipe.sent().iter().filter(|m| m["type"] == "apps.set").count(), 1, "sent at handshake");

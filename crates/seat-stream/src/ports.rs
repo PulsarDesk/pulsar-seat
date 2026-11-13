@@ -4,20 +4,20 @@
 //! [`conflicts`] says which of a seat's ports are taken by a listener or fall into a
 //! reserved range (for example an upstream Sunshine install on 47984–48010).
 //! [`allocate`] implements spec 80 §7.2 (first free `48100 + k·100`); the controller uses
-//! `split_core::ports::allocate`, which follows the same rule (OQ 29 resolved).
+//! `seat_core::remote::ports::allocate`, which follows the same rule (OQ 29 resolved).
 //!
 //! Real probe: `crate::win::ports::IpHelperProbe` (`GetExtendedTcpTable` /
 //! `GetExtendedUdpTable`, IPv4 + IPv6).
 
 use crate::StreamError;
-use split_core::ports::{block, blocks_overlap, is_valid_base, seat_ports, Proto};
+use seat_core::remote::ports::{block, blocks_overlap, is_valid_base, seat_ports, Proto};
 use std::ops::RangeInclusive;
 
 /// Upstream Sunshine's default block (base 47989).
-pub use split_core::ports::UPSTREAM_DEFAULT_BLOCK;
+pub use seat_core::remote::ports::UPSTREAM_DEFAULT_BLOCK;
 
-pub const SPEC80_ALLOC_START: u16 = split_core::ports::ALLOC_START;
-pub const SPEC80_ALLOC_STEP: u16 = split_core::ports::ALLOC_STEP;
+pub const SPEC80_ALLOC_START: u16 = seat_core::remote::ports::ALLOC_START;
+pub const SPEC80_ALLOC_STEP: u16 = seat_core::remote::ports::ALLOC_STEP;
 
 pub trait ListenerProbe: Send + Sync {
     /// Every local TCP port in LISTEN state and every bound UDP port.

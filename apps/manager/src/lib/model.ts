@@ -28,6 +28,7 @@ import {
   type KioskApp,
   type KioskShell,
   type KioskShellApp,
+  type LocalSeat,
   MAX_KIOSK_APPS,
   type MaskSource,
   type SeatAccount,
@@ -97,8 +98,23 @@ export function newSeat(number: SeatNumber): SeatConfig {
     account: { kind: 'logon_screen' },
     cpu_sets: [],
     cpu_hard_limit: false,
-    wallpaper: false
+    wallpaper: false,
+    kind: 'local',
+    local: {}
   };
+}
+
+/** The local part of a seat to read (empty for a remote seat). */
+export function localOf(s: SeatConfig | undefined): LocalSeat {
+  return (s && (s.kind ?? 'local') === 'local' ? s.local : undefined) ?? {};
+}
+
+/** The local part of a seat to edit (created when missing); `null` for a remote seat. */
+export function localMut(s: SeatConfig): LocalSeat | null {
+  if ((s.kind ?? 'local') !== 'local') return null;
+  s.kind = 'local';
+  s.local ??= {};
+  return s.local;
 }
 
 /** Sort seats, keep seat 1 present and always starting, sort devices (like `normalize`). */
@@ -408,7 +424,7 @@ export function setStartupApps(c: Config, n: SeatNumber, apps: KioskApp[]): Conf
 
 /** The seat's redirection policy, filled with the defaults for missing fields. */
 export function seatRedirect(c: Config, n: SeatNumber): SeatRedirect {
-  const r = c.seats.find((x) => x.number === n)?.redirect;
+  const r = localOf(c.seats.find((x) => x.number === n)).redirect;
   return {
     clipboard: { ...DEFAULT_SEAT_REDIRECT.clipboard, ...(r?.clipboard ?? {}) },
     drives: r?.drives ?? DEFAULT_SEAT_REDIRECT.drives,
@@ -426,9 +442,10 @@ export function redirectOn(r: SeatRedirect): boolean {
 export function setRedirect(c: Config, n: SeatNumber, r: SeatRedirect): Config {
   const out = clone(c);
   const s = out.seats.find((x) => x.number === n);
-  if (!s) return c;
-  if (n === 1 || JSON.stringify(r) === JSON.stringify(DEFAULT_SEAT_REDIRECT)) delete s.redirect;
-  else s.redirect = { clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards };
+  const l = s ? localMut(s) : null;
+  if (!l) return c;
+  if (n === 1 || JSON.stringify(r) === JSON.stringify(DEFAULT_SEAT_REDIRECT)) delete l.redirect;
+  else l.redirect = { clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards };
   return out;
 }
 
@@ -437,9 +454,10 @@ export function setRedirect(c: Config, n: SeatNumber, r: SeatRedirect): Config {
 export function setKioskShell(c: Config, n: SeatNumber, shell: KioskShell | null): Config {
   const out = clone(c);
   const s = out.seats.find((x) => x.number === n);
-  if (!s) return c;
+  const l = s ? localMut(s) : null;
+  if (!l) return c;
   if (!shell) {
-    delete s.kiosk_shell;
+    delete l.kiosk_shell;
     return out;
   }
   const apps = shell.apps
@@ -453,7 +471,7 @@ export function setKioskShell(c: Config, n: SeatNumber, shell: KioskShell | null
     .filter((a) => a.command !== '')
     .slice(0, MAX_KIOSK_APPS);
   const idle = Math.max(0, Math.min(1440, Math.trunc(shell.idle_reset_minutes) || 0));
-  s.kiosk_shell = { apps, idle_reset_minutes: idle };
+  l.kiosk_shell = { apps, idle_reset_minutes: idle };
   return out;
 }
 
@@ -799,7 +817,7 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
   }
   // Kiosk shells (seat-core `kiosk_checks`).
   for (const s of c.seats) {
-    const k = s.kiosk_shell;
+    const k = localOf(s).kiosk_shell;
     if (!k) continue;
     const textOk = (v: string, max: number) => {
       const n = [...v.trim()].length;
@@ -807,10 +825,10 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
     };
     const badApp = k.apps.some((a) => !textOk(a.title, 64) || !textOk(a.command, 260));
     if (k.apps.length > MAX_KIOSK_APPS || badApp || k.idle_reset_minutes > 1440 || k.idle_reset_minutes < 0) {
-      out.push(issue('error', 'invalid_kiosk_shell', { seat: s.number, field: 'kiosk_shell' }));
+      out.push(issue('error', 'invalid_kiosk_shell', { seat: s.number, field: 'local.kiosk_shell' }));
     }
     if (s.number === 1 && kioskSeatOneDesktop(c)) {
-      out.push(issue('warning', 'kiosk_shell_ignored_on_seat_one', { seat: s.number, field: 'kiosk_shell' }));
+      out.push(issue('warning', 'kiosk_shell_ignored_on_seat_one', { seat: s.number, field: 'local.kiosk_shell' }));
     }
   }
   const allowClone = c.settings.outputs?.allow_clone ?? false;

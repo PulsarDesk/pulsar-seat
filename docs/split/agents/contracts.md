@@ -6,6 +6,13 @@ Behaviour targets: `spec/remote/30`–`spec/remote/90`. Third-party driver / ser
 named here**). Open points raised while writing this file are appended to
 [open-questions.md](open-questions.md) (items 25–30; items 19–24 come from the research step).
 
+**Merge step 4 (2026-11-14):** `split-proto` and `split-core` no longer exist. Their types
+are in `seat_proto::remote` (wire types; v2 enums in `seat_proto::remote::legacy`) and
+`seat_core::remote` (model, validate, ports, store, streamconf, watchdog; Split's
+`SeatConfig` = `RemoteSeatRecord`, `GlobalSettings` = `RemoteSettings`), errors in
+`seat_core::error`, the spawn lock in `seat_core::spawn`, the Controller in
+`crates/split-service/src/control.rs`. See ../../agents/architecture.md section 10.
+
 This file fixes, for each implementation package, the public Rust API, the reused
 `split-core` / `split-proto` types, the IPC additions the service needs, and what the
 integrator wires into `split-service` and `apps/split-manager`. It is a contract: a package may

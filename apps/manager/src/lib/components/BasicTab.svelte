@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskSeatOneDesktop, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setWallpaper, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -113,7 +113,7 @@
             {#if kioskMode}
               <td>
                 <button type="button" class="link" aria-label={`${s.number}. ${t.kiosk.column}`} onclick={() => (dialog = { kind: 'kiosk', seat: s.number })}>
-                  {s.kiosk_shell ? t.kiosk.count(s.kiosk_shell.apps.length) : t.kiosk.off}
+                  {localOf(s).kiosk_shell ? t.kiosk.count(localOf(s).kiosk_shell!.apps.length) : t.kiosk.off}
                 </button>
               </td>
             {/if}
@@ -138,7 +138,7 @@
       </label>
       <p class="hint">{t.kiosk.seatOneDesktopHint}</p>
       <p class="hint">{t.kiosk.systemKeys}</p>
-    {:else if draft.seats.some((s) => s.kiosk_shell)}
+    {:else if draft.seats.some((s) => localOf(s).kiosk_shell)}
       <p class="hint">{t.kiosk.backendOnly}</p>
     {/if}
   </fieldset>
@@ -270,7 +270,7 @@
   {@const n = dialog.seat}
   <KioskShellDialog
     seat={n}
-    shell={draft.seats.find((s) => s.number === n)?.kiosk_shell ?? null}
+    shell={localOf(draft.seats.find((s) => s.number === n)).kiosk_shell ?? null}
     onSave={(shell) => {
       store.edit((c) => setKioskShell(c, n, shell));
       dialog = null;

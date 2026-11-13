@@ -13,7 +13,7 @@
 use crate::journal::{RestoreLog, RestoreRecord};
 use crate::StreamError;
 use serde::{Deserialize, Serialize};
-use split_core::ports::{seat_ports, Proto};
+use seat_core::remote::ports::{seat_ports, Proto};
 use std::path::{Path, PathBuf};
 
 pub const GROUP: &str = "PulsarSplit";
@@ -201,7 +201,7 @@ pub fn apply_seat_rules(
     domain: bool,
 ) -> Result<(), StreamError> {
     crate::validate_seat_id(seat_id)?;
-    if !split_core::ports::is_valid_base(base) {
+    if !seat_core::remote::ports::is_valid_base(base) {
         return Err(StreamError::invalid("port", "outside 1029-65514"));
     }
     apply_rules(fw, journal, &seat_rules(seat_id, display_name, base, program, domain))

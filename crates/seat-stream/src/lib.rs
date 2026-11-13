@@ -9,7 +9,7 @@
 //! | [`backend`] | [`backend::StreamBackend`] / [`backend::SeatStream`]: Sunshine or `pulsar-host` per seat |
 //! | [`dist`] | server binary manifest + SHA-256 check (binary is downloaded, never vendored) |
 //! | [`seatdir`] | `%ProgramData%\PulsarSplit\seats\<seat-id>\` layout, ACL, atomic writes |
-//! | [`conf`] | `server.conf` generator (extends `split_core::streamconf`, spec 80 §2.3) |
+//! | [`conf`] | `server.conf` generator (extends `seat_core::remote::streamconf`, spec 80 §2.3) |
 //! | [`apps`] | `apps.json` model, validation, placeholders, launcher wrapping |
 //! | [`control`] | [`control::SeatControl`]: fork seat pipe (spec 80 §8.4) or loopback web UI |
 //! | [`firewall`] | per-seat rule pair (spec 80 §9.2) behind [`firewall::Firewall`] |

@@ -4,7 +4,7 @@ use crate::backend::SeatStreamSpec;
 use crate::control::ServerEvent;
 use crate::fake::{FakeClock, FakeFirewall, FakeHostPipes, FakeLauncher, FakeProbe, FakeRandom, MemFs, MemJournal, MemSecrets};
 use crate::firewall::FwProto;
-use split_proto::GlobalSettings;
+use seat_proto::remote::RemoteSettings;
 
 const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const ROOT: &str = r"C:\ProgramData\PulsarSplitTest";
@@ -60,8 +60,8 @@ fn world() -> W {
     world_with(Arc::new(dist_ok))
 }
 
-fn seat() -> SeatConfig {
-    SeatConfig {
+fn seat() -> RemoteSeatRecord {
+    RemoteSeatRecord {
         id: ID.into(),
         name: "Salon".into(),
         display_name: "Salon PC".into(),
@@ -73,7 +73,7 @@ fn seat() -> SeatConfig {
 
 fn prepare(w: &W) -> Box<dyn SeatStream> {
     let s = seat();
-    let g = GlobalSettings::default();
+    let g = RemoteSettings::default();
     let spec = SeatStreamSpec {
         seat: &s,
         global: &g,
@@ -119,7 +119,7 @@ fn missing_binary_is_backend_missing_and_never_launches() {
     assert!(!info.installed);
     assert_eq!(info.reason.as_deref(), Some("backend_missing"));
     let s = seat();
-    let g = GlobalSettings::default();
+    let g = RemoteSettings::default();
     let spec = SeatStreamSpec {
         seat: &s,
         global: &g,

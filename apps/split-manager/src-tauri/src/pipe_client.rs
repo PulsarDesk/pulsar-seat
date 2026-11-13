@@ -11,12 +11,13 @@
 //! 3. the server process token user must be `S-1-5-18` (LocalSystem);
 //! 4. the pipe object's owner SID (`GetSecurityInfo`) must be SYSTEM or Administrators.
 //!
-//! A request that carries a [`split_proto::Secret`] (seat password, pairing PIN) is only
+//! A request that carries a [`seat_proto::remote::Secret`] (seat password, pairing PIN) is only
 //! sent when every check passes. Other requests are refused too in release builds; debug
 //! builds let them through so the `--console` development mode (elevated admin, not SYSTEM,
 //! not session 0) stays usable for non-secret calls.
 
-use split_proto::{ErrorCode, PIPE_NAME, PROTOCOL_VERSION, ProtoError, Request, RequestBody, Response, ResponseBody};
+use seat_proto::remote::legacy::{PIPE_NAME, Request, RequestBody, Response, ResponseBody};
+use seat_proto::remote::{ErrorCode, PROTOCOL_VERSION, ProtoError};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,8 +85,8 @@ pub fn call(body: RequestBody) -> Result<ResponseBody, ProtoError> {
     let mut pipe = open()?;
     let verified = verify_server(&pipe);
     may_send(&body, &verified)?;
-    split_proto::write_message(&mut pipe, &Request::new(id, body)).map_err(|e| unavailable(e.to_string()))?;
-    let resp: Response = split_proto::read_message(&mut pipe)
+    seat_proto::remote::write_message(&mut pipe, &Request::new(id, body)).map_err(|e| unavailable(e.to_string()))?;
+    let resp: Response = seat_proto::remote::read_message(&mut pipe)
         .map_err(|e| unavailable(e.to_string()))?
         .ok_or_else(|| unavailable("service closed the connection"))?;
     if resp.version != PROTOCOL_VERSION {
@@ -220,7 +221,7 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_proto::Secret;
+    use seat_proto::remote::Secret;
 
     #[test]
     fn secrets_never_go_to_an_unverified_server() {

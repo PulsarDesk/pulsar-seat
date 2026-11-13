@@ -22,7 +22,7 @@ separate `shim/` workspace (hence explicit package fields, and the `proto` featu
 
 Errors: `ShimError` with stable codes (`shim_blocked`, `shim_foreign`, `shim_kill_switch`,
 `shim_target_disabled`, `dxvk_hash_mismatch`, `dxvk_not_downloaded`, …) and
-`From<ShimError> for split_proto::ProtoError` (`proto` feature).
+`From<ShimError> for seat_core::error::ProtoError` (`proto` feature).
 
 Additions to the contract (see `docs/split/agents/open-questions.md` shim-6): `Role::Seat` also
 carries `session_id`; `SeatFlags::shared_account`; `classify_nodes`; `hook_plan` +

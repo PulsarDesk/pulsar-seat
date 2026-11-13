@@ -287,7 +287,7 @@ impl SessionBackend for DesktopsBackend {
             self.running().insert(req.seat, Running { session_id: console.session_id, p, shell: true, sink });
             return Ok(StartStep::Started(console));
         }
-        let app = req.config.kiosk.as_ref().ok_or_else(|| err(ErrorKind::Policy, reason::KIOSK_APP_MISSING, format!("seat {} has no kiosk app", req.seat)))?;
+        let app = req.config.local_settings().kiosk.as_ref().ok_or_else(|| err(ErrorKind::Policy, reason::KIOSK_APP_MISSING, format!("seat {} has no kiosk app", req.seat)))?;
         if self.alive(req.seat).is_some() {
             return Ok(StartStep::Started(console));
         }

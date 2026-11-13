@@ -31,12 +31,12 @@ pub struct SpawnSpec<'a> {
 }
 
 /// Process-wide lock held while our stdio handles are briefly inheritable. It is the one
-/// shared lock of `split_proto::spawn`: every other spawner in the service process
+/// shared lock of `seat_core::spawn`: every other spawner in the service process
 /// (`usbip.exe`, `sdbinst.exe`, setup tools) takes it around its create call, so no
 /// unrelated child can inherit a password pipe. The window is kept to the single
 /// `CreateProcess` call.
 pub fn spawn_lock() -> std::sync::MutexGuard<'static, ()> {
-    split_proto::spawn::spawn_lock()
+    seat_core::spawn::spawn_lock()
 }
 
 fn set_inherit(h: HANDLE, on: bool) -> Result<(), SessionError> {

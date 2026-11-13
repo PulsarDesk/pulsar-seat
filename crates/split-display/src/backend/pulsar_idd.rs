@@ -514,7 +514,7 @@ mod tests {
     use super::*;
     use crate::adapters::{AdapterChoice, Luid};
     use crate::fake::{FakeClock, FakeDeviceIo};
-    use split_proto::SeatConfig;
+    use seat_proto::remote::RemoteSeatRecord;
 
     const SEAT: &str = "8a1b2c3d-0000-4000-8000-00000000abcd";
 
@@ -531,7 +531,7 @@ mod tests {
 
     fn seat(adapter: AdapterChoice) -> SeatDisplay {
         SeatDisplay::from_seat(
-            &SeatConfig {
+            &RemoteSeatRecord {
                 id: SEAT.into(),
                 ..Default::default()
             },

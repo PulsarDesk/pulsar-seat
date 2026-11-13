@@ -16,20 +16,26 @@
 //!   ever contains a seat password except `host_take_credentials`, once, to the verified
 //!   seat host the service started itself.
 //!
-//! Version history: 1 = first contract (2026-11-12).
+//! Version history: 1 = first contract (2026-11-12). 3 = seat kinds (merge step 4,
+//! 2026-11-14): Pulsar Split's v2 requests join as `Access::Admin`, config schema 2,
+//! `wrong_seat_kind` / `session_unavailable`, topic `stream` (architecture.md section 10.2).
+//! 2 was Pulsar Split's own protocol and is never spoken on this pipe.
 
 pub mod framing;
 pub mod messages;
+pub mod remote;
 
 use serde::{Deserialize, Serialize};
 
 pub use framing::{FrameError, MAX_FRAME_LEN, read_frame, read_message, write_frame, write_message};
 pub use messages::*;
+pub use seat_core::error::{ErrorCode, ProtoError};
 
 /// Current protocol version. Additive changes (new optional fields, new requests) keep it;
 /// incompatible changes bump it and update `MIN_PROTOCOL_VERSION`.
-pub const PROTOCOL_VERSION: u32 = 1;
-/// Oldest client protocol the service still accepts.
+pub const PROTOCOL_VERSION: u32 = 3;
+/// Oldest client protocol the service still accepts. Requests whose shape changed in 3
+/// also need a hello of 3 ([`RequestBody::min_protocol`]).
 pub const MIN_PROTOCOL_VERSION: u32 = 1;
 
 /// The service's control pipe.
@@ -117,114 +123,6 @@ pub struct EventFrame {
     pub event: Event,
 }
 
-/// Machine-readable error. The manager maps `reason` (if set) or `code` to Turkish copy;
-/// `message` is an English diagnostic for logs only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
-#[error("{code:?}: {message}")]
-pub struct ProtoError {
-    pub code: ErrorCode,
-    pub message: String,
-    /// JSON path of the offending input field, when the error is about one field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// Finer snake_case reason (`BackendError::reason`, `FailureReason`, …).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// Windows error code behind the failure, when there is one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub win32: Option<u32>,
-}
-
-impl ProtoError {
-    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), field: None, reason: None, win32: None }
-    }
-    pub fn with_field(mut self, f: impl Into<String>) -> Self {
-        self.field = Some(f.into());
-        self
-    }
-    pub fn with_reason(mut self, r: impl Into<String>) -> Self {
-        self.reason = Some(r.into());
-        self
-    }
-    /// `reason` if set, else the snake_case `code`.
-    pub fn reason_or_code(&self) -> String {
-        self.reason.clone().unwrap_or_else(|| self.code.as_str().to_string())
-    }
-}
-
-impl From<seat_core::backend::BackendError> for ProtoError {
-    fn from(e: seat_core::backend::BackendError) -> Self {
-        use seat_core::backend::ErrorKind as K;
-        let code = match e.kind {
-            K::Unsupported => ErrorCode::Unsupported,
-            K::NotReady => ErrorCode::NotReady,
-            K::Denied => ErrorCode::AccessDenied,
-            K::NotFound => ErrorCode::NotFound,
-            K::Timeout => ErrorCode::Timeout,
-            K::Driver => ErrorCode::DriverUnavailable,
-            K::Coexistence => ErrorCode::Coexistence,
-            K::Policy => ErrorCode::PolicyBlocked,
-            K::Logon => ErrorCode::LogonFailed,
-            K::Os => ErrorCode::Os,
-            K::Internal => ErrorCode::Internal,
-        };
-        Self { code, message: e.message, field: None, reason: Some(e.reason), win32: e.win32 }
-    }
-}
-
-macro_rules! error_codes {
-    ($($(#[$m:meta])* $v:ident => $s:literal,)*) => {
-        /// Error codes (snake_case on the wire).
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum ErrorCode { $($(#[$m])* $v,)* }
-        impl ErrorCode {
-            pub fn as_str(self) -> &'static str { match self { $(Self::$v => $s,)* } }
-        }
-    };
-}
-
-error_codes! {
-    VersionMismatch => "version_mismatch",
-    /// First request was not `hello`, or a malformed frame.
-    BadRequest => "bad_request",
-    /// Caller's token / client kind does not allow this request.
-    AccessDenied => "access_denied",
-    /// The admin-only policy is on and the caller is not an elevated administrator.
-    AdminOnly => "admin_only",
-    NotFound => "not_found",
-    /// Config failed validation; details in `ResponseBody::Issues` of `validate_config`.
-    InvalidConfig => "invalid_config",
-    /// `apply_config` was based on an older revision.
-    RevisionConflict => "revision_conflict",
-    /// Save-time conflicts exist and `force` was false.
-    ConflictsNotConfirmed => "conflicts_not_confirmed",
-    InvalidValue => "invalid_value",
-    /// Product disabled (start refused).
-    Disabled => "disabled",
-    /// Service is in safe mode (Windows Safe Mode, unclean shutdown, crash loop).
-    SafeMode => "safe_mode",
-    SeatRunning => "seat_running",
-    SeatNotRunning => "seat_not_running",
-    Unsupported => "unsupported",
-    NotReady => "not_ready",
-    Timeout => "timeout",
-    DriverUnavailable => "driver_unavailable",
-    Coexistence => "coexistence",
-    PolicyBlocked => "policy_blocked",
-    LogonFailed => "logon_failed",
-    /// Experimental backend without the current warning acknowledged.
-    WarningNotAcknowledged => "warning_not_acknowledged",
-    /// Wizard not running / already running.
-    WizardState => "wizard_state",
-    Os => "os",
-    Store => "store",
-    ServiceUnavailable => "service_unavailable",
-    NotImplemented => "not_implemented",
-    Internal => "internal",
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,14 +132,14 @@ mod tests {
     fn request_json_shape_is_stable() {
         let req = Request::new(7, RequestBody::StopSeat { seat: SeatNumber::new(2).unwrap() });
         let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(json, r#"{"version":1,"id":7,"body":{"type":"stop_seat","data":{"seat":2}}}"#);
+        assert_eq!(json, r#"{"version":3,"id":7,"body":{"type":"stop_seat","data":{"seat":2}}}"#);
         assert_eq!(serde_json::to_string(&RequestBody::GetStatus).unwrap(), r#"{"type":"get_status"}"#);
     }
 
     #[test]
     fn server_frame_shapes() {
         let r = ServerFrame::Response(Response::new(1, Ok(ResponseBody::Ack)));
-        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"response":{"version":1,"id":1,"result":{"Ok":{"type":"ack"}}}}"#);
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"response":{"version":3,"id":1,"result":{"Ok":{"type":"ack"}}}}"#);
         let e = ServerFrame::Event(EventFrame { seq: 3, at_ms: 9, event: Event::ConfigChanged { revision: 4 } });
         let j = serde_json::to_string(&e).unwrap();
         assert!(j.starts_with(r#"{"event":{"seq":3"#), "{j}");
@@ -286,6 +184,121 @@ mod tests {
         assert_eq!(j, r#"{"type":"agent_switch","data":{"seat":2}}"#);
     }
 
+    /// One of every protocol 3 request (Pulsar Split v2 requests on the Seat pipe).
+    fn v3_requests() -> Vec<RequestBody> {
+        let two = SeatNumber::new(2).unwrap();
+        let pw = || Secret::new("pw");
+        vec![
+            RequestBody::TestSeatCredentials { seat: two },
+            RequestBody::EnableUnlockAccount { seat: two, enable: true, unlock: true, confirm: true },
+            RequestBody::GetRemoteRuntime { seat: two },
+            RequestBody::SubmitPin { seat: two, pin: pw(), client_name: "tv".into(), request_id: None },
+            RequestBody::GetPairState { seat: two },
+            RequestBody::CancelPair { seat: two },
+            RequestBody::ListPairedClients { seat: two },
+            RequestBody::UnpairClient { seat: two, uuid: "u".into() },
+            RequestBody::UnpairAll { seat: two },
+            RequestBody::RegenerateSeatIdentity { seat: two, confirm: true },
+            RequestBody::GetApps { seat: two },
+            RequestBody::SetApps { seat: two, apps: vec![] },
+            RequestBody::AnswerPeerRequest { seat: two, request_id: 1, allow: true, view_only: false },
+            RequestBody::SetSeatConnectPassword { seat: two, password: pw() },
+            RequestBody::GetSeatOtp { seat: two },
+            RequestBody::RotateSeatOtp { seat: two },
+            RequestBody::AnswerRelayAuth { seat: two, password: pw(), totp: None },
+            RequestBody::GetHostInfo,
+            RequestBody::SetMultiSession { enabled: true },
+            RequestBody::GetTermwrapStatus,
+            RequestBody::SetTermwrap { enabled: false, wrapper_path: None, ack_warning_version: 0 },
+            RequestBody::ListRenderAdapters,
+            RequestBody::GetPadBackends,
+            RequestBody::GetShimStatus,
+            RequestBody::SetShimTargets { targets: vec![] },
+            RequestBody::SetAppMasking { exe_path: r"C:\g.exe".into(), enabled: true },
+            RequestBody::SetDxvk { game_exe: r"C:\g.exe".into(), enabled: true, dlls: vec!["d3d9".into()] },
+            RequestBody::GetDxvkStatus,
+            RequestBody::GetLogTail { source: "service".into(), lines: 10 },
+            RequestBody::GetStreamBackends,
+            RequestBody::GetUserPicture { user: "ali".into() },
+            RequestBody::CleanupAudioEndpoints { confirm: true },
+        ]
+    }
+
+    #[test]
+    fn v3_requests_are_admin_and_need_protocol_3() {
+        let all = v3_requests();
+        assert_eq!(all.len(), 32);
+        for r in &all {
+            assert_eq!(r.access(), Access::Admin, "{r:?}");
+            assert!(r.is_remote_kind_request(), "{r:?}");
+            assert_eq!(r.min_protocol(), 3, "{r:?}");
+            // Wire shape: snake_case type, round trip.
+            let j = serde_json::to_value(r).unwrap();
+            assert!(j["type"].as_str().unwrap().bytes().all(|b| b.is_ascii_lowercase() || b == b'_'), "{j}");
+            assert_eq!(&serde_json::from_value::<RequestBody>(j).unwrap(), r);
+        }
+        // Old requests: unchanged minimum, except the config ones (schema 2 seat shape).
+        assert_eq!(RequestBody::GetStatus.min_protocol(), 1);
+        assert_eq!(RequestBody::HostTakeCredentials { seat: SeatNumber::new(2).unwrap() }.min_protocol(), 1);
+        assert_eq!(RequestBody::GetConfig.min_protocol(), 3);
+        assert_eq!(RequestBody::ResetConfig { confirm: true }.min_protocol(), 3);
+        assert!(!RequestBody::GetStatus.is_remote_kind_request());
+    }
+
+    #[test]
+    fn seat_kind_of_requests() {
+        use seat_core::config::SeatKind;
+        let two = SeatNumber::new(2).unwrap();
+        let remote: Vec<String> = v3_requests()
+            .iter()
+            .filter(|r| r.seat_kind() == Some((two, SeatKind::Remote)))
+            .map(|r| serde_json::to_value(r).unwrap()["type"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            remote,
+            [
+                "get_remote_runtime", "submit_pin", "get_pair_state", "cancel_pair", "list_paired_clients",
+                "unpair_client", "unpair_all", "regenerate_seat_identity", "get_apps", "set_apps",
+                "answer_peer_request", "set_seat_connect_password", "get_seat_otp", "rotate_seat_otp",
+                "answer_relay_auth",
+            ]
+        );
+        // Kind-agnostic seat requests and host-wide ones name no kind.
+        assert_eq!(RequestBody::TestSeatCredentials { seat: two }.seat_kind(), None);
+        assert_eq!(RequestBody::StopSeat { seat: two }.seat_kind(), None);
+        assert_eq!(RequestBody::SetSeatPassword { seat: two, password: None }.seat_kind(), None);
+        assert_eq!(RequestBody::GetHostInfo.seat_kind(), None);
+        // Local-only requests.
+        for r in [
+            RequestBody::RelogonSeat { seat: two },
+            RequestBody::HostGetAssignment { seat: two },
+            RequestBody::HostTakeCredentials { seat: two },
+            RequestBody::CredprovSwitch { seat: two },
+            RequestBody::AgentSwitch { seat: two },
+        ] {
+            assert_eq!(r.seat_kind(), Some((two, SeatKind::Local)), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn v3_response_and_event_shapes() {
+        let r = ResponseBody::Otp { otp: Secret::new("abc123") };
+        assert!(!format!("{r:?}").contains("abc123"));
+        let r = ResponseBody::ShimStatus(remote::IsolationStatus { supported: true, ..Default::default() });
+        let j = serde_json::to_value(&r).unwrap();
+        assert_eq!(j["type"], "shim_status");
+        assert_eq!(serde_json::from_value::<ResponseBody>(j).unwrap(), r);
+        let e = Event::Stream { seat: SeatNumber::new(3).unwrap(), event: StreamEvent::PairEnded(serde_json::json!({"result": "paired"})) };
+        assert_eq!(e.topic(), Topic::Stream);
+        assert_eq!(serde_json::to_string(&Topic::Stream).unwrap(), r#""stream""#);
+        let back: Event = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back, e);
+        assert_eq!(serde_json::to_string(&ErrorCode::WrongSeatKind).unwrap(), r#""wrong_seat_kind""#);
+        let b = RequestBody::AnswerRelayAuth { seat: SeatNumber::new(2).unwrap(), password: Secret::new("pw9"), totp: Some(Secret::new("123456")) };
+        let dbg = format!("{b:?}");
+        assert!(!dbg.contains("pw9") && !dbg.contains("123456"), "{dbg}");
+    }
+
     /// The C++ credential provider (`credprov/src/pipe.cpp`) writes and parses these shapes
     /// by hand; keep them stable.
     #[test]
@@ -293,8 +306,13 @@ mod tests {
         let q = Request::new(2, RequestBody::CredprovQuery { scenario: CredprovScenario::Unlock });
         assert_eq!(
             serde_json::to_string(&q).unwrap(),
-            r#"{"version":1,"id":2,"body":{"type":"credprov_query","data":{"scenario":"unlock"}}}"#
+            r#"{"version":3,"id":2,"body":{"type":"credprov_query","data":{"scenario":"unlock"}}}"#
         );
+        // credprov/src/pipe.cpp still stamps protocol 1; the frame parses and the request
+        // is allowed for clients below 3.
+        let old: Request = serde_json::from_str(r#"{"version":1,"id":2,"body":{"type":"credprov_query","data":{"scenario":"unlock"}}}"#).unwrap();
+        assert_eq!(old.version, 1);
+        assert_eq!(old.body.min_protocol(), MIN_PROTOCOL_VERSION);
         let min: RequestBody = serde_json::from_str(r#"{"type":"credprov_query","data":{}}"#).unwrap();
         assert_eq!(min, RequestBody::CredprovQuery { scenario: CredprovScenario::Logon });
         assert_eq!(serde_json::to_string(&RequestBody::CredprovTakeCredentials).unwrap(), r#"{"type":"credprov_take_credentials"}"#);
@@ -314,7 +332,7 @@ mod tests {
         let j = serde_json::to_string(&Response::new(2, Ok(s))).unwrap();
         assert_eq!(
             j,
-            r#"{"version":1,"id":2,"result":{"Ok":{"type":"credprov_session","data":{"seat":2,"auto_submit":true,"hide_others":true,"account":"PC\\ali","switch_targets":[1]}}}}"#
+            r#"{"version":3,"id":2,"result":{"Ok":{"type":"credprov_session","data":{"seat":2,"auto_submit":true,"hide_others":true,"account":"PC\\ali","switch_targets":[1]}}}}"#
         );
         let p = ResponseBody::CredprovSession(CredprovSession { pending: true, ..Default::default() });
         assert_eq!(
@@ -326,7 +344,7 @@ mod tests {
         let e = Response::new(3, Err(ProtoError::new(ErrorCode::AccessDenied, "x").with_reason("credentials_taken")));
         assert_eq!(
             serde_json::to_string(&e).unwrap(),
-            r#"{"version":1,"id":3,"result":{"Err":{"code":"access_denied","message":"x","reason":"credentials_taken"}}}"#
+            r#"{"version":3,"id":3,"result":{"Err":{"code":"access_denied","message":"x","reason":"credentials_taken"}}}"#
         );
         assert_eq!(serde_json::to_string(&ClientKind::CredentialProvider).unwrap(), r#""credential_provider""#);
     }

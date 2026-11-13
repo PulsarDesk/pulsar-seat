@@ -17,7 +17,7 @@ use crate::control::{AppRef, PipeTransport, ServerEvent, VideoInfo};
 use crate::StreamError;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use std::collections::VecDeque;
 use std::io;
 use std::time::{Duration, Instant};

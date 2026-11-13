@@ -12,8 +12,8 @@ rust-version.workspace = true
 fake = []
 
 [dependencies]
-split-proto.workspace = true
-split-core.workspace = true
+seat-core.workspace = true
+seat-proto.workspace = true
 # Log-watch fallback for the audio state of unmodified upstream (spec 70 §3.5).
 seat-audio.workspace = true
 serde = { version = "1", features = ["derive"] }

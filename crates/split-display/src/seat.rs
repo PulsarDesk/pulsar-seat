@@ -2,7 +2,7 @@
 //! Per-seat display configuration and result types (contract §3.1, spec 40 §4 / §8.2).
 
 use serde::{Deserialize, Serialize};
-use split_proto::SeatConfig;
+use seat_proto::remote::RemoteSeatRecord;
 
 use crate::adapters::{AdapterChoice, Luid};
 use crate::modes::ScaleMode;
@@ -92,7 +92,7 @@ fn default_refresh() -> u32 {
 
 impl SeatDisplay {
     /// Builds the display config from the stored seat, applying every range rule.
-    pub fn from_seat(seat: &SeatConfig, session_id: u32, adapter: AdapterChoice) -> Self {
+    pub fn from_seat(seat: &RemoteSeatRecord, session_id: u32, adapter: AdapterChoice) -> Self {
         let d = &seat.display;
         let scale = if d.scale_static {
             ScaleMode::Static {
@@ -273,11 +273,11 @@ pub struct DisplayState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_proto::DisplaySettings;
+    use seat_proto::remote::DisplaySettings;
 
     #[test]
     fn from_seat_applies_ranges() {
-        let seat = SeatConfig {
+        let seat = RemoteSeatRecord {
             id: "{8A1B2C3D-0000-4000-8000-00000000ABCD}".into(),
             display: DisplaySettings {
                 render_adapter: None,
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(d.session_id, 3);
         assert_eq!(d.refresh_hz, 60);
         let d2 = SeatDisplay::from_seat(
-            &SeatConfig::default(),
+            &RemoteSeatRecord::default(),
             1,
             AdapterChoice::Default { warning: None },
         );

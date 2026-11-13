@@ -2,7 +2,7 @@
 //! Error type and seat failure reason codes (spec 30 §7, §14; contracts §1.1).
 
 use serde::{Deserialize, Serialize};
-use split_proto::{ErrorCode, ProtoError};
+use seat_proto::remote::{ErrorCode, ProtoError};
 
 /// Why a seat session failed. Snake_case on the wire (spec codes with `-` → `_`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

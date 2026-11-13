@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Windows implementation of [`split_core::control::Platform`].
+//! Windows implementation of [`crate::control::Platform`].
 //!
 //! Local user enumeration, user checks, console user and the service start type live here;
 //! everything seat related is delegated to the [`Engine`] (`crate::engine`).
 
 use crate::security::wide;
 use crate::engine::Engine;
-use split_core::control::{Platform, SeatEvent};
-use split_core::streamconf::SeatFiles;
-use split_core::validate::UserFacts;
-use split_proto::{
-    ErrorCode, GlobalSettings, HostInfo, IsolationStatus, LocalUser, PairState, PairedClient, ProtoError, SeatConfig,
+use crate::control::{Platform, SeatEvent};
+use seat_core::remote::streamconf::SeatFiles;
+use seat_core::remote::validate::UserFacts;
+use seat_proto::remote::{
+    ErrorCode, RemoteSettings, HostInfo, IsolationStatus, LocalUser, PairState, PairedClient, ProtoError, RemoteSeatRecord,
     SeatRuntime, Secret, ShimTargetDto, StreamBackendInfo,
 };
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ pub struct WindowsPlatform {
     /// work, seat start and v2 features answer `unsupported`.
     pub engine: Option<Engine>,
     /// Last applied global settings (requests that need them without a store read).
-    pub global: GlobalSettings,
+    pub global: RemoteSettings,
 }
 
 fn pwstr_to_string(p: *const u16) -> String {
@@ -112,16 +112,16 @@ impl WindowsPlatform {
 }
 
 impl Platform for WindowsPlatform {
-    fn start_seat(&mut self, seat: &SeatConfig, global: &GlobalSettings, password: Option<Secret>) -> Result<(), ProtoError> {
+    fn start_seat(&mut self, seat: &RemoteSeatRecord, global: &RemoteSettings, password: Option<Secret>) -> Result<(), ProtoError> {
         self.global = global.clone();
         self.engine()?.start_seat(seat, global, password)
     }
 
-    fn stop_seat(&mut self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn stop_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.engine()?.stop_seat(seat)
     }
 
-    fn remove_seat_files(&mut self, seat: &SeatConfig) {
+    fn remove_seat_files(&mut self, seat: &RemoteSeatRecord) {
         // Phase 1 layout leftovers.
         let files = SeatFiles::new(&self.config_dir, &seat.name);
         for p in files.all() {
@@ -136,11 +136,11 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    fn submit_pin(&mut self, seat: &SeatConfig, pin: &Secret, client: &str, request_id: Option<u32>) -> Result<(), ProtoError> {
+    fn submit_pin(&mut self, seat: &RemoteSeatRecord, pin: &Secret, client: &str, request_id: Option<u32>) -> Result<(), ProtoError> {
         self.engine()?.submit_pin(seat, pin, client, request_id)
     }
 
-    fn apply_global(&mut self, old: &GlobalSettings, new: &GlobalSettings) -> Result<(), ProtoError> {
+    fn apply_global(&mut self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
         if old.start_with_windows != new.start_with_windows {
             self.set_start_type(new.start_with_windows)?;
         }
@@ -182,7 +182,7 @@ impl Platform for WindowsPlatform {
         std::io::Error::from_raw_os_error(code as i32).to_string()
     }
 
-    fn log_tail(&mut self, seat: Option<&SeatConfig>, n: usize) -> Result<Vec<String>, ProtoError> {
+    fn log_tail(&mut self, seat: Option<&RemoteSeatRecord>, n: usize) -> Result<Vec<String>, ProtoError> {
         match seat {
             None => {
                 let root = self.config_dir.parent().map(PathBuf::from).unwrap_or_else(|| self.config_dir.clone());
@@ -212,7 +212,7 @@ impl Platform for WindowsPlatform {
         self.engine.as_ref().and_then(Engine::host_class)
     }
 
-    fn host_info(&mut self, global: &GlobalSettings) -> Result<HostInfo, ProtoError> {
+    fn host_info(&mut self, global: &RemoteSettings) -> Result<HostInfo, ProtoError> {
         Ok(self.engine()?.host_info(global))
     }
 
@@ -230,7 +230,7 @@ impl Platform for WindowsPlatform {
         self.engine()?.set_termwrap(enabled, wrapper, ack)
     }
 
-    fn seat_runtime(&mut self, seat: &SeatConfig) -> Result<SeatRuntime, ProtoError> {
+    fn seat_runtime(&mut self, seat: &RemoteSeatRecord) -> Result<SeatRuntime, ProtoError> {
         Ok(self.engine()?.seat_runtime(seat))
     }
 
@@ -242,35 +242,35 @@ impl Platform for WindowsPlatform {
         Ok(self.engine()?.pad_backends())
     }
 
-    fn pair_state(&mut self, seat: &SeatConfig) -> Result<PairState, ProtoError> {
+    fn pair_state(&mut self, seat: &RemoteSeatRecord) -> Result<PairState, ProtoError> {
         Ok(self.engine()?.pair_state(seat))
     }
 
-    fn cancel_pair(&mut self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn cancel_pair(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.engine()?.cancel_pair(seat)
     }
 
-    fn paired_clients(&mut self, seat: &SeatConfig) -> Result<Vec<PairedClient>, ProtoError> {
+    fn paired_clients(&mut self, seat: &RemoteSeatRecord) -> Result<Vec<PairedClient>, ProtoError> {
         self.engine()?.paired_clients(seat)
     }
 
-    fn unpair_client(&mut self, seat: &SeatConfig, uuid: &str) -> Result<(), ProtoError> {
+    fn unpair_client(&mut self, seat: &RemoteSeatRecord, uuid: &str) -> Result<(), ProtoError> {
         self.engine()?.unpair_client(seat, uuid)
     }
 
-    fn unpair_all(&mut self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn unpair_all(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.engine()?.unpair_all(seat)
     }
 
-    fn regenerate_identity(&mut self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn regenerate_identity(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.engine()?.regenerate_identity(seat)
     }
 
-    fn get_apps(&mut self, seat: &SeatConfig) -> Result<Vec<serde_json::Value>, ProtoError> {
+    fn get_apps(&mut self, seat: &RemoteSeatRecord) -> Result<Vec<serde_json::Value>, ProtoError> {
         self.engine()?.get_apps(seat)
     }
 
-    fn set_apps(&mut self, seat: &SeatConfig, apps: Vec<serde_json::Value>) -> Result<Vec<serde_json::Value>, ProtoError> {
+    fn set_apps(&mut self, seat: &RemoteSeatRecord, apps: Vec<serde_json::Value>) -> Result<Vec<serde_json::Value>, ProtoError> {
         let g = self.global.clone();
         self.engine()?.set_apps(seat, apps, &g)
     }
@@ -279,7 +279,7 @@ impl Platform for WindowsPlatform {
         self.engine()?.isolation_status()
     }
 
-    fn set_shim_targets(&mut self, targets: Vec<ShimTargetDto>, _global: &GlobalSettings) -> Result<IsolationStatus, ProtoError> {
+    fn set_shim_targets(&mut self, targets: Vec<ShimTargetDto>, _global: &RemoteSettings) -> Result<IsolationStatus, ProtoError> {
         self.engine()?.set_shim_targets(&targets)
     }
 
@@ -291,15 +291,15 @@ impl Platform for WindowsPlatform {
         self.engine()?.set_dxvk(game_exe, enabled, dlls)
     }
 
-    fn dxvk_status(&mut self) -> Result<split_proto::DxvkStatus, ProtoError> {
+    fn dxvk_status(&mut self) -> Result<seat_proto::remote::DxvkStatus, ProtoError> {
         self.engine()?.dxvk_status()
     }
 
-    fn user_picture(&mut self, user: &str) -> Result<split_proto::UserPicture, ProtoError> {
+    fn user_picture(&mut self, user: &str) -> Result<seat_proto::remote::UserPicture, ProtoError> {
         Ok(crate::picture::read(user))
     }
 
-    fn cleanup_audio_endpoints(&mut self) -> Result<split_proto::AudioCleanup, ProtoError> {
+    fn cleanup_audio_endpoints(&mut self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
         self.engine()?.cleanup_audio_endpoints()
     }
 
@@ -307,19 +307,19 @@ impl Platform for WindowsPlatform {
         Ok(self.engine()?.stream_backends())
     }
 
-    fn answer_peer_request(&mut self, seat: &SeatConfig, request_id: u32, allow: bool, view_only: bool) -> Result<(), ProtoError> {
+    fn answer_peer_request(&mut self, seat: &RemoteSeatRecord, request_id: u32, allow: bool, view_only: bool) -> Result<(), ProtoError> {
         self.engine()?.answer_peer_request(seat, request_id, allow, view_only)
     }
 
-    fn set_connect_password(&mut self, seat: &SeatConfig, password: Option<&Secret>) -> Result<(), ProtoError> {
+    fn set_connect_password(&mut self, seat: &RemoteSeatRecord, password: Option<&Secret>) -> Result<(), ProtoError> {
         self.engine()?.set_connect_password(seat, password)
     }
 
-    fn seat_otp(&mut self, seat: &SeatConfig, rotate: bool) -> Result<Secret, ProtoError> {
+    fn seat_otp(&mut self, seat: &RemoteSeatRecord, rotate: bool) -> Result<Secret, ProtoError> {
         self.engine()?.seat_otp(seat, rotate)
     }
 
-    fn answer_relay_auth(&mut self, seat: &SeatConfig, password: &Secret, totp: Option<&Secret>) -> Result<(), ProtoError> {
+    fn answer_relay_auth(&mut self, seat: &RemoteSeatRecord, password: &Secret, totp: Option<&Secret>) -> Result<(), ProtoError> {
         self.engine()?.answer_relay_auth(seat, password, totp)
     }
 
@@ -450,7 +450,7 @@ mod tests {
     use super::*;
 
     fn bare() -> WindowsPlatform {
-        WindowsPlatform { config_dir: std::env::temp_dir(), engine: None, global: GlobalSettings::default() }
+        WindowsPlatform { config_dir: std::env::temp_dir(), engine: None, global: RemoteSettings::default() }
     }
 
     #[test]
@@ -467,8 +467,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("t1.conf"), "x").unwrap();
         let mut p = WindowsPlatform { config_dir: dir.clone(), ..bare() };
-        let seat = SeatConfig { name: "t1".into(), display_name: "T 1".into(), port: 47989, ..Default::default() };
-        let e = p.start_seat(&seat, &GlobalSettings::default(), None).unwrap_err();
+        let seat = RemoteSeatRecord { name: "t1".into(), display_name: "T 1".into(), port: 47989, ..Default::default() };
+        let e = p.start_seat(&seat, &RemoteSettings::default(), None).unwrap_err();
         assert_eq!(e.code, ErrorCode::Unsupported);
         p.remove_seat_files(&seat);
         assert!(!dir.join("t1.conf").exists());

@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use seat_audio::{Flow, SeatAudio, server_keys};
-use split_proto::{GlobalSettings, SeatConfig};
+use seat_proto::remote::{RemoteSettings, RemoteSeatRecord};
 use seat_stream::conf::{Capture, ConfInputs, Gamepad, generate};
 use seat_stream::dist::ServerFlavour;
 use seat_stream::seatdir::SeatDir;
@@ -15,14 +15,14 @@ const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const GUID: &str = "{6C26BA7D-F0B2-4225-B422-8168C5261E45}";
 
 fn conf(audio_keys: Vec<(String, String)>, flavour: ServerFlavour) -> String {
-    let seat = SeatConfig {
+    let seat = RemoteSeatRecord {
         id: ID.into(),
         name: "salon".into(),
         display_name: "Salon PC".into(),
         port: 48100,
         ..Default::default()
     };
-    let global = GlobalSettings::default();
+    let global = RemoteSettings::default();
     let dir = SeatDir::new(Path::new(r"C:\ProgramData\PulsarSplit"), ID);
     let i = ConfInputs {
         seat: &seat,

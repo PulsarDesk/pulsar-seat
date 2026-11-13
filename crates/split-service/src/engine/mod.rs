@@ -15,15 +15,15 @@
 //! has its own mutex (tick / pairing / apps reload).
 
 use seat_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
-use split_core::control::SeatEvent;
+use crate::control::SeatEvent;
 use split_display::{
     AdapterChoice, AdapterEnumerator, BackendInfo, BackendKind, DisplayBackend, DisplayError, HdrLuminance, HdrUnavailable,
     ModeRequest, ModeResult, ModeStatus, SeatDisplay, SeatDisplayHandle, choose_backend, resolve_adapter,
 };
 use seat_pads::{BackendId, PadManager, PadReleased, PadWanted, SeatPadContext};
-use split_proto::{
-    DisplayBackendPref, ErrorCode, GlobalSettings, HostInfo, IsolationStatus, PadBackendPref, PairMode, PairState, PairedClient,
-    PendingPair, ProtoError, SeatConfig, SeatRuntime, Secret, ShimTargetDto, StopAction, StreamBackendInfo, StreamBackendKind,
+use seat_proto::remote::{
+    DisplayBackendPref, ErrorCode, RemoteSettings, HostInfo, IsolationStatus, PadBackendPref, PairMode, PairState, PairedClient,
+    PendingPair, ProtoError, RemoteSeatRecord, SeatRuntime, Secret, ShimTargetDto, StopAction, StreamBackendInfo, StreamBackendKind,
 };
 use split_session::launch::{DEFAULT_DESKTOP, LaunchSpec, TokenKind};
 use split_session::manager::{CancelToken, SeatSession, SessionChange, SessionManager, SessionNotice, SessionRequest};
@@ -77,7 +77,7 @@ pub trait IsolationPort: Send + Sync {
     fn set_mask(&self, exe_lower: &str, enabled: bool) -> Result<(), ProtoError>;
     fn dxvk(&self, game: &Path, enabled: bool, dlls: &[String]) -> Result<(), ProtoError>;
     /// Pinned DXVK release + the games with a DXVK redirect (spec 50 §10.2).
-    fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError>;
+    fn dxvk_status(&self) -> Result<seat_proto::remote::DxvkStatus, ProtoError>;
     /// `pulsar-split-launch.exe` when shipped (x64 hosts only).
     fn launcher_path(&self) -> Option<PathBuf>;
     /// Seat-map kill switch etc. live in the module; nothing else needed here.
@@ -89,7 +89,7 @@ pub struct StreamEnv {
     /// Seat folder access (`apps.json`, logs, seat folder removal).
     pub fs: Arc<dyn SecureFs>,
     /// One per kind (`seat_stream::backend::SunshineBackend`, `PulsarHostBackend`). Each
-    /// seat uses the one named by `SeatConfig::stream_backend`; a kind without an entry
+    /// seat uses the one named by `RemoteSeatRecord::stream_backend`; a kind without an entry
     /// fails the start with `backend_missing`.
     pub backends: Vec<Arc<dyn StreamBackend>>,
 }
@@ -154,8 +154,8 @@ struct Resources {
 
 struct SeatRun {
     generation: u64,
-    seat: SeatConfig,
-    global: GlobalSettings,
+    seat: RemoteSeatRecord,
+    global: RemoteSettings,
     cancel: CancelToken,
     stage: Stage,
     res: Resources,
@@ -214,7 +214,7 @@ pub fn to_backend_id(p: PadBackendPref) -> BackendId {
     }
 }
 
-fn seat_audio(seat: &SeatConfig) -> SeatAudio {
+fn seat_audio(seat: &RemoteSeatRecord) -> SeatAudio {
     SeatAudio { stream_audio: seat.audio.stream_audio, microphone: seat.audio.microphone }
 }
 
@@ -235,7 +235,7 @@ fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
 }
 
 /// Session size at start: the seat's last applied mode, else [`DEFAULT_SIZE`].
-pub fn session_size(seat: &SeatConfig) -> (u32, u32) {
+pub fn session_size(seat: &RemoteSeatRecord) -> (u32, u32) {
     match seat.last_mode {
         Some(m) if m.is_plausible() => (m.width, m.height),
         _ => DEFAULT_SIZE,
@@ -364,7 +364,7 @@ impl Engine {
     /// Service start: coexistence → termwrap boot check → host info → RDS prepare (if
     /// multi-seat is on and not passive) → RDS ready → sweep → pad orphans → seat map clear.
     /// Blocking (up to the RDS ready timeout); run it off the pipe thread.
-    pub fn service_start(&self, global: &GlobalSettings, seat_users: &[String]) {
+    pub fn service_start(&self, global: &RemoteSettings, seat_users: &[String]) {
         let co = (self.d().coexist)();
         self.0.passive.store(co.passive, Ordering::SeqCst);
         *lock(&self.0.coexist) = co.report;
@@ -475,7 +475,7 @@ impl Engine {
 
     // ---- seat start ----
 
-    pub fn start_seat(&self, seat: &SeatConfig, global: &GlobalSettings, password: Option<Secret>) -> Result<(), ProtoError> {
+    pub fn start_seat(&self, seat: &RemoteSeatRecord, global: &RemoteSettings, password: Option<Secret>) -> Result<(), ProtoError> {
         if self.passive() {
             return Err(err(ErrorCode::Coexistence, "coexistence", "passive mode"));
         }
@@ -514,7 +514,7 @@ impl Engine {
         Ok(())
     }
 
-    fn boot(&self, seat: SeatConfig, global: GlobalSettings, password: Secret, generation: u64, cancel: CancelToken) {
+    fn boot(&self, seat: RemoteSeatRecord, global: RemoteSettings, password: Secret, generation: u64, cancel: CancelToken) {
         let mut res = Resources::default();
         let r = self.boot_steps(&seat, &global, &password, &cancel, &mut res);
         drop(password);
@@ -552,7 +552,7 @@ impl Engine {
         }
     }
 
-    fn phase(&self, seat: &SeatConfig, cancel: &CancelToken, p: &str) -> Result<(), Failure> {
+    fn phase(&self, seat: &RemoteSeatRecord, cancel: &CancelToken, p: &str) -> Result<(), Failure> {
         if cancel.is_cancelled() {
             return Err(Failure::cancelled());
         }
@@ -562,8 +562,8 @@ impl Engine {
 
     fn boot_steps(
         &self,
-        seat: &SeatConfig,
-        global: &GlobalSettings,
+        seat: &RemoteSeatRecord,
+        global: &RemoteSettings,
         password: &Secret,
         cancel: &CancelToken,
         res: &mut Resources,
@@ -686,7 +686,7 @@ impl Engine {
             .collect()
     }
 
-    fn attach_display(&self, seat: &SeatConfig, global: &GlobalSettings, session_id: u32) -> Result<DisplayRun, Failure> {
+    fn attach_display(&self, seat: &RemoteSeatRecord, global: &RemoteSettings, session_id: u32) -> Result<DisplayRun, Failure> {
         let infos = self.probe_displays();
         let console = (self.d().console_session)() == Some(session_id);
         let kind = choose_backend(global.display_backend.map(to_kind), &infos, console);
@@ -738,8 +738,8 @@ impl Engine {
     /// Never falls back to another backend.
     fn start_stream(
         &self,
-        seat: &SeatConfig,
-        global: &GlobalSettings,
+        seat: &RemoteSeatRecord,
+        global: &RemoteSettings,
         session_id: u32,
         audio_keys: Vec<(String, String)>,
     ) -> Result<Server, Failure> {
@@ -767,7 +767,7 @@ impl Engine {
     }
 
     /// Reverse of the start order. Every step is best effort and logged.
-    fn undo(&self, seat: &SeatConfig, res: Resources) {
+    fn undo(&self, seat: &RemoteSeatRecord, res: Resources) {
         let d = self.d();
         if res.autostart
             && let Err(e) = d.session.launcher().kill_job(&seat.id)
@@ -807,7 +807,7 @@ impl Engine {
 
     // ---- seat stop ----
 
-    pub fn stop_seat(&self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    pub fn stop_seat(&self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.take_down(&seat.id, None)
     }
 
@@ -1116,7 +1116,7 @@ impl Engine {
                     None => ModeResult::empty(request_id, ModeStatus::NoDisplay),
                 };
                 if matches!(result.status, ModeStatus::Ok | ModeStatus::OkSdrFallback | ModeStatus::Clamped) {
-                    let m = split_proto::LastMode { width: result.width, height: result.height, hz: result.hz };
+                    let m = seat_proto::remote::LastMode { width: result.width, height: result.height, hz: result.hz };
                     self.report(seat_id, SeatEvent::ModeApplied(m));
                 }
                 if let Err(e) = lock(server).reply_mode(&json(&result)) {
@@ -1193,7 +1193,7 @@ impl Engine {
 
     // ---- queries and v2 requests ----
 
-    pub fn host_info(&self, global: &GlobalSettings) -> HostInfo {
+    pub fn host_info(&self, global: &RemoteSettings) -> HostInfo {
         let tw = self.d().termwrap.status().ok();
         let wrapper_active = tw.as_ref().is_some_and(|s| matches!(s.state, TermwrapState::On { .. }));
         let mut out = HostInfo {
@@ -1266,7 +1266,7 @@ impl Engine {
         Ok(termwrap_json(&st))
     }
 
-    pub fn seat_runtime(&self, seat: &SeatConfig) -> SeatRuntime {
+    pub fn seat_runtime(&self, seat: &RemoteSeatRecord) -> SeatRuntime {
         let mut out = SeatRuntime { client_name: seat.rdp_client_name.clone(), ..Default::default() };
         let (disp, server, session, audio_report) = {
             let seats = lock(&self.0.seats);
@@ -1320,11 +1320,11 @@ impl Engine {
         }
     }
 
-    fn running_server(&self, seat: &SeatConfig) -> Result<Server, ProtoError> {
+    fn running_server(&self, seat: &RemoteSeatRecord) -> Result<Server, ProtoError> {
         self.server_of(&seat.id).ok_or_else(|| ProtoError::new(ErrorCode::ServiceUnavailable, "seat is not running"))
     }
 
-    pub fn pair_state(&self, seat: &SeatConfig) -> PairState {
+    pub fn pair_state(&self, seat: &RemoteSeatRecord) -> PairState {
         let (mut st, server) = match lock(&self.0.seats).get(&seat.id) {
             Some(r) => (r.pair.clone(), r.res.server.clone()),
             None => return PairState::default(),
@@ -1339,7 +1339,7 @@ impl Engine {
     }
 
     /// Asynchronous: the outcome arrives as a `pair_ended` notice.
-    pub fn submit_pin(&self, seat: &SeatConfig, pin: &Secret, client_name: &str, request_id: Option<u32>) -> Result<(), ProtoError> {
+    pub fn submit_pin(&self, seat: &RemoteSeatRecord, pin: &Secret, client_name: &str, request_id: Option<u32>) -> Result<(), ProtoError> {
         let server = self.running_server(seat)?;
         if lock(&server).backend() != StreamBackendKind::Sunshine {
             return Err(perr(StreamError::WrongBackend(lock(&server).backend())));
@@ -1369,13 +1369,13 @@ impl Engine {
         Ok(())
     }
 
-    fn with_stream<T>(&self, seat: &SeatConfig, f: impl FnOnce(&mut dyn SeatStream) -> Result<T, StreamError>) -> Result<T, ProtoError> {
+    fn with_stream<T>(&self, seat: &RemoteSeatRecord, f: impl FnOnce(&mut dyn SeatStream) -> Result<T, StreamError>) -> Result<T, ProtoError> {
         let server = self.running_server(seat)?;
         let mut s = lock(&server);
         f(s.as_mut()).map_err(perr)
     }
 
-    pub fn cancel_pair(&self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    pub fn cancel_pair(&self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         let id = lock(&self.0.seats).get(&seat.id).and_then(|r| r.pair.pending.as_ref().and_then(|p| p.request_id));
         self.with_stream(seat, |c| c.pair_cancel(id))?;
         if let Some(run) = lock(&self.0.seats).get_mut(&seat.id) {
@@ -1384,22 +1384,22 @@ impl Engine {
         Ok(())
     }
 
-    pub fn paired_clients(&self, seat: &SeatConfig) -> Result<Vec<PairedClient>, ProtoError> {
+    pub fn paired_clients(&self, seat: &RemoteSeatRecord) -> Result<Vec<PairedClient>, ProtoError> {
         let v = self.with_stream(seat, |c| c.clients_list())?;
         Ok(v.into_iter().map(|c| PairedClient { uuid: c.uuid, name: c.name }).collect())
     }
 
-    pub fn unpair_client(&self, seat: &SeatConfig, uuid: &str) -> Result<(), ProtoError> {
+    pub fn unpair_client(&self, seat: &RemoteSeatRecord, uuid: &str) -> Result<(), ProtoError> {
         self.with_stream(seat, |c| c.unpair(uuid))
     }
 
-    pub fn unpair_all(&self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    pub fn unpair_all(&self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         self.with_stream(seat, |c| c.unpair_all())
     }
 
     /// Seat stopped (controller): Sunshine drops its TLS pair; Pulsar gets a new identity,
     /// so the seat's relay id changes.
-    pub fn regenerate_identity(&self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    pub fn regenerate_identity(&self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         let dir = SeatDir::checked(&self.d().data_root, &seat.id).map_err(perr)?;
         self.backend_for(seat.stream_backend).map_err(perr)?.regenerate_identity(&dir).map_err(perr)
     }
@@ -1410,7 +1410,7 @@ impl Engine {
         availability_all(&self.d().stream.backends)
     }
 
-    pub fn answer_peer_request(&self, seat: &SeatConfig, request_id: u32, allow: bool, view_only: bool) -> Result<(), ProtoError> {
+    pub fn answer_peer_request(&self, seat: &RemoteSeatRecord, request_id: u32, allow: bool, view_only: bool) -> Result<(), ProtoError> {
         self.with_stream(seat, |c| c.pair_answer(request_id, allow, view_only))?;
         if let Some(run) = lock(&self.0.seats).get_mut(&seat.id)
             && run.pair.pending.as_ref().and_then(|p| p.request_id) == Some(request_id)
@@ -1421,7 +1421,7 @@ impl Engine {
     }
 
     /// Store (DPAPI) then hand over live when the seat runs.
-    pub fn set_connect_password(&self, seat: &SeatConfig, password: Option<&Secret>) -> Result<(), ProtoError> {
+    pub fn set_connect_password(&self, seat: &RemoteSeatRecord, password: Option<&Secret>) -> Result<(), ProtoError> {
         self.backend_for(seat.stream_backend).map_err(perr)?.set_connect_password(&seat.id, password).map_err(perr)?;
         if let Some(s) = self.server_of(&seat.id)
             && let Err(e) = lock(&s).secrets_changed()
@@ -1431,15 +1431,15 @@ impl Engine {
         Ok(())
     }
 
-    pub fn seat_otp(&self, seat: &SeatConfig, rotate: bool) -> Result<Secret, ProtoError> {
+    pub fn seat_otp(&self, seat: &RemoteSeatRecord, rotate: bool) -> Result<Secret, ProtoError> {
         self.with_stream(seat, |c| c.otp(rotate))
     }
 
-    pub fn answer_relay_auth(&self, seat: &SeatConfig, password: &Secret, totp: Option<&Secret>) -> Result<(), ProtoError> {
+    pub fn answer_relay_auth(&self, seat: &RemoteSeatRecord, password: &Secret, totp: Option<&Secret>) -> Result<(), ProtoError> {
         self.with_stream(seat, |c| c.relay_auth(password, totp))
     }
 
-    pub fn get_apps(&self, seat: &SeatConfig) -> Result<Vec<serde_json::Value>, ProtoError> {
+    pub fn get_apps(&self, seat: &RemoteSeatRecord) -> Result<Vec<serde_json::Value>, ProtoError> {
         let dir = SeatDir::checked(&self.d().data_root, &seat.id).map_err(perr)?;
         let apps = match self.d().stream.fs.read(&dir.apps).map_err(perr)? {
             Some(b) => parse_apps_json(&String::from_utf8_lossy(&b)).map_err(perr)?.apps,
@@ -1448,7 +1448,7 @@ impl Engine {
         Ok(apps.iter().map(json).collect())
     }
 
-    pub fn set_apps(&self, seat: &SeatConfig, apps: Vec<serde_json::Value>, global: &GlobalSettings) -> Result<Vec<serde_json::Value>, ProtoError> {
+    pub fn set_apps(&self, seat: &RemoteSeatRecord, apps: Vec<serde_json::Value>, global: &RemoteSettings) -> Result<Vec<serde_json::Value>, ProtoError> {
         let mut entries: Vec<AppEntry> = apps
             .into_iter()
             .map(serde_json::from_value)
@@ -1478,7 +1478,7 @@ impl Engine {
 
     /// Last `n` lines of the seat's stream-server log (current file), redacted
     /// (`seat_stream::seatdir::last_lines` + the service's own line filter).
-    pub fn seat_log_tail(&self, seat: &SeatConfig, n: usize) -> Vec<String> {
+    pub fn seat_log_tail(&self, seat: &RemoteSeatRecord, n: usize) -> Vec<String> {
         let Ok(dir) = SeatDir::checked(&self.d().data_root, &seat.id) else { return Vec::new() };
         let log = match self.backend_for(seat.stream_backend) {
             Ok(b) => b.log_file(&dir),
@@ -1488,7 +1488,7 @@ impl Engine {
         seat_stream::seatdir::last_lines(&bytes, n).iter().map(|l| redact(l)).collect()
     }
 
-    pub fn remove_seat_files(&self, seat: &SeatConfig) {
+    pub fn remove_seat_files(&self, seat: &RemoteSeatRecord) {
         let s = &self.d().stream;
         // Every backend: the seat may have run with the other one before.
         for b in &s.backends {
@@ -1527,7 +1527,7 @@ impl Engine {
 
     /// `process_patching` on → install (refused when a foreign shim is present), off →
     /// uninstall. HID / Steam switches only change the seat-map flags of new seats.
-    pub fn apply_isolation(&self, old: &GlobalSettings, new: &GlobalSettings) -> Result<(), ProtoError> {
+    pub fn apply_isolation(&self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
         if old.process_patching == new.process_patching {
             return Ok(());
         }
@@ -1573,24 +1573,24 @@ impl Engine {
         self.d().isolation.dxvk(Path::new(p), enabled, dlls)
     }
 
-    pub fn dxvk_status(&self) -> Result<split_proto::DxvkStatus, ProtoError> {
+    pub fn dxvk_status(&self) -> Result<seat_proto::remote::DxvkStatus, ProtoError> {
         self.d().isolation.dxvk_status()
     }
 
     /// Spec 70 §2.6: refused while a seat is starting (a new session could take a node's
     /// session id between the plan and the removal).
-    pub fn cleanup_audio_endpoints(&self) -> Result<split_proto::AudioCleanup, ProtoError> {
+    pub fn cleanup_audio_endpoints(&self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
         if lock(&self.0.seats).values().any(|r| r.stage == Stage::Booting) {
             return Err(err(ErrorCode::SeatRunning, "seat_booting", "wait until every seat finished starting"));
         }
         let r = (self.d().audio_cleanup)().map_err(|e| err(ErrorCode::Internal, e.code(), e))?;
-        Ok(split_proto::AudioCleanup { removed: r.removed, failed: r.failed })
+        Ok(seat_proto::remote::AudioCleanup { removed: r.removed, failed: r.failed })
     }
 }
 
 /// Status row of one DXVK game from its marker file (`None` = no marker = not deployed).
-pub fn dxvk_game(exe: &str, marker: Option<std::io::Result<Vec<u8>>>) -> split_proto::DxvkGame {
-    let mut g = split_proto::DxvkGame { exe: exe.to_string(), ..Default::default() };
+pub fn dxvk_game(exe: &str, marker: Option<std::io::Result<Vec<u8>>>) -> seat_proto::remote::DxvkGame {
+    let mut g = seat_proto::remote::DxvkGame { exe: exe.to_string(), ..Default::default() };
     match marker {
         None => {}
         Some(Err(_)) => g.error = Some("marker_unreadable".into()),

@@ -210,7 +210,7 @@ mod tests {
             (FakeVddPipe::default(), FakeVddSettings::new(XML), FakeVddMonitors::default(), FakeRestoreLog::default());
         pipe.link_monitors(mons.clone());
         let service = backend(&pipe, &file, &mons, &journal);
-        let seat = split_proto::SeatConfig { id: "aaaaaaaa-0000-4000-8000-000000000001".into(), ..Default::default() };
+        let seat = seat_proto::remote::RemoteSeatRecord { id: "aaaaaaaa-0000-4000-8000-000000000001".into(), ..Default::default() };
         service.attach(&SeatDisplay::from_seat(&seat, 1, AdapterChoice::Pinned(Luid { low: 42, high: 0 }))).unwrap();
         assert_ne!(file.content(), XML);
         drop(service); // the service died with the seat attached

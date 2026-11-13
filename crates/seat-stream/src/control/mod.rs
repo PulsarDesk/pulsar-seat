@@ -18,7 +18,7 @@ pub mod upstream;
 
 use crate::StreamError;
 use serde::{Deserialize, Serialize};
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::time::Duration;

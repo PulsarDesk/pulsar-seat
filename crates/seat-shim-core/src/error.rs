@@ -60,9 +60,9 @@ impl ShimError {
 }
 
 #[cfg(feature = "proto")]
-impl From<ShimError> for split_proto::ProtoError {
+impl From<ShimError> for seat_core::error::ProtoError {
     fn from(e: ShimError) -> Self {
-        use split_proto::ErrorCode;
+        use seat_core::error::ErrorCode;
         // Closest existing codes until the integrator adds new ones (contracts.md §9.3).
         let code = match &e {
             ShimError::InvalidTarget(_) | ShimError::InvalidValue(_) | ShimError::Decode(_) => {
@@ -77,7 +77,7 @@ impl From<ShimError> for split_proto::ProtoError {
             | ShimError::Download(_) => ErrorCode::ServiceUnavailable,
             _ => ErrorCode::Internal,
         };
-        split_proto::ProtoError::new(code, format!("{}: {e}", e.code()))
+        seat_core::error::ProtoError::new(code, format!("{}: {e}", e.code()))
     }
 }
 
@@ -98,8 +98,8 @@ mod tests {
     #[cfg(feature = "proto")]
     #[test]
     fn proto_message_starts_with_code() {
-        let p: split_proto::ProtoError = ShimError::Foreign("reference db".into()).into();
+        let p: seat_core::error::ProtoError = ShimError::Foreign("reference db".into()).into();
         assert!(p.message.starts_with("shim_foreign: "));
-        assert_eq!(p.code, split_proto::ErrorCode::ServiceUnavailable);
+        assert_eq!(p.code, seat_core::error::ErrorCode::ServiceUnavailable);
     }
 }

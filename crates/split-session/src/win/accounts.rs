@@ -4,8 +4,8 @@
 use super::{check, from_wide_ptr, wide, wide_secret};
 use crate::SessionError;
 use crate::users::{ADMINISTRATORS_SID, Accounts, Profiles, REMOTE_DESKTOP_USERS_SID};
-use split_core::validate::UserFacts;
-use split_proto::Secret;
+use seat_core::remote::validate::UserFacts;
+use seat_proto::remote::Secret;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
     LOCALGROUP_MEMBERS_INFO_0, MAX_PREFERRED_LENGTH, NERR_UserNotFound, NetApiBufferFree, NetLocalGroupAddMembers, NetLocalGroupGetMembers,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! `server.conf` generator (spec 80 §2.3). Extends `split_core::streamconf` (which keeps the
+//! `server.conf` generator (spec 80 §2.3). Extends `seat_core::remote::streamconf` (which keeps the
 //! Phase 1 layout) without editing it: the log-level mapping and the `key = value` parser are
 //! reused, the key set and the seat-directory layout are spec 80's.
 //!
@@ -14,8 +14,8 @@
 use crate::dist::ServerFlavour;
 use crate::seatdir::SeatDir;
 use crate::StreamError;
-use split_core::streamconf::log_level;
-use split_proto::{GlobalSettings, SeatConfig};
+use seat_core::remote::streamconf::log_level;
+use seat_proto::remote::{RemoteSettings, RemoteSeatRecord};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -76,8 +76,8 @@ const OWN_KEYS: &[&str] = &[
 /// a settings change could restart the server mid-stream. `debug` is kept only when the
 /// operator chose it: at `debug` upstream also logs unauthenticated LAN request query
 /// values, which is why the default stays `info` (open-questions stream-10).
-pub fn effective_verbosity(flavour: ServerFlavour, v: split_proto::Verbosity) -> split_proto::Verbosity {
-    use split_proto::Verbosity;
+pub fn effective_verbosity(flavour: ServerFlavour, v: seat_proto::remote::Verbosity) -> seat_proto::remote::Verbosity {
+    use seat_proto::remote::Verbosity;
     match flavour {
         ServerFlavour::Upstream if v.index() < Verbosity::Info.index() => Verbosity::Info,
         _ => v,
@@ -85,8 +85,8 @@ pub fn effective_verbosity(flavour: ServerFlavour, v: split_proto::Verbosity) ->
 }
 
 pub struct ConfInputs<'a> {
-    pub seat: &'a SeatConfig,
-    pub global: &'a GlobalSettings,
+    pub seat: &'a RemoteSeatRecord,
+    pub global: &'a RemoteSettings,
     pub dir: &'a SeatDir,
     pub flavour: ServerFlavour,
     pub capture: Capture,
@@ -136,7 +136,7 @@ pub fn generate(i: &ConfInputs<'_>) -> Result<String, StreamError> {
     if i.seat.display_name.trim().is_empty() {
         return Err(StreamError::invalid("display_name", "empty"));
     }
-    if !split_core::ports::is_valid_base(i.seat.port) {
+    if !seat_core::remote::ports::is_valid_base(i.seat.port) {
         return Err(StreamError::invalid("port", "outside 1029-65514"));
     }
     if !PAIR_TIMEOUT_RANGE_S.contains(&i.pair_timeout_s) {
@@ -211,18 +211,18 @@ pub fn generate(i: &ConfInputs<'_>) -> Result<String, StreamError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_core::streamconf::parse_conf;
-    use split_proto::Verbosity;
+    use seat_core::remote::streamconf::parse_conf;
+    use seat_proto::remote::Verbosity;
 
     const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
-    fn seat() -> SeatConfig {
-        SeatConfig { id: ID.into(), name: "salon".into(), display_name: "Salon PC".into(), port: 48100, ..Default::default() }
+    fn seat() -> RemoteSeatRecord {
+        RemoteSeatRecord { id: ID.into(), name: "salon".into(), display_name: "Salon PC".into(), port: 48100, ..Default::default() }
     }
 
     fn run(flavour: ServerFlavour, f: impl FnOnce(&mut ConfInputs<'_>)) -> Result<String, StreamError> {
         let seat = seat();
-        let global = GlobalSettings { verbosity: Verbosity::Info, ..Default::default() };
+        let global = RemoteSettings { verbosity: Verbosity::Info, ..Default::default() };
         let dir = SeatDir::new(Path::new(r"C:\ProgramData\PulsarSplit"), ID);
         let mut i = ConfInputs {
             seat: &seat,
@@ -325,8 +325,8 @@ mod tests {
 
     #[test]
     fn crlf_injection_rejected() {
-        let seat = SeatConfig { display_name: "x\r\nport = 1".into(), ..seat() };
-        let global = GlobalSettings::default();
+        let seat = RemoteSeatRecord { display_name: "x\r\nport = 1".into(), ..seat() };
+        let global = RemoteSettings::default();
         let dir = SeatDir::new(Path::new(r"C:\pd"), ID);
         let i = ConfInputs {
             seat: &seat,
@@ -343,7 +343,7 @@ mod tests {
         assert!(run(ServerFlavour::Upstream, |i| i.audio_keys = vec![("virtual_sink".into(), "a\nb".into())]).is_err());
         // Upstream parser specials: '#' comment, '[' list.
         for bad in ["Salon #2", "[Salon]", " Salon"] {
-            let s: &'static SeatConfig = Box::leak(Box::new(SeatConfig { display_name: bad.into(), ..super::tests::seat() }));
+            let s: &'static RemoteSeatRecord = Box::leak(Box::new(RemoteSeatRecord { display_name: bad.into(), ..super::tests::seat() }));
             assert!(run(ServerFlavour::Upstream, |i| i.seat = s).is_err(), "{bad}");
         }
         assert!(run(ServerFlavour::Upstream, |i| i.audio_keys = vec![("virtual_sink".into(), String::new())]).is_err());
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(effective_verbosity(Upstream, Verbosity::Debug), Verbosity::Debug);
         assert_eq!(effective_verbosity(PulsarFork, Verbosity::None), Verbosity::None);
         let seat = seat();
-        let global = GlobalSettings { verbosity: Verbosity::Error, ..Default::default() };
+        let global = RemoteSettings { verbosity: Verbosity::Error, ..Default::default() };
         let dir = SeatDir::new(Path::new(r"C:\ProgramData\PulsarSplit"), ID);
         let i = ConfInputs {
             seat: &seat,

@@ -11,14 +11,14 @@ rust-version = "1.85"
 
 [features]
 default = ["proto"]
-# `From<ShimError> for split_proto::ProtoError`. Off in `shim/` (the module never talks
+# `From<ShimError> for seat_core::error::ProtoError`. Off in `shim/` (the module never talks
 # the control protocol).
-proto = ["dep:split-proto"]
+proto = ["dep:seat-core"]
 # In-memory fakes of every system trait (`seat_shim_core::fake`) for other crates' tests.
 fake = []
 
 [dependencies]
-split-proto = { path = "../split-proto", optional = true }
+seat-core = { path = "../seat-core", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

@@ -2,7 +2,7 @@
 //! Runs the built helper binary without network (`--dry-run`) and checks the
 //! argv / stdin / stdout protocol end to end.
 
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use split_session::helper_proto::{HelperArgs, HelperEvent, HelperFailure, exit, write_password_frame};
 use std::io::Write;
 use std::process::{Command, Stdio};

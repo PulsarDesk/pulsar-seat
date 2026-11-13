@@ -68,7 +68,7 @@ impl WinUsbipTool {
         let mut cmd = Command::new(&self.exe);
         cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW);
         // Shared spawn lock: no password pipe of split-session is inheritable meanwhile.
-        let mut child = split_proto::spawn::spawn_locked(&mut cmd)
+        let mut child = seat_core::spawn::spawn_locked(&mut cmd)
             .map_err(|e| PadError::Usbip(format!("cannot start usbip.exe: {e}")))?;
         if let Ok(mut s) = self.running.lock() {
             s.insert(child.id());

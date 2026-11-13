@@ -8,7 +8,7 @@ use crate::endpoint::{Endpoint, Flow};
 use crate::policy::AudioPolicy;
 use crate::state::MICROPHONE_PATH_AVAILABLE;
 
-/// Seat audio settings (goes into `SeatConfig::audio`, contracts §9.3).
+/// Seat audio settings (goes into `RemoteSeatRecord::audio`, contracts §9.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SeatAudio {

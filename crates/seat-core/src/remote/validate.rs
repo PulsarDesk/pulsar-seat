@@ -2,8 +2,9 @@
 //! Input validation (spec 10 §3.1, §4.2, §5.1; spec 20 §10). Pure functions: every check
 //! takes the data it needs and returns a [`ProtoError`] naming the offending field.
 
-use crate::ports;
-use split_proto::{ErrorCode, GlobalSettings, ProtoError, SeatConfig};
+use crate::remote::ports;
+use crate::error::{ErrorCode, ProtoError};
+use crate::remote::{RemoteSeatRecord, RemoteSettings};
 
 pub const NAME_MAX: usize = 128;
 pub const DISPLAY_NAME_MAX: usize = 128;
@@ -76,7 +77,7 @@ fn in_range(v: u16, (lo, hi): (u16, u16), field: &str) -> Result<(), ProtoError>
 }
 
 /// Checks of one seat on its own.
-pub fn seat_alone(seat: &SeatConfig) -> Result<(), ProtoError> {
+pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
     seat_name(&seat.name)?;
     display_name(&seat.display_name)?;
     port(seat.port)?;
@@ -119,7 +120,7 @@ pub fn same_display_name(a: &str, b: &str) -> bool {
 
 /// Checks of one seat against the other seats (`others` must not contain the seat itself).
 /// Display names must be unique too (spec 80 §7.3): they become the mDNS instance name.
-pub fn seat_against(seat: &SeatConfig, others: &[SeatConfig]) -> Result<(), ProtoError> {
+pub fn seat_against(seat: &RemoteSeatRecord, others: &[RemoteSeatRecord]) -> Result<(), ProtoError> {
     seat_alone(seat)?;
     for o in others {
         if o.name.eq_ignore_ascii_case(&seat.name) {
@@ -160,7 +161,7 @@ pub fn rdp_client_name(name: &str) -> Result<(), ProtoError> {
     Ok(())
 }
 
-pub fn global(g: &GlobalSettings) -> Result<(), ProtoError> {
+pub fn global(g: &RemoteSettings) -> Result<(), ProtoError> {
     if g.steam_isolation && !g.process_patching {
         return Err(err(ErrorCode::InvalidValue, "steam_isolation", "steam isolation needs process patching"));
     }
@@ -178,7 +179,7 @@ pub struct UserFacts {
 
 /// Pre-start user checks (spec 20 §6.2, §10). We never enable/unlock accounts silently.
 pub fn user_for_start(
-    seat: &SeatConfig,
+    seat: &RemoteSeatRecord,
     has_password: bool,
     facts: UserFacts,
     console_user: Option<&str>,
@@ -209,10 +210,10 @@ pub fn user_for_start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_proto::AutostartApp;
+    use crate::remote::AutostartApp;
 
-    fn seat(name: &str, port: u16, user: &str) -> SeatConfig {
-        SeatConfig {
+    fn seat(name: &str, port: u16, user: &str) -> RemoteSeatRecord {
+        RemoteSeatRecord {
             id: format!("id-{name}"),
             name: name.into(),
             display_name: name.into(),
@@ -314,7 +315,7 @@ mod tests {
 
     #[test]
     fn steam_isolation_needs_patching() {
-        let mut g = GlobalSettings { steam_isolation: true, ..Default::default() };
+        let mut g = RemoteSettings { steam_isolation: true, ..Default::default() };
         assert!(global(&g).is_err());
         g.process_patching = true;
         assert!(global(&g).is_ok());

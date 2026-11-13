@@ -39,6 +39,10 @@ pub struct Caller {
     /// Set when the caller is a kiosk shell the `desktops` backend started for this seat
     /// (PID + session). Added 2026-11-13.
     pub kiosk_seat: Option<SeatNumber>,
+    /// Protocol the client declared in `hello` (0 before hello). Requests with a higher
+    /// `RequestBody::min_protocol` are refused with `version_mismatch`. Added 2026-11-14
+    /// (protocol 3).
+    pub protocol: u32,
 }
 
 impl Caller {
@@ -61,6 +65,7 @@ impl Caller {
             console_listener: false,
             credprov_session: None,
             kiosk_seat: None,
+            protocol: seat_proto::PROTOCOL_VERSION,
         }
     }
 
@@ -163,6 +168,7 @@ mod tests {
             console_listener: false,
             credprov_session: None,
             kiosk_seat: None,
+            protocol: seat_proto::PROTOCOL_VERSION,
         }
     }
 

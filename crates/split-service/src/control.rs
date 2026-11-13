@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Request handling for the control pipe, independent of the transport. The service wires
+//! Request handling for the control pipe, independent of the transport. Moved here from
+//! `split-core` at merge step 4 (it speaks Split's legacy v2 enums,
+//! `seat_proto::remote::legacy`, and `seat-core` must not depend on `seat-proto`); it
+//! becomes the remote seat worker at step 6. The service wires
 //! a [`Controller`] to a real [`ConfigStore`] and [`Platform`]; tests use fakes.
 //!
 //! Since protocol v2 seat start and stop are asynchronous (contracts §9.4): the platform
@@ -8,13 +11,15 @@
 //! ([`Controller::drain_reports`]). Every state change also lands in a bounded event ring
 //! that the manager reads with `poll_events`.
 
-use crate::ports;
-use crate::store::{ConfigStore, StoreError};
-use crate::validate::{self, UserFacts};
-use split_proto::{
-    CredentialTest, ErrorCode, Events, GlobalSettings, HostInfo, IsolationStatus, LocalUser, NewSeat, PROTOCOL_VERSION, PairState,
-    PairedClient, ProtoError, Request, RequestBody, Response, ResponseBody, SeatConfig, SeatRuntime, SeatState,
-    SeatStatus, Secret, ServiceEvent, ServiceStatus, ShimTargetDto, StreamBackendInfo, StreamBackendKind,
+use seat_core::remote::ports;
+use seat_core::remote::store::{ConfigStore, StoreError};
+use seat_core::remote::validate::{self, UserFacts};
+use seat_proto::PROTOCOL_VERSION;
+use seat_proto::remote::legacy::{Request, RequestBody, Response, ResponseBody};
+use seat_proto::remote::{
+    CredentialTest, ErrorCode, Events, HostInfo, IsolationStatus, LocalUser, NewSeat, PairState, PairedClient, ProtoError,
+    RemoteSeatRecord, RemoteSettings, SeatRuntime, SeatState, SeatStatus, Secret, ServiceEvent, ServiceStatus, ShimTargetDto,
+    StreamBackendInfo, StreamBackendKind,
 };
 use std::collections::{HashMap, VecDeque};
 
@@ -37,7 +42,7 @@ pub enum SeatEvent {
     /// The seat's Windows session id changed (helper reconnect).
     Session(u32),
     /// A client display mode was applied; persisted as the seat's `last_mode`.
-    ModeApplied(split_proto::LastMode),
+    ModeApplied(seat_proto::remote::LastMode),
     /// Anything else for the event ring (`pair_pending`, `pair_ended`, `stream_started`,
     /// `stream_ended`, `host_warning`).
     Notice { kind: String, data: serde_json::Value },
@@ -52,16 +57,16 @@ fn unsupported(what: &str) -> ProtoError {
 pub trait Platform: Send {
     /// Start bringing a seat up (session, display, audio, stream server, pads, isolation,
     /// autostart apps). Returns once the work is under way; progress via `take_reports`.
-    fn start_seat(&mut self, seat: &SeatConfig, global: &GlobalSettings, password: Option<Secret>) -> Result<(), ProtoError>;
+    fn start_seat(&mut self, seat: &RemoteSeatRecord, global: &RemoteSettings, password: Option<Secret>) -> Result<(), ProtoError>;
     /// Start taking the seat down; finishes with [`SeatEvent::Stopped`].
-    fn stop_seat(&mut self, seat: &SeatConfig) -> Result<(), ProtoError>;
+    fn stop_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError>;
     /// Remove the seat's files and firewall rules after deletion.
-    fn remove_seat_files(&mut self, seat: &SeatConfig);
+    fn remove_seat_files(&mut self, seat: &RemoteSeatRecord);
     /// Hand a pairing PIN to the seat's stream server (asynchronous; outcome as a
     /// `pair_ended` notice).
-    fn submit_pin(&mut self, seat: &SeatConfig, pin: &Secret, client_name: &str, request_id: Option<u32>) -> Result<(), ProtoError>;
+    fn submit_pin(&mut self, seat: &RemoteSeatRecord, pin: &Secret, client_name: &str, request_id: Option<u32>) -> Result<(), ProtoError>;
     /// Apply global settings that live outside our store (service start type, isolation).
-    fn apply_global(&mut self, old: &GlobalSettings, new: &GlobalSettings) -> Result<(), ProtoError>;
+    fn apply_global(&mut self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError>;
     fn list_local_users(&self) -> Result<Vec<LocalUser>, ProtoError>;
     fn user_facts(&self, user: &str) -> UserFacts;
     /// User logged on at the physical console, if any.
@@ -69,16 +74,7 @@ pub trait Platform: Send {
 
     /// RDP client name for a new seat (`PSS` + 8 hex), unique among `taken`.
     fn client_name_for(&self, seat_id: &str, taken: &[String]) -> String {
-        let hex: String = seat_id.chars().filter(char::is_ascii_hexdigit).take(8).collect::<String>().to_ascii_uppercase();
-        let mut salt = 0u32;
-        loop {
-            let n = u32::from_str_radix(&format!("{hex:0<8}"), 16).unwrap_or(0).wrapping_add(salt);
-            let name = format!("PSS{n:08X}");
-            if !taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
-                return name;
-            }
-            salt += 1;
-        }
+        seat_core::remote::client_name_for(seat_id, taken)
     }
     /// Local ports that are listened on right now (TCP listeners and bound UDP ports), for
     /// port allocation (spec 80 §7.2). Default: none known.
@@ -96,7 +92,7 @@ pub trait Platform: Send {
     fn host_class(&self) -> Option<String> {
         None
     }
-    fn host_info(&mut self, _global: &GlobalSettings) -> Result<HostInfo, ProtoError> {
+    fn host_info(&mut self, _global: &RemoteSettings) -> Result<HostInfo, ProtoError> {
         Err(unsupported("host information"))
     }
     /// Prepare (on) or restore (off) the host's RDS settings.
@@ -109,7 +105,7 @@ pub trait Platform: Send {
     fn set_termwrap(&mut self, _enabled: bool, _wrapper: Option<&str>, _ack: u32) -> Result<serde_json::Value, ProtoError> {
         Err(unsupported("experimental multi-session"))
     }
-    fn seat_runtime(&mut self, _seat: &SeatConfig) -> Result<SeatRuntime, ProtoError> {
+    fn seat_runtime(&mut self, _seat: &RemoteSeatRecord) -> Result<SeatRuntime, ProtoError> {
         Ok(SeatRuntime::default())
     }
     fn render_adapters(&mut self) -> Result<Vec<serde_json::Value>, ProtoError> {
@@ -118,35 +114,35 @@ pub trait Platform: Send {
     fn pad_backends(&mut self) -> Result<Vec<serde_json::Value>, ProtoError> {
         Err(unsupported("pad backends"))
     }
-    fn pair_state(&mut self, _seat: &SeatConfig) -> Result<PairState, ProtoError> {
+    fn pair_state(&mut self, _seat: &RemoteSeatRecord) -> Result<PairState, ProtoError> {
         Ok(PairState::default())
     }
-    fn cancel_pair(&mut self, _seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn cancel_pair(&mut self, _seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         Err(unsupported("pairing"))
     }
-    fn paired_clients(&mut self, _seat: &SeatConfig) -> Result<Vec<PairedClient>, ProtoError> {
+    fn paired_clients(&mut self, _seat: &RemoteSeatRecord) -> Result<Vec<PairedClient>, ProtoError> {
         Err(unsupported("pairing"))
     }
-    fn unpair_client(&mut self, _seat: &SeatConfig, _uuid: &str) -> Result<(), ProtoError> {
+    fn unpair_client(&mut self, _seat: &RemoteSeatRecord, _uuid: &str) -> Result<(), ProtoError> {
         Err(unsupported("pairing"))
     }
-    fn unpair_all(&mut self, _seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn unpair_all(&mut self, _seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         Err(unsupported("pairing"))
     }
     /// Seat is stopped (checked by the controller).
-    fn regenerate_identity(&mut self, _seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn regenerate_identity(&mut self, _seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         Err(unsupported("seat identity"))
     }
-    fn get_apps(&mut self, _seat: &SeatConfig) -> Result<Vec<serde_json::Value>, ProtoError> {
+    fn get_apps(&mut self, _seat: &RemoteSeatRecord) -> Result<Vec<serde_json::Value>, ProtoError> {
         Err(unsupported("app list"))
     }
-    fn set_apps(&mut self, _seat: &SeatConfig, _apps: Vec<serde_json::Value>) -> Result<Vec<serde_json::Value>, ProtoError> {
+    fn set_apps(&mut self, _seat: &RemoteSeatRecord, _apps: Vec<serde_json::Value>) -> Result<Vec<serde_json::Value>, ProtoError> {
         Err(unsupported("app list"))
     }
     fn isolation_status(&mut self) -> Result<IsolationStatus, ProtoError> {
         Err(unsupported("isolation"))
     }
-    fn set_shim_targets(&mut self, _targets: Vec<ShimTargetDto>, _global: &GlobalSettings) -> Result<IsolationStatus, ProtoError> {
+    fn set_shim_targets(&mut self, _targets: Vec<ShimTargetDto>, _global: &RemoteSettings) -> Result<IsolationStatus, ProtoError> {
         Err(unsupported("isolation"))
     }
     fn set_app_masking(&mut self, _exe_path: &str, _enabled: bool) -> Result<IsolationStatus, ProtoError> {
@@ -169,7 +165,7 @@ pub trait Platform: Send {
         Err(unsupported("account enable / unlock"))
     }
     /// Last `n` redacted lines of the service log (`None`) or a seat's stream-server log.
-    fn log_tail(&mut self, _seat: Option<&SeatConfig>, _n: usize) -> Result<Vec<String>, ProtoError> {
+    fn log_tail(&mut self, _seat: Option<&RemoteSeatRecord>, _n: usize) -> Result<Vec<String>, ProtoError> {
         Err(unsupported("log viewer"))
     }
     /// Restart Windows (the controller already asked every seat to stop).
@@ -181,32 +177,32 @@ pub trait Platform: Send {
         Err(unsupported("stream backends"))
     }
     /// Pulsar seats (checked by the controller): allow / deny a pending request.
-    fn answer_peer_request(&mut self, _seat: &SeatConfig, _request_id: u32, _allow: bool, _view_only: bool) -> Result<(), ProtoError> {
+    fn answer_peer_request(&mut self, _seat: &RemoteSeatRecord, _request_id: u32, _allow: bool, _view_only: bool) -> Result<(), ProtoError> {
         Err(unsupported("peer approval"))
     }
     /// Pulsar seats: store (`Some`) or clear (`None`) the permanent connect password; the
     /// seat may be stopped. A running seat gets it live.
-    fn set_connect_password(&mut self, _seat: &SeatConfig, _password: Option<&Secret>) -> Result<(), ProtoError> {
+    fn set_connect_password(&mut self, _seat: &RemoteSeatRecord, _password: Option<&Secret>) -> Result<(), ProtoError> {
         Err(unsupported("connect password"))
     }
     /// Pulsar seats (running): current (`rotate = false`) or new one-time password.
-    fn seat_otp(&mut self, _seat: &SeatConfig, _rotate: bool) -> Result<Secret, ProtoError> {
+    fn seat_otp(&mut self, _seat: &RemoteSeatRecord, _rotate: bool) -> Result<Secret, ProtoError> {
         Err(unsupported("one-time password"))
     }
     /// Pulsar seats (running): relay credentials.
-    fn answer_relay_auth(&mut self, _seat: &SeatConfig, _password: &Secret, _totp: Option<&Secret>) -> Result<(), ProtoError> {
+    fn answer_relay_auth(&mut self, _seat: &RemoteSeatRecord, _password: &Secret, _totp: Option<&Secret>) -> Result<(), ProtoError> {
         Err(unsupported("relay sign-in"))
     }
     /// Pinned DXVK release and the games with a DXVK redirect (spec 50 §10.2).
-    fn dxvk_status(&mut self) -> Result<split_proto::DxvkStatus, ProtoError> {
+    fn dxvk_status(&mut self) -> Result<seat_proto::remote::DxvkStatus, ProtoError> {
         Err(unsupported("DXVK"))
     }
     /// Account picture of a local user (spec 10 §2.1); empty when there is none.
-    fn user_picture(&mut self, _user: &str) -> Result<split_proto::UserPicture, ProtoError> {
-        Ok(split_proto::UserPicture::default())
+    fn user_picture(&mut self, _user: &str) -> Result<seat_proto::remote::UserPicture, ProtoError> {
+        Ok(seat_proto::remote::UserPicture::default())
     }
     /// Spec 70 §2.6 stale RDP audio endpoint cleanup (operator-triggered).
-    fn cleanup_audio_endpoints(&mut self) -> Result<split_proto::AudioCleanup, ProtoError> {
+    fn cleanup_audio_endpoints(&mut self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
         Err(unsupported("audio endpoint cleanup"))
     }
 }
@@ -304,10 +300,13 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         }
     }
 
+    // Used by the tests (and by split-core users before the move into this crate).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn platform(&self) -> &P {
         &self.platform
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn platform_mut(&mut self) -> &mut P {
         &mut self.platform
     }
@@ -536,17 +535,17 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         }
     }
 
-    fn config(&self) -> Result<crate::store::Config, ProtoError> {
+    fn config(&self) -> Result<seat_core::remote::store::Config, ProtoError> {
         self.store.load().map_err(store_err)
     }
 
-    fn seat(&self, name: &str) -> Result<SeatConfig, ProtoError> {
+    fn seat(&self, name: &str) -> Result<RemoteSeatRecord, ProtoError> {
         self.config()?.seat(name).cloned().ok_or_else(|| not_found(name))
     }
 
     /// Seat whose backend is Pulsar (`unsupported` / `backend_sunshine` otherwise);
     /// `running` = it must also be running.
-    fn pulsar_seat(&self, name: &str, running: bool) -> Result<SeatConfig, ProtoError> {
+    fn pulsar_seat(&self, name: &str, running: bool) -> Result<RemoteSeatRecord, ProtoError> {
         let seat = if running { self.running_seat(name)? } else { self.seat(name)? };
         if seat.stream_backend != StreamBackendKind::Pulsar {
             return Err(wrong_backend(seat.stream_backend));
@@ -554,7 +553,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         Ok(seat)
     }
 
-    fn running_seat(&self, name: &str) -> Result<SeatConfig, ProtoError> {
+    fn running_seat(&self, name: &str) -> Result<RemoteSeatRecord, ProtoError> {
         let seat = self.seat(name)?;
         if !self.rt(&seat.id).is_some_and(|r| r.state == SeatState::Running) {
             return Err(ProtoError::new(ErrorCode::ServiceUnavailable, "seat is not running"));
@@ -570,7 +569,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         self.runtime.entry(id.to_string()).or_default()
     }
 
-    fn ensure_stopped(&self, seat: &SeatConfig) -> Result<(), ProtoError> {
+    fn ensure_stopped(&self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         if self.rt(&seat.id).is_some_and(Runtime::is_active) {
             return Err(ProtoError::new(ErrorCode::SeatRunning, "stop the seat before changing it"));
         }
@@ -611,7 +610,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         })
     }
 
-    fn create_seat(&mut self, new: NewSeat) -> Result<SeatConfig, ProtoError> {
+    fn create_seat(&mut self, new: NewSeat) -> Result<RemoteSeatRecord, ProtoError> {
         validate::seat_name(&new.name)?;
         let cfg = self.config()?;
         let port = match new.port {
@@ -624,7 +623,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         };
         let id = new_id();
         let taken: Vec<String> = cfg.seats.iter().map(|s| s.rdp_client_name.clone()).collect();
-        let seat = SeatConfig {
+        let seat = RemoteSeatRecord {
             rdp_client_name: self.platform.client_name_for(&id, &taken),
             id,
             name: new.name.clone(),
@@ -641,9 +640,9 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
     fn update_seat(
         &mut self,
         name: &str,
-        mut seat: SeatConfig,
+        mut seat: RemoteSeatRecord,
         stream_backend: Option<StreamBackendKind>,
-    ) -> Result<SeatConfig, ProtoError> {
+    ) -> Result<RemoteSeatRecord, ProtoError> {
         let cfg = self.config()?;
         let current = cfg.seat(name).cloned().ok_or_else(|| not_found(name))?;
         self.ensure_stopped(&current)?;
@@ -661,7 +660,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                 app.id = new_id();
             }
         }
-        let others: Vec<SeatConfig> = cfg.seats.iter().filter(|s| s.id != current.id).cloned().collect();
+        let others: Vec<RemoteSeatRecord> = cfg.seats.iter().filter(|s| s.id != current.id).cloned().collect();
         validate::seat_against(&seat, &others)?;
         if seat.name != current.name {
             self.store.rename_seat(&current.name, &seat.name).map_err(store_err)?;
@@ -784,7 +783,7 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         result
     }
 
-    fn set_global(&mut self, g: GlobalSettings) -> Result<GlobalSettings, ProtoError> {
+    fn set_global(&mut self, g: RemoteSettings) -> Result<RemoteSettings, ProtoError> {
         validate::global(&g)?;
         let old = self.config()?.global;
         let isolation_changed = old.process_patching != g.process_patching
@@ -1013,8 +1012,8 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::MemoryStore;
-    use split_proto::AutostartApp;
+    use seat_core::remote::store::MemoryStore;
+    use seat_proto::remote::AutostartApp;
 
     #[derive(Default)]
     struct FakePlatform {
@@ -1033,7 +1032,7 @@ mod tests {
     }
 
     impl Platform for FakePlatform {
-        fn start_seat(&mut self, seat: &SeatConfig, _: &GlobalSettings, pw: Option<Secret>) -> Result<(), ProtoError> {
+        fn start_seat(&mut self, seat: &RemoteSeatRecord, _: &RemoteSettings, pw: Option<Secret>) -> Result<(), ProtoError> {
             if self.fail_start {
                 return Err(ProtoError::new(ErrorCode::ServiceUnavailable, "rds_not_ready: no sessions yet"));
             }
@@ -1041,19 +1040,19 @@ mod tests {
             self.passwords.push(pw.map(|p| p.0.clone()));
             Ok(())
         }
-        fn stop_seat(&mut self, seat: &SeatConfig) -> Result<(), ProtoError> {
+        fn stop_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
             self.stopped.push(seat.name.clone());
             self.reports.push((seat.id.clone(), SeatEvent::Stopped));
             Ok(())
         }
-        fn remove_seat_files(&mut self, s: &SeatConfig) {
+        fn remove_seat_files(&mut self, s: &RemoteSeatRecord) {
             self.removed.push(s.name.clone());
         }
-        fn submit_pin(&mut self, _: &SeatConfig, _: &Secret, _: &str, r: Option<u32>) -> Result<(), ProtoError> {
+        fn submit_pin(&mut self, _: &RemoteSeatRecord, _: &Secret, _: &str, r: Option<u32>) -> Result<(), ProtoError> {
             self.pins.push(r);
             Ok(())
         }
-        fn apply_global(&mut self, _: &GlobalSettings, _: &GlobalSettings) -> Result<(), ProtoError> {
+        fn apply_global(&mut self, _: &RemoteSettings, _: &RemoteSettings) -> Result<(), ProtoError> {
             Ok(())
         }
         fn list_local_users(&self) -> Result<Vec<LocalUser>, ProtoError> {
@@ -1081,7 +1080,7 @@ mod tests {
             self.unlocked.push((user.into(), enable, unlock));
             Ok(())
         }
-        fn log_tail(&mut self, seat: Option<&SeatConfig>, n: usize) -> Result<Vec<String>, ProtoError> {
+        fn log_tail(&mut self, seat: Option<&RemoteSeatRecord>, n: usize) -> Result<Vec<String>, ProtoError> {
             Ok(vec![format!("{}:{n}", seat.map_or("service", |s| s.name.as_str()))])
         }
         fn reboot_host(&mut self) -> Result<(), ProtoError> {
@@ -1100,14 +1099,14 @@ mod tests {
         resp.result
     }
 
-    fn create(c: &mut Controller<MemoryStore, FakePlatform>, name: &str) -> SeatConfig {
+    fn create(c: &mut Controller<MemoryStore, FakePlatform>, name: &str) -> RemoteSeatRecord {
         match call(c, RequestBody::CreateSeat(NewSeat { name: name.into(), port: None })).unwrap() {
             ResponseBody::Seat(s) => s,
             other => panic!("{other:?}"),
         }
     }
 
-    fn ready(c: &mut Controller<MemoryStore, FakePlatform>, name: &str, user: &str) -> SeatConfig {
+    fn ready(c: &mut Controller<MemoryStore, FakePlatform>, name: &str, user: &str) -> RemoteSeatRecord {
         let mut s = create(c, name);
         s.user_name = user.into();
         call(c, RequestBody::UpdateSeat { name: name.into(), seat: s.clone(), stream_backend: None }).unwrap();
@@ -1177,9 +1176,9 @@ mod tests {
     fn applied_mode_is_persisted_and_service_owned() {
         let mut c = ctl();
         let a = create(&mut c, "A");
-        let m = split_proto::LastMode { width: 2560, height: 1440, hz: 120 };
+        let m = seat_proto::remote::LastMode { width: 2560, height: 1440, hz: 120 };
         c.platform_mut().reports.push((a.id.clone(), SeatEvent::ModeApplied(m)));
-        c.platform_mut().reports.push((a.id.clone(), SeatEvent::ModeApplied(split_proto::LastMode { width: 1, height: 1, hz: 1 })));
+        c.platform_mut().reports.push((a.id.clone(), SeatEvent::ModeApplied(seat_proto::remote::LastMode { width: 1, height: 1, hz: 1 })));
         c.drain_reports();
         let got = match call(&mut c, RequestBody::GetSeat { name: "A".into() }).unwrap() {
             ResponseBody::Seat(s) => s,
@@ -1338,7 +1337,7 @@ mod tests {
         }
         assert_eq!(
             call(&mut c, RequestBody::GetUserPicture { user: "ali".into() }).unwrap(),
-            ResponseBody::UserPicture(split_proto::UserPicture::default())
+            ResponseBody::UserPicture(seat_proto::remote::UserPicture::default())
         );
     }
 
@@ -1425,7 +1424,7 @@ mod tests {
         assert_eq!((e.code, e.reason.as_deref()), (ErrorCode::Coexistence, Some("coexistence")));
         assert!(c.status().unwrap().passive);
         assert_eq!(code(call(&mut c, RequestBody::SetMultiSession { enabled: true })), ErrorCode::Coexistence);
-        let g = GlobalSettings { process_patching: true, ..Default::default() };
+        let g = RemoteSettings { process_patching: true, ..Default::default() };
         assert_eq!(code(call(&mut c, RequestBody::SetGlobalSettings(g))), ErrorCode::Coexistence);
     }
 
@@ -1446,13 +1445,13 @@ mod tests {
     #[test]
     fn global_settings_roundtrip_validation_and_multi_session_guard() {
         let mut c = ctl();
-        let bad = GlobalSettings { steam_isolation: true, ..Default::default() };
+        let bad = RemoteSettings { steam_isolation: true, ..Default::default() };
         assert_eq!(code(call(&mut c, RequestBody::SetGlobalSettings(bad))), ErrorCode::InvalidValue);
-        let good = GlobalSettings { start_with_windows: true, ..Default::default() };
+        let good = RemoteSettings { start_with_windows: true, ..Default::default() };
         call(&mut c, RequestBody::SetGlobalSettings(good.clone())).unwrap();
         assert_eq!(call(&mut c, RequestBody::GetGlobalSettings).unwrap(), ResponseBody::GlobalSettings(good.clone()));
         // multi_session only through its own request.
-        let sneaky = GlobalSettings { multi_session: true, ..good };
+        let sneaky = RemoteSettings { multi_session: true, ..good };
         match call(&mut c, RequestBody::SetGlobalSettings(sneaky)).unwrap() {
             ResponseBody::GlobalSettings(g) => assert!(!g.multi_session),
             o => panic!("{o:?}"),

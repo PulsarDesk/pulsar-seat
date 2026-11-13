@@ -15,17 +15,17 @@ describe('seat redirection model', () => {
     expect(redirectOn(seatRedirect(c, 2))).toBe(false);
     const on = { ...DEFAULT_SEAT_REDIRECT, drives: 'read_only' as const };
     const c2 = setRedirect(c, 2, on);
-    expect(c2.seats.find((s) => s.number === 2)?.redirect?.drives).toBe('read_only');
+    expect(c2.seats.find((s) => s.number === 2)?.local?.redirect?.drives).toBe('read_only');
     expect(redirectOn(seatRedirect(c2, 2))).toBe(true);
     const back = setRedirect(c2, 2, DEFAULT_SEAT_REDIRECT);
-    expect(back.seats.find((s) => s.number === 2)?.redirect).toBeUndefined();
-    expect(setRedirect(c, 1, on).seats.find((s) => s.number === 1)?.redirect).toBeUndefined();
+    expect(back.seats.find((s) => s.number === 2)?.local?.redirect).toBeUndefined();
+    expect(setRedirect(c, 1, on).seats.find((s) => s.number === 1)?.local?.redirect).toBeUndefined();
   });
 
   it('fills missing fields of an older config', () => {
     const c = demoConfig();
     const s2 = c.seats.find((s) => s.number === 2)!;
-    s2.redirect = { clipboard: { direction: 'both' } } as never;
+    s2.local = { redirect: { clipboard: { direction: 'both' } } as never };
     const r = seatRedirect(c, 2);
     expect(r.clipboard).toEqual({ ...DEFAULT_SEAT_REDIRECT.clipboard, direction: 'both' });
     expect(r.drives).toBe('off');

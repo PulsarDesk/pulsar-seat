@@ -39,7 +39,7 @@ use super::{
 use crate::StreamError;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use split_proto::Secret;
+use seat_proto::remote::Secret;
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;

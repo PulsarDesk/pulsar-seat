@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Length-prefixed frames over any byte stream (a named pipe in byte mode in production,
-//! an in-memory buffer in tests). Adapted from pulsar-split (`split-proto::framing`).
+//! an in-memory buffer in tests). Adapted from pulsar-split (`split-proto::framing`); since
+//! merge step 4 frame buffers are wiped after use (they may carry a `Secret`).
 //!
 //! Frame = 4-byte little-endian payload length + UTF-8 JSON payload, at most
 //! [`MAX_FRAME_LEN`] bytes.
 
 use serde::{Serialize, de::DeserializeOwned};
+use zeroize::Zeroizing;
 use std::io::{self, Read, Write};
 
 /// Upper bound for one frame's payload. Control messages are small; this stops a
@@ -31,7 +33,8 @@ pub fn write_frame<W: Write>(w: &mut W, payload: &[u8]) -> Result<(), FrameError
     if len > MAX_FRAME_LEN {
         return Err(FrameError::TooLarge(len));
     }
-    let mut buf = Vec::with_capacity(4 + payload.len());
+    // Wiped on drop: the payload may carry a `Secret` (password / PIN).
+    let mut buf = Zeroizing::new(Vec::with_capacity(4 + payload.len()));
     buf.extend_from_slice(&len.to_le_bytes());
     buf.extend_from_slice(payload);
     w.write_all(&buf)?;
@@ -67,14 +70,17 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<Vec<u8>>, FrameError> {
 }
 
 pub fn write_message<W: Write, T: Serialize>(w: &mut W, msg: &T) -> Result<(), FrameError> {
-    let payload = serde_json::to_vec(msg)?;
+    let payload = Zeroizing::new(serde_json::to_vec(msg)?);
     write_frame(w, &payload)
 }
 
 pub fn read_message<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<Option<T>, FrameError> {
     match read_frame(r)? {
         None => Ok(None),
-        Some(payload) => Ok(Some(serde_json::from_slice(&payload)?)),
+        Some(payload) => {
+            let payload = Zeroizing::new(payload);
+            Ok(Some(serde_json::from_slice(&payload)?))
+        }
     }
 }
 

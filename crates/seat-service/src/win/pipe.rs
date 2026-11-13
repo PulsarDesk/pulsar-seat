@@ -227,6 +227,7 @@ impl PipeIo {
             console_listener: false,
             credprov_session: None,
             kiosk_seat: None,
+            protocol: 0,
         };
         // SAFETY: impersonate on this thread, query, revert.
         unsafe {

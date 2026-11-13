@@ -57,8 +57,8 @@ fn sunshine_seat_behaves_like_the_seat_server() {
     let fs = Arc::new(MemFs::default());
     let connector = FakeConnector::default();
     let b = sunshine(fs.clone(), connector.clone(), false);
-    let seat = SeatConfig { id: ID.into(), name: "Salon".into(), display_name: "Salon PC".into(), port: 48100, ..Default::default() };
-    let g = GlobalSettings::default();
+    let seat = RemoteSeatRecord { id: ID.into(), name: "Salon".into(), display_name: "Salon PC".into(), port: 48100, ..Default::default() };
+    let g = RemoteSettings::default();
     let spec = SeatStreamSpec {
         seat: &seat,
         global: &g,

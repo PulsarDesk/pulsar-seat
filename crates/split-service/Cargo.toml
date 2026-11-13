@@ -12,8 +12,9 @@ name = "pulsar-split-service"
 path = "src/main.rs"
 
 [dependencies]
-split-proto.workspace = true
-split-core.workspace = true
+seat-core.workspace = true
+seat-proto.workspace = true
+uuid.workspace = true
 split-session.workspace = true
 split-termwrap.workspace = true
 split-display.workspace = true
@@ -49,7 +50,6 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-uuid.workspace = true
 split-session = { workspace = true, features = ["fake"] }
 split-termwrap = { workspace = true, features = ["fake"] }
 split-display = { workspace = true, features = ["fake"] }

@@ -9,7 +9,7 @@
 //! base64. No picture (local accounts that never chose one) = empty answer; the manager
 //! then shows the initial. Read-only, no network.
 
-use split_proto::UserPicture;
+use seat_proto::remote::UserPicture;
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_BYTES: u64 = 512 * 1024;

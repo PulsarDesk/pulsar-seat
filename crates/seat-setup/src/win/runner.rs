@@ -25,8 +25,8 @@ impl CommandRunner for WinRunner {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        // Shared spawn lock (split_proto::spawn): this runner also runs inside the service.
-        let child = split_proto::spawn::spawn_locked(&mut cmd).map_err(|e| SetupError::io(exe, e))?;
+        // Shared spawn lock (seat_core::spawn): this runner also runs inside the service.
+        let child = seat_core::spawn::spawn_locked(&mut cmd).map_err(|e| SetupError::io(exe, e))?;
         let out = child.wait_with_output().map_err(|e| SetupError::io(exe, e))?;
         Ok(CmdOutput {
             code: out.status.code().unwrap_or(-1),

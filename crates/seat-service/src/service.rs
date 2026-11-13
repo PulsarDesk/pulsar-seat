@@ -1162,7 +1162,13 @@ impl Service {
     }
 
     pub(crate) fn runtime_list(st: &State) -> Vec<SeatRuntime> {
-        st.config.seats.iter().filter_map(|c| st.seats.get(&c.number).map(|s| s.rt.clone())).collect()
+        st.config
+            .seats
+            .iter()
+            .filter_map(|c| {
+                st.seats.get(&c.number).map(|s| seat_core::state::SeatRuntime { kind: c.kind, ..s.rt.clone() })
+            })
+            .collect()
     }
 }
 

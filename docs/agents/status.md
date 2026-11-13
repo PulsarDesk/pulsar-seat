@@ -848,3 +848,29 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   passed / 5 ignored, clippy aarch64 + x86_64 clean, vitest 111 + 44, installer scripts
   29 + 15, shim 8 (host + x64 target), i686 check. Two services and two managers still.
   **Next:** step 4 (merge proto + core: `kind`, sub-structs, protocol v3).
+- 2026-11-14: **merge steps 1 + 4 done** (merge-plan.md section 3). Step 1: contract delta in
+  [architecture.md](architecture.md) section 10 "Seat kinds" (config schema 2, protocol 3
+  request table with access and seat kind, `wrong_seat_kind` / `session_unavailable`,
+  `SecretStore`, `SessionBackend` for remote seats, event topic mapping, ports only for
+  remote seats). Step 4: `split-proto` and `split-core` removed. `seat-core` gained
+  `error` (one `ErrorCode` / `ProtoError`), `spawn`, one `Secret`, `remote` (Split model as
+  `RemoteSeatRecord` / `RemoteSettings`, validation, ports, stream config, watchdog, record
+  store, `RemoteSeat`, `assign_resources`); `SeatConfig.kind` + `local: LocalSeat`
+  (`redirect`, `kiosk`, `kiosk_shell` moved there) / `remote: RemoteSeat`,
+  `settings.remote`, schema 1 -> 2 migration (old documents load as local seats),
+  `kind_checks` validation, `SeatRuntime.kind`. `seat-proto`: `PROTOCOL_VERSION` 3, 32 Split
+  requests as `Access::Admin` with `seat_kind()` / `min_protocol()`, topic `stream`,
+  `seat_proto::remote` (wire types, `legacy` v2 enums for split-service / split-manager,
+  `map_legacy_event`), zeroized framing. Split's Controller moved to
+  `crates/split-service/src/control.rs`. seat-service: per-caller protocol check (config
+  requests need a hello of 3), `wrong_seat_kind`, remote requests answer `not_implemented`
+  (`remote_worker_pending`), remote seats never started by the local worker
+  (`session_unavailable` without concurrent sessions), remote seat status and the `stream`
+  topic admin only. Manager: `SeatConfig.kind` / `local`, protocol 3 in the demo, Turkish copy
+  for the new codes. Gates green: cargo 1564 passed / 5 ignored (was 1548; 5 duplicate
+  split-proto framing tests deleted on purpose, identical copies stay in
+  seat-proto/src/framing.rs), clippy aarch64 + x86_64 clean, vitest 115 + 44, installer
+  scripts 29 (+ Split's 15), shim 8 (host; x64 check).
+  **Next:** step 5 (`SecretStore` slots + LSA for the remote seat's Pulsar secrets), then
+  step 6 (Split engine as the remote seat worker; it then reads `SeatConfig.remote` instead
+  of the record store and answers the protocol 3 requests).

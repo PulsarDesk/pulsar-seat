@@ -5,11 +5,12 @@
 mod pipe_client;
 mod scm;
 
-use split_proto::{ProtoError, RequestBody, ResponseBody};
+use seat_proto::remote::legacy::{RequestBody, ResponseBody};
+use seat_proto::remote::{ProtoError};
 use tauri::Manager;
 
 fn blocking_err(e: impl std::fmt::Display) -> ProtoError {
-    ProtoError::new(split_proto::ErrorCode::Internal, e.to_string())
+    ProtoError::new(seat_proto::remote::ErrorCode::Internal, e.to_string())
 }
 
 #[tauri::command]

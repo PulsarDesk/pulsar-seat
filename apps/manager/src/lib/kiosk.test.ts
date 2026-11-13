@@ -15,16 +15,16 @@ describe('kiosk shell config', () => {
       ],
       idle_reset_minutes: 99999
     });
-    const k = c.seats.find((s) => s.number === 2)!.kiosk_shell!;
+    const k = c.seats.find((s) => s.number === 2)!.local?.kiosk_shell!;
     expect(k.apps).toEqual([
       { title: 'notepad', command: 'C:\\Windows\\notepad.exe', autostart: true, monitor: 2 },
       { title: 'Web', command: 'C:\\Web\\web.exe', args: ['--kiosk'], autostart: false, monitor: 0 }
     ]);
     expect(k.idle_reset_minutes).toBe(1440);
     const off = setKioskShell(c, 2, null);
-    expect(off.seats.find((s) => s.number === 2)!.kiosk_shell).toBeUndefined();
+    expect(off.seats.find((s) => s.number === 2)!.local?.kiosk_shell).toBeUndefined();
     // Input config is untouched.
-    expect(demoConfig().seats.find((s) => s.number === 2)!.kiosk_shell).toBeUndefined();
+    expect(demoConfig().seats.find((s) => s.number === 2)!.local?.kiosk_shell).toBeUndefined();
   });
 
   it('seat one desktop defaults to on and warns about an ignored seat-one shell', () => {
@@ -39,7 +39,8 @@ describe('kiosk shell config', () => {
 
   it('flags invalid shells like seat-core', () => {
     const c = demoConfig();
-    c.seats.find((s) => s.number === 2)!.kiosk_shell = {
+    c.seats.find((s) => s.number === 2)!.local = {};
+    c.seats.find((s) => s.number === 2)!.local!.kiosk_shell = {
       apps: [{ title: 'x', command: '', autostart: false, monitor: 0 }],
       idle_reset_minutes: 5
     };

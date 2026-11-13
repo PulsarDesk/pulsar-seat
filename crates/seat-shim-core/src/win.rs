@@ -497,10 +497,10 @@ impl ShimSystem for WinShimSystem {
         let exe = self.dirs().system32.join("sdbinst.exe");
         let mut cmd = std::process::Command::new(exe);
         cmd.args(args);
-        // In the service: the shared spawn lock (split_proto::spawn). The module build has
+        // In the service: the shared spawn lock (seat_core::spawn). The module build has
         // no password pipes to protect.
         #[cfg(feature = "proto")]
-        let mut child = split_proto::spawn::spawn_locked(&mut cmd)?;
+        let mut child = seat_core::spawn::spawn_locked(&mut cmd)?;
         #[cfg(not(feature = "proto"))]
         let mut child = cmd.spawn()?;
         let st = child.wait()?;

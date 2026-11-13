@@ -8,7 +8,7 @@
 
 use crate::StreamError;
 use serde::{Deserialize, Serialize};
-use split_proto::SeatConfig;
+use seat_proto::remote::RemoteSeatRecord;
 use std::path::Path;
 
 pub const MAX_APPS: usize = 100;
@@ -118,12 +118,12 @@ pub fn render_apps_json(apps: &[AppEntry], env: &serde_json::Map<String, serde_j
 }
 
 /// Replace `{seat}` (display name) and `{seat_id}`. Never a bare word (spec 80 §5.3).
-pub fn expand_placeholders(s: &str, seat: &SeatConfig) -> String {
+pub fn expand_placeholders(s: &str, seat: &RemoteSeatRecord) -> String {
     s.replace("{seat_id}", &seat.id).replace("{seat}", &seat.display_name)
 }
 
 /// Expand placeholders in every string field of every entry.
-pub fn expand_all(apps: &mut [AppEntry], seat: &SeatConfig) {
+pub fn expand_all(apps: &mut [AppEntry], seat: &RemoteSeatRecord) {
     for a in apps {
         a.name = expand_placeholders(&a.name, seat);
         for s in a.cmd.iter_mut().chain(a.working_dir.iter_mut()).chain(a.detached.iter_mut()) {
@@ -168,8 +168,8 @@ pub fn default_apps() -> Vec<AppEntry> {
 mod tests {
     use super::*;
 
-    fn seat() -> SeatConfig {
-        SeatConfig { id: "0f8fad5b-d9cb-469f-a165-70867728950e".into(), display_name: "Salon".into(), ..Default::default() }
+    fn seat() -> RemoteSeatRecord {
+        RemoteSeatRecord { id: "0f8fad5b-d9cb-469f-a165-70867728950e".into(), display_name: "Salon".into(), ..Default::default() }
     }
 
     #[test]

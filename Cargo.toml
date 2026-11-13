@@ -22,9 +22,7 @@ default-members = [
     "crates/seat-rdp",
     "crates/seat-release",
     # Remote seat kind (from Pulsar Split). split-* crates clash with a seat-* crate and are
-    # merged into it at merge-plan.md steps 4-8.
-    "crates/split-proto",
-    "crates/split-core",
+    # merged into it at merge-plan.md steps 6-8 (split-proto / split-core: step 4, done).
     "crates/split-session",
     "crates/split-rdp-helper",
     "crates/split-termwrap",
@@ -59,8 +57,6 @@ seat-stream = { path = "crates/seat-stream" }
 seat-pads = { path = "crates/seat-pads" }
 seat-shim-core = { path = "crates/seat-shim-core" }
 seat-setup = { path = "crates/seat-setup" }
-split-proto = { path = "crates/split-proto" }
-split-core = { path = "crates/split-core" }
 split-session = { path = "crates/split-session" }
 split-termwrap = { path = "crates/split-termwrap" }
 split-display = { path = "crates/split-display" }

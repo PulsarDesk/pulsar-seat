@@ -6,7 +6,7 @@
 //! (see [`crate::ports::seat_ports`]). Pairing and app lists are handled by the manager
 //! through the service.
 
-use split_proto::{GlobalSettings, SeatConfig, Verbosity};
+use crate::remote::{RemoteSeatRecord, RemoteSettings, Verbosity};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -48,7 +48,7 @@ pub fn log_level(v: Verbosity) -> &'static str {
 
 /// Contents of `<seat>.conf`. The seat must already be validated (no control characters
 /// in the display name), so every value fits on one line.
-pub fn generate_conf(seat: &SeatConfig, global: &GlobalSettings, files: &SeatFiles) -> String {
+pub fn generate_conf(seat: &RemoteSeatRecord, global: &RemoteSettings, files: &SeatFiles) -> String {
     let mut out = String::new();
     let mut kv = |k: &str, v: &str| {
         debug_assert!(!v.contains(['\r', '\n']));
@@ -94,14 +94,14 @@ pub fn parse_conf(text: &str) -> Vec<(String, String)> {
 mod tests {
     use super::*;
 
-    fn sample() -> (SeatConfig, GlobalSettings, SeatFiles) {
-        let seat = SeatConfig {
+    fn sample() -> (RemoteSeatRecord, RemoteSettings, SeatFiles) {
+        let seat = RemoteSeatRecord {
             name: "salon".into(),
             display_name: "Salon PC".into(),
             port: 48089,
             ..Default::default()
         };
-        let global = GlobalSettings { verbosity: Verbosity::Warning, ..Default::default() };
+        let global = RemoteSettings { verbosity: Verbosity::Warning, ..Default::default() };
         let files = SeatFiles::new(Path::new(r"C:\ProgramData\PulsarSplit\config"), "salon");
         (seat, global, files)
     }

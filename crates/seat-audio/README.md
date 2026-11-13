@@ -87,4 +87,4 @@ Feature `fake` exports `seat_audio::fake` (`FakeAudioProbe`, `FakeDeviceNodes`,
   the playback channel (spec 70 OQ 2) — session / stream packages.
 
 No third-party code is included. Dependencies: `serde`, `thiserror`, `log`, `winreg`,
-`windows-sys` (MIT/Apache-2.0), `split-proto`; dev-only `seat-stream`, `serde_json`.
+`windows-sys` (MIT/Apache-2.0), `seat-proto` (was `split-proto`); dev-only `seat-stream`, `serde_json`.

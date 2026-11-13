@@ -3,8 +3,8 @@
 
 use crate::SessionError;
 use serde::{Deserialize, Serialize};
-use split_core::validate::UserFacts;
-use split_proto::Secret;
+use seat_core::remote::validate::UserFacts;
+use seat_proto::remote::Secret;
 
 /// Well-known SID of the builtin "Remote Desktop Users" group (name is localised).
 pub const REMOTE_DESKTOP_USERS_SID: &str = "S-1-5-32-555";
@@ -43,7 +43,7 @@ pub struct UserCheck {
 /// Account facts + RDU membership (spec 30 §14 reason codes `account`, `password_expired`,
 /// `rdu_membership`). Profile creation is a separate step ([`Profiles`]).
 pub fn ensure_seat_user<A: Accounts + ?Sized>(a: &A, user: &str) -> Result<UserCheck, SessionError> {
-    split_core::validate::user_name(user).map_err(|e| SessionError::Account(e.message))?;
+    seat_core::remote::validate::user_name(user).map_err(|e| SessionError::Account(e.message))?;
     if user.is_empty() {
         return Err(SessionError::Account("seat has no user".into()));
     }

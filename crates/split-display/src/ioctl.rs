@@ -646,7 +646,7 @@ mod tests {
     use super::*;
     use crate::adapters::AdapterChoice;
     use crate::seat::HdrLuminance;
-    use split_proto::SeatConfig;
+    use seat_proto::remote::RemoteSeatRecord;
 
     #[test]
     fn codes_match_spec() {
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn seat_config_round_trip_and_bytes() {
-        let seat = SeatConfig {
+        let seat = RemoteSeatRecord {
             id: "8a1b2c3d-0000-4000-8000-00000000abcd".into(),
             ..Default::default()
         };
@@ -711,7 +711,7 @@ mod tests {
             None
         );
         let mut bad = SeatDisplay::from_seat(
-            &SeatConfig::default(),
+            &RemoteSeatRecord::default(),
             1,
             AdapterChoice::Default { warning: None },
         );

@@ -3,17 +3,22 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use zeroize::Zeroizing;
 
-/// Seat passwords and one-time host tokens. `Debug` prints `Secret(***)`; the content is
-/// still serialized (it must travel over the pipe once). Never log a `Secret`, never put
-/// one into the config file, a log or a diagnostic report (rules.md).
-#[derive(Clone, PartialEq, Eq, Default)]
-pub struct Secret(Zeroizing<String>);
+/// Seat passwords, PINs, one-time host tokens and the remote seat's Pulsar secrets.
+/// `Debug` prints `Secret(***)`; the content is still serialized (it must travel over the
+/// pipe once). Never log a `Secret`, never put one into the config file, a log or a
+/// diagnostic report (rules.md). Every clone is wiped on its own drop, so avoid needless
+/// clones.
+///
+/// The inner `String` is public because the remote-kind code (from Pulsar Split) builds and
+/// reads secrets as `Secret(s)` / `.0`; new code uses [`Secret::new`] / [`Secret::expose`].
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
 
 impl Secret {
     pub fn new(s: impl Into<String>) -> Self {
-        Self(Zeroizing::new(s.into()))
+        Self(s.into())
     }
     /// Borrow the clear text (only at the point of use: LSA write, RDP logon).
     pub fn expose(&self) -> &str {
@@ -24,21 +29,16 @@ impl Secret {
     }
 }
 
+impl Drop for Secret {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.0.zeroize();
+    }
+}
+
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Secret(***)")
-    }
-}
-
-impl Serialize for Secret {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for Secret {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(Self::new(String::deserialize(d)?))
     }
 }
 
@@ -53,5 +53,6 @@ mod tests {
         assert_eq!(serde_json::to_string(&s).unwrap(), "\"hunter2\"");
         let back: Secret = serde_json::from_str("\"x\"").unwrap();
         assert_eq!(back.expose(), "x");
+        assert_eq!(Secret("y".into()), Secret::new("y"));
     }
 }

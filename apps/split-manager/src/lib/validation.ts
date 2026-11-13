@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Client-side mirror of `split-core::validate` so the UI can react while typing. The
+// Client-side mirror of `seat_core::remote::validate` (was `split-core::validate`) so the UI can react while typing. The
 // service validates again and is authoritative.
 
 export const PORT_MIN = 1029;

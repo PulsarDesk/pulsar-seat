@@ -15,7 +15,7 @@ use crate::ports::ListenerProbe;
 use crate::seatdir::{SecureFs, SeatDir};
 use crate::supervise::{AppsReload, ControlConnector, SeatServer, SeatServerConfig, ServerLauncher, StreamNotice};
 use crate::{Clock, StreamError};
-use split_proto::{CapturePref, GamepadPref, Secret, StreamBackendInfo, StreamBackendKind};
+use seat_proto::remote::{CapturePref, GamepadPref, Secret, StreamBackendInfo, StreamBackendKind};
 use std::path::PathBuf;
 use std::sync::Arc;
 

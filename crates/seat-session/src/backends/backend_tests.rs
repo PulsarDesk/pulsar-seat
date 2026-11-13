@@ -531,7 +531,7 @@ fn desktops_launch_kiosk_on_seat_monitor() {
     assert_eq!(b.probe().unwrap().availability, Availability::Available);
     let mut s2 = seat_cfg(2, None);
     assert_eq!(b.start(&req(&s2, &settings, None)).unwrap_err().reason, "kiosk_app_missing");
-    s2.kiosk = Some(KioskApp { command: r"C:\Apps\kiosk.exe".into(), args: vec!["--full".into()] });
+    s2.local_mut().unwrap().kiosk = Some(KioskApp { command: r"C:\Apps\kiosk.exe".into(), args: vec!["--full".into()] });
     let StartStep::Started(i) = b.start(&req(&s2, &settings, None)).unwrap() else { panic!() };
     assert_eq!(i.session_id, 1);
     {
@@ -560,7 +560,7 @@ fn desktops_need_a_signed_in_console() {
     let b = create_backend(SessionBackendKind::Desktops, w.deps());
     assert_eq!(b.probe().unwrap().availability, Availability::NeedsSetup { what: "console_sign_in".into() });
     let mut s2 = seat_cfg(2, None);
-    s2.kiosk = Some(KioskApp { command: "kiosk.exe".into(), args: vec![] });
+    s2.local_mut().unwrap().kiosk = Some(KioskApp { command: "kiosk.exe".into(), args: vec![] });
     assert_eq!(b.start(&req(&s2, &GlobalSettings::default(), None)).unwrap_err().reason, "console_not_signed_in");
 }
 
@@ -576,8 +576,8 @@ fn desktops_kiosk_shell_seats() {
         idle_reset_minutes: 5,
     };
     let mut s2 = seat_cfg(2, None);
-    s2.kiosk = Some(KioskApp { command: "ignored.exe".into(), args: vec![] });
-    s2.kiosk_shell = Some(shell.clone());
+    s2.local_mut().unwrap().kiosk = Some(KioskApp { command: "ignored.exe".into(), args: vec![] });
+    s2.local_mut().unwrap().kiosk_shell = Some(shell.clone());
     b.start(&req(&s2, &settings, None)).unwrap();
     {
         let l = w.launcher.launched.lock().unwrap();
@@ -595,7 +595,7 @@ fn desktops_kiosk_shell_seats() {
     assert_eq!(w.launcher.launched.lock().unwrap().len(), 1);
     // Seat 1 with a shell: normal desktop by default, a kiosk seat when switched off.
     let mut s1 = seat_cfg(1, None);
-    s1.kiosk_shell = Some(shell);
+    s1.local_mut().unwrap().kiosk_shell = Some(shell);
     b.start(&req(&s1, &settings, None)).unwrap();
     assert_eq!(w.launcher.launched.lock().unwrap().len(), 1);
     assert_eq!(b.log_off(seat(1), 1).unwrap_err().reason, "console_seat");
@@ -635,7 +635,7 @@ fn desktops_kiosk_shell_stop_watch_and_release() {
     let mut settings = GlobalSettings::default();
     settings.kiosk.seat1_desktop = false;
     let mut s1 = seat_cfg(1, None);
-    s1.kiosk_shell = Some(shell.clone());
+    s1.local_mut().unwrap().kiosk_shell = Some(shell.clone());
 
     for honour in [true, false] {
         let w = FakeWorld::client();
@@ -694,7 +694,7 @@ fn desktops_per_seat_mode_needs_the_keeper() {
     let opts = DesktopsOptions { mode: DesktopMode::PerSeat, install_dir: r"C:\P".into(), events: Some(Arc::new(Ev(true))), ..DesktopsOptions::default() };
     let b = create_backend_with(SessionBackendKind::Desktops, w.deps(), opts);
     let mut s2 = seat_cfg(2, None);
-    s2.kiosk = Some(KioskApp { command: "kiosk.exe".into(), args: vec![] });
+    s2.local_mut().unwrap().kiosk = Some(KioskApp { command: "kiosk.exe".into(), args: vec![] });
     b.start(&req(&s2, &GlobalSettings::default(), None)).unwrap();
     let l = w.launcher.launched.lock().unwrap();
     assert_eq!(l[0].1.args, ["--desktop-keeper", "--seat", "2"]);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// TypeScript mirror of the `split-proto` wire types (JSON, snake_case). Protocol v2.
+// TypeScript mirror of the remote-kind wire types (JSON, snake_case): `seat_proto::remote`
+// (Split protocol v2 enums in `seat_proto::remote::legacy`, from `split-proto`, merge step 4).
 
 export const PROTOCOL_VERSION = 2;
 

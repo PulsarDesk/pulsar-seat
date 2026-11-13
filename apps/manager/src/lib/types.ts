@@ -71,6 +71,8 @@ export type SeatState =
 
 export interface SeatRuntime {
   seat: SeatNumber;
+  /** Protocol 3; missing from older services = `local`. */
+  kind?: SeatKind;
   state: SeatState;
   session_id?: number;
   user_sid?: string;
@@ -174,26 +176,50 @@ export type SeatAccount =
   | { kind: 'local'; user: string }
   | { kind: 'domain'; domain: string; user: string };
 
+/** Seat kind (config schema 2, protocol 3; architecture.md section 10). */
+export type SeatKind = 'local' | 'remote';
+
 export interface SeatConfig {
   number: SeatNumber;
   name: string;
   autostart: boolean;
+  /** Missing in documents of older services = `local`. */
+  kind?: SeatKind;
   account: SeatAccount;
   cpu_sets?: number[];
   cpu_hard_limit: boolean;
   wallpaper: boolean;
-  kiosk?: KioskApp;
   /** Per-seat source address (spec 10 §7.4). Added 2026-11-13. */
   ip_binding?: IpBinding;
   /** Programs started in the seat session after sign-in, in the seat's job (spec 80 §11.2).
    *  Absolute paths only (the service skips anything else). Added 2026-11-13. */
   startup_apps?: KioskApp[];
+  /** Physical-seat part; set exactly when `kind` is `local`. */
+  local?: LocalSeat;
+  /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. This
+   *  manager does not edit remote seats yet (merge step 9) and keeps the object as is. */
+  remote?: RemoteSeat;
+}
+
+/** Local-only part of a seat (these fields were on the seat before config schema 2). */
+export interface LocalSeat {
+  /** Kiosk app for the desktops backend. */
+  kiosk?: KioskApp;
   /** Concurrent kiosk seat in the console session (desktops backend, spec 35 §5.1 U3).
    *  Added 2026-11-13. */
   kiosk_shell?: KioskShell;
   /** Clipboard / drive / smart-card redirection of the seat session (IronRDP backend,
    *  spec 70). Absent = all off. Added 2026-11-13. */
   redirect?: SeatRedirect;
+}
+
+/** Remote seat part (`seat_core::remote::RemoteSeat`); only the fields this manager reads. */
+export interface RemoteSeat {
+  id?: string;
+  display_name?: string;
+  port?: number;
+  stream_backend?: 'sunshine' | 'pulsar';
+  [field: string]: unknown;
 }
 
 /** Direction of the clipboard bridge, seen from the seat session. */
@@ -426,6 +452,8 @@ export interface GlobalSettings {
   outputs?: OutputSettings;
   /** Added 2026-11-13 (kiosk-shell); older services omit it (default seat1_desktop = true). */
   kiosk?: KioskSettings;
+  /** Remote seat machine settings (config schema 2); kept as is by this manager. */
+  remote?: Record<string, unknown>;
 }
 
 /** Update check opt-in (spec 90 §11 item 10). */
@@ -586,6 +614,8 @@ export interface Issue {
   seat?: SeatNumber;
   device?: DeviceKey;
   field?: string;
+  /** Finer reason (`remote_seat_invalid`: the remote model error code). */
+  reason?: string;
 }
 
 export interface ApplyResult {
