@@ -39,6 +39,7 @@ here when you add a doc.
 | Service integration: seat start order, engine, wiring, IPC v2 | [docs/agents/architecture.md](docs/agents/architecture.md) (Processes, IPC, Seat lifecycle) |
 | Package READMEs (build, test, untested parts, notices) | `crates/*/README.md`, `shim/README.md`, `installer/README.md`, `drivers/*/README.md` |
 | Pulsar stream backend (`pulsar-host`): launch, isolation, control pipe, pads | [docs/agents/pulsar-host-backend.md](docs/agents/pulsar-host-backend.md) |
+| Merge with Pulsar Seat: Split side (packages, IPC, config, overlap, proposal) | [docs/agents/merge-plan-split.md](docs/agents/merge-plan-split.md) |
 | Test coverage: commands, ARM64 workaround, baseline | [docs/agents/coverage.md](docs/agents/coverage.md) |
 | Open spec / design questions | [docs/agents/open-questions.md](docs/agents/open-questions.md) |
 | Current status / resume point | [docs/agents/status.md](docs/agents/status.md) |
