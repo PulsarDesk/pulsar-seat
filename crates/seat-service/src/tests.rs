@@ -1891,6 +1891,26 @@ fn fus_hand_over_keeps_seat1_on_its_own_session() {
     assert_eq!(seat_session_id(&h, s(1)), home);
 }
 
+/// Seat 1 (no account) locked on the console: the answer carries the session user's SID,
+/// so the provider's switch tile is listed on that user's lock screen (VM test 2026-11-15).
+#[test]
+fn credprov_seat_without_account_gets_the_session_user_sid() {
+    let h = fus_harness();
+    let one = seat_session_id(&h, s(1));
+    let me = crate::platform::SessionUser { domain: "PC".into(), name: "admin".into(), sid: "S-1-5-21-9-500".into(), logon_sid: "S-1-5-5-0-1".into() };
+    h.p.users.lock().unwrap().insert(one, me);
+    let mut c = logonui(&h, 960, one);
+    credprov_hello(&h, &mut c).unwrap();
+    let ResponseBody::CredprovSession(q) =
+        call(&h, &mut c, RequestBody::CredprovQuery { scenario: seat_proto::CredprovScenario::Unlock }).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(q.seat, Some(s(1)), "{q:?}");
+    assert!(q.account.is_none() && q.switch_targets.contains(&s(2)), "{q:?}");
+    assert_eq!(q.user_sid.as_deref(), Some("S-1-5-21-9-500"));
+}
+
 #[test]
 fn credprov_no_auto_submit_without_an_account() {
     let h = fus_harness();

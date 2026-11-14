@@ -243,7 +243,10 @@ impl Service {
                 }
                 sid
             }
-            (None, None) => None,
+            // A seat without an account (seat 1 at the logon screen setting): the session's
+            // signed-in user, so the provider's switch tile sits on that user's lock screen
+            // (Windows 11 shows only that user's tiles there; VM test 2026-11-15).
+            (None, None) => self.platform.session_user(session).map(|u| u.sid),
         };
         Ok(ResponseBody::CredprovSession(CredprovSession {
             seat,
