@@ -215,14 +215,24 @@ impl Service {
         }
         let console = self.platform.console_session();
         let topo = st.config.settings.backends.host_topology;
-        (console == Some(session_id) && topo == seat_core::backend::session::HostTopology::SeatOneConsole)
-            .then_some(SeatNumber::CONSOLE)
+        // Seat 1 bound to another session (its own, waiting off the console under
+        // `fast_user_switch`): the console session is a seat N hand-over, not seat 1.
+        let seat1 = st.seats.get(&SeatNumber::CONSOLE).and_then(|s| s.rt.session_id);
+        (console == Some(session_id)
+            && topo == seat_core::backend::session::HostTopology::SeatOneConsole
+            && seat1.is_none_or(|id| id == session_id))
+        .then_some(SeatNumber::CONSOLE)
     }
 
     /// Seat 1 mirrors the console session (`seat_one_console` only; under
     /// `dedicated_host` seat 1 is a started seat and the console is the host account's).
+    /// `fast_user_switch`: while another seat holds the console, seat 1 stays bound to its
+    /// own session waiting off the console (`SessionBackend::console_seat_away`), never to
+    /// the seat N session on the console (VM test 2026-11-15: seat 1 took seat 2's fresh
+    /// logon session, so the credential provider there was answered for seat 1).
     pub(crate) fn refresh_console_seat(&self) {
-        let console = self.platform.console_session();
+        let away = self.backends().session.console_seat_away();
+        let console = away.or_else(|| self.platform.console_session());
         let user = console.and_then(|c| self.platform.session_user(c));
         let mut st = self.lock();
         if !st.config.settings.enabled || Self::dedicated(&st) {
@@ -671,6 +681,14 @@ impl Service {
         }
         log::info(&format!("seat {seat}: session {} ready", info.session_id));
         let at_logon = user.is_none() && info.state == SessionState::AtLogon;
+        // fast_user_switch: the console notification of a fresh logon session usually
+        // arrives before the session is bound to this seat, so its topology is queued here.
+        if at_logon
+            && b.session.kind() == seat_core::backend::SessionBackendKind::FastUserSwitch
+            && self.platform.console_session() == Some(info.session_id)
+        {
+            self.queue_switch_topology(info.session_id);
+        }
         if let Some(u) = user {
             self.on_seat_logon(seat, info.session_id, u);
         }
@@ -883,7 +901,13 @@ impl Service {
         }
         let console = self.platform.console_session();
         let dedicated = Self::dedicated(&self.lock());
-        let console_event = console == Some(session_id) || change == SessionChange::ConsoleConnect;
+        // `fast_user_switch` with seat 1 off the console: the console session is another
+        // seat's, so its events go to that seat below, not to seat 1.
+        let seat1_away = self.backends().session.console_seat_away().is_some();
+        let console_event = !seat1_away && (console == Some(session_id) || change == SessionChange::ConsoleConnect);
+        if seat1_away && change == SessionChange::ConsoleConnect && !dedicated {
+            self.refresh_console_seat();
+        }
         if console_event && change == SessionChange::Logon && self.take_seat_one_wait() {
             // `after_seat_one_logon`: somebody signed in at the console (the host account
             // under `dedicated_host`).

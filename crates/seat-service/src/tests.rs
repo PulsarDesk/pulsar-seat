@@ -1854,6 +1854,43 @@ fn credprov_query_before_arm_is_pending_until_the_grant() {
     assert!(!query(&h, &mut c).pending);
 }
 
+/// VM test 2026-11-15: under `fast_user_switch` the console notification of seat 2's
+/// fresh logon session arrived before the session was bound to seat 2, and seat 1 (which
+/// mirrored the console) took it. LogonUI there was then answered for seat 1: no seat tile,
+/// not pending, so no auto-logon. Seat 1 must stay on its own session while it is away.
+#[test]
+fn fus_hand_over_keeps_seat1_on_its_own_session() {
+    let h = fus_harness();
+    let home = seat_session_id(&h, s(1));
+    let fresh = home + 40;
+    // Start of seat 2: the hand-over is noted, the backend remembered seat 1's session and
+    // disconnected the console; Windows reports the new console before the start binds it.
+    h.s.note_credprov_handover(s(2));
+    *h.f.fus.console_seat_away.lock().unwrap() = Some(home);
+    *h.p.console.lock().unwrap() = Some(fresh);
+    h.s.on_session_change(SessionChange::ConsoleConnect, fresh);
+    assert_eq!(seat_session_id(&h, s(1)), home, "seat 1 keeps its own session");
+    // LogonUI of the fresh session asks now: not seat 1, and pending (polls for the grant).
+    let mut c = logonui(&h, 950, fresh);
+    credprov_hello(&h, &mut c).unwrap();
+    let q = query(&h, &mut c);
+    assert_ne!(q.seat, Some(s(1)), "{q:?}");
+    assert!(q.pending, "{q:?}");
+    // Seat 2 is bound to the session and its user signs in there: seat 2's logon, not seat 1's.
+    h.s.lock().seats.get_mut(&s(2)).unwrap().rt.session_id = Some(fresh);
+    let ali = crate::platform::SessionUser { domain: "PC".into(), name: "ali".into(), sid: "S-1-5-21-9-ali".into(), logon_sid: "S-1-5-5-0-9".into() };
+    h.p.users.lock().unwrap().insert(fresh, ali);
+    h.s.on_session_change(SessionChange::Logon, fresh);
+    assert!(matches!(state(&h, s(2)), SeatState::SignedIn { ref user } if user.ends_with("ali")), "{:?}", state(&h, s(2)));
+    assert_eq!(seat_session_id(&h, s(1)), home);
+    assert!(!matches!(state(&h, s(1)), SeatState::SignedIn { ref user } if user.ends_with("ali")));
+    // Seat 1 back on the console: it mirrors the console again.
+    *h.f.fus.console_seat_away.lock().unwrap() = None;
+    *h.p.console.lock().unwrap() = Some(home);
+    h.s.on_session_change(SessionChange::ConsoleConnect, home);
+    assert_eq!(seat_session_id(&h, s(1)), home);
+}
+
 #[test]
 fn credprov_no_auto_submit_without_an_account() {
     let h = fus_harness();
