@@ -144,3 +144,13 @@ otherwise:
   designs that need few or no kernel drivers.
 - **Multiple interactive sessions on client Windows SKUs** are restricted by Microsoft's
   licence terms. Decide the approach in Phase 2 (same question as Pulsar Split).
+
+## Decisions (2026-11-15, maintainer)
+
+- **Printer redirection** (`SeatRedirect.printers`, round 4): accepted as a Pulsar Seat
+  addition beyond the reference behaviour (spec/local/70 §3.8: the reference does nothing
+  with printers). Default stays `off`, so out of the box every seat sees every printer,
+  as with the reference.
+- **Remote seat microphone** (pulsar-host contract §3.8, `mic` capability): accepted. The
+  matching change in pulsar-desktop is still to be made; until then Pulsar seats report
+  `mic = unsupported`.
