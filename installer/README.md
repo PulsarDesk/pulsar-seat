@@ -11,6 +11,12 @@ installer/scripts` covers the scripts.
 > was extracted (`msiexec /a`) and PE-checked, **never installed**: every elevated step
 > (custom actions, service record, restore point, tweaks, uninstall revert) is untested on
 > hardware. Nothing is signed.
+>
+> **2026-11-14 (merge step 10):** one MSI per arch for both seat kinds. Both MSIs built on
+> the ARM64 dev box (unsigned), extracted and PE-checked: ARM64 package all native 0xAA64
+> except the app API helpers of other arches and the x86 usbip-win2 installer stub, no shim;
+> x64 package all 0x8664 except `shim\x86\` and the same stubs. SHA-256 in
+> `docs/agents/status.md`. Never installed.
 ## Files
 
 | File | What |
@@ -18,10 +24,10 @@ installer/scripts` covers the scripts.
 | `wix/PulsarSeat.wxs` | WiX v3 fragment merged into the Tauri MSI: service exe + `ServiceInstall` (`PulsarSeat`, LocalSystem, own process, automatic, depends on `RpcSs` + `LSM`, SID type unrestricted, restart 5 s / 30 s / 120 s, reset 1 day), host + agent exes, the credential provider DLL `pulsar-seat-credprov.dll` (file only: **never registered by the MSI**; the service registers it while enabled under `fast_user_switch`, credprov/README.md), app API helper DLLs (`apihelper\<arch>\`), machine Run value, `HKLM\SOFTWARE\Pulsar Seat` (`InstallPath`, `Version`), empty `drivers\` folder, deferred no-impersonate custom actions `install` / `uninstall` + a **rollback** action, arch / build / admin / coexistence / property-validation conditions, a yes / no dialog before running seats are stopped (upgrade, repair, removal; full UI only) and a non-blocking TermService warning dialog. |
 | `nsis/hooks.nsh` | Tauri NSIS `installerHooks` for a `-setup.exe`. **Not shipped**: Tauri's NSIS stub is 32-bit x86 (emulated on ARM64), which `docs/agents/rules.md` does not allow; kept correct for a maintainer-approved exception. Arch guard, build ≥ 19045, refuse beside the reference product, TermService warning (full expanded path), **full pre-flight gate from `$PLUGINSDIR` before any file is laid down**, stop seats on upgrade (asks first), Turkish yes / no questions, validated + quoted arguments, cleanup on a late refusal. |
 | `tauri-bundle.json` | Snippet merged into `apps/manager/src-tauri/tauri.conf.json` (`productName` "Pulsar Seat", `bundle.active`, **MSI only**, fixed `upgradeCode`, `tr-TR`, fragment + component refs, licences, WebView2 bootstrapper). CI passes it with `tauri build --config`. |
-| `scripts/check-payload.ts` | Release gate: PE machine of every `.exe/.dll/.sys` is the target arch (0xAA64 / 0x8664, read from the PE header) except `apihelper/<x86\|x64\|arm64\|arm64ec>/`, which must match its folder; no Microsoft runtime DLLs (static CRT); no certificates / keys; drivers only with `--allow-drivers` and then only as INF + CAT package; vulnerable drivers by a name pre-check and, with `--blocklist <SiPolicy.xml>`, by Authenticode hash / file name against Microsoft's recommended driver block rules. `--machine-only` = PE machine check only (CI drivers job). `--release`: `pulsar-seat-credprov.dll` (LogonUI, SYSTEM) must carry an Authenticode certificate table (`unsigned_system_dll`). |
+| `scripts/check-payload.ts` | Release gate: PE machine of every `.exe/.dll/.sys` is the target arch (0xAA64 / 0x8664, read from the PE header) except `apihelper/<x86\|x64\|arm64\|arm64ec>/`, which must match its folder; no Microsoft runtime DLLs (static CRT); no certificates / keys; drivers only with `--allow-drivers` and then only as INF + CAT package; vulnerable drivers by a name pre-check and, with `--blocklist <SiPolicy.xml>`, by Authenticode hash / file name against Microsoft's recommended driver block rules. `--machine-only` = PE machine check only (CI drivers job). `--release`: `pulsar-seat-credprov.dll` (LogonUI, SYSTEM) must carry an Authenticode certificate table (`unsigned_system_dll`). Remote kind (union with Split's check, merge step 10): web-UI assets refused, more Microsoft files (`rfxvmt`, `AcRes`, `d3dcompiler_NN`), the pinned packages of `remote/drivers/<id>/` allowed without `--allow-drivers` (still INF + CAT; `*.sys` warn for review; an upstream installer `.exe` there may be x86), `shim/x64/` = x64, `shim/x86/` = x86, no shim in the ARM64 package. |
 | `scripts/js-notices.ts` | Licence notices of the JS packages bundled into the manager frontend. |
-| `scripts/bundle-config.ts` | Writes the snippet without `$comment` keys for `tauri build --config`, plus the generated fragment `PulsarSeatDrivers.wxs` (`ComponentGroup PulsarSeatDriverPackages`: one `drivers\<package>\` folder per staged signed package, empty otherwise) and an optional `--version`. |
-| `scripts/build-installer.ps1` | The whole MSI build for one arch (local and CI): release binaries (static CRT), app API helpers, optional `-SignedDrivers <dir>` (staged only when every catalog is Authenticode-valid and signed by "Microsoft Windows Hardware Compatibility Publisher", and every `.sys` / `.dll` either a member of that catalog (`signtool verify /pa /c`) or embedded-signed by the same publisher; an embedded signature from anyone else refuses the package), **version gate** (Cargo workspace = `tauri.conf.json` = `package.json` = `-Version`), payload gate, bundle config, `tauri build --bundles msi`, `msiexec /a` extraction + payload gate on every file inside, `target\installer\dist\PulsarSeat_<v>_<arch>.msi` + `SHA256SUMS.txt`. `-SkipCargo` uses an existing payload (CI), `-NoArm64ec` leaves the ARM64EC helper out (test builds on a toolchain without that target only; refused with `-Release`; without it a missing `arm64ec-pc-windows-msvc` target fails the build), `-Release` sets `PULSAR_SEAT_RELEASE` (the service then refuses to compile while `release-signers.txt` lists no key), checks the key list (`pulsar-seat-release check-signers --require`), the source-offer tag and the generated third-party notices (also inside the MSI: `check-payload.ts --notices`). Every build writes `<msi>.build.txt` (version, arch, commit, dirty, release, service SHA-256) next to the MSI. `-SignedCredProv <dll>` bundles a validly signed credential provider DLL; with `-Release` an unsigned one only warns (CI has no signing; `sign-release.ps1` refuses it). |
+| `scripts/bundle-config.ts` | Writes the snippet without `$comment` keys for `tauri build --config`, plus the generated fragment `PulsarSeatDrivers.wxs` (`ComponentGroup PulsarSeatDriverPackages`: one `drivers\<package>\` folder per staged signed package, empty otherwise), the remote payload fragment `PulsarSeatRemote.wxs` (`--remote <dir>`; empty group without it) and an optional `--version`. |
+| `scripts/build-installer.ps1` | The whole MSI build for one arch (local and CI): release binaries (static CRT), app API helpers, optional `-SignedDrivers <dir>` (staged only when every catalog is Authenticode-valid and signed by "Microsoft Windows Hardware Compatibility Publisher", and every `.sys` / `.dll` either a member of that catalog (`signtool verify /pa /c`) or embedded-signed by the same publisher; an embedded signature from anyone else refuses the package), **version gate** (Cargo workspace = `tauri.conf.json` = `package.json` = `-Version`), payload gate, bundle config, `tauri build --bundles msi`, `msiexec /a` extraction + payload gate on every file inside, `target\installer\dist\PulsarSeat_<v>_<arch>.msi` + `SHA256SUMS.txt`. Remote kind: builds the shim (x64 package: `shim\x64`, `shim\x86`) and runs `fetch-deps.ts` into `<payload>\remote` (`-NoRemoteDeps` leaves it out: test builds only, refused with `-Release`). `-SkipCargo` uses an existing payload (CI; the x64 shim comes from the `shim-x64` artifact), `-NoArm64ec` leaves the ARM64EC helper out (test builds on a toolchain without that target only; refused with `-Release`; without it a missing `arm64ec-pc-windows-msvc` target fails the build), `-Release` sets `PULSAR_SEAT_RELEASE` (the service then refuses to compile while `release-signers.txt` lists no key), checks the key list (`pulsar-seat-release check-signers --require`), the source-offer tag and the generated third-party notices (also inside the MSI: `check-payload.ts --notices`). Every build writes `<msi>.build.txt` (version, arch, commit, dirty, release, service SHA-256) next to the MSI. `-SignedCredProv <dll>` bundles a validly signed credential provider DLL; with `-Release` an unsigned one only warns (CI has no signing; `sign-release.ps1` refuses it). |
 | `scripts/write-sums.ps1` | `SHA256SUMS.txt` for the **signed** MSIs of a release (warns about any MSI without a valid signature; removes a stale `SHA256SUMS.txt.minisig`). |
 | `release-signers.txt` | Release signing **public** keys (minisign Ed25519, one `RWQ…` line each) compiled into the service's update check (`include_str!`, `update::ACCEPTED_SIGNERS`). **Empty** until the maintainer creates the real key (docs/release/checklist.md §2). |
 | `scripts/release-keygen.ps1` | Once, maintainer only: `pulsar-seat-release keygen` → secret key **outside the repo** (default `%USERPROFILE%\.pulsar-seat\release-key\minisign.key`, never printed, ACL current user + SYSTEM; refuses a folder inside any source tree and never overwrites), prints the public key line for `release-signers.txt`. |
@@ -32,6 +38,9 @@ installer/scripts` covers the scripts.
 | `scripts/build-drivers.ps1` | Drivers package: msbuild ARM64 + x64 with WDK 10.0.28000, zero warnings, infverif, PE machine (CI drivers job). |
 | `scripts/*.test.ts` | `bun test` (synthetic PE headers, temp folders only). |
 | `licenses/` | `SOURCE-OFFER.txt` (GPL-3 §6), `NOTICES.md`, `about.toml` + `about.hbs` (cargo-about); the generated `THIRD-PARTY-NOTICES-*.md` (not tracked). |
+| `remote/drivers.json` | Remote kind: third-party driver manifest (`DriverPackage[]`): URL, pinned SHA-256, licence, install kind, detection, minimum build. Defaults from `docs/split/agents/third-party.md`. |
+| `remote/stream-server.json` | Remote kind: stream-server manifest (upstream Sunshine, pinned tag of remote spec 80), one portable zip per arch with its SHA-256, the web-UI folders and `drop_paths` (upstream's `scripts\`: service install, firewall allow rules, bundled ViGEmBus installer; and `tools\sunshinesvc.exe`) left out. |
+| `scripts/fetch-deps.ts` | Remote kind (from Pulsar Split): downloads the pinned artefacts over HTTPS, verifies SHA-256, unpacks with the system `tar.exe`, checks each INF (arch section + root hardware id), drops the stream server's web UI and `drop_paths`, writes `target/installer-deps/<arch>/remote/` (resolved `drivers.json`, `drivers\<id>\`, runtime `stream-server.json`, `stream-server\`), then runs `check-payload.ts` on it. Cache: `target/installer-deps/cache/<sha256>-<file>`. |
 
 ## Target
 
@@ -76,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File installer\scripts\build-installer.ps1 -
 
 Licence texts: CI generates `installer/licenses/THIRD-PARTY-NOTICES-{RUST,JS}.md`
 (`cargo about`, `js-notices.ts`) before the bundle; a local test build without them still
-bundles `installer/licenses/` (GPL text, `NOTICES.md`, `SOURCE-OFFER.txt`) but is **not**
+bundles `installer/licenses/` (GPL text, `NOTICES.md`, `SOURCE-OFFER.txt`, the remote kind's upstream licence texts) but is **not**
 releasable.
 
 The x64 MSI can be built on the ARM64 dev box (cross-compiled binaries, same WiX); its
@@ -204,13 +213,59 @@ A value changed by someone else after us is left alone and reported. Then files,
 entry, `HKLM\SOFTWARE\Pulsar Seat`; `%ProgramData%\Pulsar Seat` only with
 `REMOVEUSERDATA=1` / `/REMOVEUSERDATA` / "yes" in the NSIS question.
 
+## Remote seat kind (merge step 10)
+
+The one MSI carries the remote kind too (from Pulsar Split's `installer/split/`, removed).
+Install logic: `crates/seat-setup` through `pulsar-seat-service remote-setup install |
+reconcile | uninstall | check-coexistence`; remote spec 90 (`spec/remote/`).
+
+- **Payload.** `<install>\remote\` = `fetch-deps.ts` output, generated into the WiX
+  fragment `PulsarSeatRemote.wxs` (`ComponentGroup PulsarSeatRemotePayload`, one component
+  per file) by `bundle-config.ts --remote`. Sunshine per arch (x64 / ARM64 portable zip),
+  the VDD INF package, the usbip-win2 upstream installer. Kept apart from `drivers\`
+  (the signed packages `install` stages, which must be WHCP-signed). The service reads the
+  stream server from `remote\stream-server.json` (`seat_setup::layout::REMOTE_PAYLOAD_DIR`).
+- **Shim** (x64 package only): `shim\x64\{PulsarSplitShim.dll, pulsar-split-launch.exe,
+  pulsar-split-shimctl.exe}`, `shim\x86\{PulsarSplitShim.dll, pulsar-split-launch32.exe}`
+  (`ComponentGroup PulsarSeatShim`, empty in the ARM64 package). Copied only; the service
+  installs it when the operator turns isolation on.
+- **Custom actions.** After `install`: `remote-setup install --msi "--drivers=[PULSARDRIVERS]"
+  "--consent=[PULSARCONSENT]"` (fresh install only) and `remote-setup reconcile …` (every
+  install, upgrade, repair). They make the remote journal / log folders (owner SYSTEM,
+  the Seat DACLs), **stop and delete a leftover `PulsarSplit` service** (pre-merge Split
+  installs), install third-party drivers from `remote\drivers\` and run the reconcile hooks.
+  Log: `%ProgramData%\Pulsar Seat\logs\remote-setup.log` (Seat's `setup.log` is separate).
+- **Drivers default: none.** A fresh install without `PULSARDRIVERS` sets it to `none`, so a
+  local-only PC gets no virtual display or USB/IP driver. Opt in with
+  `msiexec /i … PULSARDRIVERS=vdd` (and `PULSARDRIVERS=vdd,usbip-win2 PULSARCONSENT=usbip-win2`
+  for the upstream usbip-win2 installer). Repairs and upgrades keep the choice saved at the
+  first install (`HKLM\SOFTWARE\PulsarSplit\Setup\Drivers`). Both properties refuse
+  whitespace and `/ \ = [ ]` (launch conditions).
+- **Uninstall replays both journal formats.** The one `uninstall` action first runs the
+  remote uninstall in process (package restore hooks: wrapper module with the TermService
+  restart last, RDS rows, shim, stream firewall group `PulsarSplit`, pads, VDD settings;
+  then the generic replay of `journal\<package>.jsonl`; our devnodes, our driver packages,
+  `HKLM\SOFTWARE\PulsarSplit\Secrets`, with `REMOVEUSERDATA=1` also the seat accounts it
+  created and `HKLM\SOFTWARE\PulsarSplit`), then the local kind (device gates, session host,
+  seat-compat `journal\changes.jsonl`). Each side skips the other's format; the data folder
+  is deleted once, last, by the local part.
+- Experimental multi-session (wrapper backend kind): off by default; there is no MSI
+  feature for it any more (Split's `Termwrap\Offered` marker had no reader). The manager
+  turns it on after its warning.
+- Not taken over from Split: the NSIS hooks (Seat ships MSI only), the Tauri
+  `resources` / `externalBin` overrides, the "reference seen at install" marker (no reader;
+  the service evaluates coexistence at each start).
+- **Untested:** no install ran. The remote custom actions, the driver opt-in, the
+  leftover-service removal and the chained uninstall never ran elevated.
+
 ## Service CLI (implemented in `crates/seat-service/src/win/setup.rs`, untested elevated)
 
 | Command | Behaviour |
 | --- | --- |
 | `preflight` | `seat_compat::preflight::run`; print `InstallReport::warnings()` lines on stdout; exit `setup::gate_exit_code` (0 / 4). No system change. |
 | `install [--msi] [--register-service] [--restore-point=…] [--tweak=…] [--drivers=…]` | service part; `--register-service` = create the service record (NSIS only; the MSI's `ServiceInstall` already made it, creating it again would collide); then `InstallOptions::parse` + `setup::install(&Journal::in_data_dir(..)?, &WinOps, &opts)`, `setup::write_setup_log`; exit `report.exit_code()`, through `setup::msi_exit_code` with `--msi`. Parse errors: exit 1. |
-| `uninstall [--msi] [--unregister-service] [--remove-user-data=<0\|1>]` | `UninstallOptions::parse`; `setup::uninstall`; service part; exit `setup::uninstall_exit_code` (0 with `--msi`). |
+| `remote-setup install \| reconcile [--msi] [--drivers=<ids\|none>] [--consent=<ids>]`, `remote-setup uninstall [--remove-user-data]`, `remote-setup check-coexistence` | Remote kind (`seat_setup::cli`, `crates/seat-service/src/remote/win/setup_cmd.rs`); see "Remote seat kind". |
+| `uninstall [--msi] [--unregister-service] [--remove-user-data=<0\|1>]` | the remote uninstall first (both journal formats, see "Remote seat kind"); `UninstallOptions::parse`; `setup::uninstall`; service part; exit `setup::uninstall_exit_code` (0 with `--msi`). |
 
 Also for the service: journal the seat user's SID with
 `seat_compat::tweaks::record_user_palm_check` before sending the agent's palm-check task;

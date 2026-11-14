@@ -248,6 +248,8 @@ pub fn read_dir_journals(dir: &Path) -> Result<Vec<(PathBuf, ParsedJournal)>, Se
     let mut paths: Vec<PathBuf> = entries
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+        // Other formats in the same folder (seat-compat `changes.jsonl`) are not ours.
+        .filter(|p| !p.file_name().and_then(|n| n.to_str()).is_some_and(|n| crate::layout::FOREIGN_JOURNALS.iter().any(|f| f.eq_ignore_ascii_case(n))))
         .collect();
     paths.sort();
     for p in paths {

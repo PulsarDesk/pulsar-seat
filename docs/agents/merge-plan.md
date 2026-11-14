@@ -1,7 +1,8 @@
 # Merge plan: Pulsar Seat + Pulsar Split (JOINT v1)
 
 Index: [../../AGENTS.md](../../AGENTS.md). Status: **joint plan, 2026-11-14, agreed by the
-Seat and Split sessions; waiting for maintainer approval.** No code moves before that.
+Seat and Split sessions, approved by the maintainer (§5). Steps 0-10 done (2026-11-14); step
+11 (hardware tests) is the maintainer's.** Results per step: [status.md](status.md).
 
 Inputs:
 - Seat side: this file's earlier draft (2026-11-13).

@@ -165,6 +165,23 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         }
     };
     let mut code = setup::EXIT_OK;
+    // Remote kind first (merge step 10): its package hooks (stream firewall rules, pads,
+    // virtual display settings, shim, wrapper module with the TermService restart, RDS
+    // rows) and the generic replay of its `<package>.jsonl` journals. Then the local kind
+    // below: device gates, the session host and seat-compat's `changes.jsonl`. Each side
+    // skips the other's journal format; the data folder itself is deleted last, here.
+    let remote = crate::remote::win::setup_cmd::run(seat_setup::cli::SetupCommand::Uninstall {
+        remove_user_data: opts.remove_user_data,
+        unregister_service: false,
+        msi: false,
+    });
+    if remote != setup::EXIT_OK && remote != setup::EXIT_REBOOT {
+        eprintln!(
+            "Uyarı: uzak koltuk değişiklikleri tam geri alınamadı (çıkış {remote}); ayrıntılar: {}",
+            data_dir.join(seat_core::consts::LOGS_DIR).join(seat_setup::layout::SETUP_LOG).display()
+        );
+        code = code.max(setup::EXIT_PARTIAL);
+    }
     let run = data_dir.join(seat_core::consts::RUN_DIR);
     let pnp: Arc<dyn seat_core::pnp::PnpTree> = Arc::new(seat_media::pnp::WinPnpTree::new());
     let make = |kind| seat_media::create_gate_in(kind, pnp.clone(), Some(&run));

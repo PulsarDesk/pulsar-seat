@@ -7,4 +7,17 @@ package is published at:
   https://github.com/PulsarDesk/pulsar-seat
   (the tag matching the version shown in the manager's "Hakkında" page)
 
-The package contains no third-party binaries other than those listed in NOTICES.md.
+The stream server shipped in the "remote\stream-server" folder is Sunshine (upstream
+repository SunshineStream/Sunshine, formerly LizardByte/Sunshine), also licensed under
+the GNU General Public License version 3. Its corresponding source:
+
+  https://github.com/SunshineStream/Sunshine/tree/v2026.516.143833
+  (commit 14ffa6fdaa53f7b51512be2b3d24f3939695403c; the shipped binaries are that
+  release's own portable zips, unmodified; only the browser web-UI asset folder, the
+  "scripts" folder and "tools\sunshinesvc.exe" are left out of the package; no source
+  change)
+
+If a later release ships a modified stream server, its complete corresponding source
+(including the patches) is published next to that release.
+
+The package contains no other third-party binaries than those listed in NOTICES.md.

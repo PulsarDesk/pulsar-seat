@@ -104,11 +104,11 @@ pub struct ServiceSpec {
 impl ServiceSpec {
     /// Spec 90 §2.7: LocalSystem, own process, demand start, SID type unrestricted,
     /// restart after 5 s / 30 s / 120 s, reset after one day.
-    pub fn pulsar_split(exe: &Path) -> Self {
+    pub fn pulsar_seat(exe: &Path) -> Self {
         Self {
             name: crate::layout::SERVICE_NAME.into(),
-            display_name: "Pulsar Split".into(),
-            description: "Pulsar Split çoklu oturum hizmeti".into(),
+            display_name: seat_core::consts::SERVICE_DISPLAY_NAME.into(),
+            description: "Bir bilgisayarda birden çok koltuğu (yerel ve uzak) yönetir.".into(),
             command_line: format!("\"{}\" --service", exe.display()),
             restart_delays_ms: vec![5_000, 30_000, 120_000],
             reset_period_s: 86_400,

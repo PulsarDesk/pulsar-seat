@@ -29,6 +29,19 @@
 // 1 KiB each, the size CI checks after generating them). A release MSI without the MIT /
 // Apache / BSD texts of its bundled crates and packages must not be published.
 //
+// Remote seat kind (merge step 10, rules from Pulsar Split's installer/split/scripts/
+// check-payload.ts, same author, merged here):
+//   - browser web-UI assets (`*.html`, `*.htm`, folders named web / webui / www) are refused
+//     (the stream server's web UI never ships);
+//   - more Microsoft files: rfxvmt.dll, AcRes.dll, d3dcompiler_NN.dll;
+//   - the pinned third-party driver packages of `remote/drivers/<id>/` (fetch-deps.ts,
+//     SHA-256 pinned in installer/remote/drivers.json) may ship without `--allow-drivers`,
+//     still only as INF + CAT packages; their kernel drivers (*.sys) warn for review; an
+//     upstream installer `.exe` directly in `remote/drivers/<id>/` may be x86 (Inno Setup
+//     stubs are 32-bit on every arch); every other file there is native;
+//   - the per-process shim: `shim/x64/` must be x64, `shim/x86/` x86, and the ARM64 package
+//     carries no shim at all (shim/README.md: x64 / x86 only).
+//
 // `--machine-only` checks just the PE machine (loose driver binaries in CI); the package
 // shape rules stay with the release gate.
 //
@@ -69,11 +82,17 @@ const MS_DLL_PATTERNS: RegExp[] = [
   /^webview2loader\.dll$/i,
   /^termsrv\.dll$/i,
   /^rdpidd\.dll$/i,
+  /^rfxvmt\.dll$/i,
+  /^acres\.dll$/i,
+  /^d3dcompiler_\d+\.dll$/i,
   /^msvcr\d+\.dll$/i,
 ];
 const CERT_EXT = new Set([".pfx", ".p12", ".cer", ".crt", ".der", ".pem", ".key", ".pvk", ".spc", ".p7b", ".sst"]);
 const PE_EXT = new Set([".exe", ".dll", ".sys"]);
+const WEB_EXT = new Set([".html", ".htm"]);
+const WEB_DIRS = new Set(["web", "webui", "www"]);
 const BAD_DRIVERS = new Set([
+  "duodriver.sys",
   "rtcore64.sys",
   "winring0.sys",
   "winring0x64.sys",
@@ -123,12 +142,22 @@ export function findNameViolations(paths: string[], allowDrivers: boolean): Viol
     const lower = name.toLowerCase();
     if (MS_DLL_PATTERNS.some((re) => re.test(name))) out.push({ path, rule: "microsoft_binary", severity: "error" });
     if (CERT_EXT.has(ext(name))) out.push({ path, rule: "certificate_or_key", severity: "error" });
+    if (WEB_EXT.has(ext(name)) || parts.slice(0, -1).some((d) => WEB_DIRS.has(d.toLowerCase()))) {
+      out.push({ path, rule: "web_ui_asset", severity: "error" });
+    }
+    // The shim module only ever ships in shim/<x64|x86>/ (a copy next to the manager exe
+    // would be loaded by nothing and hide a bundling mistake).
+    if (lower === "pulsarsplitshim.dll" && !parts.slice(0, -1).some((d) => d.toLowerCase() === "shim")) {
+      out.push({ path, rule: "shim_outside_folder", severity: "error" });
+    }
     if (BAD_DRIVERS.has(lower)) {
       out.push({ path, rule: "vulnerable_driver", severity: "error" });
       continue;
     }
     if (ext(name) === ".sys" || ext(name) === ".inf") {
-      if (!allowDrivers) {
+      const pinned = remoteDriverFile(path) !== null;
+      if (pinned && ext(name) === ".sys") out.push({ path, rule: "kernel_driver_review", severity: "warning" });
+      if (!allowDrivers && !pinned) {
         out.push({ path, rule: "driver_not_allowed", severity: "error", detail: "no signed driver package yet" });
         continue;
       }
@@ -152,9 +181,36 @@ export const APIHELPER_MACHINES: Record<string, number[]> = {
   arm64ec: [0x8664, 0xa641, 0xaa64],
 };
 
+/** Machines allowed in `shim/<folder>/` (x64 package only). */
+export const SHIM_MACHINES: Record<string, number[]> = { x64: [0x8664], x86: [0x014c] };
+
+/**
+ * `remote/drivers/<id>/<rest>` (the pinned third-party driver payload): `{ id, rest }`
+ * with `rest` relative to the package folder, or null for any other path.
+ */
+export function remoteDriverFile(path: string): { id: string; rest: string } | null {
+  const parts = path.replace(/\\/g, "/").split("/").filter((p) => p.length > 0);
+  for (let i = 0; i + 3 < parts.length; i++) {
+    if (parts[i].toLowerCase() === "remote" && parts[i + 1].toLowerCase() === "drivers") {
+      return { id: parts[i + 2], rest: parts.slice(i + 3).join("/") };
+    }
+  }
+  return null;
+}
+
 /** Allowed machines for a payload-relative path (forward slashes). */
 export function allowedMachines(path: string, arch: Arch): number[] | string {
   const parts = path.replace(/\\/g, "/").toLowerCase().split("/");
+  const s = parts.indexOf("shim");
+  // shim/<x64|x86>/<file>
+  if (s >= 0 && parts.length >= s + 3) {
+    if (arch !== "x64") return "the shim is x64 / x86 only and never ships in the ARM64 package";
+    const m = SHIM_MACHINES[parts[s + 1]];
+    return m ?? `unknown shim folder ${parts[s + 1]}`;
+  }
+  // An upstream installer stub directly in remote/drivers/<id>/ (32-bit on every arch).
+  const rd = remoteDriverFile(path);
+  if (rd && !rd.rest.includes("/") && ext(rd.rest) === ".exe") return [MACHINE[arch], 0x014c];
   const i = parts.indexOf("apihelper");
   // apihelper/<folder>/<file>
   if (i >= 0 && parts.length >= i + 3) {

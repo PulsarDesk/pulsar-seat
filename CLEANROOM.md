@@ -39,8 +39,8 @@ they analysed. The rules below apply to both.
   flow of the screens may follow the spec; every visual asset and every string is ours.
   UI copy is Turkish (Pulsar rule).
 - Code from open-source projects (for example GPL-3.0 code from Sunshine) may be used under
-  a GPL-3-compatible licence and must keep its notices (`installer/licenses/`,
-  `installer/split/licenses/`, package READMEs).
+  a GPL-3-compatible licence and must keep its notices (`installer/licenses/`, package
+  READMEs).
 
 ## Interop with an installed third-party product
 

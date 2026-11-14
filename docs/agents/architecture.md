@@ -62,8 +62,8 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
 | (removed) `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 (done 2026-11-14): `apps/manager/src/lib/remote/` (§10.7) |
 | `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
-| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | one own IddCx driver later ([../../drivers/README.md](../../drivers/README.md)); build at step 10 |
-| `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 into one MSI |
+| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | one own IddCx driver later ([../../drivers/README.md](../../drivers/README.md)); not built or shipped (nothing is signed; the MSI ships no own driver) |
+| (removed) `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 (done 2026-11-14): one MSI; pins in `installer/remote/`, `installer/scripts/fetch-deps.ts`, licences in `installer/licenses/` ([../../installer/README.md](../../installer/README.md) "Remote seat kind") |
 | `spec/remote/` | analyst spec | remote kind ([../../spec/README.md](../../spec/README.md)); the local kind is `spec/local/` | — |
 
 Dependency rule: package crates depend on `seat-core` (and `seat-proto` where they speak
@@ -987,7 +987,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace --target x86_64-pc-windows-msvc
 cargo build --release                             then check PE machine 0xAA64 / 0x8664
 bun test installer/scripts
-bun test installer/split/scripts
 cd shim && cargo test --target x86_64-pc-windows-msvc   (x64 + x86 only; x64 emulation on ARM64)
 ```
 

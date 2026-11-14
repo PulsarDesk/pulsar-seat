@@ -151,7 +151,9 @@ pub fn run(cmd: SetupCommand) -> i32 {
         Box::new(display_hook(data_root.clone())),
     ];
     let reconcile: Vec<Box<dyn ReconcileHook>> = vec![Box::new(display_hook(data_root))];
-    let ctx = seat_setup::win::windows_ctx(layout, InstallOptions::default(), hooks, reconcile);
+    // The data folder is the Seat service's: its `uninstall` deletes it (after this ran).
+    let options = InstallOptions { shared_data_root: true, ..InstallOptions::default() };
+    let ctx = seat_setup::win::windows_ctx(layout, options, hooks, reconcile);
     seat_setup::cli::run(cmd, ctx)
 }
 

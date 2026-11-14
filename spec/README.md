@@ -11,5 +11,5 @@ interfaces, no code. One folder per seat kind, each from its own reference produ
 File numbers overlap between the folders (both have `00`, `10`, `20`, `90`), so a
 reference such as "spec 20 §5" means the folder of the code or doc that cites it: code
 from Pulsar Split (`split-*` crates, `seat-stream`, `seat-pads`, `seat-shim-core`,
-`seat-setup`, `seat-audio`, `shim/`, `apps/manager/src/lib/remote/`, `installer/split/`,
+`seat-setup`, `seat-audio`, `shim/`, `apps/manager/src/lib/remote/`, `installer/remote/`,
 `drivers/split-*`) cites `remote/`, everything else cites `local/`.

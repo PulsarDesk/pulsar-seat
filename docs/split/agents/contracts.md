@@ -1,5 +1,7 @@
 # Package contracts (Phases 2–4)
 
+> **Superseded (merge step 10, 2026-11-14).** Pulsar Split is merged into Pulsar Seat. This file is kept as history and is not updated: names such as `pulsar-split-service`, `PulsarSplit.Control`, IPC v2, `installer/split/` and `split-*` crates are gone. Current facts: [AGENTS.md](../../../AGENTS.md), `docs/agents/`, `installer/README.md` and the package READMEs. Package APIs described here may still match the moved `seat-*` crates; the crate READMEs and `docs/agents/architecture.md` win where they differ.
+
 Index: [../../AGENTS.md](../../../AGENTS.md). Design context: [architecture.md](architecture.md).
 Behaviour targets: `spec/remote/30`–`spec/remote/90`. Third-party driver / server choices:
 `docs/split/agents/third-party.md` (written by the research step; **it wins over any candidate

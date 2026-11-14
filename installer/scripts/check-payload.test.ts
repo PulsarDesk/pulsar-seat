@@ -14,6 +14,8 @@ import {
   checkMachine,
   checkNotices,
   findNameViolations,
+  allowedMachines,
+  remoteDriverFile,
   parseArgs,
   parseBlocklist,
   peMachine,
@@ -326,5 +328,96 @@ describe("bundle-config", () => {
     // Every component the snippet references exists in the WiX fragment.
     const wxs = await Bun.file(new URL("../wix/PulsarSeat.wxs", import.meta.url)).text();
     for (const id of real.bundle.windows.wix.componentRefs) expect(wxs).toContain(`<Component Id="${id}"`);
+  });
+});
+
+// Remote seat kind (merge step 10): rules ported from Pulsar Split's check-payload tests.
+describe("remote kind payload", () => {
+  test("pinned remote payload passes without --allow-drivers", () => {
+    expect(
+      rules([
+        "pulsar-seat-service.exe",
+        "remote/drivers/vdd/VirtualDisplayDriver/MttVDD.inf",
+        "remote/drivers/vdd/VirtualDisplayDriver/mttvdd.cat",
+        "remote/drivers/vdd/VirtualDisplayDriver/MttVDD.dll",
+        "remote/drivers/usbip-win2/USBip-0.9.8.1-x64.exe",
+        "remote/stream-server/sunshine.exe",
+        "remote/stream-server/assets/shaders/directx/convert.hlsl",
+        "remote/drivers.json",
+        "licenses/VirtualDisplayDriver-MIT.txt",
+      ]),
+    ).toEqual([]);
+  });
+
+  test("a pinned INF still needs its catalog; drivers elsewhere still need --allow-drivers", () => {
+    expect(rules(["remote/drivers/vdd/MttVDD.inf", "remote/drivers/vdd/MttVDD.dll"])).toEqual([
+      "driver_without_package:remote/drivers/vdd/MttVDD.inf",
+    ]);
+    expect(rules(["drivers/vdd/MttVDD.inf", "drivers/vdd/mttvdd.cat"])).toEqual(["driver_not_allowed:drivers/vdd/MttVDD.inf"]);
+    expect(rules(["remote/x.inf"])).toEqual(["driver_not_allowed:remote/x.inf"]);
+  });
+
+  test("more Microsoft system files are rejected", () => {
+    const r = rules(["RdpIdd.dll", "rfxvmt.dll", "AcRes.dll", "d3dcompiler_47.dll", "runtimes/win-x64/native/WebView2Loader.dll"]);
+    expect(r.length).toBe(5);
+    expect(r.every((x) => x.startsWith("microsoft_binary:"))).toBe(true);
+  });
+
+  test("web UI assets are rejected, backslashes normalised", () => {
+    expect(rules(["remote/stream-server/assets/web/index.html"])).toEqual(["web_ui_asset:remote/stream-server/assets/web/index.html"]);
+    expect(rules(["remote/stream-server/assets/web/assets/app.js"])).toEqual([
+      "web_ui_asset:remote/stream-server/assets/web/assets/app.js",
+    ]);
+    expect(rules(["docs/readme.htm"])).toEqual(["web_ui_asset:docs/readme.htm"]);
+    expect(rules(["remote\\stream-server\\www\\a.js"])).toEqual(["web_ui_asset:remote/stream-server/www/a.js"]);
+  });
+
+  test("vulnerable drivers fail, pinned kernel drivers warn", () => {
+    const v = findNameViolations(["x/DuoDriver.sys", "remote/drivers/usbip/usbip2_ude.sys", "remote/drivers/usbip/u.inf", "remote/drivers/usbip/u.cat"], false);
+    expect(v).toEqual([
+      { path: "x/DuoDriver.sys", rule: "vulnerable_driver", severity: "error" },
+      { path: "remote/drivers/usbip/usbip2_ude.sys", rule: "kernel_driver_review", severity: "warning" },
+    ]);
+  });
+
+  test("the shim module ships only in shim/", () => {
+    expect(rules(["shim/x64/PulsarSplitShim.dll", "shim/x86/PulsarSplitShim.dll"])).toEqual([]);
+    expect(rules(["PFiles/Pulsar Seat/PulsarSplitShim.dll"])).toEqual(["shim_outside_folder:PFiles/Pulsar Seat/PulsarSplitShim.dll"]);
+  });
+
+  test("remoteDriverFile", () => {
+    expect(remoteDriverFile("PFiles/Pulsar Seat/remote/drivers/vdd/a/b.dll")).toEqual({ id: "vdd", rest: "a/b.dll" });
+    expect(remoteDriverFile("remote/drivers.json")).toBeNull();
+    expect(remoteDriverFile("drivers/vdd/a.inf")).toBeNull();
+  });
+
+  test("machines: shim x64 package only, installer stubs may be x86", () => {
+    expect(allowedMachines("shim/x64/PulsarSplitShim.dll", "x64")).toEqual([0x8664]);
+    expect(allowedMachines("shim/x86/PulsarSplitShim.dll", "x64")).toEqual([0x014c]);
+    expect(typeof allowedMachines("shim/x64/PulsarSplitShim.dll", "arm64")).toBe("string");
+    expect(typeof allowedMachines("shim/arm64/a.dll", "x64")).toBe("string");
+    expect(allowedMachines("remote/drivers/usbip-win2/USBip-arm64.exe", "arm64")).toEqual([0xaa64, 0x014c]);
+    expect(allowedMachines("remote/drivers/vdd/VirtualDisplayDriver/MttVDD.dll", "arm64")).toEqual([0xaa64]);
+    expect(allowedMachines("remote/stream-server/sunshine.exe", "x64")).toEqual([0x8664]);
+    expect(checkMachine("shim/x86/l.exe", pe(0x014c), "x64")).toBeNull();
+    expect(checkMachine("shim/x86/l.exe", pe(0x8664), "x64")?.rule).toBe("wrong_machine");
+    expect(checkMachine("shim/x64/l.exe", pe(0x8664), "arm64")?.rule).toBe("wrong_machine");
+    expect(checkMachine("remote/stream-server/tools/x.exe", pe(0x014c), "arm64")?.rule).toBe("wrong_machine");
+  });
+
+  test("directory walk over a remote payload", () => {
+    const root = mkdtempSync(join(tmpdir(), "ps-remote-"));
+    try {
+      mkdirSync(join(root, "remote", "stream-server", "web"), { recursive: true });
+      mkdirSync(join(root, "remote", "drivers", "u"), { recursive: true });
+      writeFileSync(join(root, "remote", "stream-server", "web", "x.js"), "");
+      writeFileSync(join(root, "remote", "stream-server", "s.exe"), pe(0xaa64));
+      writeFileSync(join(root, "remote", "drivers", "u", "setup.exe"), pe(0x014c));
+      writeFileSync(join(root, "msvcp140.dll"), pe(0xaa64));
+      const v = checkDirs([root], "arm64").map((x) => x.rule).sort();
+      expect(v).toEqual(["microsoft_binary", "web_ui_asset"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

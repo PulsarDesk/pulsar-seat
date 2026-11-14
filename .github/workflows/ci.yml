@@ -186,14 +186,12 @@ jobs:
           bun run build
       - name: Installer scripts
         run: bun test installer/scripts
-      - name: Installer scripts (remote kind, installer/split)
-        run: bun test installer/split/scripts
       - name: Workflow lint (this file)
         run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml
 
   # Per-process HID shim of the remote seat kind (shim/, own workspace): x64 + x86 only,
-  # so it runs on the x64 runner (shim/README.md). Release DLLs / exes are not part of the
-  # payload yet (merge-plan.md step 10).
+  # so it runs on the x64 runner (shim/README.md). Its release DLLs / exes go into the x64
+  # MSI only (artifact shim-x64, laid out as the payload's shim folder).
   shim:
     name: shim (x64 + x86)
     runs-on: windows-2025
@@ -213,6 +211,21 @@ jobs:
           cargo test --locked --target x86_64-pc-windows-msvc
           cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
           cargo check --locked --target i686-pc-windows-msvc --all-targets
+      - name: Release build for the x64 MSI (static CRT from .cargo/config.toml)
+        working-directory: shim
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release --target x86_64-pc-windows-msvc
+          cargo build --locked --release --target i686-pc-windows-msvc
+          $out = "../target/payload-shim/shim"
+          New-Item -ItemType Directory -Force "$out/x64", "$out/x86" | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/PulsarSplitShim.dll, target/x86_64-pc-windows-msvc/release/pulsar-split-launch.exe, target/x86_64-pc-windows-msvc/release/pulsar-split-shimctl.exe "$out/x64"
+          Copy-Item target/i686-pc-windows-msvc/release/PulsarSplitShim.dll "$out/x86"
+          Copy-Item target/i686-pc-windows-msvc/release/pulsar-split-launch.exe "$out/x86/pulsar-split-launch32.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shim-x64
+          path: target/payload-shim
 
   drivers:
     name: drivers (${{ matrix.platform }})
@@ -380,7 +393,7 @@ jobs:
   installers:
     name: installers (${{ matrix.arch }})
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.installers)
-    needs: [rust, bun, credprov]
+    needs: [rust, bun, credprov, shim]
     strategy:
       fail-fast: false
       matrix:
@@ -426,6 +439,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: credprov-unsigned-${{ matrix.arch }}
+          path: target/payload/${{ matrix.arch }}
+      # Remote kind's per-process shim: x64 package only (the ARM64 one carries none).
+      - uses: actions/download-artifact@v4
+        if: matrix.arch == 'x64'
+        with:
+          name: shim-x64
           path: target/payload/${{ matrix.arch }}
       - run: bun install --frozen-lockfile
       # Licence texts of every Rust crate in the shipped binaries (MIT / Apache-2.0 /

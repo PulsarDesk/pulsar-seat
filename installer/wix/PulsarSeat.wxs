@@ -3,7 +3,8 @@
 <!--
   Pulsar Seat - WiX v3 fragment merged into the Tauri 2 MSI
   (bundle.windows.wix.fragmentPaths / componentRefs, see ../tauri-bundle.json).
-  Adapted from pulsar-split (installer/wix/PulsarSplit.wxs, same author, GPL-3.0).
+  Adapted from pulsar-split (installer/wix/PulsarSplit.wxs, same author, GPL-3.0); since
+  merge step 10 it is the one MSI of both seat kinds (local and remote).
 
   What it adds to the Tauri product (the manager exe is Tauri's main binary):
     * pulsar-seat-service.exe + ServiceInstall (PulsarSeat, LocalSystem, own process,
@@ -29,6 +30,18 @@
       dump tweaks, all off by default) that sets PSRESTOREPOINT / PSTWEAKS; interactive
       removal: a page that asks whether to delete %ProgramData%\Pulsar Seat (REMOVEUSERDATA)
     * builds with signed driver packages: ScheduleReboot, so msiexec /norestart returns 3010
+    * remote seat kind (merge step 10, from installer/split/wix/PulsarSplit.wxs):
+        - the pinned third-party payload below remote\ (drivers.json, drivers\<id>\,
+          stream-server.json, stream-server\: Sunshine per arch), generated as
+          ComponentGroup PulsarSeatRemotePayload by installer/scripts/bundle-config.ts;
+        - the per-process shim (x64 package only): shim\x64\, shim\x86\ (ComponentGroup
+          PulsarSeatShim, empty in the ARM64 package);
+        - deferred custom actions `remote-setup install` (fresh install) and
+          `remote-setup reconcile` (every install / upgrade / repair) after `install`:
+          remote data folders, a leftover PulsarSplit service (stopped and deleted),
+          third-party drivers only when PULSARDRIVERS names them (default on a fresh
+          install: none), passive mode beside the reference product;
+        - uninstall: the one `uninstall` action replays both journal formats.
     * interactive install: a non-blocking warning when TermService uses a non-default DLL
       (the other warnings are in %ProgramData%\Pulsar Seat\logs\setup.log and shown by
       the manager on its first start)
@@ -45,6 +58,11 @@
     PSTWEAKS=fast_startup_off,sleep_off,small_crash_dumps
                                        optional system tweaks (journaled, undone on uninstall);
                                        only a-z, _ and , (launch condition below)
+    PULSARDRIVERS=vdd,usbip-win2       remote kind: third-party driver ids from remote\drivers.json
+                                       ("none" = none; empty on a repair / upgrade = the choice
+                                       saved at the first install; a fresh install without it
+                                       installs none, so local-only PCs get no virtual display)
+    PULSARCONSENT=usbip-win2           remote kind: ids whose upstream installer may run
     REMOVEUSERDATA=1                   uninstall also deletes %ProgramData%\Pulsar Seat
                                        (msiexec /x PulsarSeat.msi /qn REMOVEUSERDATA=1); the
                                        updates\ download cache is deleted on every uninstall
@@ -69,6 +87,8 @@
     <Property Id="PSRESTOREPOINT" Secure="yes" />
     <Property Id="PSTWEAKS" Secure="yes" />
     <Property Id="REMOVEUSERDATA" Secure="yes" />
+    <Property Id="PULSARDRIVERS" Secure="yes" />
+    <Property Id="PULSARCONSENT" Secure="yes" />
 
     <!-- Native machine (64-bit registry view; not virtualised for x64 code on ARM64). -->
     <Property Id="PSNATIVEARCH">
@@ -124,6 +144,11 @@
     <Condition Message="PSRESTOREPOINT yalnızca 0 ya da 1 olabilir.">
       <![CDATA[Installed OR NOT PSRESTOREPOINT OR PSRESTOREPOINT = "0" OR PSRESTOREPOINT = "1"]]>
     </Condition>
+    <!-- PULSARDRIVERS / PULSARCONSENT reach a SYSTEM command line (quoted argument): ids,
+         commas and "-" / "_" only; the same characters as for PSTWEAKS are refused here
+         (except "-", which driver ids use; seat-setup's parser refuses unknown ids). -->
+    <Condition Message="PULSARDRIVERS geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.">Installed OR NOT (PULSARDRIVERS &gt;&lt; " " OR PULSARDRIVERS &gt;&lt; "&#9;" OR PULSARDRIVERS &gt;&lt; "/" OR PULSARDRIVERS &gt;&lt; "\" OR PULSARDRIVERS &gt;&lt; "=" OR PULSARDRIVERS &gt;&lt; "[" OR PULSARDRIVERS &gt;&lt; "]")</Condition>
+    <Condition Message="PULSARCONSENT geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.">Installed OR NOT (PULSARCONSENT &gt;&lt; " " OR PULSARCONSENT &gt;&lt; "&#9;" OR PULSARCONSENT &gt;&lt; "/" OR PULSARCONSENT &gt;&lt; "\" OR PULSARCONSENT &gt;&lt; "=" OR PULSARCONSENT &gt;&lt; "[" OR PULSARCONSENT &gt;&lt; "]")</Condition>
     <Condition Message="REMOVEUSERDATA yalnızca 0 ya da 1 olabilir.">
       <![CDATA[NOT REMOVEUSERDATA OR REMOVEUSERDATA = "0" OR REMOVEUSERDATA = "1"]]>
     </Condition>
@@ -268,7 +293,42 @@
           </Component>
         </Directory>
       </Directory>
+
+<?if $(sys.BUILDARCH) = "x64" ?>
+      <!-- Per-process shim of the remote kind (shim/ workspace), x64 + x86 only: never in the
+           ARM64 package. Copied here, never to System32; the service installs it only when
+           the operator turns isolation on (seat-shim-core). File names stay pulsar-split-*
+           because shim/ and its registry keys use them. -->
+      <Directory Id="PulsarSeatShimDir" Name="shim">
+        <Directory Id="PulsarSeatShimX64Dir" Name="x64">
+          <Component Id="PulsarSeatShimX64Component" Guid="{68094D7D-AAAB-4930-959C-902EF4F36708}" Win64="yes">
+            <File Id="PulsarSeatShimX64Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x64\PulsarSplitShim.dll" />
+            <File Id="PulsarSeatShimLaunchExe" Name="pulsar-split-launch.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x64\pulsar-split-launch.exe" />
+            <File Id="PulsarSeatShimctlExe" Name="pulsar-split-shimctl.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x64\pulsar-split-shimctl.exe" />
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSeatShimX86Dir" Name="x86">
+          <Component Id="PulsarSeatShimX86Component" Guid="{4D6EA0C5-94F7-4180-9A30-E765F3167E26}" Win64="yes">
+            <File Id="PulsarSeatShimX86Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x86\PulsarSplitShim.dll" />
+            <File Id="PulsarSeatShimLaunch32Exe" Name="pulsar-split-launch32.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x86\pulsar-split-launch32.exe" />
+          </Component>
+        </Directory>
+      </Directory>
+<?endif ?>
     </DirectoryRef>
+
+    <!-- Referenced from tauri-bundle.json in both packages; empty in the ARM64 one. -->
+    <ComponentGroup Id="PulsarSeatShim">
+<?if $(sys.BUILDARCH) = "x64" ?>
+      <ComponentRef Id="PulsarSeatShimX64Component" />
+      <ComponentRef Id="PulsarSeatShimX86Component" />
+<?endif ?>
+    </ComponentGroup>
 
     <!-- ================================================================ custom actions -->
     <!-- Exit codes (seat-compat::setup): 0 ok, 3010 reboot, 2 partial, 4 refused, 1 failed.
@@ -296,6 +356,22 @@
                   ExeCommand="uninstall --msi --remove-user-data=[REMOVEUSERDATA]"
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
+    <!-- Remote kind (seat-setup, `pulsar-seat-service remote-setup ...`). With the msi switch
+         only a real failure is non-zero; partial / reboot go to
+         %ProgramData%\Pulsar Seat\logs\remote-setup.log. Arguments are quoted; the launch
+         conditions above keep whitespace and escape characters out of the properties. -->
+    <CustomAction Id="PsRemoteInstall" FileKey="PulsarSeatServiceExe"
+                  ExeCommand="remote-setup install --msi &quot;--drivers=[PULSARDRIVERS]&quot; &quot;--consent=[PULSARCONSENT]&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="PsRemoteReconcile" FileKey="PulsarSeatServiceExe"
+                  ExeCommand="remote-setup reconcile --msi &quot;--drivers=[PULSARDRIVERS]&quot; &quot;--consent=[PULSARCONSENT]&quot;"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <!-- Fresh install without PULSARDRIVERS: no third-party driver (a local-only PC gets no
+         virtual display). Repairs and upgrades keep the saved choice (empty value). -->
+    <SetProperty Id="PULSARDRIVERS" Value="none" Before="PsRemoteInstall" Sequence="execute">
+      <![CDATA[NOT PULSARDRIVERS AND NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE ~= "ALL")]]>
+    </SetProperty>
+
     <InstallExecuteSequence>
       <!-- Rollback first (it must be scheduled before the action it undoes). Fresh
            installs only: on a failed upgrade / repair the restored old product still owns
@@ -307,8 +383,18 @@
       <Custom Action="PsSetupInstall" After="InstallServices">
         <![CDATA[NOT (REMOVE ~= "ALL")]]>
       </Custom>
+      <!-- Remote kind after the local install step (the data folder and the Event Log source
+           exist then), before the service starts. Install: fresh only; reconcile: always. -->
+      <Custom Action="PsRemoteInstall" After="PsSetupInstall">
+        <![CDATA[NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE ~= "ALL")]]>
+      </Custom>
+      <Custom Action="PsRemoteReconcile" After="PsRemoteInstall">
+        <![CDATA[NOT (REMOVE ~= "ALL")]]>
+      </Custom>
       <!-- Real uninstall only (not the old product's removal during a major upgrade):
-           after the service is stopped, before its files are removed. -->
+           after the service is stopped, before its files are removed. The service's
+           uninstall replays both journal formats: the remote kind's <package>.jsonl
+           (seat-setup) first, then seat-compat's changes.jsonl. -->
       <Custom Action="PsSetupUninstall" After="StopServices">
         <![CDATA[(REMOVE ~= "ALL") AND NOT UPGRADINGPRODUCTCODE]]>
       </Custom>

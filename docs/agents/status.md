@@ -743,6 +743,56 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   `seat-media live_tree`) pass on the ARM64 dev laptop. Untested on hardware: every pad and
   display path; `local_pads` never ran against a real backend.
   **Next:** step 9 (one manager).
+- 2026-11-14: **merge step 10 done** (one MSI for x64 and ARM64; installer/README.md "Remote
+  seat kind"). `installer/split/` is gone. Pins moved to `installer/remote/{drivers,
+  stream-server}.json`, `fetch-deps.ts` to `installer/scripts/` (output
+  `target/installer-deps/<arch>/remote/`; new `drop_paths` leave out Sunshine's `scripts\`
+  (its own service install, firewall allow rules, bundled ViGEmBus installer) and
+  `tools\sunshinesvc.exe`). `check-payload.ts` is the union (web UI, rfxvmt / AcRes /
+  d3dcompiler, DuoDriver, pinned `remote/drivers/<id>/` INF + CAT packages without
+  `--allow-drivers`, x86 upstream installer stubs there, `shim/x64` / `shim/x86` machines, no
+  shim in ARM64, `shim_outside_folder`). `bundle-config.ts` generates `PulsarSeatRemote.wxs`
+  (one component per payload file below `<install>\remote\`); `PulsarSeat.wxs` adds the shim
+  (x64 only, group `PulsarSeatShim`), `remote-setup install` (fresh) / `reconcile` (always)
+  after `install`, `PULSARDRIVERS` / `PULSARCONSENT` with launch-condition validation, and a
+  fresh-install default `PULSARDRIVERS=none` (decision: a local-only PC gets no virtual
+  display or USB/IP driver; opt in with `PULSARDRIVERS=vdd`). seat-setup: data root is
+  `%ProgramData%\Pulsar Seat` (Seat DACLs, owner SYSTEM), payload `<install>\remote\` (the
+  service reads the stream server there), log `logs\remote-setup.log`, `install` /
+  `reconcile` stop and delete a leftover `PulsarSplit` service, the generic replay skips
+  seat-compat's `changes.jsonl`, `shared_data_root` leaves the data folder to the Seat
+  uninstall. The Seat `uninstall` (MSI, rollback, CLI) now runs the remote uninstall first, so
+  one action replays both journal formats. Licences and Sunshine's source offer merged into
+  `installer/licenses/`. CI: the shim job uploads `shim-x64`, the installers job needs it;
+  the `installer/split/scripts` step is gone. Also fixed: the stale
+  `crates/seat-compat/apihelper/Cargo.lock` (missing `zeroize` of seat-core, broke
+  `--locked` MSI builds).
+  - Gates (`CARGO_TARGET_DIR=target\wf`, ARM64 dev box): `cargo test --workspace` 1504 passed
+    (was 1501; +3), clippy `-D warnings` aarch64 + x86_64 clean, manager vitest 178 / check /
+    build, shim 8 (host; x64 + i686 check), `bun test installer/scripts` 49 (was 29 + 15 in
+    `installer/split/scripts`). Deleted on purpose: Split's 8 `installer/split/scripts/
+    check-payload.test.ts` tests (its script is merged into Seat's; the rules are covered by
+    9 new tests in `installer/scripts/check-payload.test.ts`). Split's 7 fetch-deps tests
+    moved unchanged (+1).
+  - MSIs (unsigned, `installer/scripts/build-installer.ps1`, never installed), extracted with
+    `msiexec /a` and PE-checked:
+    - `PulsarSeat_0.1.0_arm64.msi` SHA-256
+      `1274cafaa1615422847b5c8aeefacb9d94eb74eb2bc1c4fed9398533a661e450` (51 265 536 bytes):
+      service, host, agent, manager, credprov, Sunshine, VDD DLL all ARM64 0xAA64; API
+      helpers x86 / x64 / arm64ec by folder; usbip-win2 installer stub x86; no shim.
+    - `PulsarSeat_0.1.0_x64.msi` SHA-256
+      `b0bdfa68a0dad467f370bd4bc08b71ba596b3db960bedab43088315cc181c77e` (65 101 824 bytes):
+      everything x64 0x8664 except `shim\x86\` and the API helper x86 (0x014C) and the
+      usbip-win2 stub (x86).
+    - Built from the uncommitted step 10 tree on top of 4fc88d7 (build records say
+      dirty); rebuild from the commit for anything beyond a smoke test.
+  - Open: nothing installed or run elevated (remote custom actions, driver opt-in,
+    leftover-service removal, chained uninstall). The shim's own journal and DXVK cache stay
+    in `%ProgramData%\PulsarSplit` (seat-shim-core) and are not deleted by
+    `REMOVEUSERDATA=1`. Split's NSIS hooks, the `Termwrap\Offered` MSI feature and the
+    "reference seen" marker are dropped (no reader). `remote-setup --register-service` now
+    registers the `PulsarSeat` service (NSIS only, not shipped).
+  **Next:** step 11 (hardware tests per kind, then mixed; the maintainer runs them).
 - 2026-11-14: **merge step 9 done** (one manager; architecture.md 10.7). `apps/split-manager`
   and its Tauri crate are gone; Split's pages moved with history to
   `apps/manager/src/lib/remote/`. New tab **Uzak koltuklar** (remote seat list with avatars,

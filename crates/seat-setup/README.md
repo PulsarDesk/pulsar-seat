@@ -12,7 +12,16 @@ pulsar-seat-service remote-setup check-coexistence --json
 
 Exit codes 0 / 1 failure / 2 partial / 3010 reboot required; `--msi` maps everything but
 failure to 0 (Windows Installer EXE custom actions). Each run appends to
-`%ProgramData%\PulsarSplit\logs\setup.log`.
+`%ProgramData%\Pulsar Seat\logs\remote-setup.log`.
+
+Since merge step 10 (one MSI, `installer/README.md` "Remote seat kind"): the data root is
+the one product's `%ProgramData%\Pulsar Seat` (journal / logs with the Seat DACLs, owner
+SYSTEM), the third-party payload is `<install>\remote\` (`layout::REMOTE_PAYLOAD_DIR`),
+`install` / `reconcile` stop and delete a leftover `PulsarSplit` service
+(`layout::LEGACY_SERVICE_NAME`), the generic replay skips seat-compat's `changes.jsonl`
+(`layout::FOREIGN_JOURNALS`), and with `InstallOptions::shared_data_root` (set by the
+service) `uninstall` leaves the data folder itself to the Seat `uninstall`, which runs this
+one first.
 
 ## Modules
 

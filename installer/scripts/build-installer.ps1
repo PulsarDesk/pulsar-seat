@@ -5,8 +5,10 @@
 #   2. the app API helper DLL for every app architecture the PC can run
 #   3. optional: signed driver packages (-SignedDrivers <dir>), staged only when every
 #      catalog verifies and is signed by the Microsoft hardware publisher
+#   3b. remote seat kind (merge step 10): the shim (x64 package only) and the pinned
+#      third-party payload (fetch-deps.ts: drivers + Sunshine per arch) under remote\
 #   4. PE-machine / payload gate (check-payload.ts)
-#   5. bundle config + generated driver fragment (bundle-config.ts)
+#   5. bundle config + generated driver and remote-payload fragments (bundle-config.ts)
 #   6. `tauri build --bundles msi` (Tauri downloads WiX 3.14 into %LOCALAPPDATA%\tauri
 #      itself; nothing is installed system-wide)
 #   7. administrative extraction of the MSI (msiexec /a: plain copy, nothing registered)
@@ -38,6 +40,9 @@ param(
     # Authenticode-signed pulsar-seat-credprov.dll (signing machine, docs/release/checklist.md
     # §3) to bundle instead of the freshly built, unsigned one. Its signature must be Valid.
     [string] $SignedCredProv = "",
+    # Leave out the remote kind's pinned third-party payload (fetch-deps.ts needs network).
+    # Test builds only; refused with -Release.
+    [switch] $NoRemoteDeps,
     [string] $CargoTargetDir = ""
 )
 
@@ -171,6 +176,52 @@ if ($SignedCredProv) {
 foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe", "pulsar-seat-credprov.dll") {
     if (-not (Test-Path (Join-Path $payload $n))) { throw "payload is missing $n ($payload)" }
 }
+
+# Remote seat kind (merge step 10). Per-process shim: x64 package only (shim/ is an own
+# x64 / x86 workspace); the ARM64 package carries none (check-payload refuses it there).
+$shimDir = Join-Path $payload "shim"
+$shimTarget = Join-Path $CargoTargetDir "shim"
+if ($Arch -eq "x64") {
+    if (-not $SkipCargo) {
+        $oldFlags = $env:RUSTFLAGS
+        $env:RUSTFLAGS = "-C target-feature=+crt-static"
+        try {
+            foreach ($t in "x86_64-pc-windows-msvc", "i686-pc-windows-msvc") {
+                # Own sub-folder (like the API helper): Tauri's MSI bundler picks up every DLL
+                # next to the manager exe in <target>\<triple>\release.
+                Invoke-Checked "shim ($t)" { cargo build --locked --release --manifest-path (Join-Path $repo "shim\Cargo.toml") --target $t --target-dir $shimTarget }
+            }
+        } finally {
+            $env:RUSTFLAGS = $oldFlags
+        }
+        if (Test-Path $shimDir) { Remove-Item -Recurse -Force $shimDir }
+        New-Item -ItemType Directory -Force (Join-Path $shimDir "x64"), (Join-Path $shimDir "x86") | Out-Null
+        $r64 = Join-Path $shimTarget "x86_64-pc-windows-msvc\release"
+        $r32 = Join-Path $shimTarget "i686-pc-windows-msvc\release"
+        Copy-Item (Join-Path $r64 "PulsarSplitShim.dll"), (Join-Path $r64 "pulsar-split-launch.exe"), (Join-Path $r64 "pulsar-split-shimctl.exe") (Join-Path $shimDir "x64") -Force
+        Copy-Item (Join-Path $r32 "PulsarSplitShim.dll") (Join-Path $shimDir "x86") -Force
+        Copy-Item (Join-Path $r32 "pulsar-split-launch.exe") (Join-Path $shimDir "x86\pulsar-split-launch32.exe") -Force
+    }
+    foreach ($n in "x64\PulsarSplitShim.dll", "x64\pulsar-split-launch.exe", "x64\pulsar-split-shimctl.exe", "x86\PulsarSplitShim.dll", "x86\pulsar-split-launch32.exe") {
+        if (-not (Test-Path (Join-Path $shimDir $n))) { throw "payload is missing shim\$n ($payload)" }
+    }
+} elseif (Test-Path $shimDir) {
+    Remove-Item -Recurse -Force $shimDir
+}
+# Pinned third-party payload (drivers.json, drivers\, stream-server.json, stream-server\):
+# downloaded and hash-checked by fetch-deps.ts (cached under target\installer-deps\cache),
+# copied to <payload>\remote. -NoRemoteDeps builds a package without it (no network; test
+# builds only, refused with -Release).
+$remoteDir = Join-Path $payload "remote"
+if (Test-Path $remoteDir) { Remove-Item -Recurse -Force $remoteDir }
+if ($NoRemoteDeps) {
+    if ($Release) { throw "-Release needs the remote payload; drop -NoRemoteDeps" }
+    Write-Warning "no remote payload (-NoRemoteDeps): remote seats cannot stream with this package"
+} else {
+    $deps = Join-Path $repo "target\installer-deps"
+    Invoke-Checked "remote payload (fetch-deps.ts)" { bun (Join-Path $repo "installer\scripts\fetch-deps.ts") --arch $Arch --out $deps }
+    Copy-Item (Join-Path $deps "$Arch\remote") $remoteDir -Recurse -Force
+}
 # LogonUI loads the credential provider as SYSTEM: a published release carries it signed.
 # CI tag builds have no signing (no secret in CI), so this warns here; sign-release.ps1
 # refuses an MSI whose DLL is not validly signed, and without its .minisig no client offers
@@ -240,6 +291,7 @@ if ($SignedDrivers) {
 $config = Join-Path $work "tauri-bundle.json"
 Invoke-Checked "bundle config" {
     $extra = @("--bin", $payload); if ($NoArm64ec -and $Arch -eq "arm64") { $extra += "--no-arm64ec" }
+    if (Test-Path $remoteDir) { $extra += @("--remote", $remoteDir) }
     bun (Join-Path $repo "installer\scripts\bundle-config.ts") $config --drivers $staged --version $Version @extra
 }
 

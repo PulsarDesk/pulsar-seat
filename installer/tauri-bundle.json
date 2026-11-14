@@ -1,25 +1,32 @@
 {
-  "$comment": "SPDX-License-Identifier: GPL-3.0-only. Snippet the integrator merges into apps/manager/src-tauri/tauri.conf.json when the bundle is switched on (installer/README.md). Paths are relative to apps/manager/src-tauri. upgradeCode is fixed forever. Targets: MSI only (Tauri NSIS stubs are x86; see installer/README.md). Build with scripts/build-installer.ps1: bundle-config.ts strips the comments, writes a copy of the WiX fragment with the payload folder resolved (--bin; Tauri runs candle without the caller environment) and adds the generated driver-package fragment (ComponentGroup PulsarSeatDriverPackages). componentRefs and featureRefs are WiX ids from ../../../installer/wix/PulsarSeat.wxs.",
+  "$comment": "SPDX-License-Identifier: GPL-3.0-only. Snippet the integrator merges into apps/manager/src-tauri/tauri.conf.json when the bundle is switched on (installer/README.md). Paths are relative to apps/manager/src-tauri. upgradeCode is fixed forever. Targets: MSI only (Tauri NSIS stubs are x86; see installer/README.md). Build with scripts/build-installer.ps1: bundle-config.ts strips the comments, writes a copy of the WiX fragment with the payload folder resolved (--bin; Tauri runs candle without the caller environment) and adds the generated driver-package fragment (ComponentGroup PulsarSeatDriverPackages). componentRefs and featureRefs are WiX ids from ../../../installer/wix/PulsarSeat.wxs. componentGroupRefs: PulsarSeatShim (static in PulsarSeat.wxs, empty in the ARM64 package); bundle-config.ts adds the generated PulsarSeatDriverPackages and PulsarSeatRemotePayload (the remote kind's pinned third-party payload below remote, merge step 10).",
   "productName": "Pulsar Seat",
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": [
+      "msi"
+    ],
     "publisher": "PulsarDesk",
     "license": "GPL-3.0-only",
     "licenseFile": "../../../LICENSE",
-    "shortDescription": "Bir bilgisayarda birden çok koltuk",
+    "shortDescription": "Bir bilgisayarda birden çok koltuk (yerel ve uzak)",
     "resources": {
       "../../../LICENSE": "licenses/LICENSE.txt",
       "../../../installer/licenses/*.md": "licenses/",
       "../../../installer/licenses/*.txt": "licenses/"
     },
     "windows": {
-      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
       "allowDowngrades": false,
       "wix": {
         "upgradeCode": "64186005-469F-42E8-9357-9219ACA10398",
         "language": "tr-TR",
-        "fragmentPaths": ["../../../installer/wix/PulsarSeat.wxs"],
+        "fragmentPaths": [
+          "../../../installer/wix/PulsarSeat.wxs"
+        ],
         "componentRefs": [
           "PulsarSeatServiceComponent",
           "PulsarSeatHostComponent",
@@ -32,11 +39,16 @@
           "PulsarSeatApiHelperX64Component",
           "PulsarSeatApiHelperArm64Component",
           "PulsarSeatApiHelperArm64ecComponent"
+        ],
+        "componentGroupRefs": [
+          "PulsarSeatShim"
         ]
       },
       "nsis": {
         "installMode": "perMachine",
-        "languages": ["Turkish"],
+        "languages": [
+          "Turkish"
+        ],
         "displayLanguageSelector": false,
         "installerHooks": "../../../installer/nsis/hooks.nsh"
       }

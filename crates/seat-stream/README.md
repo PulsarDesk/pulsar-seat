@@ -7,7 +7,7 @@ Each running seat gets one game-stream server process inside its Windows session
 server is **upstream LizardByte Sunshine** (GPL-3.0), pinned tag `v2026.516.143833`,
 unmodified for Phase 2 (`docs/split/agents/third-party.md`), or later the Pulsar fork with the
 spec 80 patches. The binary is **downloaded and SHA-256 verified, never vendored** in
-this repository: the installer writes `<install>\stream-server.json`
+this repository: the installer writes `<install>\remote\stream-server.json`
 (`dist::ServerDist`), and the service re-checks the hash before every launch.
 
 ## What the crate does

@@ -406,7 +406,8 @@ pub fn build(
     let fs: Arc<dyn seat_stream::seatdir::SecureFs> = Arc::new(seat_stream::win::WinSecureFs);
     let journal = seat_stream::journal::JsonlJournal::open(fs.clone(), data_root.join("journal").join("stream.jsonl"), SysClock)
         .map_err(|e| format!("stream journal: {e}"))?;
-    let dist_dir = install_dir.to_path_buf();
+    // Third-party remote payload: `<install>emote` (installer/scripts/fetch-deps.ts).
+    let dist_dir = install_dir.join(seat_setup::layout::REMOTE_PAYLOAD_DIR);
     let launcher: Arc<dyn seat_stream::supervise::ServerLauncher> = Arc::new(seat_stream::win::SessionLauncher::new());
     let firewall: Arc<dyn seat_stream::firewall::Firewall> = Arc::new(seat_stream::win::ComFirewall);
     let ports: Arc<dyn seat_stream::ports::ListenerProbe> = Arc::new(seat_stream::win::IpHelperProbe);
@@ -421,7 +422,7 @@ pub fn build(
         ports: ports.clone(),
         journal: journal.clone(),
         dist: Arc::new(move || {
-            // The installer places `stream-server.json` + `stream-server\<file>` (installer/split/tauri.release.conf.json).
+            // The MSI places `remote\stream-server.json` + `remote\stream-server\<file>` (installer/wix/PulsarSeat.wxs, bundle-config.ts).
             let dir = dist_dir.join("stream-server");
             let manifest = dist_dir.join(seat_stream::dist::MANIFEST_FILE);
             let d = seat_stream::dist::load_manifest(&manifest)?;

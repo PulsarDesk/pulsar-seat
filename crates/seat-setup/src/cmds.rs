@@ -161,6 +161,10 @@ pub struct InstallOptions {
     pub unregister_service: bool,
     /// Allow installing over a newer recorded version (spec 90 §5: blocked by default).
     pub allow_downgrade: bool,
+    /// The data folder belongs to the Seat service (merge step 10): `uninstall` with
+    /// remove-user-data leaves the folder itself to the Seat `uninstall`, which still
+    /// needs its own journal (`changes.jsonl`) after this one ran.
+    pub shared_data_root: bool,
 }
 
 pub struct SetupCtx {
@@ -203,7 +207,7 @@ fn write_log(ctx: &SetupCtx, rep: &RunReport) {
     if !dir.exists() {
         return;
     }
-    let path = dir.join("setup.log");
+    let path = dir.join(layout::SETUP_LOG);
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "== {} {}", ctx.now(), rep.command);
         let _ = f.write_all(rep.to_text().as_bytes());
@@ -214,8 +218,13 @@ fn write_log(ctx: &SetupCtx, rep: &RunReport) {
 
 fn ensure_layout(ctx: &SetupCtx, rep: &mut RunReport) -> bool {
     let mut ok = true;
-    for d in [ctx.layout.data_root.clone(), ctx.layout.journal_dir(), ctx.layout.logs_dir()] {
-        let r = ctx.fs.ensure_dir(&d, layout::DATA_DIR_SDDL);
+    // Same DACLs as the Seat service gives these folders (seat-core consts), owner SYSTEM.
+    for (d, sddl) in [
+        (ctx.layout.data_root.clone(), layout::DATA_DIR_SDDL),
+        (ctx.layout.journal_dir(), layout::PRIVATE_DIR_SDDL),
+        (ctx.layout.logs_dir(), layout::DATA_DIR_SDDL),
+    ] {
+        let r = ctx.fs.ensure_dir(&d, sddl);
         ok &= r.is_ok();
         rep.result(format!("data_dir {}", d.display()), r.map(|_| StepOutcome::Done));
     }
@@ -434,7 +443,7 @@ fn install_official(
     } else {
         // Not bundled: download (pinned hash) into the protected data folder.
         let dl = ctx.layout.downloads_dir();
-        ctx.fs.ensure_dir(&dl, layout::DATA_DIR_SDDL)?;
+        ctx.fs.ensure_dir(&dl, layout::PRIVATE_DIR_SDDL)?;
         exe = dl.join(&file);
         if !exe.is_file() {
             drivers::fetch_verified(ctx.fetcher.as_ref(), pkg, &exe)?;
@@ -572,10 +581,16 @@ fn install_like(ctx: &SetupCtx, command: &str, upgrade: bool) -> RunReport {
     ensure_event_source(ctx, &j, &mut rep);
     write_setup_info(ctx, &mut rep);
     if ctx.options.register_service {
-        let exe = ctx.layout.install_root.join("pulsar-split-service.exe");
-        let r = ctx.services.ensure(&ServiceSpec::pulsar_split(&exe));
+        let exe = ctx.layout.install_root.join(seat_core::consts::SERVICE_EXE);
+        let r = ctx.services.ensure(&ServiceSpec::pulsar_seat(&exe));
         rep.result("service", r.map(|c| if c { StepOutcome::Done } else { StepOutcome::Unchanged }));
     }
+    // A leftover pre-merge Pulsar Split service (merge step 10): stopped and deleted.
+    // Missing is fine; the Seat service is never touched here.
+    rep.result(
+        "legacy_service",
+        ctx.services.remove(layout::LEGACY_SERVICE_NAME, 60_000).map(|_| StepOutcome::Done),
+    );
     let report = evaluate_with_own(ctx.probe.as_ref(), &ctx.own_targets());
     if report.is_passive() {
         rep.push("coexistence", StepOutcome::Unchanged, "reference product present: passive mode");
@@ -673,7 +688,7 @@ pub fn run_uninstall(ctx: &SetupCtx, remove_user_data: bool) -> RunReport {
         // Neither log into nor delete a folder we do not own.
         return rep;
     }
-    if remove_user_data {
+    if remove_user_data && !ctx.options.shared_data_root {
         write_log(ctx, &rep);
         let r = ctx.fs.remove_dir_all(&ctx.layout.data_root).map(|o| match o {
             crate::system::RemoveOutcome::ScheduledForReboot => StepOutcome::Reboot,
@@ -783,12 +798,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let install = dir.path().join("install");
         let data = dir.path().join("data");
-        std::fs::create_dir_all(install.join(r"drivers\vdd\sub")).unwrap();
-        std::fs::write(install.join(r"drivers\vdd\sub\TestVdd.inf"), "[Version]\n").unwrap();
-        std::fs::create_dir_all(install.join(r"drivers\usbip-win2")).unwrap();
-        std::fs::write(install.join(r"drivers\usbip-win2\USBip-1-x64.exe"), b"hello").unwrap();
+        std::fs::create_dir_all(install.join(r"remote\drivers\vdd\sub")).unwrap();
+        std::fs::write(install.join(r"remote\drivers\vdd\sub\TestVdd.inf"), "[Version]\n").unwrap();
+        std::fs::create_dir_all(install.join(r"remote\drivers\usbip-win2")).unwrap();
+        std::fs::write(install.join(r"remote\drivers\usbip-win2\USBip-1-x64.exe"), b"hello").unwrap();
         if let Some(m) = manifest {
-            std::fs::write(install.join("drivers.json"), m).unwrap();
+            std::fs::write(install.join(r"remote\drivers.json"), m).unwrap();
         }
         // Real dirs for the journal + log (FakeFs only records the ACL calls).
         std::fs::create_dir_all(data.join("logs")).unwrap();
@@ -1110,12 +1125,12 @@ mod tests {
         f.ctx.options.register_service = true;
         f.ctx.options.unregister_service = true;
         assert_eq!(run_install(&f.ctx).exit(), ExitCode::Ok);
-        let spec = f.svcs.get("PulsarSplit").unwrap();
-        assert!(spec.command_line.ends_with(r#"pulsar-split-service.exe" --service"#));
+        let spec = f.svcs.get(layout::SERVICE_NAME).unwrap();
+        assert!(spec.command_line.ends_with(r#"pulsar-seat-service.exe" --service"#));
         assert_eq!(spec.restart_delays_ms, vec![5_000, 30_000, 120_000]);
         assert_eq!(spec.reset_period_s, 86_400);
         run_uninstall(&f.ctx, false);
-        assert!(f.svcs.get("PulsarSplit").is_none());
+        assert!(f.svcs.get(layout::SERVICE_NAME).is_none());
         f.reg.set(layout::SETUP_KEY, "Version", &ValueState::Sz("99.0.0".into())).unwrap();
         f.reg.delete_tree(layout::EVENTLOG_KEY).unwrap();
         let rep = run_install(&f.ctx);
@@ -1144,5 +1159,37 @@ mod tests {
         std::fs::write(d.path().join("other.inf"), "").unwrap();
         assert!(resolve_inf(d.path(), "*.inf").is_none(), "ambiguous");
         assert!(resolve_inf(d.path(), "other.inf").is_some());
+    }
+
+    #[test]
+    fn install_removes_a_leftover_split_service_only() {
+        let f = fixture(None);
+        let exe = f.ctx.layout.install_root.join("pulsar-split-service.exe");
+        let legacy = ServiceSpec { name: layout::LEGACY_SERVICE_NAME.into(), ..ServiceSpec::pulsar_seat(&exe) };
+        crate::system::ServiceRegistrar::ensure(&f.svcs, &legacy).unwrap();
+        crate::system::ServiceRegistrar::ensure(&f.svcs, &ServiceSpec::pulsar_seat(&exe)).unwrap();
+        let rep = run_install(&f.ctx);
+        assert!(rep.steps.iter().any(|s| s.step == "legacy_service" && s.outcome == StepOutcome::Done), "{rep:?}");
+        assert!(f.svcs.get(layout::LEGACY_SERVICE_NAME).is_none());
+        assert!(f.svcs.get(layout::SERVICE_NAME).is_some(), "the Seat service stays");
+        // Nothing left: the step still succeeds (reconcile on every upgrade).
+        assert_eq!(run_reconcile(&f.ctx).exit(), ExitCode::Ok);
+    }
+
+    #[test]
+    fn shared_data_root_survives_remove_user_data_and_seat_journal_is_not_replayed() {
+        let mut f = fixture(None);
+        f.ctx.options.shared_data_root = true;
+        let jd = f.ctx.layout.journal_dir();
+        std::fs::create_dir_all(&jd).unwrap();
+        // seat-compat's journal: another format, replayed by the Seat `uninstall` only.
+        let compat = jd.join("changes.jsonl");
+        std::fs::write(&compat, "{\"seq\":1,\"owner\":\"tweaks\",\"change\":{}}\n").unwrap();
+        assert!(journal::read_dir_journals(&jd).unwrap().is_empty());
+        let rep = run_uninstall(&f.ctx, true);
+        assert!(!rep.steps.iter().any(|s| s.step == "data_dir"), "{rep:?}");
+        assert!(compat.is_file(), "left for the Seat uninstall");
+        assert!(f.ctx.layout.logs_dir().join(layout::SETUP_LOG).is_file());
+        assert!(!f.ctx.layout.logs_dir().join("setup.log").exists(), "Seat's setup.log is not ours");
     }
 }

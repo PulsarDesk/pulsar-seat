@@ -1,5 +1,7 @@
 # Open questions
 
+> **Superseded (merge step 10, 2026-11-14).** Pulsar Split is merged into Pulsar Seat. This file is kept as history and is not updated: names such as `pulsar-split-service`, `PulsarSplit.Control`, IPC v2, `installer/split/` and `split-*` crates are gone. Current facts: [AGENTS.md](../../../AGENTS.md), `docs/agents/`, `installer/README.md` and the package READMEs.
+
 Index: [../../AGENTS.md](../../../AGENTS.md). Questions for the analyst (spec) or the
 maintainer (decision). Each has the choice we made for now. `spec/remote/` is analyst-only, so
 spec questions are collected here.

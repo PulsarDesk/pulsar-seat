@@ -1,5 +1,7 @@
 # Third-party components
 
+> **Superseded (merge step 10, 2026-11-14).** Pulsar Split is merged into Pulsar Seat. This file is kept as history and is not updated: names such as `pulsar-split-service`, `PulsarSplit.Control`, IPC v2, `installer/split/` and `split-*` crates are gone. Current facts: [AGENTS.md](../../../AGENTS.md), `docs/agents/`, `installer/README.md` and the package READMEs. **Still the reference** for the verified third-party table (drivers, stream server, RDP libraries); the pins themselves now live in `installer/remote/*.json`.
+
 Index: [../../AGENTS.md](../../../AGENTS.md). Decision context: [plan.md](plan.md) (Drivers,
 2026-11-12). Install-side facts: `spec/remote/90-install.md` §3.
 

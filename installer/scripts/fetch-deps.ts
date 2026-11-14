@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Build-time (CI) step: download the third-party artefacts pinned in
-// installer/split/drivers.json and installer/split/stream-server.json, verify their SHA-256, lay them
-// out for the Tauri bundle and run check-payload on the result.
+// Build-time (CI) step of the one MSI (merge step 10, from Pulsar Split): download the
+// third-party artefacts of the remote seat kind pinned in installer/remote/drivers.json and
+// installer/remote/stream-server.json, verify their SHA-256, lay them out for the MSI and
+// run check-payload on the result.
 //
-//   bun installer/split/scripts/fetch-deps.ts --arch x64|arm64 [--out target/installer-deps] [--only drivers|stream]
+//   bun installer/scripts/fetch-deps.ts --arch x64|arm64 [--out target/installer-deps] [--only drivers|stream]
 //
-// Output (per arch, plus a copy in <out>/current for installer/split/tauri.release.conf.json):
-//   <out>/<arch>/drivers.json              resolved manifest (only this arch, INF globs resolved)
-//   <out>/<arch>/drivers/<id>/...          extracted INF package or the official installer exe
-//   <out>/<arch>/stream-server/...         stream server without its browser web UI
-//   <out>/<arch>/stream-server.json        runtime ServerDist {flavour, version, file, sha256, source_url, licence}
-//   <out>/cache/<sha256>-<file>            verified downloads (reused when the hash matches)
+// Output (per arch; build-installer.ps1 copies <out>/<arch>/remote into the payload, and
+// bundle-config.ts turns it into the generated WiX fragment PulsarSeatRemote.wxs):
+//   <out>/<arch>/remote/drivers.json              resolved manifest (only this arch, INF globs resolved)
+//   <out>/<arch>/remote/drivers/<id>/...          extracted INF package or the official installer exe
+//   <out>/<arch>/remote/stream-server/...         stream server without its browser web UI
+//   <out>/<arch>/remote/stream-server.json        runtime ServerDist {flavour, version, file, sha256, source_url, licence}
+//   <out>/cache/<sha256>-<file>                   verified downloads (reused when the hash matches)
+// The service reads them from `<install>\remote\` (seat-setup `layout::REMOTE_PAYLOAD_DIR`).
 //
 // Fails (exit 1) on: hash mismatch, missing/ambiguous INF, INF without a section for the
 // arch, INF without the manifest's root hardware id, web UI left in the payload, any
@@ -22,6 +25,9 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { checkDirs } from "./check-payload.ts";
+
+/** Folder of the remote payload, in the deps output and under the install root. */
+export const REMOTE_DIR = "remote";
 
 export type Arch = "x64" | "arm64";
 
@@ -52,6 +58,11 @@ export interface StreamManifest {
   exe: string;
   install_dir: string;
   web_ui_dirs: string[];
+  /**
+   * Paths (relative to the exe's folder; a folder ends in `/`) left out of the payload:
+   * upstream's own service / firewall / driver installers, which the product never runs.
+   */
+  drop_paths?: string[];
   builds: Record<string, { url: string; sha256: string }>;
 }
 
@@ -104,6 +115,15 @@ export function decodeInf(bytes: Uint8Array): string {
 export function isWebUiPath(rel: string, webDirs: string[]): boolean {
   const p = "/" + rel.replace(/\\/g, "/").toLowerCase();
   return webDirs.some((d) => p.includes("/" + d.toLowerCase().replace(/^\/|\/$/g, "") + "/"));
+}
+
+/** Is `rel` one of the `drop_paths` (that exact file, or below a folder ending in `/`)? */
+export function isDroppedPath(rel: string, drop: string[] = []): boolean {
+  const p = rel.replace(/\\/g, "/").toLowerCase();
+  return drop.some((d) => {
+    const x = d.replace(/\\/g, "/").toLowerCase();
+    return x.endsWith("/") ? p.startsWith(x) : p === x;
+  });
 }
 
 export function packagesFor(pkgs: DriverPackage[], arch: Arch): DriverPackage[] {
@@ -195,7 +215,7 @@ async function unzip(zip: string, dest: string): Promise<void> {
 }
 
 async function fetchDrivers(root: string, arch: Arch, out: string, cache: string): Promise<void> {
-  const all: DriverPackage[] = JSON.parse(readFileSync(join(root, "installer", "split", "drivers.json"), "utf8"));
+  const all: DriverPackage[] = JSON.parse(readFileSync(join(root, "installer", "remote", "drivers.json"), "utf8"));
   const errs = validateDrivers(all);
   if (errs.length) throw new Error(errs.join("\n"));
   const resolved: DriverPackage[] = [];
@@ -226,7 +246,7 @@ async function fetchDrivers(root: string, arch: Arch, out: string, cache: string
 }
 
 async function fetchStream(root: string, arch: Arch, out: string, cache: string): Promise<void> {
-  const m: StreamManifest = JSON.parse(readFileSync(join(root, "installer", "split", "stream-server.json"), "utf8"));
+  const m: StreamManifest = JSON.parse(readFileSync(join(root, "installer", "remote", "stream-server.json"), "utf8"));
   const errs = validateStream(m);
   if (errs.length) throw new Error(errs.join("\n"));
   const b = m.builds[arch];
@@ -244,7 +264,7 @@ async function fetchStream(root: string, arch: Arch, out: string, cache: string)
   for (const f of files) {
     if (base && !f.startsWith(base + "/")) continue;
     const rel = base ? f.slice(base.length + 1) : f;
-    if (isWebUiPath(rel, m.web_ui_dirs) || /\.html?$/i.test(rel)) {
+    if (isWebUiPath(rel, m.web_ui_dirs) || /\.html?$/i.test(rel) || isDroppedPath(rel, m.drop_paths)) {
       dropped++;
       continue;
     }
@@ -252,7 +272,7 @@ async function fetchStream(root: string, arch: Arch, out: string, cache: string)
     cpSync(join(tmp, f), join(dest, rel));
   }
   rmSync(tmp, { recursive: true, force: true });
-  console.log(`stream server: dropped ${dropped} web UI file(s)`);
+  console.log(`stream server: dropped ${dropped} web UI / installer file(s)`);
   const exeRel = `${m.install_dir}/${basename(exe)}`;
   const dist = serverDist(m, exeRel, sha256Hex(readFileSync(join(out, exeRel))));
   writeFileSync(join(out, "stream-server.json"), JSON.stringify(dist, null, 2) + "\n");
@@ -264,23 +284,21 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const root = resolve(import.meta.dir, "..", "..", "..");
+  const root = resolve(import.meta.dir, "..", "..");
   const arch = (arg("--arch") ?? (process.arch === "arm64" ? "arm64" : "x64")) as Arch;
   if (arch !== "x64" && arch !== "arm64") throw new Error(`unsupported --arch ${arch}`);
   const base = resolve(root, arg("--out") ?? join("target", "installer-deps"));
-  const out = join(base, arch);
+  const out = join(base, arch, REMOTE_DIR);
   const cache = join(base, "cache");
   const only = arg("--only");
   mkdirSync(out, { recursive: true });
   if (!only || only === "drivers") await fetchDrivers(root, arch, out, cache);
   if (!only || only === "stream") await fetchStream(root, arch, out, cache);
-  const errors = checkDirs([out]).filter((v) => v.severity === "error");
-  for (const v of errors) console.error(`ERROR ${v.rule}: ${v.path}`);
-  if (errors.length) throw new Error("payload check failed");
-  const current = join(base, "current");
-  rmSync(current, { recursive: true, force: true });
-  cpSync(out, current, { recursive: true });
-  console.log(`ok: ${out} (copied to ${current}); ${statSync(out).isDirectory() ? "ready for tauri build" : ""}`);
+  // The same rules as the whole MSI payload, on the folder as it will sit in it.
+  const found = checkDirs([join(base, arch)], arch, { allowDrivers: false });
+  for (const v of found) console.error(`${v.severity.toUpperCase()} ${v.rule}: ${v.path}${v.detail ? ` (${v.detail})` : ""}`);
+  if (found.some((v) => v.severity === "error")) throw new Error("payload check failed");
+  console.log(`ok: ${out} (${statSync(out).isDirectory() ? "ready for build-installer.ps1" : ""})`);
 }
 
 if (import.meta.main) {

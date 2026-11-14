@@ -9,6 +9,7 @@ import {
   decodeInf,
   globMatch,
   infProblems,
+  isDroppedPath,
   isWebUiPath,
   packagesFor,
   serverDist,
@@ -17,7 +18,7 @@ import {
   validateStream,
 } from "./fetch-deps.ts";
 
-const root = join(import.meta.dir, "..");
+const root = join(import.meta.dir, "..", "remote");
 
 describe("fetch-deps helpers", () => {
   test("sha256", () => {
@@ -108,5 +109,19 @@ describe("fetch-deps helpers", () => {
     } as DriverPackage;
     expect(validateDrivers([p])).toEqual(["x: sha256 not pinned"]);
     expect(validateDrivers([{ ...p, url: "http://e/x" }]).length).toBe(2);
+  });
+});
+
+describe("fetch-deps drop list (merge step 10)", () => {
+  test("upstream installers and service wrapper are left out", () => {
+    const stream: StreamManifest = JSON.parse(readFileSync(join(root, "stream-server.json"), "utf8"));
+    const drop = stream.drop_paths ?? [];
+    expect(isDroppedPath("scripts/vigembus_installer.exe", drop)).toBe(true);
+    expect(isDroppedPath("scripts\\install-service.bat", drop)).toBe(true);
+    expect(isDroppedPath("Tools/SunshineSvc.exe", drop)).toBe(true);
+    expect(isDroppedPath("tools/audio-info.exe", drop)).toBe(false);
+    expect(isDroppedPath("sunshine.exe", drop)).toBe(false);
+    expect(isDroppedPath("scripts", drop)).toBe(false);
+    expect(isDroppedPath("x", undefined)).toBe(false);
   });
 });
