@@ -5,7 +5,10 @@
 # a "+" chord presses in order and releases in reverse. The synthetic mouse does not
 # register clicks in the basic session: drive the UI with the keyboard.
 # Usage: ui.ps1 -Do "key:0x5B+0x52; type:notepad; key:0x0D; wait:2; shot:name"
-param([string] $Do, [string] $VmName = "PulsarSeatTest-arm64", [string] $OutDir = (Join-Path $PSScriptRoot "..\..\target\vm\shots"))
+# `cred:<name>` types the password of credential <name> (pstest, seat1, ...) from the
+# credential file (see vm.ps1) into the VM; it is never printed.
+param([string] $Do, [string] $VmName = "PulsarSeatTest-arm64", [string] $OutDir = (Join-Path $PSScriptRoot "..\..\target\vm\shots"),
+    [string] $CredFile = $(if ($env:PSEAT_VM_CREDS) { $env:PSEAT_VM_CREDS } else { "$env:USERPROFILE\.pulsar-seat\vm-creds.xml" }))
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $dir = (Resolve-Path $OutDir).Path
@@ -45,6 +48,7 @@ foreach ($step in ($Do -split ';')) {
     switch ($k) {
         'key'   { Key $v }
         'type'  { Invoke-CimMethod -InputObject $kb -MethodName TypeText -Arguments @{ asciiText = $v } | Out-Null }
+        'cred'  { Invoke-CimMethod -InputObject $kb -MethodName TypeText -Arguments @{ asciiText = (Import-Clixml $CredFile).$v.GetNetworkCredential().Password } | Out-Null }
         'wait'  { Start-Sleep -Seconds ([double]$v) }
         'click' { $x, $y = $v.Split(','); Click ([int]$x) ([int]$y) }
         'dbl'   { $x, $y = $v.Split(','); Click ([int]$x) ([int]$y); Start-Sleep -Milliseconds 80; Click ([int]$x) ([int]$y) }
