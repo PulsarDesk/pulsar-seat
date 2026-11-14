@@ -39,6 +39,34 @@ describe('seat redirection model', () => {
   });
 });
 
+describe('printer redirection', () => {
+  it('is stored, summarised and older documents read as off', async () => {
+    const c = demoConfig();
+    const on = { ...DEFAULT_SEAT_REDIRECT, printers: 'seat' as const };
+    const c2 = setRedirect(c, 2, on);
+    expect(c2.seats.find((s) => s.number === 2)?.local?.redirect?.printers).toBe('seat');
+    expect(redirectOn(seatRedirect(c2, 2))).toBe(true);
+    expect(t.redirect.summary('kapalı', 'Kapalı', false, t.redirect.printersShort.seat)).toBe('Yazıcı: koltuğun');
+    const s2 = c.seats.find((s) => s.number === 2)!;
+    s2.local = { redirect: { clipboard: { direction: 'off' }, drives: 'off', smartcards: false } as never };
+    expect(seatRedirect(c, 2).printers).toBe('off');
+    expect(noteLabel('printers_print_as_host')).toContain('arka plan hesabı');
+    expect(refusalLabel({ channel: 'printers', reason: 'printer_not_redirected' })).toBe('Yazıcı: yazıcı bu koltuğa yönlendirilmemiş');
+  });
+
+  it('the dialog sets the printer mode and warns for every queue', async () => {
+    const onSave = vi.fn();
+    render(RedirectDialog, { seat: 2, redirect: DEFAULT_SEAT_REDIRECT, onSave, onCancel: vi.fn() });
+    const user = userEvent.setup();
+    expect(screen.queryByTestId('printers-all')).toBeNull();
+    await user.click(screen.getByLabelText(t.redirect.printerModes.all));
+    expect(screen.getByTestId('printers-all')).toHaveTextContent(t.redirect.printersAllWarning);
+    await user.click(screen.getByLabelText(t.redirect.printerModes.seat));
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave).toHaveBeenCalledWith({ ...DEFAULT_SEAT_REDIRECT, printers: 'seat' });
+  });
+});
+
 describe('RedirectDialog', () => {
   it('sets clipboard, drives and smart cards and warns about the shared clipboard', async () => {
     const onSave = vi.fn();
@@ -54,7 +82,8 @@ describe('RedirectDialog', () => {
     expect(onSave).toHaveBeenCalledWith({
       clipboard: { ...DEFAULT_SEAT_REDIRECT.clipboard, direction: 'to_seat', files: true },
       drives: 'read_only',
-      smartcards: true
+      smartcards: true,
+      printers: 'off'
     });
   });
 

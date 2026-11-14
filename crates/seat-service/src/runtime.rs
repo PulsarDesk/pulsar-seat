@@ -180,7 +180,34 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
     // not in INTERACTIVE, so the IU entry above does not admit them). Set up at every start;
     // when that fails they use the SYSTEM Low token for this run (win::containment).
     if !opts.console {
-        match crate::win::host_account::ensure() {
+        // The host group first (round 4 local-gaps): the pipe admits it with one ACE, so
+        // per-seat accounts created later in this run need no pipe change.
+        let group = match crate::win::host_account::ensure_group() {
+            Ok(g) => {
+                match seat_session::host_account::pipe_ace(&g) {
+                    Some(ace) => sddl.push_str(&ace),
+                    None => log::warn(&format!("host group SID {g:?} not usable in the pipe DACL")),
+                }
+                Some(g)
+            }
+            Err(e) => {
+                log::warn(&format!("host group not set up, every seat host uses the shared account: {e}"));
+                None
+            }
+        };
+        match &group {
+            Some(g) => {
+                let g = g.clone();
+                platform_for_hosts.set_seat_provisioner(Some(std::sync::Arc::new(move |seat| crate::win::host_account::ensure_seat(seat, &g))));
+                // Accounts of seats that no longer run a host go (service start only).
+                let keep: Vec<seat_core::SeatNumber> = service.host_account_seats();
+                for e in crate::win::host_account::prune(&keep) {
+                    log::warn(&format!("seat host account cleanup: {e}"));
+                }
+            }
+            None => platform_for_hosts.set_seat_provisioner(None),
+        }
+        match crate::win::host_account::ensure_shared(group.as_deref()) {
             Ok(a) => {
                 match seat_session::host_account::pipe_ace(&a.sid) {
                     Some(ace) => sddl.push_str(&ace),

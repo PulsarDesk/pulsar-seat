@@ -510,7 +510,10 @@ export const t = {
       'Bu bağlantı noktasında ağ düzeyinde kimlik doğrulaması kapalıdır; yalnızca bu bilgisayarın içinden bağlanılabilir (güvenlik duvarı kuralıyla). Güvenlik duvarı kapalıysa ya da bir ilke yerel kuralları yok sayıyorsa kullanılmaz. Ayar değişince Uzak Masaüstü Hizmetleri, açık Uzak Masaüstü koltuğu kalmadığında yeniden başlatılır.',
     loopbackPort: 'Bağlantı noktası (1024–65535, 3389 olamaz)',
     loopbackAccounts: 'Bu bağlantı noktasından oturum açabilecek ek hesaplar (her satıra bir: kullanici ya da ETKİ_ALANI\\kullanici)',
-    loopbackAccountsHint: 'Koltuklara atanmış hesaplar her zaman izinlidir. Yöneticiler bu bağlantı noktasından oturum açamaz.'
+    loopbackAccountsHint: 'Koltuklara atanmış hesaplar her zaman izinlidir. Yöneticiler bu bağlantı noktasından oturum açamaz.',
+    loopbackAllowed: (list: string) => `Şu hesaplar bu bağlantı noktasından oturum açabilir: ${list}.`,
+    loopbackNoAccounts: (seats: string) =>
+      `Oturum açma ekranındaki koltuklar (${seats}) için izinli hesap yok; bu koltuklar başlayamaz. Yukarıya bu koltuklarda oturum açacak hesapları yazın.`
   },
 
   backendNames: {
@@ -646,6 +649,9 @@ export const t = {
     drive_letter_moved: 'Bir sürücü harfi artık başka bir birimi gösteriyor; bu sürücü yönlendirilmez',
     drive_volume_unknown: 'Bir sürücünün birimi belirlenemedi; bu sürücü yönlendirilmez',
     no_seat_readers: 'Bu koltuğa atanmış akıllı kart okuyucu yok',
+    no_seat_printers: 'Bu koltuğa atanmış ve kuyruğu bulunan yazıcı yok',
+    printers_all_queues: 'Bilgisayardaki bütün yazıcılar bu koltuğa yönlendirilir (başka koltuklarınkiler de)',
+    printers_print_as_host: 'Yönlendirilen yazıcılara işler koltuğun arka plan hesabıyla gönderilir, koltuk kullanıcısı adına değil',
     // Backend probe / apply notes (seat-session, seat-media, seat-service).
     no_per_user_isolation: 'Bütün koltuklar aynı Windows kullanıcısıyla çalışır (kullanıcı yalıtımı yok)',
     one_kiosk_visible_at_a_time: 'Aynı anda yalnızca bir kiosk masaüstü görünür',
@@ -698,12 +704,27 @@ export const t = {
     smartcards: 'Akıllı kart',
     smartcardsLabel: 'Bu koltuğa atanmış akıllı kart okuyucularını koltuk oturumuna aç',
     smartcardsHint: 'Koltuk oturumu yalnızca kendi okuyucularını görür. Aynı modelden iki okuyucu varsa okuyucu kimliği okunamazsa ikisi de kapalı kalır.',
-    summary: (clip: string, drives: string, cards: boolean) =>
-      [clip !== 'kapalı' ? `Pano ${clip}` : '', drives !== 'Kapalı' ? `Sürücü: ${drives.toLocaleLowerCase('tr')}` : '', cards ? 'Akıllı kart' : '']
+    printers: 'Yazıcılar',
+    printerModes: {
+      off: 'Kapalı',
+      seat: 'Bu koltuğa atanmış yazıcılar',
+      all: 'Bilgisayardaki bütün yazıcılar'
+    } as Record<string, string>,
+    printersHint:
+      'Koltuk oturumu bu bilgisayarın yazıcılarını zaten doğrudan görebilir; yönlendirilen yazıcı oturumda ayrıca “yönlendirildi” ekiyle görünür. Yazdırma işi koltuk kullanıcısı adına değil, koltuğun arka plan hesabıyla gönderilir. Değişiklik koltuğun bir sonraki bağlantısında geçerli olur.',
+    printersAllWarning: 'Uyarı: başka koltuklara ait yazıcılar da bu koltukta görünür ve kullanılabilir.',
+    printersShort: { off: '', seat: 'Yazıcı: koltuğun', all: 'Yazıcı: hepsi' } as Record<string, string>,
+    summary: (clip: string, drives: string, cards: boolean, printers = '') =>
+      [
+        clip !== 'kapalı' ? `Pano ${clip}` : '',
+        drives !== 'Kapalı' ? `Sürücü: ${drives.toLocaleLowerCase('tr')}` : '',
+        cards ? 'Akıllı kart' : '',
+        printers
+      ]
         .filter(Boolean)
         .join(' · ') || 'Kapalı',
     refusals: 'Son reddedilen yönlendirmeler',
-    channels: { clipboard: 'Pano', drives: 'Sürücü', smartcard: 'Akıllı kart', activex: 'ActiveX istemcisi' } as Record<string, string>
+    channels: { clipboard: 'Pano', drives: 'Sürücü', smartcard: 'Akıllı kart', printers: 'Yazıcı', activex: 'ActiveX istemcisi' } as Record<string, string>
   },
 
   /** Turkish text per refused redirection reason (seat host, `RefusalLog`). */
@@ -732,11 +753,14 @@ export const t = {
     drive_is_system_drive: 'Windows sürücüsü yönlendirilmez',
     drive_root_invalid: 'geçersiz sürücü kökü',
     drive_root_unavailable: 'sürücü açılamadı',
-    printer_not_redirected: 'yazıcı yönlendirilmez',
+    printer_not_redirected: 'yazıcı bu koltuğa yönlendirilmemiş',
+    no_printer_queue_found: 'yönlendirilecek yazıcı kuyruğu bulunamadı',
+    printer_discovery_failed: 'yazıcılar okunamadı',
     port_not_redirected: 'bağlantı noktası yönlendirilmez',
     clipboard_filter_needs_ironrdp: 'ActiveX istemcisi panoyu süzemez; pano kapalı',
     drives_need_ironrdp: 'ActiveX istemcisi sürücüleri yönlendirmez',
-    smartcards_need_ironrdp: 'ActiveX istemcisi akıllı kartları yönlendirmez'
+    smartcards_need_ironrdp: 'ActiveX istemcisi akıllı kartları yönlendirmez',
+    printers_need_ironrdp: 'ActiveX istemcisi yazıcıları yönlendirmez'
   } as Record<string, string>,
 
   drivers: {
@@ -1164,6 +1188,10 @@ export const issueText: Record<string, string> = {
   timeout_out_of_range: 'Zamanlama değeri izin verilen aralığın dışında.',
   loopback_port_invalid: 'Parolasız koltuk bağlantı noktası 1024 ile 65535 arasında olmalı ve 3389 olamaz.',
   hide_fsu_with_fast_user_switch: 'Hızlı kullanıcı değiştirmeyi gizlemek, “aynı anda bir koltuk” oturum yöntemini kapatır.',
+  loopback_no_accounts:
+    'Bu koltuk oturum açma ekranında açılıyor, ama parolasız koltuk bağlantı noktasını kullanabilecek hesap yok; koltuk başlayamaz. Gelişmiş sekmesindeki “ek hesaplar” listesine bu koltukta oturum açacak kişileri ekleyin ya da koltuğa bir hesap verin.',
+  logon_screen_needs_listener:
+    'Bu koltuk oturum açma ekranında açılıyor; parolasız koltuk bağlantı noktası kapalıyken başlatılamaz. Bağlantı noktasını açın ya da koltuğa parolalı bir hesap verin.',
   loopback_account_invalid: 'Ek hesaplardan biri geçersiz (kullanici ya da ETKİ_ALANI\\kullanici yazın, @ kullanmayın); yok sayılır.',
   invalid_hotkey: 'Geçiş kısayolu geçersiz.',
   experimental_not_acknowledged: 'Deneysel oturum yöntemi için uyarı onaylanmadı.',

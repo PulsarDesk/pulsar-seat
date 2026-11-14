@@ -299,6 +299,29 @@ pub struct SeatRedirect {
     /// Smart-card API redirected to the readers assigned to this seat only (MS-RDPESC).
     #[serde(default)]
     pub smartcards: bool,
+    /// Print queues announced to the seat session as redirected printers (MS-RDPEPC over
+    /// MS-RDPEFS). Off by default. Added 2026-11-14 (round 4 local-gaps, additive).
+    #[serde(default)]
+    pub printers: PrinterRedirect,
+}
+
+/// Which local print queues the seat host announces to the seat session.
+///
+/// The seat session runs on this PC and can already reach the local queues it is allowed
+/// to use (spec 70 §3.8); a redirected printer is an extra queue in the session (named
+/// "<printer> (redirected N)" by Windows) whose jobs the **seat host** prints with its own
+/// token. Useful when the seat's user may not print to the queue directly (the
+/// `printer_acl` gate gives a seat-owned queue to the seat's logon only) or for the
+/// session's default-printer handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrinterRedirect {
+    #[default]
+    Off,
+    /// The queues of the printers whose effective mask is exactly this seat.
+    Seat,
+    /// Every local queue and printer connection the seat host can open (as mstsc does).
+    All,
 }
 
 impl SeatRedirect {

@@ -134,8 +134,15 @@ Kovan Yükle** ile `D:\Windows\System32\config\SYSTEM` açılabilir. İşiniz bi
 - Hızlı kullanıcı değiştirme yönteminde koltuklar bilgisayar açılırken kendiliğinden
   başlamaz (her başlatma konsolu o koltuğa geçirir). Koltuğu yönetici uygulamasından
   başlatın.
-- Koltuk sunucusu (`pulsar-seat-host.exe`) güvenlik için **`PulsarSeatHost`** adlı ayrı bir
-  yerel hesapla ve düşük bütünlük düzeyinde çalışır. Hesabı hizmet kendisi oluşturur ve her
+- Koltuk sunucusu (`pulsar-seat-host.exe`) güvenlik için her koltukta o koltuğa ait ayrı bir
+  yerel hesapla (**`PulsarSeatHost02`**, **`PulsarSeatHost03`** …) ve düşük bütünlük düzeyinde
+  çalışır; böylece bir koltuğun sunucusu başka bir koltuğunkine erişemez. Bu hesaplar
+  **`PulsarSeatHosts`** adlı yerel grubun üyesidir. Koltuk silinirse hesabı hizmetin bir
+  sonraki başlangıcında, Pulsar Seat kaldırılırsa hepsi silinir. Koltuğun hesabı
+  kurulamazsa o koltuk ortak **`PulsarSeatHost`** hesabıyla çalışır (yerel bağlantı
+  dinleyicisi de bu ortak hesabı kullanır). Koltuğa yazıcı yönlendirmesi açıksa koltuk
+  sunucusu çalıştığı sürece hesabın kullanıcı profili yüklenir (`C:\Users\PulsarSeatHost02`
+  gibi bir klasör oluşur). Hesabı hizmet kendisi oluşturur ve her
   başlangıçta parolasını rastgele yeniler (parola yalnızca Windows'un korumalı LSA
   deposunda durur, kimse yazmaz). Bu hesapla Windows'ta oturum açılamaz, ağdan
   bağlanılamaz; oturum açma ekranında da görünmez. Silmeyin: silinirse hizmet bir sonraki
@@ -146,9 +153,18 @@ Kovan Yükle** ile `D:\Windows\System32\config\SYSTEM` açılabilir. İşiniz bi
 - **Pano paylaşımı:** bu hesapla çalışan koltuk sunucusu panoya yalnızca koltuğun
   ayarlarında pano paylaşımı açıksa erişir. Ayarı değiştirdikten sonra koltuğu yeniden
   başlatın; değişiklik koltuk sunucusu yeniden başlayınca etkili olur.
-- Hesap kurulamazsa ya da koltuk sunucusu bu hesapla masaüstüne veya hizmete
-  ulaşamazsa, hizmet o çalışma boyunca kendiliğinden bir önceki ayara (SYSTEM, düşük
-  bütünlük düzeyi) döner ve bunu `service.log` dosyasına yazar.
+- Bir koltuğun kendi hesabı kurulamazsa ya da koltuk sunucusu bu hesapla masaüstüne
+  veya hizmete ulaşamazsa, o koltuk hizmetin o çalışması boyunca ortak `PulsarSeatHost`
+  hesabına döner. Ortak hesap da kurulamazsa ya da ulaşamazsa hizmet bir önceki ayara
+  (SYSTEM, düşük bütünlük düzeyi) döner. Her ikisi de `service.log` dosyasına yazılır.
+- `PulsarSeatHosts` adında Pulsar'ın oluşturmadığı bir grup ya da kullanıcı varsa koltuk
+  başına hesaplar kapalı kalır ve bütün koltuklar ortak hesabı kullanır; o adı
+  değiştirip hizmeti yeniden başlatın.
+- Oturum açma ekranında açılan (hesabı olmayan) koltuklar parolasız koltuk bağlantı
+  noktasından bağlanır. Bu bağlantı noktasını yalnızca koltuklara atanmış hesaplar ve
+  Gelişmiş sekmesindeki **ek hesaplar** kullanabilir. Hiç hesap yoksa bu koltuklar
+  başlayamaz; yönetici uygulaması koltukta bunu uyarı olarak gösterir. Bu koltuklarda
+  oturum açacak kişileri ek hesaplara yazın ya da koltuğa bir hesap verin.
 - Bir bilgisayarda koltuk yine de hiç bağlanmıyorsa, yönetici komut isteminde aşağıdaki
   değerlerden birini ayarlayıp hizmeti yeniden başlatın:
 
@@ -156,6 +172,8 @@ Kovan Yükle** ile `D:\Windows\System32\config\SYSTEM` açılabilir. İşiniz bi
   reg add HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters /v HostTokenCompat /t REG_DWORD /d 2 /f
   ```
 
+  - `3`: koltuk başına hesap kullanılmaz; bütün koltuk sunucuları ortak `PulsarSeatHost`
+    hesabıyla çalışır (önceki sürümlerin davranışı).
   - `2`: ayrı hesap kullanılmaz; koltuk sunucusu SYSTEM olarak, düşük bütünlük
     düzeyinde çalışır.
   - `1`: en eski ayar (SYSTEM, ayrıcalıksız, sistem bütünlük düzeyi). Yalnızca `2` de

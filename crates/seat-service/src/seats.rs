@@ -562,7 +562,7 @@ impl Service {
         // Per-seat preferences (clone groups, software cursor, mode follow) first: the
         // binding reads them in `bind_seat`. The frame sections of `pulsar_idd` must be
         // readable by the seat hosts' account (host containment).
-        let prefs = seat_core::backend::display::SeatDisplayPrefs { frame_reader_sid: self.platform.host_frame_reader_sid(), ..prefs };
+        let prefs = seat_core::backend::display::SeatDisplayPrefs { frame_reader_sid: self.platform.host_frame_reader_sid(seat), ..prefs };
         b.display.configure_seat(seat, &prefs);
         let outputs = match b.display.bind_seat(seat, &monitors) {
             Ok(o) => o,
@@ -695,6 +695,16 @@ impl Service {
         d.to_seat() || d.from_seat()
     }
 
+    /// The seat's policy redirects printers: its host account's user profile is loaded for
+    /// the host's lifetime (per-user default printer and printer connections).
+    fn seat_redirects_printers(&self, seat: SeatNumber) -> bool {
+        if seat.is_console() {
+            return false;
+        }
+        let st = self.lock();
+        st.config.seat(seat).is_some_and(|c| c.local_settings().redirect.printers != seat_core::config::PrinterRedirect::Off)
+    }
+
     fn launch_host(&self, seat: SeatNumber, generation: u64, hl: HostLaunch) -> Result<(), BackendError> {
         let token = self.platform.random_token()?;
         // The host receives the seat's credentials, so it runs with a SYSTEM token in the
@@ -714,6 +724,8 @@ impl Service {
             stdin_secret: Some(token.clone()),
             service_child: true,
             host_clipboard: self.seat_redirects_clipboard(seat),
+            host_seat: Some(seat),
+            host_profile: self.seat_redirects_printers(seat),
         };
         let pid = self.platform.launch(&spec)?;
         let created = self.platform.process_created(pid).unwrap_or(0);
@@ -1028,6 +1040,8 @@ impl Service {
                 stdin_secret: None,
                 service_child: true,
                 host_clipboard: false,
+                host_seat: None,
+                host_profile: false,
             };
             match self.platform.launch(&spec) {
                 Ok(pid) => {
@@ -1056,6 +1070,8 @@ impl Service {
                 stdin_secret: None,
                 service_child: false,
                 host_clipboard: false,
+                host_seat: None,
+                host_profile: false,
             };
             match self.platform.launch(&spec) {
                 Ok(pid) => log::info(&format!("seat {seat}: startup app {i} started (pid {pid})")),
@@ -1164,6 +1180,8 @@ impl Service {
             stdin_secret: None,
             service_child: false,
             host_clipboard: false,
+            host_seat: None,
+            host_profile: false,
         };
 
         let pid = self.platform.launch(&spec).map_err(ProtoError::from)?;

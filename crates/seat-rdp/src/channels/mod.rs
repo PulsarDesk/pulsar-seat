@@ -203,7 +203,7 @@ pub fn attach(connector: &mut ClientConnector, p: &SessionParams, ch: &Channels,
         }
     }
     let live = ch.live.get_or(&p.redirect.channels);
-    let rdpdr_wanted = !live.drives.is_empty() || (p.redirect.smartcards_on() && live.smartcards);
+    let rdpdr_wanted = !live.drives.is_empty() || (p.redirect.smartcards_on() && live.smartcards) || printers_wanted(&live);
     if rdpdr_wanted
         && let Some(r) = build_rdpdr(p, ch)
     {
@@ -212,6 +212,11 @@ pub fn attach(connector: &mut ClientConnector, p: &SessionParams, ch: &Channels,
         j.needs_rdpsnd = true;
     }
     j
+}
+
+/// The resolution asks for redirected printers (named queues or all of them).
+pub fn printers_wanted(r: &seat_core::backend::session::HostRedirection) -> bool {
+    r.all_printers || !r.printers.is_empty()
 }
 
 #[cfg(windows)]

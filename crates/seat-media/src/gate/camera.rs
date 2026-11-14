@@ -211,6 +211,7 @@ mod tests {
             logons: vec![logon(2, 4, "S-1-5-5-0-1"), logon(3, 5, "S-1-5-5-0-2")],
             admins_bypass: true,
             class_defaults: vec![],
+            printer_hosts: vec![],
         };
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.applied, vec![(cam.clone(), IsolationStatus::CameraConsent)]);

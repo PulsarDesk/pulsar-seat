@@ -22,7 +22,12 @@
   function redirectSummary(c: Config, n: SeatNumber): string {
     if (n === 1) return t.none;
     const r = seatRedirect(c, n);
-    return t.redirect.summary(t.redirect.short[r.clipboard.direction], t.redirect.driveModes[r.drives], r.smartcards);
+    return t.redirect.summary(
+      t.redirect.short[r.clipboard.direction],
+      t.redirect.driveModes[r.drives],
+      r.smartcards,
+      t.redirect.printersShort[r.printers ?? 'off']
+    );
   }
   const draft = $derived(store.draft);
   const readOnly = $derived(!store.isAdmin);

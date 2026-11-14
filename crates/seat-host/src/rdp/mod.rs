@@ -136,6 +136,9 @@ impl ClientPolicy {
         if r.smartcards {
             refused.push("smartcards_need_ironrdp");
         }
+        if r.all_printers || !r.printers.is_empty() {
+            refused.push("printers_need_ironrdp");
+        }
         (Self { redirect_clipboard: wanted && unfiltered }, refused)
     }
 }
@@ -339,9 +342,10 @@ mod tests {
         let dev = HostRedirection {
             drives: vec![RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new() }],
             smartcards: true,
+            printers: vec!["Laser".into()],
             ..Default::default()
         };
-        assert_eq!(ClientPolicy::from_redirection(&dev).1, vec!["drives_need_ironrdp", "smartcards_need_ironrdp"]);
+        assert_eq!(ClientPolicy::from_redirection(&dev).1, vec!["drives_need_ironrdp", "smartcards_need_ironrdp", "printers_need_ironrdp"]);
     }
 
     use super::*;

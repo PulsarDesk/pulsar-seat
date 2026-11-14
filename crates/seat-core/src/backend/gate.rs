@@ -89,6 +89,11 @@ pub struct GatePlan {
     /// feature off (the gate restores any class value it changed).
     #[serde(default)]
     pub class_defaults: Vec<DeviceClassTarget>,
+    /// Host accounts that print to a seat's own queues for it (`printer_acl` gate only):
+    /// `(seat, account SID)` of each seat whose host redirects the seat's printers and runs
+    /// as the seat's own account. Added 2026-11-14 (round 4 local-gaps, additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub printer_hosts: Vec<(crate::ids::SeatNumber, String)>,
 }
 
 /// Which enforcement applies to a device (manager isolation-status row, spec 70 §5.4).

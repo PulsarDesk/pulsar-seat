@@ -15,17 +15,10 @@ use seat_core::SeatNumber;
 use crate::log;
 use crate::service::Service;
 
-/// Pure: `user` → `(".", user)`, `DOMAIN\user` → `(DOMAIN, user)`; anything else `None`.
+/// Pure: `user` -> `(".", user)`, `DOMAIN\user` -> `(DOMAIN, user)`; anything else `None`
+/// (one rule with seat-core's validation, `seat_core::validate::parse_loopback_account`).
 pub fn parse_account(s: &str) -> Option<(String, String)> {
-    let s = s.trim();
-    let (d, u) = match s.split_once('\\') {
-        Some((d, u)) => (d.trim(), u.trim()),
-        None => (".", s),
-    };
-    if d.is_empty() || u.is_empty() || u.contains('\\') || u.contains('@') {
-        return None;
-    }
-    Some((d.to_owned(), u.to_owned()))
+    seat_core::validate::parse_loopback_account(s)
 }
 
 /// Seats that are RDP sessions under the topology (seat 1 is the console under

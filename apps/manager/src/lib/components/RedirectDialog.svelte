@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Redirection of one seat session (spec 70, `SeatConfig.redirect`): clipboard direction
-     and format classes, the seat's own drives (off / read-only / read-write) and its smart
-     card readers. The service narrows it to the devices the seat owns; the seat host
+     and format classes, the seat's own drives (off / read-only / read-write), its smart
+     card readers and printers (off / the seat's own / every queue, round 4 local-gaps). The service narrows it to the devices the seat owns; the seat host
      applies it (IronRDP backend) and reports every refusal. -->
 <script lang="ts">
   import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
-  import type { ClipboardDirection, DriveRedirect, SeatRedirect } from '#lib/types.ts';
+  import type { ClipboardDirection, DriveRedirect, PrinterRedirect, SeatRedirect } from '#lib/types.ts';
 
   interface Props {
     seat: number;
@@ -17,15 +17,21 @@
   let { seat, redirect, onSave, onCancel }: Props = $props();
 
   // svelte-ignore state_referenced_locally
-  let r = $state<SeatRedirect>({ clipboard: { ...redirect.clipboard }, drives: redirect.drives, smartcards: redirect.smartcards });
+  let r = $state<SeatRedirect>({
+    clipboard: { ...redirect.clipboard },
+    drives: redirect.drives,
+    smartcards: redirect.smartcards,
+    printers: redirect.printers ?? 'off'
+  });
   const directions: ClipboardDirection[] = ['off', 'to_seat', 'from_seat', 'both'];
   const driveModes: DriveRedirect[] = ['off', 'read_only', 'read_write'];
+  const printerModes: PrinterRedirect[] = ['off', 'seat', 'all'];
   const clipOn = $derived(r.clipboard.direction !== 'off');
   const seatOne = $derived(seat === 1);
 
   function submit(e: Event) {
     e.preventDefault();
-    onSave({ clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards });
+    onSave({ clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards, printers: r.printers ?? 'off' });
   }
 </script>
 
@@ -67,6 +73,17 @@
         <legend>{t.redirect.smartcards}</legend>
         <label class="choice"><input type="checkbox" bind:checked={r.smartcards} /> {t.redirect.smartcardsLabel}</label>
         <p class="hint">{t.redirect.smartcardsHint}</p>
+      </fieldset>
+      <fieldset>
+        <legend>{t.redirect.printers}</legend>
+        {#each printerModes as m (m)}
+          <label class="choice">
+            <input type="radio" name="printer-mode" value={m} bind:group={r.printers} />
+            {t.redirect.printerModes[m]}
+          </label>
+        {/each}
+        <p class="hint">{t.redirect.printersHint}</p>
+        {#if r.printers === 'all'}<p class="warning" role="note" data-testid="printers-all">{t.redirect.printersAllWarning}</p>{/if}
       </fieldset>
     {/if}
   </form>

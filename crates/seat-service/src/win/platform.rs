@@ -208,6 +208,11 @@ impl WinPlatform {
         self.containment.set_account(account);
     }
 
+    /// Per-seat host accounts for this run (`None` = off: every seat uses the shared one).
+    pub fn set_seat_provisioner(&self, provision: Option<crate::win::containment::SeatProvisioner>) {
+        self.containment.set_seat_provisioner(provision);
+    }
+
     /// Close the handles of every exited process (seat apps are never asked about with
     /// `process_alive` / `terminate`, so without this each one would stay a zombie process
     /// object in the service). Also forgets them in the session jobs. Returns how many.
@@ -476,7 +481,12 @@ impl Platform for WinPlatform {
         // Seat hosts / the console listener: the host account (Low integrity, desktop grant)
         // or a SYSTEM fallback from `win::containment`; everyone else: the session user.
         let (primary, grant_sid) = if spec.as_system {
-            let t = self.containment.host_token(spec.session_id, spec.host_clipboard)?;
+            let t = self.containment.host_token(&crate::win::containment::HostRequest {
+                session_id: spec.session_id,
+                clipboard: spec.host_clipboard,
+                seat: spec.host_seat,
+                profile: spec.host_profile,
+            })?;
             (t.token, t.grant_sid)
         } else {
             let p = child_token(spec.session_id)?;
@@ -683,8 +693,11 @@ impl Platform for WinPlatform {
         seat_session::win::wts::account_sid(domain, user)
     }
 
-    fn host_frame_reader_sid(&self) -> Option<String> {
-        self.containment.frame_reader_sid()
+    fn host_frame_reader_sid(&self, seat: seat_core::SeatNumber) -> Option<String> {
+        self.containment.frame_reader_sid(seat)
+    }
+    fn host_account_sid(&self, seat: seat_core::SeatNumber) -> Option<String> {
+        self.containment.seat_account_sid(seat)
     }
 
     fn system_root(&self) -> String {
@@ -771,8 +784,8 @@ impl Platform for WinPlatform {
                 unsafe {
                     for u in std::slice::from_raw_parts(buf as *const USER_INFO_20, read as usize) {
                         let name = from_wide_ptr(u.usri20_name);
-                        // The seat hosts' own account is never offered as a seat user.
-                        if name.eq_ignore_ascii_case(seat_session::host_account::ACCOUNT_NAME) {
+                        // The seat hosts' own accounts are never offered as seat users.
+                        if seat_session::host_account::is_host_account_name(&name) {
                             continue;
                         }
                         let sid = account_sid(&name).unwrap_or_default();

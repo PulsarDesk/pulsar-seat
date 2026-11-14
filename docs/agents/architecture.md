@@ -126,9 +126,36 @@ Console session (seat 1, or a dedicated host session)
       the pipe; 44 and `STATUS_DLL_INIT_FAILED` switch the service to SYSTEM Low for the
       rest of its run. Recovery `HostTokenCompat` (DWORD) under
       `HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters`: 0 / missing =
-      account, `1` = the older privilege-less System-integrity SYSTEM token, `2` = SYSTEM at
-      Low integrity (round-2 token, no account); the service also falls back to `2` by
-      itself when the account cannot be set up or a grant fails. Not seat 1's user (could
+      per-seat accounts (below), `3` = the shared account for every host (round-3
+      behaviour), `1` = the older privilege-less System-integrity SYSTEM token, `2` = SYSTEM
+      at Low integrity (round-2 token, no account); the service also falls back to `2` by
+      itself when the shared account cannot be set up or a grant fails.
+      **Per-seat accounts (round 4 local-gaps, 2026-11-14, untested on hardware):** each
+      seat host runs as its own local account `PulsarSeatHostNN` (`seat_account_name`,
+      password in LSA private data `L$PulsarSeat.HostAccount.NN`, same rights, flags and
+      group rules as the shared account), created / maintained with a rotated password the
+      first time the seat's host starts in a service run (`Containment::seat_account`,
+      provisioner = `win::host_account::ensure_seat`). All host accounts are members of the
+      local group `PulsarSeatHosts` (comment-marked, created at service start,
+      `ensure_group`; a foreign group of that name turns per-seat accounts off); the control
+      pipe admits the group with one ACE (plus the shared account's own ACE, kept for hosts
+      adopted across the upgrade). `check_groups` allows `Users` + that group. Fallbacks:
+      a seat whose account cannot be set up, cannot log on, or whose host exits 44 /
+      `STATUS_DLL_INIT_FAILED` uses the shared account for the rest of the run (only that
+      seat); the console listener always uses the shared account. Service start prunes the
+      accounts of seats that no longer run a host (`host_account_seats`: local seats, seat
+      1 only under `dedicated_host`): rights, `DeleteProfileW`, account, logon-screen entry,
+      secret; uninstall removes every host account and the group (`remove_all`). Profile:
+      when the seat redirects printers (`LaunchSpec::host_profile`) the seat account's
+      profile is loaded (`LoadUserProfileW`, `PI_NOUI`) before the launch and unloaded when
+      the host exits or the launch fails; a load failure is logged, the host runs without
+      it. `pulsar_idd` frame sections of a seat grant that seat's account
+      (`Platform::host_frame_reader_sid(seat)`). Migration from the shared account: nothing
+      to convert (group created, shared account added to it, journal grants keyed by logon
+      SID). HYPOTHESES: a batch token carries the local group SID so the pipe ACE admits
+      it; the hardened token can load / unload its own profile from the service; a seat
+      whose own account fails after `configure_seat` keeps that SID on its frame sections
+      until its next start (the shared-account fallback host could not read them). Not seat 1's user (could
       debug it and read another seat's password). The control pipe has a Low `NW` label
       (`seat_proto::PIPE_LOW_LABEL_SDDL`). Credential prompts off, clipboard redirection off by
       default (IronRDP: `SeatConfig.redirect`, §4.8), listener owner (TermService PID) checked before every Connect, control
@@ -214,6 +241,13 @@ Update 2026-11-13 (second-listener), design (a) **built, untested on hardware**
   config apply, a password change and a reset: accounts = every RDP seat's account (seat 1
   only under `DedicatedHost`) + `extra_accounts`; `passwordless_seats` = any RDP seat with
   logon screen or no stored password.
+- Accounts check (round 4 local-gaps): seat-core `validate` warns per logon-screen RDP
+  seat with `loopback_no_accounts` when no RDP seat has an account and no
+  `extra_accounts` entry is valid (the listener would be `unavailable:no_accounts` and the
+  seat cannot start), and with `logon_screen_needs_listener` when the listener is off; the
+  manager mirrors both (`loopbackAccountIssues`) and lists the admitted accounts under the
+  extra-accounts field (`loopbackAllowedAccounts`). One parser:
+  `seat_core::validate::parse_loopback_account`.
 - `rds_loopback` only (`termsrv_wrapper` builds its inner backend with
   `without_second_listener`). `prepare_host` ensures, `restore_host` removes, a changed
   plan re-ensures while prepared.
@@ -415,6 +449,15 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   (`SC_KEYMENU`); top-level scroll bars get nothing (wheel works); popup menus an app opens
   itself still follow the real cursor. Touch: a primary contact that vanishes without "up"
   is released. Back to the launcher: bar button or Ctrl+Alt+Home (consumed).
+- **Filter session map (round 4 local-gaps):** kiosk seats report the console session as
+  their session; mapping them in the filter's `SET_SESSIONS` would let every console
+  program (seat 1's desktop included, and win32k's raw input thread) open the kiosk seat's
+  HID collections. `service::filter_session_map` leaves out every seat but seat 1 whose
+  session is the console session (unless `dedicated_host`) or is shared with another
+  seat, so those collections stay denied to the console and reach the kiosk shell only
+  through the service reader (`input_packets`). Limit: HID game pads of a kiosk seat are
+  then usable by no app under the filter (pads are not service-read); HYPOTHESIS,
+  untested.
 - **Input filter:** with `kmdf_filter` active the raw reader sees nothing; the shell
   subscribes to the `host` topic as a verified kiosk shell and gets only its own seat's
   `input_packets` (`Scope::kiosk_seat`; never host commands). Each source is used only
@@ -535,8 +578,9 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   (clone) and `follow_session_mode` come from the configuration
   (`SeatDisplayPrefs::from_config`). `frame_reader_sid` (integrate, 2026-11-13) is filled
   by the service from `Platform::host_frame_reader_sid` = `win::containment::
-  frame_reader_sid`: the `PulsarSeatHost` account's SID while hosts run as that account
-  (not `HostTokenCompat`, account set up, not failed), else `None` (SYSTEM Low hosts read
+  frame_reader_sid(seat)`: the seat's own `PulsarSeatHostNN` SID while hosts run as
+  per-seat accounts, else the shared `PulsarSeatHost` SID while hosts run as it (not
+  `HostTokenCompat` 1 / 2, account set up, not failed), else `None` (SYSTEM Low hosts read
   SY + BA sections anyway). Without it a contained seat host could not open the
   `pulsar_idd` frame sections. The SID is fixed at `bind_seat`; a host that falls back to
   SYSTEM Low later still reads. Untested on hardware (IDD driver unsigned, never loaded).
@@ -845,7 +889,19 @@ monitor's same-container hub keeps a seat the monitor is not on.
   drive / WinSCard back-end; system drive refused, read-only per policy, reader list
   filtered, other readers `SCARD_E_UNKNOWN_READER`, reader admin `SCARD_E_NO_ACCESS`,
   card cache not shared). `rdpsnd` is advertised with a silent sink when `rdpdr` needs it
-  and audio is off. Printers / ports: never. Refusals: `channels::RefusalLog` (stderr,
+  and audio is off. Printers (round 4 local-gaps, opt-in `SeatRedirect.printers` =
+  `off` / `seat` / `all`): the service resolves `seat` to the queues of printers whose
+  effective mask is exactly this seat (`seat_media::printer_queues_for_device`, USB port
+  match) into `HostRedirection.printers`, `all` into `all_printers`; the host builds the
+  rdpdr product of IronRDP's Windows back-end with `WindowsPrinterSelection::Named` /
+  `All` (MS-RDPEPC announce with the queue's own driver, jobs written with
+  `StartDocPrinter` / `WritePrinter` under the host token), announces them with
+  `Rdpdr::with_redirected_printer`, and `SeatRdpdr` refuses printer IRPs for any other
+  device id (`printer_not_redirected`). The `printer_acl` gate gives the seat's own host
+  account the use right on the seat's queues (`GatePlan.printer_hosts`). ActiveX:
+  `printers_need_ironrdp`. Changes apply at the next connection. Untested on hardware;
+  HYPOTHESES: printing from a Low-integrity batch token works; spec 70 §3.8 (no printer
+  redirection) is superseded for this opt-in by maintainer request. Ports: never. Refusals: `channels::RefusalLog` (stderr,
   once per 10 s per reason). The clipboard bridge is the host session's clipboard (shared
   with seat 1 and every seat that has it on: note `clipboard_shared_with_host_session`).
 - **Redirection hardening (2026-11-13, fix-rdp-channels).** Single source of truth:

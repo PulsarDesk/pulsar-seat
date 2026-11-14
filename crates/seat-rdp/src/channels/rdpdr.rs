@@ -35,7 +35,13 @@
 //!   the filtered count, so the seat never learns how many readers other seats have. A
 //!   reader change on another seat still wakes the wait (the seat re-lists and sees no
 //!   change).
-//! - **Printers / ports**: never announced (see `crate::policy`).
+//! - **Printers** (round 4 local-gaps): only the queues the service resolved
+//!   (`HostRedirection.printers` / `all_printers`, see `crate::policy`) are announced, by
+//!   IronRDP's Windows printer back-end (MS-RDPEPC: the queue name and its own driver name;
+//!   jobs are written to the local queue with `StartDocPrinter` / `WritePrinter` under the
+//!   host's token). Printer IRPs for a device id this channel did not announce are refused
+//!   here (`printer_not_redirected`) and never reach the back-end.
+//! - **Ports**: never announced.
 //!
 //! Every refusal goes to the refusal log. **Untested on hardware**.
 
@@ -48,8 +54,8 @@ use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpdr::backend::RdpdrBackend;
 use ironrdp_rdpdr::pdu::RdpdrPdu;
 use ironrdp_rdpdr::pdu::efs::{
-    AnyIoCtlCode, DecodedDeviceControlRequest, DeviceControlRequest, DeviceIoRequest, PrinterIoRequest,
-    ServerDeviceAnnounceResponse, ServerDriveIoRequest,
+    AnyIoCtlCode, DecodedDeviceControlRequest, DeviceCloseResponse, DeviceControlRequest, DeviceIoRequest, DeviceIoResponse, NtStatus,
+    PrinterIoRequest, ServerDeviceAnnounceResponse, ServerDriveIoRequest,
 };
 use ironrdp_rdpdr::pdu::esc::{
     CardStateFlags, GetStatusChangeCall, ListReadersCall, ListReadersReturn, LongReturn, ReturnCode, ScardCall, ScardIoCtlCode,
@@ -63,6 +69,7 @@ use std::sync::Arc;
 
 pub const CHANNEL_DRIVES: &str = "drives";
 pub const CHANNEL_SMARTCARD: &str = "smartcard";
+pub const CHANNEL_PRINTERS: &str = "printers";
 
 /// Device id of the smart-card device (any id not used by drives, ports or printers).
 pub const SMARTCARD_DEVICE_ID: u32 = 0x2000_0001;
@@ -221,6 +228,8 @@ pub struct SeatRdpdr {
     live_seen: u64,
     /// PnP waits in flight: completion id -> index of the PnP entry.
     pnp: HashMap<u32, usize>,
+    /// Device ids of the printers this channel announced.
+    printers: HashSet<u32>,
 }
 
 impl core::fmt::Debug for SeatRdpdr {
@@ -244,7 +253,15 @@ impl SeatRdpdr {
             removed: HashSet::new(),
             live_seen: 0,
             pnp: HashMap::new(),
+            printers: HashSet::new(),
         }
+    }
+
+    /// The printers this channel announces (device ids); IRPs for any other printer id are
+    /// refused.
+    pub fn with_printers(mut self, ids: impl IntoIterator<Item = u32>) -> Self {
+        self.printers = ids.into_iter().collect();
+        self
     }
 
     /// The drives of this channel (device id, what the service resolved), the check before
@@ -406,9 +423,15 @@ impl RdpdrBackend for SeatRdpdr {
         self.inner.handle_user_logged_on(rdpdr)
     }
     fn handle_printer_io_request(&mut self, req: PrinterIoRequest) -> PduResult<Vec<SvcMessage>> {
-        // No printer is announced; the default answer is NOT_SUPPORTED.
-        self.log.refuse(CHANNEL_DRIVES, "printer_not_redirected", String::new());
-        self.inner.handle_printer_io_request(req)
+        let id = printer_device_id(&req);
+        if self.printers.contains(&id) {
+            return self.inner.handle_printer_io_request(req);
+        }
+        // Not a printer of this channel: NOT_SUPPORTED, the back-end never sees it.
+        self.log.refuse(CHANNEL_PRINTERS, "printer_not_redirected", format!("device {id}"));
+        Ok(vec![SvcMessage::from(RdpdrPdu::DeviceCloseResponse(DeviceCloseResponse {
+            device_io_response: DeviceIoResponse::new(req.into_device_io_request(), NtStatus::NOT_SUPPORTED),
+        }))])
     }
     fn handle_port_io_request(&mut self, req: PortIoRequest) -> PduResult<Vec<SvcMessage>> {
         self.log.refuse(CHANNEL_DRIVES, "port_not_redirected", String::new());
@@ -416,6 +439,15 @@ impl RdpdrBackend for SeatRdpdr {
     }
     fn reject_printer_write(&mut self, req: DeviceIoRequest) -> PduResult<Vec<SvcMessage>> {
         self.inner.reject_printer_write(req)
+    }
+}
+
+/// Device id a printer IRP is addressed to.
+pub fn printer_device_id(req: &PrinterIoRequest) -> u32 {
+    match req {
+        PrinterIoRequest::Create(r) => r.device_io_request.device_id,
+        PrinterIoRequest::Write(r) => r.device_io_request.device_id,
+        PrinterIoRequest::Close(r) => r.device_io_request.device_id,
     }
 }
 
@@ -500,6 +532,39 @@ mod tests {
         fn poll_deferred_messages(&mut self) -> PduResult<Vec<SvcMessage>> {
             Ok(std::mem::take(&mut self.deferred))
         }
+        fn handle_printer_io_request(&mut self, req: PrinterIoRequest) -> PduResult<Vec<SvcMessage>> {
+            self.calls.lock().unwrap().push(format!("printer {}", printer_device_id(&req)));
+            Ok(Vec::new())
+        }
+    }
+
+    fn printer_close(device_id: u32) -> PrinterIoRequest {
+        use ironrdp_rdpdr::pdu::efs::DeviceCloseRequest;
+        PrinterIoRequest::Close(DeviceCloseRequest {
+            device_io_request: DeviceIoRequest {
+                device_id,
+                file_id: 1,
+                completion_id: 9,
+                major_function: MajorFunction::Close,
+                minor_function: MinorFunction::from(0),
+            },
+        })
+    }
+
+    #[test]
+    fn only_announced_printers_reach_the_back_end() {
+        let (s, calls, seen) = seat(None);
+        let mut s = s.with_printers([0xFFFF_FFFE]);
+        assert!(s.handle_printer_io_request(printer_close(0xFFFF_FFFE)).unwrap().is_empty());
+        assert_eq!(*calls.lock().unwrap(), ["printer 4294967294"]);
+        let out = s.handle_printer_io_request(printer_close(7)).unwrap();
+        assert_eq!(out.len(), 1, "answered here");
+        let b = out[0].encode_unframed_pdu().unwrap();
+        // DR_DEVICE_IOCOMPLETION: header 4, device id 4, completion id 4, IoStatus at 12.
+        assert_eq!(u32_at(&b, 12), u32::from(NtStatus::NOT_SUPPORTED));
+        assert_eq!(calls.lock().unwrap().len(), 1, "the back-end never saw device 7");
+        let r = seen.lock().unwrap();
+        assert_eq!((r[0].channel, r[0].reason), (CHANNEL_PRINTERS, "printer_not_redirected"));
     }
 
     fn req(code: ScardIoCtlCode, completion_id: u32) -> DeviceControlRequest<ScardIoCtlCode> {

@@ -154,6 +154,50 @@ export function accountEntryValid(s: string): boolean {
   return d.length > 0 && u.length > 0 && !u.includes('\\') && !u.includes('@');
 }
 
+/**
+ * Local seats that are RDP sessions (seat 1 is the console under `seat_one_console`) and
+ * have no account: they sign in at the logon screen through the second listener.
+ */
+export function logonScreenRdpSeats(c: Config): number[] {
+  const topo = c.settings.backends.host_topology;
+  return c.seats
+    .filter((s) => (s.kind ?? 'local') === 'local' && !(s.number === 1 && topo !== 'dedicated_host') && s.account.kind === 'logon_screen')
+    .map((s) => s.number);
+}
+
+/**
+ * Accounts the second listener admits: the accounts of the RDP seats plus the valid extra
+ * accounts, as `user` / `DOMAIN\user` (seat-service `loopback_plan::plan_for`).
+ */
+export function loopbackAllowedAccounts(c: Config): string[] {
+  const topo = c.settings.backends.host_topology;
+  const out: string[] = [];
+  const push = (a: string) => {
+    if (!out.some((x) => x.toLowerCase() === a.toLowerCase())) out.push(a);
+  };
+  for (const s of c.seats) {
+    if (s.number === 1 && topo !== 'dedicated_host') continue;
+    if (s.account.kind === 'local') push(s.account.user);
+    else if (s.account.kind === 'domain') push(`${s.account.domain}\\${s.account.user}`);
+  }
+  for (const a of c.settings.backends.loopback_listener?.extra_accounts ?? []) {
+    if (accountEntryValid(a)) push(a.trim());
+  }
+  return out;
+}
+
+/** seat-core `loopback_account_checks` (`rds_loopback` only): logon-screen seats and the second listener. */
+export function loopbackAccountIssues(c: Config): Issue[] {
+  const seats = logonScreenRdpSeats(c);
+  if (c.settings.backends.session !== 'rds_loopback' || seats.length === 0) return [];
+  const enabled = c.settings.backends.loopback_listener?.enabled ?? true;
+  if (!enabled) {
+    return seats.map((n) => issue('warning', 'logon_screen_needs_listener', { seat: n, field: 'settings.backends.loopback_listener.enabled' }));
+  }
+  if (loopbackAllowedAccounts(c).length > 0) return [];
+  return seats.map((n) => issue('warning', 'loopback_no_accounts', { seat: n, field: 'settings.backends.loopback_listener.extra_accounts' }));
+}
+
 /** One account per line (or comma); trimmed, empty lines and duplicates dropped. */
 export function parseAccountList(text: string): string[] {
   const out: string[] = [];
@@ -438,13 +482,14 @@ export function seatRedirect(c: Config, n: SeatNumber): SeatRedirect {
   return {
     clipboard: { ...DEFAULT_SEAT_REDIRECT.clipboard, ...(r?.clipboard ?? {}) },
     drives: r?.drives ?? DEFAULT_SEAT_REDIRECT.drives,
-    smartcards: r?.smartcards ?? DEFAULT_SEAT_REDIRECT.smartcards
+    smartcards: r?.smartcards ?? DEFAULT_SEAT_REDIRECT.smartcards,
+    printers: r?.printers ?? 'off'
   };
 }
 
 /** Whether a redirection policy turns anything on. */
 export function redirectOn(r: SeatRedirect): boolean {
-  return r.clipboard.direction !== 'off' || r.drives !== 'off' || r.smartcards;
+  return r.clipboard.direction !== 'off' || r.drives !== 'off' || r.smartcards || (r.printers ?? 'off') !== 'off';
 }
 
 /** Set a seat's redirection policy; the default (all off) is not written (like the service).
@@ -454,8 +499,9 @@ export function setRedirect(c: Config, n: SeatNumber, r: SeatRedirect): Config {
   const s = out.seats.find((x) => x.number === n);
   const l = s ? localMut(s) : null;
   if (!l) return c;
-  if (n === 1 || JSON.stringify(r) === JSON.stringify(DEFAULT_SEAT_REDIRECT)) delete l.redirect;
-  else l.redirect = { clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards };
+  const full: SeatRedirect = { clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards, printers: r.printers ?? 'off' };
+  if (n === 1 || JSON.stringify(full) === JSON.stringify(DEFAULT_SEAT_REDIRECT)) delete l.redirect;
+  else l.redirect = full;
   return out;
 }
 
@@ -832,6 +878,7 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
   if (ll && (ll.extra_accounts ?? []).some((a) => !accountEntryValid(a))) {
     out.push(issue('warning', 'loopback_account_invalid', { field: 'settings.backends.loopback_listener.extra_accounts' }));
   }
+  out.push(...loopbackAccountIssues(c));
   // Fast user switching finds each seat's session by account: one account per seat
   // (seat-core `SameAccountFastUserSwitch`).
   const fus = b.session === 'fast_user_switch';

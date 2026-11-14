@@ -299,7 +299,7 @@ mod tests {
             DeviceDetails::Storage(s) => assert_eq!(s.letters, vec!['E']),
             x => panic!("{x:?}"),
         }
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 5, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 5, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.applied, vec![(key.clone(), IsolationStatus::SessionLetter)]);
         assert!(!sys.letters.lock().unwrap().contains_key(&'E'));
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn failed_removal_defines_on_retry() {
         let (sys, g, key) = setup();
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 5, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 5, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         *sys.fail_remove_letter.lock().unwrap() = true;
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.failed.len(), 1);
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn console_seat_alone_keeps_global_letter() {
         let (sys, g, key) = setup();
-        let plan = GatePlan { devices: vec![(key, SeatMask::CONSOLE)], logons: vec![logon(1, 1, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key, SeatMask::CONSOLE)], logons: vec![logon(1, 1, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         assert!(g.apply(&plan).unwrap().applied.is_empty());
         assert_eq!(sys.letters.lock().unwrap().get(&'E').map(String::as_str), Some(VOLNAME));
         assert!(g.take_agent_tasks().is_empty());
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn revert_and_taken_letter() {
         let (sys, g, key) = setup();
-        let plan = GatePlan { devices: vec![(key, SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key, SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         g.apply(&plan).unwrap();
         assert!(g.take_agent_tasks().is_empty(), "owner not logged on: no agent work");
         sys.letters.lock().unwrap().insert('E', r"\\?\Volume{other}\".into());

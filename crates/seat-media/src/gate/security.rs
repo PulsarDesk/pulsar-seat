@@ -499,6 +499,7 @@ pub(crate) mod tests {
             logons: vec![logon(2, 3, "S-1-5-5-0-77")],
             admins_bypass: true,
             class_defaults: vec![],
+            printer_hosts: vec![],
         };
         let r = g.apply(&plan).unwrap();
         assert!(r.applied.contains(&(key.clone(), IsolationStatus::Descriptor)));
@@ -533,7 +534,7 @@ pub(crate) mod tests {
         *sys.veto_dismount.lock().unwrap() = true;
         let g = gate(&sys);
         let key = disk_key(&g);
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: false, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: false, class_defaults: vec![], printer_hosts: vec![] };
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.vetoed, vec![key.clone()]);
         assert!(sys.restarts.lock().unwrap().is_empty());
@@ -559,7 +560,7 @@ pub(crate) mod tests {
         *sys.fail_set.lock().unwrap() = true;
         let g = gate(&sys);
         let key = disk_key(&g);
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: false, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(3)]))], logons: vec![], admins_bypass: false, class_defaults: vec![], printer_hosts: vec![] };
         let r = g.apply(&plan).unwrap();
         assert!(r.failed.iter().any(|(k, _)| *k == key));
         assert_eq!(g.journal.get(DISK).unwrap().applied_sddl, None);
@@ -597,7 +598,7 @@ pub(crate) mod tests {
         let sys = Arc::new(FakeSys::default());
         let g = gate(&sys);
         let devices: Vec<_> = g.enumerate().unwrap().into_iter().map(|d| (d.key, SeatMask::from_seats([seat(2)]))).collect();
-        let r = g.apply(&GatePlan { devices, logons: vec![], admins_bypass: true, class_defaults: vec![] }).unwrap();
+        let r = g.apply(&GatePlan { devices, logons: vec![], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] }).unwrap();
         assert!(r.applied.iter().any(|(_, s)| *s == IsolationStatus::Network));
         assert!(!sys.sddl.lock().unwrap().is_empty());
         g.revert_all().unwrap();
@@ -623,6 +624,7 @@ pub(crate) mod tests {
             logons: vec![],
             admins_bypass: true,
             class_defaults: vec![DeviceClassTarget::Ports],
+            printer_hosts: vec![],
         };
         let r = g.apply(&plan).unwrap();
         assert!(r.failed.is_empty(), "{:?}", r.failed);

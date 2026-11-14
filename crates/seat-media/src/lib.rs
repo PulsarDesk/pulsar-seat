@@ -55,6 +55,23 @@ pub mod redirect;
 #[cfg(windows)]
 mod win;
 
+/// Local print queues of a printer devnode (USB printing-support port match, as the
+/// `printer_acl` gate uses it). Empty when none is found or the spooler cannot be read;
+/// always empty off Windows. Used by the service to resolve a seat's printer redirection
+/// (`seat_rdp::policy`, round 4 local-gaps). **Untested on hardware.**
+pub fn printer_queues_for_device(instance_id: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        use gate::printer::PrinterIo;
+        win::spooler::WinPrinterIo.queues_for_device(instance_id).unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = instance_id;
+        Vec::new()
+    }
+}
+
 /// Version of the loaded storage minifilter (service driver status; Windows only).
 #[cfg(windows)]
 pub use win::fltport::probe_minifilter_version;

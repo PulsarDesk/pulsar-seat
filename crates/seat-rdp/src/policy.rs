@@ -35,13 +35,20 @@
 //!   by device instance id (`SCardGetReaderDeviceInstanceIdW`); by friendly name only when
 //!   no instance id is known and the name is unique on the PC (`name_unique`, and only one
 //!   present reader carries it), otherwise refused (`reader_name_ambiguous`).
-//! - **Printers / ports**: not redirected. The seat session runs on this PC and already
-//!   sees the local print queues and ports directly (spec 70 §3.8); redirecting them would
-//!   only add duplicate queues.
+//! - **Printers** (round 4 local-gaps, opt-in, `SeatRedirect::printers`): the seat
+//!   session runs on this PC and already sees the local queues it may use (spec 70 §3.8),
+//!   so redirection is off by default. `seat`: the queues of the printers whose effective
+//!   mask is exactly this seat (resolved by the service from the printer devnode's USB
+//!   port, `queues_of`); `all`: every local queue and connection the host can open. The
+//!   host announces them over MS-RDPEPC (IronRDP's Windows printer back-end, the queue's
+//!   own driver name) and prints each job **with the host's token** (note
+//!   `printers_print_as_host`): with the `printer_acl` gate on, the service adds the seat's
+//!   own host account to the seat's queues. **Untested on hardware.**
+//! - **Ports**: not redirected (the session sees the local ports directly).
 
 use seat_core::assign::Effective;
 use seat_core::backend::session::{HostRedirection, RedirectDrive, SmartCardReaderRef};
-use seat_core::config::{DriveRedirect, SeatRedirect};
+use seat_core::config::{DriveRedirect, PrinterRedirect, SeatRedirect};
 use seat_core::device::{Device, DeviceDetails, DeviceKind};
 use seat_core::ids::SeatNumber;
 
@@ -76,15 +83,29 @@ pub fn drive_identity_check(expected: &str, actual: Option<&str>, fs: Option<&st
     }
 }
 
-/// Redirection the host of `seat` applies. Seat 1 on the console needs none.
-/// `volume_of(letter)` = the volume GUID path the letter names now (Windows:
-/// `GetVolumeNameForVolumeMountPointW`), `None` when unknown.
+/// Redirection the host of `seat` applies, without printer queue lookup (see
+/// [`host_redirection_with`]).
 pub fn host_redirection(
     seat: SeatNumber,
     policy: &SeatRedirect,
     effective: &[Effective],
     devices: &[Device],
     volume_of: &dyn Fn(char) -> Option<String>,
+) -> HostRedirection {
+    host_redirection_with(seat, policy, effective, devices, volume_of, &|_| Vec::new())
+}
+
+/// Redirection the host of `seat` applies. Seat 1 on the console needs none.
+/// `volume_of(letter)` = the volume GUID path the letter names now (Windows:
+/// `GetVolumeNameForVolumeMountPointW`), `None` when unknown. `queues_of(instance_id)` =
+/// the local print queues of a printer devnode (Windows: `seat_media::printer_queues_for_device`).
+pub fn host_redirection_with(
+    seat: SeatNumber,
+    policy: &SeatRedirect,
+    effective: &[Effective],
+    devices: &[Device],
+    volume_of: &dyn Fn(char) -> Option<String>,
+    queues_of: &dyn Fn(&str) -> Vec<String>,
 ) -> HostRedirection {
     let mut r = HostRedirection::default();
     if seat.is_console() {
@@ -157,6 +178,32 @@ pub fn host_redirection(
         r.smartcards = !r.readers.is_empty();
         if !r.smartcards {
             push_note(&mut r.notes, "no_seat_readers");
+        }
+    }
+
+    match policy.printers {
+        PrinterRedirect::Off => {}
+        PrinterRedirect::All => {
+            r.all_printers = true;
+            push_note(&mut r.notes, "printers_all_queues");
+            push_note(&mut r.notes, "printers_print_as_host");
+        }
+        PrinterRedirect::Seat => {
+            for e in effective.iter().filter(|e| e.kind == DeviceKind::Printer && e.mask.single() == Some(seat)) {
+                let Some(d) = device(e) else { continue };
+                let Some(id) = d.instance_id.as_deref() else { continue };
+                for q in queues_of(id) {
+                    let q = q.trim().to_owned();
+                    if !q.is_empty() && !r.printers.iter().any(|x| x.eq_ignore_ascii_case(&q)) {
+                        r.printers.push(q);
+                    }
+                }
+            }
+            if r.printers.is_empty() {
+                push_note(&mut r.notes, "no_seat_printers");
+            } else {
+                push_note(&mut r.notes, "printers_print_as_host");
+            }
         }
     }
     r
@@ -368,6 +415,48 @@ mod tests {
     }
 
     #[test]
+    fn printers_follow_the_seat_owned_queues() {
+        let devices = vec![
+            dev("prn;a", DeviceKind::Printer, "Laser", DeviceDetails::None),
+            dev("prn;b", DeviceKind::Printer, "Inkjet", DeviceDetails::None),
+            dev("prn;c", DeviceKind::Printer, "Shared", DeviceDetails::None),
+        ];
+        let effective = vec![
+            eff("prn;a", DeviceKind::Printer, SeatMask::from_seats([s(2)])),
+            eff("prn;b", DeviceKind::Printer, SeatMask::from_seats([s(3)])),
+            eff("prn;c", DeviceKind::Printer, SeatMask::from_seats([s(2), s(3)])),
+        ];
+        let queues = |id: &str| -> Vec<String> {
+            if id.ends_with("prn;a") {
+                vec!["Laser".into(), " laser ".into(), "Laser (Fax)".into()]
+            } else {
+                vec!["Other".into()]
+            }
+        };
+        let p = SeatRedirect { printers: PrinterRedirect::Seat, ..Default::default() };
+        let r = host_redirection_with(s(2), &p, &effective, &devices, &|_| None, &queues);
+        assert_eq!(r.printers, ["Laser", "Laser (Fax)"], "own printer only, shared and other seats' left out, deduplicated");
+        assert!(!r.all_printers);
+        assert!(r.notes.contains(&"printers_print_as_host".to_string()));
+        // A seat without its own printer: nothing, with a note.
+        let none = host_redirection_with(s(4), &p, &effective, &devices, &|_| None, &queues);
+        assert!(none.printers.is_empty());
+        assert!(none.notes.contains(&"no_seat_printers".to_string()));
+        // All queues: the host enumerates them itself.
+        let all = host_redirection_with(s(4), &SeatRedirect { printers: PrinterRedirect::All, ..Default::default() }, &effective, &devices, &|_| None, &queues);
+        assert!(all.all_printers && all.printers.is_empty());
+        assert!(all.notes.contains(&"printers_all_queues".to_string()));
+        // Off (default) and seat 1: nothing; the wrapper without a lookup finds no queue.
+        assert_eq!(host_redirection_with(s(2), &SeatRedirect::default(), &effective, &devices, &|_| None, &queues), HostRedirection::default());
+        assert_eq!(host_redirection_with(SeatNumber::CONSOLE, &p, &effective, &devices, &|_| None, &queues), HostRedirection::default());
+        assert!(host_redirection(s(2), &p, &effective, &devices, &|_| None).printers.is_empty());
+        // Older documents without the field read as off.
+        let old: SeatRedirect = serde_json::from_str(r#"{"smartcards":true}"#).unwrap();
+        assert_eq!(old.printers, PrinterRedirect::Off);
+        assert_eq!(serde_json::to_string(&PrinterRedirect::Seat).unwrap(), r#""seat""#);
+    }
+
+    #[test]
     fn everything_off_by_default_and_for_seat_one() {
         let devices = vec![dev("stor;a", DeviceKind::Storage, "Stick", stor(&['E']))];
         let effective = vec![eff("stor;a", DeviceKind::Storage, SeatMask::from_seats([s(2)]))];
@@ -376,6 +465,7 @@ mod tests {
             clipboard: ClipboardRedirect { direction: ClipboardDirection::Both, ..Default::default() },
             drives: DriveRedirect::ReadWrite,
             smartcards: true,
+            printers: PrinterRedirect::All,
         };
         assert_eq!(host_redirection(SeatNumber::CONSOLE, &all, &effective, &devices, &vol), HostRedirection::default());
     }

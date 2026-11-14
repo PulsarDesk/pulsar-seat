@@ -73,7 +73,8 @@ describe('per-seat addresses', () => {
     c = setIpBinding(c, 1, { address: '192.168.1.20', rule: 'all_programs' });
     c = setIpBinding(c, 2, { address: '192.168.1.20', rule: 'only_listed' });
     expect(c.seats[1].ip_binding).toEqual({ address: '192.168.1.20', rule: 'only_listed' });
-    expect(localIssues(c, null).map((i) => i.code)).toEqual(['duplicate_ip_address']);
+    // The demo's logon-screen seat 2 also gets `loopback_no_accounts` (own test in loopback.test.ts).
+    expect(localIssues(c, null).map((i) => i.code).filter((x) => x !== 'loopback_no_accounts')).toEqual(['duplicate_ip_address']);
     c = setIpBinding(c, 2, null);
     expect(c.seats[1].ip_binding).toBeUndefined();
     c = setIpPrograms(c, [{ title: ' Oyun ', path: ' C:\\Oyun\\oyun.exe ', enabled: true }]);

@@ -6,7 +6,15 @@
   import ExperimentalDialog from './ExperimentalDialog.svelte';
   import { availabilityLabel, backendName, noteLabel, t } from '#lib/i18n.ts';
   import { hotkeyLabel } from '#lib/hotkey.ts';
-  import { accountEntryValid, clone, loopbackPortValid, parseAccountList, setClassDefaultClasses } from '#lib/model.ts';
+  import {
+    accountEntryValid,
+    clone,
+    logonScreenRdpSeats,
+    loopbackAllowedAccounts,
+    loopbackPortValid,
+    parseAccountList,
+    setClassDefaultClasses
+  } from '#lib/model.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import {
     DEFAULT_LOOPBACK_LISTENER_PORT,
@@ -180,6 +188,15 @@
               ></textarea></label
             >
             <p class="hint">{t.advanced.loopbackAccountsHint}</p>
+            {#if loopback.enabled && draft}
+              {@const allowed = loopbackAllowedAccounts(draft)}
+              {@const waiting = logonScreenRdpSeats(draft)}
+              {#if allowed.length > 0}
+                <p class="hint" data-testid="loopback-allowed">{t.advanced.loopbackAllowed(allowed.join(', '))}</p>
+              {:else if waiting.length > 0}
+                <p class="warn-text" data-testid="loopback-no-accounts">{t.advanced.loopbackNoAccounts(waiting.join(', '))}</p>
+              {/if}
+            {/if}
           </div>
         {/if}
         {#if cat === 'session' && draft.settings.backends.session === 'termsrv_wrapper'}

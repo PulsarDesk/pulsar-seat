@@ -253,17 +253,25 @@ export interface ClipboardRedirect {
 
 export type DriveRedirect = 'off' | 'read_only' | 'read_write';
 
+/** Which local print queues the seat host announces to the seat session (seat-core
+ *  `PrinterRedirect`, added 2026-11-14): `seat` = the queues of the printers assigned to
+ *  this seat alone, `all` = every queue of the PC. */
+export type PrinterRedirect = 'off' | 'seat' | 'all';
+
 export interface SeatRedirect {
   clipboard: ClipboardRedirect;
   drives: DriveRedirect;
   smartcards: boolean;
+  /** Missing in documents of older services (= off). */
+  printers?: PrinterRedirect;
 }
 
 /** Same defaults as seat-core `SeatRedirect::default()`. */
 export const DEFAULT_SEAT_REDIRECT: SeatRedirect = {
   clipboard: { direction: 'off', text: true, html: true, images: true, files: false, cross_seat: false },
   drives: 'off',
-  smartcards: false
+  smartcards: false,
+  printers: 'off'
 };
 
 /** Kiosk shell of a seat: only these apps, input routed per seat. */

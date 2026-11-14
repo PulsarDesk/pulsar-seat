@@ -87,6 +87,16 @@ pub enum IssueCode {
     /// `loopbackPortValid`; the backend also refuses the live RDP-Tcp port at run time).
     /// Added 2026-11-13 (integrate), error.
     LoopbackPortInvalid,
+    /// A logon-screen seat (no account) on `rds_loopback` with the second listener on, but
+    /// no account may use that listener: no RDP seat has an account and
+    /// `loopback_listener.extra_accounts` has no valid entry. The listener is not created
+    /// (`loopback_listener:unavailable:no_accounts`) and the seat cannot start. Per seat,
+    /// warning. Added 2026-11-14 (round 4 local-gaps).
+    LoopbackNoAccounts,
+    /// A logon-screen seat on `rds_loopback` with the second listener off: under an NLA
+    /// listener the seat is refused with `nla_required`. Per seat, warning. Added
+    /// 2026-11-14 (round 4 local-gaps).
+    LogonScreenNeedsListener,
     /// `tweaks.hide_fast_user_switching` while the session backend is `fast_user_switch`:
     /// the tweak writes the `HideFastUserSwitching` policy, which turns that backend off
     /// (`fsu_disabled`). Added 2026-11-13 (final-fix), error.
@@ -239,6 +249,9 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
     if b.session == crate::backend::SessionBackendKind::RdsLoopback && ll.enabled && (ll.port < 1024 || ll.port == 3389) {
         out.push(Issue::new(Severity::Error, IssueCode::LoopbackPortInvalid).field("settings.backends.loopback_listener.port"));
     }
+    if b.session == crate::backend::SessionBackendKind::RdsLoopback {
+        loopback_account_checks(config, &mut out);
+    }
     if b.session == crate::backend::SessionBackendKind::FastUserSwitch && config.settings.tweaks.hide_fast_user_switching {
         out.push(Issue::new(Severity::Error, IssueCode::HideFsuWithFastUserSwitch).field("settings.tweaks.hide_fast_user_switching"));
     }
@@ -254,6 +267,54 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
         device_checks(config, inv, &mut out);
     }
     out
+}
+
+/// Pure: an `extra_accounts` entry: `user` -> `(".", user)`, `DOMAIN\user` -> `(DOMAIN,
+/// user)`; anything else (empty parts, more than one `\`, a UPN with `@`) `None`. Same rule
+/// as the manager's `accountEntryValid`.
+pub fn parse_loopback_account(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    let (d, u) = match s.split_once('\\') {
+        Some((d, u)) => (d.trim(), u.trim()),
+        None => (".", s),
+    };
+    if d.is_empty() || u.is_empty() || u.contains('\\') || u.contains('@') {
+        return None;
+    }
+    Some((d.to_owned(), u.to_owned()))
+}
+
+/// Local seats that are RDP sessions under the topology (seat 1 is the console under
+/// `seat_one_console`).
+fn rdp_local_seats(config: &Config) -> impl Iterator<Item = &crate::config::SeatConfig> {
+    let topo = config.settings.backends.host_topology;
+    config
+        .seats
+        .iter()
+        .filter(move |s| s.is_local() && !(s.number.is_console() && topo == crate::backend::session::HostTopology::SeatOneConsole))
+}
+
+/// Logon-screen seats and the second listener (`rds_loopback` only).
+fn loopback_account_checks(config: &Config, out: &mut Vec<Issue>) {
+    let ll = &config.settings.backends.loopback_listener;
+    let logon_screen: Vec<SeatNumber> =
+        rdp_local_seats(config).filter(|s| s.account.domain_user().is_none()).map(|s| s.number).collect();
+    if logon_screen.is_empty() {
+        return;
+    }
+    if !ll.enabled {
+        for n in logon_screen {
+            out.push(Issue::new(Severity::Warning, IssueCode::LogonScreenNeedsListener).seat(n).field("settings.backends.loopback_listener.enabled"));
+        }
+        return;
+    }
+    let any_account = rdp_local_seats(config).any(|s| s.account.domain_user().is_some())
+        || ll.extra_accounts.iter().any(|a| parse_loopback_account(a).is_some());
+    if !any_account {
+        for n in logon_screen {
+            out.push(Issue::new(Severity::Warning, IssueCode::LoopbackNoAccounts).seat(n).field("settings.backends.loopback_listener.extra_accounts"));
+        }
+    }
 }
 
 /// `X:\…` / `X:/…` or `\\server\share\…`, with no leading or trailing white space (same rule
@@ -466,8 +527,10 @@ mod tests {
         }
     }
 
+    /// Issue codes, without the second-listener account warnings that every default config
+    /// with a logon-screen seat 2 gets (they have their own test).
     fn codes(i: &[Issue]) -> Vec<IssueCode> {
-        i.iter().map(|x| x.code).collect()
+        i.iter().map(|x| x.code).filter(|c| !matches!(c, IssueCode::LoopbackNoAccounts | IssueCode::LogonScreenNeedsListener)).collect()
     }
 
     #[test]
@@ -571,6 +634,37 @@ mod tests {
         c.settings.backends.loopback_listener.enabled = true;
         c.settings.backends.session = crate::backend::SessionBackendKind::FastUserSwitch;
         assert!(!codes(&validate(&c, None)).contains(&IssueCode::LoopbackPortInvalid), "other backend");
+    }
+
+    #[test]
+    fn logon_screen_seats_need_an_account_for_the_second_listener() {
+        use crate::config::SeatAccount;
+        let mut c = Config::default();
+        c.settings.backends.session = crate::backend::SessionBackendKind::RdsLoopback;
+        c.seats.push(SeatConfig::new(s(2)));
+        c.seats[1].account = SeatAccount::LogonScreen;
+        let has = |c: &Config, code| validate(c, None).iter().any(|i| i.code == code && i.seat == Some(s(2)) && i.severity == Severity::Warning);
+        assert!(has(&c, IssueCode::LoopbackNoAccounts), "nobody may use the listener");
+        c.settings.backends.loopback_listener.extra_accounts = vec!["a@b".into(), r"EV\".into()];
+        assert!(has(&c, IssueCode::LoopbackNoAccounts), "invalid extra accounts do not count");
+        c.settings.backends.loopback_listener.extra_accounts = vec!["misafir".into()];
+        assert!(!has(&c, IssueCode::LoopbackNoAccounts));
+        c.settings.backends.loopback_listener.extra_accounts.clear();
+        c.seats.push(SeatConfig::new(s(3)));
+        c.seats[2].account = SeatAccount::Local { user: "ali".into() };
+        assert!(!has(&c, IssueCode::LoopbackNoAccounts), "a seat account may sign in");
+        // Seat 1 is the console under seat_one_console: its account does not count.
+        c.seats.pop();
+        c.seats[0].account = SeatAccount::Local { user: "owner".into() };
+        assert!(has(&c, IssueCode::LoopbackNoAccounts));
+        c.settings.backends.loopback_listener.enabled = false;
+        assert!(has(&c, IssueCode::LogonScreenNeedsListener));
+        assert!(!has(&c, IssueCode::LoopbackNoAccounts));
+        c.settings.backends.session = crate::backend::SessionBackendKind::FastUserSwitch;
+        assert!(!has(&c, IssueCode::LogonScreenNeedsListener), "other backends");
+        assert_eq!(parse_loopback_account(r" EV\mehmet "), Some(("EV".into(), "mehmet".into())));
+        assert_eq!(parse_loopback_account("ayse"), Some((".".into(), "ayse".into())));
+        assert_eq!(parse_loopback_account(r"a\b\c"), None);
     }
 
     #[test]

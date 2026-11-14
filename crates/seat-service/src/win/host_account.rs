@@ -2,12 +2,14 @@
 //! [`AccountOps`] on Windows for the seat hosts' account (`crate::host_account`): local SAM
 //! through the NetUser / NetLocalGroup API, logon rights through `LsaAddAccountRights` /
 //! `LsaRemoveAccountRights`, the password as LSA private data (`win::lsa`), the logon-screen
-//! entry under Winlogon `SpecialAccounts\UserList`. Needs SYSTEM / elevation: never run in
-//! unit tests. **Untested on hardware.**
+//! entry under Winlogon `SpecialAccounts\UserList`, the host group through
+//! `NetLocalGroupAdd` / `NetLocalGroupGetInfo` / `NetLocalGroupDel`, profiles of removed seat
+//! accounts through `DeleteProfileW`. Needs SYSTEM / elevation: never run in unit tests.
+//! **Untested on hardware.**
 
-use crate::host_account::{AccountOps, HostAccount, Lookup};
-use seat_core::Secret;
-use seat_session::host_account::PASSWORD_SECRET;
+use crate::host_account::{AccountOps, GroupLookup, HostAccount, Lookup};
+use seat_core::{SeatNumber, Secret};
+use seat_session::host_account::{GROUP_COMMENT, PASSWORD_SECRET};
 use std::ptr;
 use windows_sys::Win32::Foundation::{HLOCAL, LocalFree, NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND};
 use windows_sys::Win32::NetworkManagement::NetManagement::{
@@ -77,6 +79,23 @@ impl Drop for Sid {
         // SAFETY: allocated by ConvertStringSidToSidW.
         unsafe { LocalFree(self.0 as HLOCAL) };
     }
+}
+
+/// Read a NUL-terminated UTF-16 string (at most 4096 units); empty for null.
+///
+/// # Safety
+/// `p` is null or points to a NUL-terminated UTF-16 string.
+unsafe fn wide_str(p: *const u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let mut n = 0usize;
+    // SAFETY: caller guarantees the terminator.
+    while unsafe { *p.add(n) } != 0 && n < 4096 {
+        n += 1;
+    }
+    // SAFETY: `n` units read above.
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, n) })
 }
 
 /// Localised name of `BUILTIN\Users`.
@@ -312,8 +331,8 @@ impl AccountOps for WinAccountOps {
         }
     }
 
-    fn store_password(&self, password: Option<&Secret>) -> Result<(), String> {
-        super::lsa::set_named(PASSWORD_SECRET, password).map_err(|e| e.to_string())
+    fn store_password(&self, secret: &str, password: Option<&Secret>) -> Result<(), String> {
+        super::lsa::set_named(secret, password).map_err(|e| e.to_string())
     }
 
     fn delete(&self, name: &str) -> Result<(), String> {
@@ -321,6 +340,88 @@ impl AccountOps for WinAccountOps {
         // SAFETY: NUL-terminated name.
         let rc = unsafe { NetUserDel(ptr::null(), n.as_ptr()) };
         if rc == NERR_USER_NOT_FOUND { Ok(()) } else { net("NetUserDel", rc) }
+    }
+
+    fn group_lookup(&self, name: &str) -> Result<GroupLookup, String> {
+        use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
+        let w = wide(name);
+        let mut buf: *mut u8 = ptr::null_mut();
+        // SAFETY: local SAM; buffer freed with NetApiBufferFree.
+        let rc = unsafe { NetLocalGroupGetInfo(ptr::null(), w.as_ptr(), 1, &mut buf) };
+        if rc != 0 {
+            if !buf.is_null() {
+                // SAFETY: NetApi buffer.
+                unsafe { NetApiBufferFree(buf as *const _) };
+            }
+            // NERR_GroupNotFound (2220) / ERROR_NO_SUCH_ALIAS (1376): no local group of
+            // that name. A user of that name would block the group: Foreign.
+            return match rc {
+                2220 | 1376 => {
+                    let mut u: *mut u8 = ptr::null_mut();
+                    // SAFETY: as above.
+                    let urc = unsafe { NetUserGetInfo(ptr::null(), w.as_ptr(), 0, &mut u) };
+                    if !u.is_null() {
+                        // SAFETY: NetApi buffer.
+                        unsafe { NetApiBufferFree(u as *const _) };
+                    }
+                    Ok(if urc == 0 { GroupLookup::Foreign } else { GroupLookup::Missing })
+                }
+                _ => Err(format!("NetLocalGroupGetInfo failed (win32 {rc})")),
+            };
+        }
+        // SAFETY: level-1 buffer from NetLocalGroupGetInfo.
+        let comment = unsafe {
+            let g = &*(buf as *const LOCALGROUP_INFO_1);
+            let c = wide_str(g.lgrpi1_comment);
+            NetApiBufferFree(buf as *const _);
+            c
+        };
+        if comment != GROUP_COMMENT {
+            return Ok(GroupLookup::Foreign);
+        }
+        group_sid(&w).map(GroupLookup::Ours)
+    }
+
+    fn create_group(&self, name: &str, comment: &str) -> Result<(), String> {
+        use windows_sys::Win32::NetworkManagement::NetManagement::{LOCALGROUP_INFO_1, NetLocalGroupAdd};
+        let mut n = wide(name);
+        let mut c = wide(comment);
+        let info = LOCALGROUP_INFO_1 { lgrpi1_name: n.as_mut_ptr(), lgrpi1_comment: c.as_mut_ptr() };
+        let mut parm = 0u32;
+        // SAFETY: level-1 struct with buffers that outlive the call.
+        net("NetLocalGroupAdd", unsafe { NetLocalGroupAdd(ptr::null(), 1, (&info as *const LOCALGROUP_INFO_1).cast(), &mut parm) })
+    }
+
+    fn add_to_group(&self, group: &str, sid: &str) -> Result<(), String> {
+        let g = wide(group);
+        let s = Sid::parse(sid)?;
+        let m = LOCALGROUP_MEMBERS_INFO_0 { lgrmi0_sid: s.0 };
+        // SAFETY: one level-0 entry; the SID outlives the call.
+        let rc = unsafe { NetLocalGroupAddMembers(ptr::null(), g.as_ptr(), 0, (&m as *const LOCALGROUP_MEMBERS_INFO_0).cast(), 1) };
+        if rc == ERROR_MEMBER_IN_ALIAS { Ok(()) } else { net("NetLocalGroupAddMembers", rc) }
+    }
+
+    fn delete_group(&self, name: &str) -> Result<(), String> {
+        use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupDel;
+        let n = wide(name);
+        // SAFETY: NUL-terminated name.
+        let rc = unsafe { NetLocalGroupDel(ptr::null(), n.as_ptr()) };
+        if rc == 2220 || rc == 1376 { Ok(()) } else { net("NetLocalGroupDel", rc) }
+    }
+
+    fn delete_profile(&self, sid: &str) -> Result<(), String> {
+        use windows_sys::Win32::UI::Shell::DeleteProfileW;
+        if !seat_session::host_account::is_sid_string(sid) {
+            return Err(format!("bad SID {sid:?}"));
+        }
+        let w = wide(sid);
+        // SAFETY: NUL-terminated SID string; default profile path and local computer.
+        if unsafe { DeleteProfileW(w.as_ptr(), ptr::null(), ptr::null()) } != 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        // ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND: the account never had a profile.
+        if matches!(e.raw_os_error(), Some(2 | 3)) { Ok(()) } else { Err(format!("DeleteProfileW: {e}")) }
     }
 
     fn random32(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
@@ -331,17 +432,33 @@ impl AccountOps for WinAccountOps {
     }
 }
 
-/// [`crate::host_account::ensure`] with the real system.
-pub fn ensure() -> Result<HostAccount, String> {
-    crate::host_account::ensure(&WinAccountOps)
+/// [`crate::host_account::ensure_account`] for the shared account, as a member of the host
+/// group `group_sid` when known.
+pub fn ensure_shared(group_sid: Option<&str>) -> Result<HostAccount, String> {
+    crate::host_account::ensure_account(&WinAccountOps, seat_session::host_account::ACCOUNT_NAME, PASSWORD_SECRET, group_sid)
 }
 
-/// [`crate::host_account::remove`] with the real system.
+/// [`crate::host_account::ensure_group`] with the real system.
+pub fn ensure_group() -> Result<String, String> {
+    crate::host_account::ensure_group(&WinAccountOps)
+}
+
+/// [`crate::host_account::ensure_seat`] with the real system.
+pub fn ensure_seat(seat: SeatNumber, group_sid: &str) -> Result<HostAccount, String> {
+    crate::host_account::ensure_seat(&WinAccountOps, seat, group_sid)
+}
+
+/// [`crate::host_account::prune`] with the real system.
+pub fn prune(keep: &[SeatNumber]) -> Vec<String> {
+    crate::host_account::prune(&WinAccountOps, keep)
+}
+
+/// [`crate::host_account::remove_all`] with the real system (uninstall).
 pub fn remove() -> Vec<String> {
-    crate::host_account::remove(&WinAccountOps)
+    crate::host_account::remove_all(&WinAccountOps)
 }
 
-/// The account's password from LSA private data.
-pub fn password() -> Result<Secret, String> {
-    super::lsa::get_named(PASSWORD_SECRET).map_err(|e| e.to_string())?.ok_or_else(|| "host account password not stored".into())
+/// A host account's password from the LSA private data `secret`.
+pub fn password(secret: &str) -> Result<Secret, String> {
+    super::lsa::get_named(secret).map_err(|e| e.to_string())?.ok_or_else(|| "host account password not stored".into())
 }

@@ -190,6 +190,14 @@ pub struct HostRedirection {
     pub smartcards: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readers: Vec<SmartCardReaderRef>,
+    /// Print queues announced as redirected printers (MS-RDPEPC), by queue name. Added
+    /// 2026-11-14 (round 4 local-gaps, additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub printers: Vec<String>,
+    /// Announce every local queue and printer connection the host can open (overrides
+    /// `printers`). Added 2026-11-14 (additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_printers: bool,
     /// Snake_case notes for logs / the manager (`clipboard_shared_with_host_session`, ...).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,

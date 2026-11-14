@@ -52,10 +52,13 @@ pub trait PrinterIo: Send + Sync {
     fn set_dacl(&self, queue: &str, sddl: &str) -> BackendResult<()>;
 }
 
-/// Printer DACL for a seat-owned printer.
-pub fn printer_sddl(mask: SeatMask, logons: &[SeatLogon], admins_bypass: bool) -> String {
+/// Printer DACL for a seat-owned printer. `hosts` = `(seat, account SID)` of seat hosts that
+/// print to their seat's queues for the seat session (redirected printers, round 4
+/// local-gaps): they get the same use right as the seat's logons.
+pub fn printer_sddl(mask: SeatMask, logons: &[SeatLogon], hosts: &[(seat_core::ids::SeatNumber, String)], admins_bypass: bool) -> String {
     let mut sids: Vec<&str> =
         logons.iter().filter(|l| mask.contains(l.seat) && valid_sid(&l.logon_sid)).map(|l| l.logon_sid.as_str()).collect();
+    sids.extend(hosts.iter().filter(|(seat, sid)| mask.contains(*seat) && valid_sid(sid)).map(|(_, sid)| sid.as_str()));
     sids.sort();
     sids.dedup();
     let mut s = format!("D:P(A;;{PRINTER_ALL_ACCESS:#x};;;SY)(A;OIIO;{JOB_ALL_ACCESS:#x};;;SY)");
@@ -178,7 +181,7 @@ impl DeviceGate for PrinterAclGate {
                 let r = if is_shared(mask) {
                     self.restore(q)
                 } else {
-                    self.write(d.key.as_str(), q, &printer_sddl(mask, &plan.logons, plan.admins_bypass))
+                    self.write(d.key.as_str(), q, &printer_sddl(mask, &plan.logons, &plan.printer_hosts, plan.admins_bypass))
                 };
                 if let Err(e) = r {
                     err.get_or_insert(e);
@@ -206,7 +209,7 @@ impl DeviceGate for PrinterAclGate {
             let r = if is_shared(mask) {
                 self.restore(&q)
             } else {
-                self.write(&rec.key, &q, &printer_sddl(mask, &plan.logons, plan.admins_bypass))
+                self.write(&rec.key, &q, &printer_sddl(mask, &plan.logons, &plan.printer_hosts, plan.admins_bypass))
             };
             if let Err(e) = r {
                 log::warn!("printer_acl: queue {q}: {e}");
@@ -308,6 +311,7 @@ mod tests {
             logons: vec![logon(2, 3, "S-1-5-5-0-10"), logon(3, 4, "S-1-5-5-0-11")],
             admins_bypass: true,
             class_defaults: vec![],
+            printer_hosts: vec![],
         };
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.applied, vec![(key.clone(), IsolationStatus::Descriptor)]);
@@ -347,8 +351,17 @@ mod tests {
 
     #[test]
     fn sddl_shape() {
-        let s = printer_sddl(SeatMask::from_seats([seat(2)]), &[logon(2, 1, "S-1-5-5-0-9)(A;;GA;;;WD")], true);
+        let s = printer_sddl(SeatMask::from_seats([seat(2)]), &[logon(2, 1, "S-1-5-5-0-9)(A;;GA;;;WD")], &[], true);
         assert!(!s.contains("WD"), "invalid SIDs never reach the SDDL: {s}");
         assert!(s.starts_with("D:P(A;;0xf000c;;;SY)"));
+    }
+
+    #[test]
+    fn seat_host_accounts_print_to_their_own_seats_queues_only() {
+        let hosts = vec![(seat(2), "S-1-5-21-9-2".to_string()), (seat(3), "S-1-5-21-9-3".to_string()), (seat(2), "bad)(A;;GA;;;WD".to_string())];
+        let s = printer_sddl(SeatMask::from_seats([seat(2)]), &[logon(2, 1, "S-1-5-5-0-9")], &hosts, false);
+        assert!(s.contains("S-1-5-5-0-9") && s.contains("S-1-5-21-9-2"), "{s}");
+        assert!(!s.contains("S-1-5-21-9-3"), "another seat's host: {s}");
+        assert!(!s.contains("WD"));
     }
 }

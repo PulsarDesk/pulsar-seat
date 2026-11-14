@@ -348,7 +348,7 @@ mod tests {
         let g = MinifilterGate::new(Arc::new(sample_tree()), port, sys, Arc::new(NoChanges));
         assert!(g.availability().is_available());
         let key = g.enumerate().unwrap()[0].key.clone();
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 3, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![logon(2, 3, "S-1-5-5-0-1")], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         let r = g.apply(&plan).unwrap();
         assert_eq!(r.applied, vec![(key, IsolationStatus::Minifilter)]);
         assert_eq!(*log.lock().unwrap(), vec![1, 2, 3, 4, 5]);
@@ -392,7 +392,7 @@ mod tests {
         let port = Arc::new(FakePort { major: seat_core::consts::DRIVER_INTERFACE_MAJOR, log: log.clone() });
         let g = MinifilterGate::new(Arc::new(sample_tree()), port, Arc::new(ManyVols), Arc::new(NoChanges));
         let key = g.enumerate().unwrap()[0].key.clone();
-        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![], admins_bypass: true, class_defaults: vec![] };
+        let plan = GatePlan { devices: vec![(key.clone(), SeatMask::from_seats([seat(2)]))], logons: vec![], admins_bypass: true, class_defaults: vec![], printer_hosts: vec![] };
         let r = g.apply(&plan).unwrap();
         assert!(r.applied.is_empty());
         assert_eq!(r.failed[0].1.reason, "minifilter_plan_full");

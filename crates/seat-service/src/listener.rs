@@ -173,6 +173,8 @@ impl Service {
             service_child: true,
             // The console listener is not a seat: no clipboard redirection.
             host_clipboard: false,
+            host_seat: None,
+            host_profile: false,
         };
 
         match self.platform.launch(&spec) {

@@ -5,9 +5,28 @@
 //!
 //! Shape:
 //!
-//! - One dedicated local account, [`ACCOUNT_NAME`], created and maintained by the service.
-//!   Its password is random ([`password_from_random`]), rotated at every service start and
-//!   kept as LSA private data ([`PASSWORD_SECRET`]); nobody types it.
+//! - **Per-seat accounts** (round 4 local-gaps, 2026-11-14): every seat host runs as its own
+//!   local account, [`seat_account_name`] (`PulsarSeatHost02` ... `PulsarSeatHost16`),
+//!   created by the service the first time the seat's host starts in a service run (and
+//!   its password rotated then), removed when the seat is no longer configured (next
+//!   service start, [`seat_account_seats`]) and at uninstall. Each password is random and
+//!   kept as its own LSA private data ([`seat_password_secret`]). All host accounts are
+//!   members of the local group [`GROUP_NAME`], which the control pipe admits with one
+//!   ACE, so a seat added while the service runs needs no pipe change. With per-seat
+//!   accounts one seat's host cannot open another seat's host process, threads or
+//!   `pulsar_idd` frame sections (each seat's sections grant only that seat's account).
+//!   The user profile of a seat account is loaded for the host's lifetime when the seat
+//!   needs it (printer redirection: per-user default printer and printer connections) and
+//!   unloaded when the host exits.
+//! - The **shared account** [`ACCOUNT_NAME`] (the round-3 design) stays: the console
+//!   listener runs as it, and every seat falls back to it when its own account cannot be
+//!   set up or fails to start (`HostTokenCompat=3` forces it for every seat). Its password
+//!   is random ([`password_from_random`]), rotated at every service start and kept as LSA
+//!   private data ([`PASSWORD_SECRET`]); nobody types it.
+//! - Migration from the shared account (installs before round 4): nothing to convert. The
+//!   shared account keeps its pipe ACE and is added to [`GROUP_NAME`]; hosts adopted after
+//!   a service restart keep running as it; seat hosts started from then on use their seat
+//!   accounts. Desktop grants are keyed by logon SID and are not affected.
 //! - Logon rights: only [`GRANT_RIGHTS`] (batch logon, what `LogonUserW(LOGON32_LOGON_BATCH)`
 //!   needs); [`DENY_RIGHTS`] deny interactive, remote interactive, network and service
 //!   logon. The account stays in `Users`: Program Files and System32 grant read / execute
@@ -57,6 +76,42 @@ pub const ACCOUNT_FULL_NAME: &str = "Pulsar Seat koltuk ana makinesi";
 pub const ACCOUNT_COMMENT: &str = "Pulsar Seat hizmetinin otomatik hesabı. Silmeyin; kaldırma sırasında silinir.";
 /// LSA private data holding the account's password (`L$` = local, never replicated).
 pub const PASSWORD_SECRET: &str = "L$PulsarSeat.HostAccount";
+/// Local group of every host account (shared and per seat); the control pipe has one ACE
+/// for it. Created and removed by the service (comment [`GROUP_COMMENT`]).
+pub const GROUP_NAME: &str = "PulsarSeatHosts";
+/// Comment of the group (Turkish UI copy: visible in "lusrmgr"); marks it as Pulsar's.
+pub const GROUP_COMMENT: &str = "Pulsar Seat koltuk ana makinesi hesapları. Silmeyin; kaldırma sırasında silinir.";
+
+/// Local account of one seat's host: [`ACCOUNT_NAME`] + the two-digit seat number
+/// (`PulsarSeatHost02`, 16 characters, under the 20-character SAM limit).
+pub fn seat_account_name(seat: seat_core::SeatNumber) -> String {
+    format!("{ACCOUNT_NAME}{}", seat.two_digits())
+}
+
+/// LSA private data of one seat account's password.
+pub fn seat_password_secret(seat: seat_core::SeatNumber) -> String {
+    format!("{PASSWORD_SECRET}.{}", seat.two_digits())
+}
+
+/// Every seat number a seat account can exist for (1..=16; seat 1 has a host only under
+/// `dedicated_host`).
+pub fn seat_account_seats() -> impl Iterator<Item = seat_core::SeatNumber> {
+    (1..=16u8).filter_map(seat_core::SeatNumber::new)
+}
+
+/// A name Pulsar uses for a host account (shared or per seat). Such accounts are never
+/// offered as seat users.
+pub fn is_host_account_name(name: &str) -> bool {
+    if name.eq_ignore_ascii_case(ACCOUNT_NAME) {
+        return true;
+    }
+    let n = name.len();
+    n == ACCOUNT_NAME.len() + 2
+        && name.is_char_boundary(ACCOUNT_NAME.len())
+        && name[..ACCOUNT_NAME.len()].eq_ignore_ascii_case(ACCOUNT_NAME)
+        && name[ACCOUNT_NAME.len()..].parse::<u8>().is_ok_and(|v| (1..=16).contains(&v))
+        && name.as_bytes()[ACCOUNT_NAME.len()].is_ascii_digit()
+}
 
 /// Rights the account gets.
 pub const GRANT_RIGHTS: &[&str] = &["SeBatchLogonRight"];
@@ -122,8 +177,11 @@ pub fn is_account_start_failure(exit_code: u32) -> bool {
 /// Which token seat hosts and the console listener get.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostTokenMode {
-    /// Default: the dedicated account, Low integrity.
+    /// Default: each seat host as its seat's account (the listener as the shared one),
+    /// Low integrity.
     Account,
+    /// `HostTokenCompat=3`: every host as the shared account (the round-3 behaviour).
+    SharedAccount,
     /// SYSTEM, no privileges, Administrators deny-only, Low integrity (round-2 token).
     HardenedSystem,
     /// SYSTEM, no privileges, System integrity (oldest token).
@@ -131,12 +189,13 @@ pub enum HostTokenMode {
 }
 
 impl HostTokenMode {
-    /// `HostTokenCompat` DWORD: missing / 0 = account, 1 = compat SYSTEM, 2 = SYSTEM Low.
-    /// Unknown values keep the default (account).
+    /// `HostTokenCompat` DWORD: missing / 0 = per-seat accounts, 1 = compat SYSTEM, 2 =
+    /// SYSTEM Low, 3 = the shared account for every host. Unknown values keep the default.
     pub fn from_compat_value(v: Option<u32>) -> Self {
         match v {
             Some(1) => Self::CompatSystem,
             Some(2) => Self::HardenedSystem,
+            Some(3) => Self::SharedAccount,
             _ => Self::Account,
         }
     }
@@ -503,6 +562,22 @@ mod tests {
     }
 
     #[test]
+    fn seat_account_names() {
+        let s = |n| seat_core::SeatNumber::new(n).unwrap();
+        assert_eq!(seat_account_name(s(2)), "PulsarSeatHost02");
+        assert_eq!(seat_account_name(s(16)), "PulsarSeatHost16");
+        assert!(seat_account_name(s(16)).len() <= 20);
+        assert_eq!(seat_password_secret(s(3)), "L$PulsarSeat.HostAccount.03");
+        assert_eq!(seat_account_seats().count(), 16);
+        for ok in ["PulsarSeatHost", "pulsarseathost", "PulsarSeatHost01", "PULSARSEATHOST16"] {
+            assert!(is_host_account_name(ok), "{ok}");
+        }
+        for no in ["PulsarSeatHost00", "PulsarSeatHost17", "PulsarSeatHost2", "PulsarSeatHost+1", "PulsarSeatHosts", "ali", "PulsarSeatHost123"] {
+            assert!(!is_host_account_name(no), "{no}");
+        }
+    }
+
+    #[test]
     fn password_has_all_classes() {
         for seed in [0u8, 1, 77, 200, 255] {
             let mut b = [0u8; 32];
@@ -525,6 +600,7 @@ mod tests {
         assert_eq!(HostTokenMode::from_compat_value(Some(0)), HostTokenMode::Account);
         assert_eq!(HostTokenMode::from_compat_value(Some(1)), HostTokenMode::CompatSystem);
         assert_eq!(HostTokenMode::from_compat_value(Some(2)), HostTokenMode::HardenedSystem);
+        assert_eq!(HostTokenMode::from_compat_value(Some(3)), HostTokenMode::SharedAccount);
         assert_eq!(HostTokenMode::from_compat_value(Some(9)), HostTokenMode::Account);
         assert!(is_account_start_failure(0xC000_0142));
         assert!(is_account_start_failure(44));

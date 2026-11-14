@@ -783,7 +783,8 @@ impl Service {
         let b = self.backends();
         if let Some(c) = self.factory.input_control(b.input.kind()) {
             c.set_config_revision(revision);
-            let sessions: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
+            let all: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
+            let sessions = filter_session_map(&all, self.platform.console_session(), dedicated);
             if let Err(e) = c.set_seat_sessions(&sessions) {
                 log::warn(&format!("input seat sessions: {e}"));
             }
@@ -831,6 +832,7 @@ impl Service {
             logons,
             admins_bypass: settings.devices.admins_bypass,
             class_defaults: settings.devices.class_defaults(),
+            printer_hosts: self.printer_hosts(),
         };
         for g in &b.gates {
             match g.apply(&gate_plan) {
@@ -1236,4 +1238,100 @@ pub(crate) fn set_assignment(cfg: &mut Config, key: &DeviceKey, kind: DeviceKind
 /// Configured remote seat numbers (for the admin-only event filter).
 pub(crate) fn remote_seats(cfg: &Config) -> std::collections::BTreeSet<seat_core::SeatNumber> {
     cfg.seats.iter().filter(|s| s.is_remote()).map(|s| s.number).collect()
+}
+
+/// The input filter's seat -> session map (`InputControl::set_seat_sessions`, round 4
+/// local-gaps). The HID filter lets a requestor open a seat's collections when its session
+/// is the seat's session, so a seat that has no session of its own must not be mapped:
+/// kiosk seats (`desktops`) all report the console session, and mapping them would let
+/// every console program (seat 1's desktop included) open the kiosk seat's touch screens,
+/// consumer keys and pads. Such seats get their input only through the service
+/// (`input_packets` to the verified kiosk shell). Left out: every seat but seat 1 whose
+/// session is the console session (unless `dedicated`, where the console is the host
+/// account's and seat 1 is a session of its own) or is shared with another seat.
+pub(crate) fn filter_session_map(all: &[(SeatNumber, u32)], console: Option<u32>, dedicated: bool) -> Vec<(SeatNumber, u32)> {
+    all.iter()
+        .filter(|(seat, sid)| {
+            if seat.is_console() && !dedicated {
+                return true;
+            }
+            let on_console = !dedicated && console == Some(*sid);
+            let shared = all.iter().any(|(s, x)| s != seat && x == sid);
+            !on_console && !shared
+        })
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+mod session_map_tests {
+    use super::*;
+
+    fn s(n: u8) -> SeatNumber {
+        SeatNumber::new(n).unwrap()
+    }
+
+    #[test]
+    fn kiosk_seats_on_the_console_session_are_not_mapped() {
+        // Seat 1 = console session 1; seats 2 and 3 = kiosk shells in session 1; seat 4 = RDP.
+        let all = [(s(1), 1), (s(2), 1), (s(3), 1), (s(4), 5)];
+        assert_eq!(filter_session_map(&all, Some(1), false), vec![(s(1), 1), (s(4), 5)]);
+        // Seat 1 at the logon screen (no logon entry): a lone kiosk seat still is not mapped.
+        assert_eq!(filter_session_map(&[(s(2), 1)], Some(1), false), vec![]);
+        // Two seats sharing a non-console session are left out too.
+        assert_eq!(filter_session_map(&[(s(2), 7), (s(3), 7), (s(4), 8)], Some(1), false), vec![(s(4), 8)]);
+    }
+
+    #[test]
+    fn dedicated_host_keeps_seat_sessions() {
+        let all = [(s(1), 3), (s(2), 4)];
+        assert_eq!(filter_session_map(&all, Some(1), true), all.to_vec());
+        // Under dedicated_host seat 1 is an ordinary seat: shared sessions are still dropped.
+        assert_eq!(filter_session_map(&[(s(1), 3), (s(2), 3)], Some(1), true), vec![]);
+    }
+}
+
+impl Service {
+    /// `(seat, host account SID)` of the seats whose host prints to the seat's own queues
+    /// (`redirect.printers = seat`) as the seat's own account, for the `printer_acl` gate.
+    /// The account is set up here when it is not yet (no state lock held).
+    pub(crate) fn printer_hosts(&self) -> Vec<(SeatNumber, String)> {
+        let seats: Vec<SeatNumber> = {
+            let st = self.lock();
+            st.config
+                .seats
+                .iter()
+                .filter(|s| s.is_local() && !s.number.is_console() && s.local_settings().redirect.printers == seat_core::config::PrinterRedirect::Seat)
+                .map(|s| s.number)
+                .collect()
+        };
+        seats.into_iter().filter_map(|s| self.platform.host_account_sid(s).map(|sid| (s, sid))).collect()
+    }
+
+    /// Seats whose host may run as a seat account (round 4 local-gaps): the configured local
+    /// seats, seat 1 only under `dedicated_host`. The service start removes the accounts of
+    /// every other seat number (`host_account::prune`).
+    pub(crate) fn host_account_seats(&self) -> Vec<SeatNumber> {
+        host_account_seats(&self.lock().config)
+    }
+}
+
+/// Pure part of [`Service::host_account_seats`].
+pub(crate) fn host_account_seats(cfg: &Config) -> Vec<SeatNumber> {
+    let dedicated = cfg.settings.backends.host_topology == seat_core::backend::session::HostTopology::DedicatedHost;
+    cfg.seats.iter().filter(|s| s.is_local() && (!s.number.is_console() || dedicated)).map(|s| s.number).collect()
+}
+
+#[cfg(test)]
+mod host_account_seat_tests {
+    use super::*;
+
+    #[test]
+    fn local_seats_with_a_host_keep_their_account() {
+        let s = |n| SeatNumber::new(n).unwrap();
+        let mut c = Config { seats: vec![seat_core::config::SeatConfig::new(s(1)), seat_core::config::SeatConfig::new(s(2)), seat_core::config::SeatConfig::new(s(3))], ..Config::default() };
+        assert_eq!(host_account_seats(&c), vec![s(2), s(3)]);
+        c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+        assert_eq!(host_account_seats(&c), vec![s(1), s(2), s(3)]);
+    }
 }

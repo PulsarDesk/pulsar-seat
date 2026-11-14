@@ -55,6 +55,11 @@ pub struct LaunchSpec {
     /// gets the window station's clipboard right (`seat_session::host_account::winsta_access`).
     /// `false` for everything else.
     pub host_clipboard: bool,
+    /// Seat host of this seat: runs as the seat's own host account (`win::containment`,
+    /// round 4 local-gaps). `None` for the console listener and everything else.
+    pub host_seat: Option<seat_core::SeatNumber>,
+    /// Seat host whose seat needs its account's user profile loaded (printer redirection).
+    pub host_profile: bool,
 }
 
 /// Longest secret written to a child's stdin (seat-host `flow::MAX_TOKEN_BYTES`).
@@ -174,9 +179,16 @@ pub trait Platform: Send + Sync {
         let _ = (domain, user);
         None
     }
-    /// SID the seat's `pulsar_idd` frame sections grant read access to (the seat hosts'
+    /// SID `seat`'s `pulsar_idd` frame sections grant read access to (that seat host's
     /// account, `win::containment`). `None` = SYSTEM + Administrators only. Default: `None`.
-    fn host_frame_reader_sid(&self) -> Option<String> {
+    fn host_frame_reader_sid(&self, seat: seat_core::SeatNumber) -> Option<String> {
+        let _ = seat;
+        None
+    }
+    /// SID of `seat`'s own host account while seat hosts run as per-seat accounts
+    /// (`win::containment`); `None` otherwise. Default: `None`.
+    fn host_account_sid(&self, seat: seat_core::SeatNumber) -> Option<String> {
+        let _ = seat;
         None
     }
     /// `%SystemRoot%` (e.g. `C:\Windows`).

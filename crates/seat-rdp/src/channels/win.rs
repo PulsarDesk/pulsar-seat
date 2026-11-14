@@ -3,13 +3,16 @@
 //! back-end ([`build_rdpdr`]) and the WinSCard reader source ([`WinReaders`]).
 //! **Untested on hardware.**
 
-use super::rdpdr::{CHANNEL_DRIVES, CHANNEL_SMARTCARD, DriveCheck, ReaderSource, SMARTCARD_DEVICE_ID, SeatRdpdr};
+use super::rdpdr::{CHANNEL_DRIVES, CHANNEL_PRINTERS, CHANNEL_SMARTCARD, DriveCheck, ReaderSource, SMARTCARD_DEVICE_ID, SeatRdpdr};
 use super::{Channels, LiveRedirection, RefusalLog};
 use crate::config::SessionParams;
 use crate::policy::{MAX_DRIVE_NAME, ReaderMatch, drive_root_allowed, reader_match};
 use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpdr::pdu::esc::ReturnCode;
-use ironrdp_rdpdr_native::{FIRST_NAMED_DRIVE_DEVICE_ID, RedirectedDrive, WindowsRdpdrBackendFactory};
+use ironrdp_rdpdr::backend::RdpdrBackendFactory;
+use ironrdp_rdpdr_native::{
+    FIRST_NAMED_DRIVE_DEVICE_ID, RedirectedDrive, WindowsPrinterRedirection, WindowsPrinterSelection, WindowsRdpdrBackendFactory,
+};
 use seat_core::backend::session::SmartCardReaderRef;
 use std::sync::Arc;
 
@@ -73,7 +76,8 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
     } else {
         None
     };
-    if drives.is_empty() && readers.is_none() {
+    let printers = printer_selection(&red);
+    if drives.is_empty() && readers.is_none() && printers.is_none() {
         return None;
     }
     let factory = match WindowsRdpdrBackendFactory::from_drives(drives) {
@@ -87,7 +91,34 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
     let smart = readers.is_some();
     let check: DriveCheck = Arc::new(crate::policy::volume::check_drive);
     let live = (ch.live.revision() > 0).then(|| ch.live.clone());
-    let backend = SeatRdpdr::new(Box::new(factory.build()), readers, log.clone()).with_drives(offered, Some(check), live);
+    // Printers: the factory's product discovers the selected queues now (each connection
+    // re-reads them) and builds a back-end that prints their jobs; without printers the
+    // plain back-end is enough.
+    let (inner, announced): (Box<dyn ironrdp_rdpdr::backend::RdpdrBackend>, Vec<ironrdp_rdpdr::RdpdrPrinter>) = match printers {
+        Some(sel) => match factory.with_printer_redirection(WindowsPrinterRedirection::new(sel)).build_rdpdr_backend() {
+            Ok(product) => {
+                let list = product.printers().to_vec();
+                if list.is_empty() {
+                    log.refuse(CHANNEL_PRINTERS, "no_printer_queue_found", String::new());
+                }
+                (product.into_parts().0, list)
+            }
+            Err(e) => {
+                log.refuse(CHANNEL_PRINTERS, "printer_discovery_failed", e.to_string());
+                return None;
+            }
+        },
+        None => (Box::new(factory.build()), Vec::new()),
+    };
+    if initial.is_empty() && !smart && announced.is_empty() {
+        return None;
+    }
+    for pr in &announced {
+        eprintln!("seat-rdp: printer {} offered (driver {})", pr.name(), pr.driver_name());
+    }
+    let backend = SeatRdpdr::new(inner, readers, log.clone())
+        .with_drives(offered, Some(check), live)
+        .with_printers(announced.iter().map(ironrdp_rdpdr::RdpdrPrinter::device_id));
     let mut r = Rdpdr::new(Box::new(backend), p.client_name.chars().take(15).collect());
     if !initial.is_empty() {
         r = r.with_drives(Some(initial));
@@ -95,7 +126,21 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
     if smart {
         r = r.with_smartcard(SMARTCARD_DEVICE_ID);
     }
+    for pr in announced {
+        r = r.with_redirected_printer(pr);
+    }
     Some(r)
+}
+
+/// IronRDP's printer selection for the resolution: every queue, the named queues, or none.
+pub fn printer_selection(r: &seat_core::backend::session::HostRedirection) -> Option<WindowsPrinterSelection> {
+    if r.all_printers {
+        Some(WindowsPrinterSelection::All)
+    } else if r.printers.is_empty() {
+        None
+    } else {
+        Some(WindowsPrinterSelection::Named(r.printers.clone()))
+    }
 }
 
 /// WinSCard readers of the PC, filtered to the seat's readers.
@@ -373,5 +418,23 @@ mod tests {
         assert_eq!(rdpdr_name("", "G:\\"), "G");
         let s = system_drive().expect("Windows directory has a drive letter");
         assert_eq!(drive_root_allowed(&format!("{s}:\\"), Some(s)), Err("drive_is_system_drive"));
+    }
+}
+
+#[cfg(test)]
+mod printer_tests {
+    use super::*;
+    use seat_core::backend::session::HostRedirection;
+
+    #[test]
+    fn selection_follows_the_resolution() {
+        let none = HostRedirection::default();
+        assert_eq!(printer_selection(&none), None);
+        assert!(!super::super::printers_wanted(&none));
+        let named = HostRedirection { printers: vec!["Laser".into()], ..Default::default() };
+        assert_eq!(printer_selection(&named), Some(WindowsPrinterSelection::Named(vec!["Laser".into()])));
+        assert!(super::super::printers_wanted(&named));
+        let all = HostRedirection { all_printers: true, printers: vec!["Laser".into()], ..Default::default() };
+        assert_eq!(printer_selection(&all), Some(WindowsPrinterSelection::All));
     }
 }

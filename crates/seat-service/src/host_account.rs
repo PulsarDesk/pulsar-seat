@@ -28,10 +28,25 @@
 //! [`remove`] (uninstall): rights first (they are keyed by SID and would stay behind once
 //! the account is gone), then the account, the logon-screen entry and the secret. Every
 //! step runs even when an earlier one failed; the errors are returned.
+//!
+//! Per-seat accounts (round 4 local-gaps; `seat_session::host_account` module doc):
+//!
+//! - [`ensure_group`] at service start: the local group `GROUP_NAME` (created with
+//!   `GROUP_COMMENT`; a group of that name Pulsar did not create is refused, and so are
+//!   per-seat accounts for that run). The control pipe admits the group.
+//! - [`ensure_account`] runs the steps above for any host account name with its own LSA
+//!   secret and, when the group is known, also makes the account a member of it (the
+//!   group is the one local group besides `Users` a host account may be in).
+//!   [`ensure_seat`] = the account of one seat (`seat_account_name`), called the first
+//!   time that seat's host starts in a service run.
+//! - [`prune`] at service start: accounts of seats that are not configured any more go
+//!   ([`remove_seat_account`]: rights, profile, account, logon-screen entry, secret).
+//! - [`remove_all`] (uninstall): the shared account, every seat account and the group.
 
-use seat_core::Secret;
+use seat_core::{SeatNumber, Secret};
 use seat_session::host_account::{
-    ACCOUNT_COMMENT, ACCOUNT_FULL_NAME, ACCOUNT_NAME, DENY_RIGHTS, GRANT_RIGHTS, is_sid_string, password_from_random,
+    ACCOUNT_COMMENT, ACCOUNT_FULL_NAME, ACCOUNT_NAME, DENY_RIGHTS, GRANT_RIGHTS, GROUP_COMMENT, GROUP_NAME, PASSWORD_SECRET,
+    is_sid_string, password_from_random, seat_account_name, seat_account_seats, seat_password_secret,
 };
 
 /// What a name resolves to.
@@ -62,9 +77,43 @@ pub trait AccountOps {
     fn add_rights(&self, sid: &str, rights: &[&str]) -> Result<(), String>;
     fn remove_all_rights(&self, sid: &str) -> Result<(), String>;
     fn hide_from_logon(&self, name: &str, hide: bool) -> Result<(), String>;
-    fn store_password(&self, password: Option<&Secret>) -> Result<(), String>;
+    /// Store (`Some`) or delete (`None`) the password in the LSA private data `secret`.
+    fn store_password(&self, secret: &str, password: Option<&Secret>) -> Result<(), String>;
     fn delete(&self, name: &str) -> Result<(), String>;
     fn random32(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, String>;
+    /// The host accounts' local group.
+    fn group_lookup(&self, name: &str) -> Result<GroupLookup, String> {
+        let _ = name;
+        Ok(GroupLookup::Missing)
+    }
+    fn create_group(&self, name: &str, comment: &str) -> Result<(), String> {
+        let _ = (name, comment);
+        Err("not supported".into())
+    }
+    /// Member of the local group `group` (already a member = Ok).
+    fn add_to_group(&self, group: &str, sid: &str) -> Result<(), String> {
+        let _ = (group, sid);
+        Err("not supported".into())
+    }
+    fn delete_group(&self, name: &str) -> Result<(), String> {
+        let _ = name;
+        Ok(())
+    }
+    /// Delete the user profile of `sid` (folder + registry); a missing profile is Ok.
+    fn delete_profile(&self, sid: &str) -> Result<(), String> {
+        let _ = sid;
+        Ok(())
+    }
+}
+
+/// What the host group name resolves to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupLookup {
+    Missing,
+    /// The local group Pulsar created (comment `GROUP_COMMENT`), with its SID.
+    Ours(String),
+    /// A local group or account of that name Pulsar did not create: never used or deleted.
+    Foreign,
 }
 
 /// The account as the service uses it.
@@ -79,24 +128,57 @@ pub const USERS_SID: &str = "S-1-5-32-545";
 /// `BUILTIN\Administrators`.
 pub const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 
-/// The account's local groups (direct and through domain groups) hold nothing but `Users`.
-/// `Err` = refused, with the reason; a failed lookup refuses too.
-pub fn check_groups(ops: &dyn AccountOps, name: &str) -> Result<(), String> {
+/// The account's local groups (direct and through domain groups) hold nothing but `Users`
+/// (and the host group `host_group`, when known). `Err` = refused, with the reason; a
+/// failed lookup refuses too.
+pub fn check_groups(ops: &dyn AccountOps, name: &str, host_group: Option<&str>) -> Result<(), String> {
     let groups = ops.local_groups(name).map_err(|e| format!("{name}: group membership not readable, not used: {e}"))?;
     if groups.iter().any(|g| g.eq_ignore_ascii_case(ADMINISTRATORS_SID)) {
         return Err(format!("{name} is in Administrators; not used (remove it from the group)"));
     }
-    let extra: Vec<&str> = groups.iter().map(String::as_str).filter(|g| !g.eq_ignore_ascii_case(USERS_SID)).collect();
+    let extra: Vec<&str> = groups
+        .iter()
+        .map(String::as_str)
+        .filter(|g| !g.eq_ignore_ascii_case(USERS_SID) && !host_group.is_some_and(|h| g.eq_ignore_ascii_case(h)))
+        .collect();
     if !extra.is_empty() {
         return Err(format!("{name} is in local groups other than Users ({}); not used (remove it from them)", extra.join(", ")));
     }
     Ok(())
 }
 
-/// Create or maintain the account (see module doc). `Err` = the hosts use the SYSTEM Low
-/// token for this run.
+/// Create or maintain the shared account (see module doc), without the group. `Err` = the
+/// hosts use the SYSTEM Low token for this run.
+#[cfg(test)]
 pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
-    let name = ACCOUNT_NAME;
+    ensure_account(ops, ACCOUNT_NAME, PASSWORD_SECRET, None)
+}
+
+/// The host group (created when missing). `Err` = no per-seat accounts in this run.
+pub fn ensure_group(ops: &dyn AccountOps) -> Result<String, String> {
+    match ops.group_lookup(GROUP_NAME)? {
+        GroupLookup::Ours(sid) if is_sid_string(&sid) => Ok(sid),
+        GroupLookup::Ours(sid) => Err(format!("{GROUP_NAME}: unexpected SID {sid:?}")),
+        GroupLookup::Foreign => Err(format!("{GROUP_NAME} exists but Pulsar did not create it; per-seat host accounts are off (rename or remove it)")),
+        GroupLookup::Missing => {
+            ops.create_group(GROUP_NAME, GROUP_COMMENT)?;
+            match ops.group_lookup(GROUP_NAME)? {
+                GroupLookup::Ours(sid) if is_sid_string(&sid) => Ok(sid),
+                other => Err(format!("{GROUP_NAME} created but not found ({other:?})")),
+            }
+        }
+    }
+}
+
+/// The account of `seat`'s host (created or maintained, password rotated; member of the
+/// host group `group_sid`).
+pub fn ensure_seat(ops: &dyn AccountOps, seat: SeatNumber, group_sid: &str) -> Result<HostAccount, String> {
+    ensure_account(ops, &seat_account_name(seat), &seat_password_secret(seat), Some(group_sid))
+}
+
+/// Create or maintain the host account `name` whose password lives in the LSA private data
+/// `secret`; with `group_sid` also a member of the host group (see module doc).
+pub fn ensure_account(ops: &dyn AccountOps, name: &str, secret: &str, group_sid: Option<&str>) -> Result<HostAccount, String> {
     let bytes = ops.random32()?;
     let password = Secret::new(password_from_random(&bytes).to_string());
     drop(bytes);
@@ -105,7 +187,7 @@ pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
         Lookup::Foreign => return Err(format!("{name} is a local user Pulsar did not create; not used (rename or remove it)")),
         Lookup::User(sid) => {
             // Refused before anything is touched.
-            check_groups(ops, name)?;
+            check_groups(ops, name, group_sid)?;
             (sid, false)
         }
         Lookup::Missing => {
@@ -113,7 +195,7 @@ pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
             match ops.lookup(name) {
                 Ok(Lookup::User(sid)) => (sid, true),
                 other => {
-                    forget_password(ops, name);
+                    forget_password(ops, name, secret);
                     return Err(format!("{name} created but not found ({other:?})"));
                 }
             }
@@ -127,10 +209,14 @@ pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
             return Err(format!("{name}: unexpected SID {sid:?}"));
         }
         if created {
-            check_groups(ops, name)?;
+            check_groups(ops, name, group_sid)?;
         }
         ops.set_flags(name)?;
         ops.ensure_users_member(&sid)?;
+        if group_sid.is_some() {
+            // Without it the host could not open the control pipe (one ACE for the group).
+            ops.add_to_group(GROUP_NAME, &sid).map_err(|e| format!("{name}: not added to {GROUP_NAME}: {e}"))?;
+        }
         ops.add_rights(&sid, GRANT_RIGHTS)?;
         ops.add_rights(&sid, DENY_RIGHTS)?;
         if let Err(e) = ops.hide_from_logon(name, true) {
@@ -143,11 +229,11 @@ pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
             ops.set_password(name, &password)?;
             sam_changed = true;
         }
-        ops.store_password(Some(&password))
+        ops.store_password(secret, Some(&password))
     };
     if let Err(e) = steps() {
         if sam_changed {
-            forget_password(ops, name);
+            forget_password(ops, name, secret);
         }
         return Err(e);
     }
@@ -155,8 +241,8 @@ pub fn ensure(ops: &dyn AccountOps) -> Result<HostAccount, String> {
 }
 
 /// The SAM password changed but the secret could not follow: delete the stale secret.
-fn forget_password(ops: &dyn AccountOps, name: &str) {
-    if let Err(e) = ops.store_password(None) {
+fn forget_password(ops: &dyn AccountOps, name: &str, secret: &str) {
+    if let Err(e) = ops.store_password(secret, None) {
         crate::log::warn(&format!("{name}: stale stored password not deleted: {e}"));
     }
 }
@@ -188,8 +274,82 @@ pub fn remove(ops: &dyn AccountOps) -> Vec<String> {
     if !foreign && let Err(e) = ops.hide_from_logon(name, false) {
         errors.push(format!("{name} oturum açma ekranı kaydı silinemedi: {e}"));
     }
-    if let Err(e) = ops.store_password(None) {
+    if let Err(e) = ops.store_password(PASSWORD_SECRET, None) {
         errors.push(format!("{name} parolası (LSA) silinemedi: {e}"));
+    }
+    errors
+}
+
+/// Remove `seat`'s host account (seat no longer configured, uninstall): rights, profile,
+/// account, logon-screen entry, secret. A name Pulsar did not create is left alone.
+/// Returns the errors (Turkish).
+pub fn remove_seat_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String> {
+    let name = seat_account_name(seat);
+    let mut errors = Vec::new();
+    match ops.lookup(&name) {
+        Ok(Lookup::User(sid)) => {
+            if let Err(e) = ops.remove_all_rights(&sid) {
+                errors.push(format!("{name} hesabının oturum hakları kaldırılamadı: {e}"));
+            }
+            if let Err(e) = ops.delete_profile(&sid) {
+                errors.push(format!("{name} hesabının kullanıcı profili silinemedi: {e}"));
+            }
+            if let Err(e) = ops.delete(&name) {
+                errors.push(format!("{name} hesabı silinemedi: {e}"));
+            }
+            if let Err(e) = ops.hide_from_logon(&name, false) {
+                errors.push(format!("{name} oturum açma ekranı kaydı silinemedi: {e}"));
+            }
+        }
+        Ok(Lookup::Missing) => {}
+        Ok(Lookup::Foreign | Lookup::Other) => {
+            crate::log::warn(&format!("{name}: not an account Pulsar created; left untouched"));
+            return errors;
+        }
+        Err(e) => {
+            errors.push(format!("{name} hesabı aranamadı: {e}"));
+            return errors;
+        }
+    }
+    if let Err(e) = ops.store_password(&seat_password_secret(seat), None) {
+        errors.push(format!("{name} parolası (LSA) silinemedi: {e}"));
+    }
+    errors
+}
+
+/// Service start: remove the accounts of seats that are not in `keep` (seat removed from
+/// the config, or a seat that no longer runs a host). Returns the errors.
+pub fn prune(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for seat in seat_account_seats().filter(|s| !keep.contains(s)) {
+        // Cheap check first: most seat numbers never had an account.
+        match ops.lookup(&seat_account_name(seat)) {
+            Ok(Lookup::User(_)) => errors.extend(remove_seat_account(ops, seat)),
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{}: {e}", seat_account_name(seat))),
+        }
+    }
+    errors
+}
+
+/// Uninstall: the shared account, every seat account and the host group. Returns the
+/// errors (Turkish).
+pub fn remove_all(ops: &dyn AccountOps) -> Vec<String> {
+    let mut errors = remove(ops);
+    for seat in seat_account_seats() {
+        if let Ok(Lookup::User(_)) = ops.lookup(&seat_account_name(seat)) {
+            errors.extend(remove_seat_account(ops, seat));
+        }
+    }
+    match ops.group_lookup(GROUP_NAME) {
+        Ok(GroupLookup::Ours(_)) => {
+            if let Err(e) = ops.delete_group(GROUP_NAME) {
+                errors.push(format!("{GROUP_NAME} grubu silinemedi: {e}"));
+            }
+        }
+        Ok(GroupLookup::Missing) => {}
+        Ok(GroupLookup::Foreign) => errors.push(format!("{GROUP_NAME} grubunu Pulsar oluşturmamış; dokunulmadı")),
+        Err(e) => errors.push(format!("{GROUP_NAME} grubu aranamadı: {e}")),
     }
     errors
 }
@@ -210,6 +370,12 @@ mod tests {
         calls: Mutex<Vec<String>>,
         stored: Mutex<Option<String>>,
         passwords: Mutex<Vec<String>>,
+        /// Secret names written / deleted.
+        secrets: Mutex<Vec<String>>,
+        /// Answers of `group_lookup` (last one repeats).
+        group: Mutex<Vec<GroupLookup>>,
+        /// Per-name lookups (`lookup` falls back to the `lookup` queue when absent).
+        named: Mutex<std::collections::HashMap<String, Lookup>>,
     }
 
     impl Mock {
@@ -223,13 +389,17 @@ mod tests {
     }
 
     impl AccountOps for Mock {
-        fn lookup(&self, _n: &str) -> Result<Lookup, String> {
+        fn lookup(&self, n: &str) -> Result<Lookup, String> {
+            if let Some(l) = self.named.lock().unwrap().get(n).cloned() {
+                self.calls.lock().unwrap().push(format!("lookup {n}"));
+                return Ok(l);
+            }
             self.call("lookup")?;
             let mut l = self.lookup.lock().unwrap();
             Ok(if l.len() > 1 { l.remove(0) } else { l[0].clone() })
         }
         fn create(&self, n: &str, p: &Secret, full: &str, _c: &str) -> Result<(), String> {
-            assert_eq!(n, ACCOUNT_NAME);
+            assert!(seat_session::host_account::is_host_account_name(n), "{n}");
             assert!(!full.is_empty());
             self.passwords.lock().unwrap().push(p.expose().to_string());
             self.call("create")
@@ -257,12 +427,32 @@ mod tests {
         fn hide_from_logon(&self, _n: &str, hide: bool) -> Result<(), String> {
             self.call(if hide { "hide" } else { "unhide" })
         }
-        fn store_password(&self, p: Option<&Secret>) -> Result<(), String> {
+        fn store_password(&self, secret: &str, p: Option<&Secret>) -> Result<(), String> {
+            self.secrets.lock().unwrap().push(format!("{}{secret}", if p.is_some() { "+" } else { "-" }));
             *self.stored.lock().unwrap() = p.map(|s| s.expose().to_string());
             self.call(if p.is_some() { "store" } else { "unstore" })
         }
         fn delete(&self, _n: &str) -> Result<(), String> {
             self.call("delete")
+        }
+        fn group_lookup(&self, _n: &str) -> Result<GroupLookup, String> {
+            self.call("group_lookup")?;
+            let mut g = self.group.lock().unwrap();
+            Ok(if g.len() > 1 { g.remove(0) } else { g.first().cloned().unwrap_or(GroupLookup::Missing) })
+        }
+        fn create_group(&self, n: &str, c: &str) -> Result<(), String> {
+            assert_eq!((n, c), (GROUP_NAME, GROUP_COMMENT));
+            self.call("create_group")
+        }
+        fn add_to_group(&self, g: &str, _s: &str) -> Result<(), String> {
+            assert_eq!(g, GROUP_NAME);
+            self.call("add_to_group")
+        }
+        fn delete_group(&self, _n: &str) -> Result<(), String> {
+            self.call("delete_group")
+        }
+        fn delete_profile(&self, _s: &str) -> Result<(), String> {
+            self.call("delete_profile")
         }
         fn random32(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
             let mut b = [0u8; 32];
@@ -274,6 +464,79 @@ mod tests {
     }
 
     const SID: &str = "S-1-5-21-1-2-3-1050";
+
+    const GROUP_SID: &str = "S-1-5-21-1-2-3-1100";
+
+    fn s(n: u8) -> SeatNumber {
+        SeatNumber::new(n).unwrap()
+    }
+
+    #[test]
+    fn group_is_created_once_and_a_foreign_one_is_refused() {
+        let m = Mock { group: Mutex::new(vec![GroupLookup::Missing, GroupLookup::Ours(GROUP_SID.into())]), ..Default::default() };
+        assert_eq!(ensure_group(&m).unwrap(), GROUP_SID);
+        assert_eq!(m.calls(), ["group_lookup", "create_group", "group_lookup"]);
+        let m = Mock { group: Mutex::new(vec![GroupLookup::Ours(GROUP_SID.into())]), ..Default::default() };
+        assert_eq!(ensure_group(&m).unwrap(), GROUP_SID);
+        assert_eq!(m.calls(), ["group_lookup"]);
+        let m = Mock { group: Mutex::new(vec![GroupLookup::Foreign]), ..Default::default() };
+        assert!(ensure_group(&m).unwrap_err().contains("did not create"));
+        assert_eq!(m.calls(), ["group_lookup"], "never created over a foreign name");
+    }
+
+    #[test]
+    fn seat_account_has_its_own_secret_and_joins_the_group() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing, Lookup::User(SID.into())]), groups: vec![USERS_SID.into(), GROUP_SID.into()], ..Default::default() };
+        let a = ensure_seat(&m, s(3), GROUP_SID).unwrap();
+        assert_eq!(a.name, "PulsarSeatHost03");
+        let calls = m.calls();
+        assert!(calls.contains(&"add_to_group".to_string()), "{calls:?}");
+        assert_eq!(*m.secrets.lock().unwrap(), ["+L$PulsarSeat.HostAccount.03"]);
+        // The host group is allowed next to Users; any other group still refuses.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), groups: vec![USERS_SID.into(), GROUP_SID.into()], ..Default::default() };
+        assert!(ensure_seat(&m, s(3), GROUP_SID).is_ok());
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), groups: vec![GROUP_SID.into(), "S-1-5-32-555".into()], ..Default::default() };
+        assert!(ensure_seat(&m, s(3), GROUP_SID).is_err());
+        // Without the group (shared account path), the group SID is not allowed.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), groups: vec![GROUP_SID.into()], ..Default::default() };
+        assert!(ensure(&m).is_err());
+    }
+
+    #[test]
+    fn a_failed_group_join_drops_the_new_secret() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), fail: Some("add_to_group"), ..Default::default() };
+        assert!(ensure_seat(&m, s(2), GROUP_SID).unwrap_err().contains(GROUP_NAME));
+        assert!(!m.calls().contains(&"set_password".to_string()), "the old password still matches the stored secret");
+    }
+
+    #[test]
+    fn prune_removes_only_unconfigured_seat_accounts_pulsar_created() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarSeatHost02".into(), Lookup::User(SID.into()));
+        m.named.lock().unwrap().insert("PulsarSeatHost05".into(), Lookup::User("S-1-5-21-1-2-3-1055".into()));
+        m.named.lock().unwrap().insert("PulsarSeatHost07".into(), Lookup::Foreign);
+        assert!(prune(&m, &[s(1), s(2)]).is_empty());
+        let calls = m.calls();
+        assert!(!calls.iter().any(|c| c == "lookup PulsarSeatHost02"), "kept seats are not even looked up");
+        let removed: Vec<&String> = calls.iter().filter(|c| *c == "delete").collect();
+        assert_eq!(removed.len(), 1, "only seat 5 is ours and unconfigured: {calls:?}");
+        assert!(calls.contains(&"delete_profile".to_string()));
+        assert_eq!(*m.secrets.lock().unwrap(), ["-L$PulsarSeat.HostAccount.05"]);
+    }
+
+    #[test]
+    fn remove_all_takes_seat_accounts_and_the_group() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Ours(GROUP_SID.into())]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarSeatHost04".into(), Lookup::User(SID.into()));
+        assert!(remove_all(&m).is_empty());
+        let calls = m.calls();
+        assert_eq!(calls.iter().filter(|c| *c == "delete").count(), 1);
+        assert_eq!(calls.last().unwrap(), "delete_group");
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Foreign]), ..Default::default() };
+        let errs = remove_all(&m);
+        assert!(!m.calls().contains(&"delete_group".to_string()));
+        assert_eq!(errs.len(), 1);
+    }
 
     #[test]
     fn creates_a_missing_account_and_stores_its_password() {

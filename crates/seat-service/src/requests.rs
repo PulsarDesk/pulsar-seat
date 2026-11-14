@@ -947,7 +947,17 @@ impl Service {
                 let volume_of = seat_rdp::policy::volume::name_of_letter;
                 #[cfg(not(windows))]
                 let volume_of = |_: char| None::<String>;
-                seat_rdp::policy::host_redirection(seat, &cfg.local_settings().redirect, &st.inventory.effective(&st.config), &live, &volume_of)
+                // Print queues of seat-owned printers (spooler lookup, only when the seat's
+                // printer policy is `seat`).
+                let queues_of = |id: &str| seat_media::printer_queues_for_device(id);
+                seat_rdp::policy::host_redirection_with(
+                    seat,
+                    &cfg.local_settings().redirect,
+                    &st.inventory.effective(&st.config),
+                    &live,
+                    &volume_of,
+                    &queues_of,
+                )
             }
             None => Default::default(),
         };

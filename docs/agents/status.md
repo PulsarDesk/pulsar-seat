@@ -1179,3 +1179,53 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     calls, the token elevation check and the 60 s state wait of the service buttons.
   - Open (work): pulsar-host side (above); no silence is sent while no client mic is open
     (apps may wait for data); mic for Moonlight clients is impossible (protocol has none).
+- 2026-11-14 (round 4 local-gaps): **per-seat host accounts, kiosk filter session map,
+  printer redirection, redirect UI, second-listener accounts.** Nothing ran on hardware.
+  (a) Each seat host runs as its own local account `PulsarSeatHostNN` (LSA secret
+  `L$PulsarSeat.HostAccount.NN`), all in the local group `PulsarSeatHosts` that the pipe
+  admits with one ACE; created / rotated the first time a seat's host starts in a run,
+  pruned at service start for seats without a host, all removed at uninstall
+  (`host_account::{ensure_group, ensure_account, ensure_seat, prune, remove_all}`,
+  `win::containment` provisioner + `HostRequest`). Per-seat fallback to the shared
+  `PulsarSeatHost` account (setup / logon failure, exit 44 / `STATUS_DLL_INIT_FAILED`),
+  then SYSTEM Low; `HostTokenCompat=3` = shared account for every host (round-3
+  behaviour), 1 / 2 unchanged. Profile loaded for the host's lifetime when the seat
+  redirects printers. IDD frame sections per seat account. Migration: shared account
+  kept (listener, fallback, own pipe ACE), added to the group. (b) Kiosk shell under
+  `kmdf_filter`: forwarding (`Scope::kiosk_seat`) already existed; the real gap was the
+  filter's seat -> session map, which mapped kiosk seats to the console session and let
+  console programs open kiosk-seat HID collections; `service::filter_session_map` now
+  leaves out seats on the console session / a shared session. (c) Manager "Yönlendirme"
+  dialog: printers (kapalı / koltuğun yazıcıları / bütün yazıcılar, warning for all),
+  summary, Turkish notes and refusals. (d) Printer redirection: `SeatRedirect.printers`
+  (`off` / `seat` / `all`, seat-core additive), `HostRedirection.printers` /
+  `all_printers`, `seat_rdp::policy::host_redirection_with` (queue lookup
+  `seat_media::printer_queues_for_device`), IronRDP 0.9's Windows printer back-end
+  (MS-RDPEPC announce via the rdpdr product, `with_redirected_printer`), `SeatRdpdr`
+  refuses IRPs for unannounced printer ids, ActiveX refuses (`printers_need_ironrdp`),
+  `printer_acl` gate gives the seat's own host account the use right
+  (`GatePlan.printer_hosts`). (e) seat-core `loopback_no_accounts` /
+  `logon_screen_needs_listener` warnings per logon-screen seat (manager mirrors them and
+  lists the accounts the listener admits). Gates green: cargo 1563 passed / 6 ignored,
+  clippy aarch64 + x86_64 clean, manager 198 / check / build, shim tests (host) + x64 /
+  i686 check, installer scripts 49. No test deleted. The kiosk-isolation WIP was parked in
+  `git stash` during this package and restored afterwards (still uncommitted, still
+  breaks the shim workspace build).
+  - Open (HYPOTHESIS, untested on hardware): batch token of a seat account carries the
+    `PulsarSeatHosts` SID so the pipe ACE admits it; `LoadUserProfileW` /
+    `UnloadUserProfile` with the hardened Low token from the service; `DeleteProfileW` of
+    a pruned account; printing from a Low-integrity batch token through the spooler;
+    the seat-owned queue lookup by USB port; the server installs the redirected queue
+    with the announced driver name (the queue's own driver must exist on the PC: it does,
+    the session runs on the same PC); the kiosk filter map keeps console opens of
+    kiosk-seat touch / consumer collections out while the service reader still opens them.
+  - Open (work / limits): a seat added while the service runs gets its account at its
+    first host start, but seats removed while it runs keep their account until the next
+    service start; a config that fails to load at start prunes every seat account (they
+    are recreated, profiles lost); under `kmdf_filter` HID game pads of kiosk seats are
+    usable by nobody (not service-read; kiosk-isolation shim would be the way); a seat
+    whose own account fails after its display was configured keeps the seat SID on its
+    IDD frame sections until its next start; printer redirection changes apply at the
+    next connection; `all` with the `printer_acl` gate cannot print to other seats'
+    gated queues; spec 70 §3.8 (printers never redirected) needs the analyst to record
+    the maintainer's opt-in.
