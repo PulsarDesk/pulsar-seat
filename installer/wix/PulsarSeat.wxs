@@ -201,11 +201,10 @@
           <ServiceDependency Id="LSM" />
           <ServiceConfig DelayedAutoStart="no" ServiceSid="unrestricted"
                          OnInstall="yes" OnReinstall="yes" />
-          <ServiceConfigFailureActions OnInstall="yes" OnReinstall="yes" ResetPeriod="86400">
-            <Failure Action="restartService" Delay="5000" />
-            <Failure Action="restartService" Delay="30000" />
-            <Failure Action="restartService" Delay="120000" />
-          </ServiceConfigFailureActions>
+          <!-- No ServiceConfigFailureActions: Windows Installer opens the service without
+               SERVICE_START, so restart actions fail with error 5 (MSI error 1939, seen in
+               the ARM64 test VM 2026-11-14). PsSetupInstall (MSI-mode install) sets the
+               recovery actions, required privileges and DACL (scm::configure_existing). -->
         </ServiceInstall>
         <!-- Stopping the service stops every seat first (service pre-shutdown path). -->
         <ServiceControl Id="PulsarSeatServiceControl" Name="PulsarSeat"

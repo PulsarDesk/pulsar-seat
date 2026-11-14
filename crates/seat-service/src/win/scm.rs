@@ -96,6 +96,20 @@ pub fn install(exe: &Path, data_dir: &Path) -> Result<(), String> {
         }
         Err(_) => m.create_service(&info, ServiceAccess::ALL_ACCESS).map_err(s)?,
     };
+    configure(&svc, data_dir)
+}
+
+/// Service record settings the MSI cannot set itself: Windows Installer opens the service
+/// without `SERVICE_START`, so `ChangeServiceConfig2(SERVICE_CONFIG_FAILURE_ACTIONS)` with
+/// restart actions fails there with error 5 (seen in the ARM64 test VM on 2026-11-14, MSI
+/// error 1939). The MSI creates the service; `install --msi` calls this for the rest.
+pub fn configure_existing(data_dir: &Path) -> Result<(), String> {
+    let m = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT).map_err(s)?;
+    let svc = m.open_service(SERVICE_NAME, ServiceAccess::ALL_ACCESS).map_err(s)?;
+    configure(&svc, data_dir)
+}
+
+fn configure(svc: &windows_service::service::Service, data_dir: &Path) -> Result<(), String> {
     svc.set_description(SERVICE_DESCRIPTION).map_err(s)?;
     svc.update_failure_actions(ServiceFailureActions {
         reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 3600)),

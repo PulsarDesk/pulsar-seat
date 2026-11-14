@@ -70,9 +70,9 @@ pub fn install(exe: &Path, data_dir: &Path, args: &[String]) -> i32 {
     let service_part = if opts.register_service || !opts.msi {
         super::scm::install(exe, data_dir)
     } else {
-        super::eventlog::register_source()
-            .map_err(|e| format!("event source: {e}"))
-            .and_then(|_| crate::runtime::ensure_data_dirs(data_dir, true).map_err(|e| format!("data folder: {e}")))
+        // The MSI created the service record; recovery actions, required privileges and
+        // the service DACL are set here (Windows Installer cannot set restart actions).
+        super::scm::configure_existing(data_dir)
     };
     if let Err(e) = service_part {
         eprintln!("Hata: {e}");
