@@ -91,7 +91,8 @@ windows-sys = { workspace = true, features = [
 # back-end of the redirection channels (IronRDP, MIT OR Apache-2.0).
 ironrdp-cliprdr-native = { version = "0.9", optional = true }
 ironrdp-rdpdr-native = { version = "0.9", optional = true }
-# H.264 decode for the graphics pipeline (src/h264/mf.rs): Media Foundation + D3D11.
+# H.264 decode for the graphics pipeline (src/h264/mf.rs) and the zero-copy compositor
+# (src/gpu/d3d.rs): Media Foundation + D3D11 + DXGI shared textures.
 windows = { version = "0.62.2", optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
@@ -99,5 +100,6 @@ windows = { version = "0.62.2", optional = true, features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Media_MediaFoundation",
+    "Win32_Security",
     "Win32_System_Com",
 ] }

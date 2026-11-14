@@ -18,6 +18,12 @@
 //! - a flip chain lost to a device removal / reset (driver update, TDR) is re-created
 //!   (limited retries) instead of staying on the GDI blit for good;
 //! - the seat's pointer is composited from [`CursorState`] (straight-alpha BGRA shape);
+//! - GPU frames (zero-copy EGFX path, round 4): a flip-chain output that is no clone
+//!   source takes [`GpuFrameRef`]s ([`FrameSink::present_gpu`]): the newest one is kept
+//!   until the next vblank, copied from the RDP client's shared texture into the chain
+//!   (`FlipChain::take_shared`) and shown with the cursor drawn on the back buffer only.
+//!   [`FrameSink::backlog`] counts outputs whose last frame is not on screen yet (the
+//!   RDP client then defers presents and frame acknowledgements);
 //! - guards against the console user: `ClipCursor` keeps the console cursor off every
 //!   seat monitor (all hosts compute the same clip from all presenter windows, so they do
 //!   not fight), and a WinEvent hook moves foreign windows that land on a seat monitor
@@ -37,7 +43,7 @@ use crate::model::{
     blend_cursor_region, centre, coalesce_dirty, console_clip, contains_point, copy_region, cursor_rect, letterbox, move_back,
     pick_follow_mode, ModeFollower, MODE_FOLLOW_SETTLE,
 };
-use seat_core::backend::display::{CursorState, FrameRef, FrameSink, OutputPlacement, SeatOutputs};
+use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, OutputPlacement, SeatOutputs};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_core::device::{Presentation, Rect};
 use std::cell::RefCell;
@@ -141,6 +147,22 @@ struct Out {
     /// Device losses seen and failed re-creations (bounded, then GDI for good).
     gpu_lost: u8,
     gpu_create_failures: u8,
+    /// Adapter of the flip chain's device (0: no chain / unknown).
+    gpu_luid: u64,
+    /// The content comes from GPU frames (`frame` is not kept up to date then).
+    gpu_source: bool,
+    /// Newest GPU frame not taken yet.
+    shared: Option<SharedFrame>,
+    /// A frame (CPU or GPU) waits for the next vblank (back-pressure; cursor moves do not
+    /// count).
+    frame_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SharedFrame {
+    handle: usize,
+    generation: u64,
+    src: Rect,
 }
 
 /// Dirty rectangles kept per GPU output before the next upload; more = full upload
@@ -261,6 +283,10 @@ impl WindowPresenter {
                         gpu_retry: false,
                         gpu_lost: 0,
                         gpu_create_failures: 0,
+                        gpu_luid: 0,
+                        gpu_source: false,
+                        shared: None,
+                        frame_pending: false,
                     })
                 })
                 .collect();
@@ -384,6 +410,12 @@ impl FrameSink for WindowPresenter {
                 if o.blank.take().is_some() {
                     full = true;
                 }
+                if o.gpu_source {
+                    // Back from GPU frames: the whole CPU frame goes up.
+                    o.gpu_source = false;
+                    o.shared = None;
+                    full = true;
+                }
                 if full {
                     for y in 0..frame.height as usize {
                         o.frame[y * row..(y + 1) * row].copy_from_slice(&frame.data[y * stride..y * stride + row]);
@@ -402,6 +434,7 @@ impl FrameSink for WindowPresenter {
                 }
                 if o.gpu {
                     o.pending = true;
+                    o.frame_pending = true;
                     if full {
                         o.pending_full = true;
                         o.pending_rects.clear();
@@ -492,6 +525,57 @@ impl FrameSink for WindowPresenter {
             }
         }
         Ok(())
+    }
+
+    fn gpu_adapter(&self, output: usize) -> Option<u64> {
+        let s = lock(&self.shared);
+        let o = s.outputs.get(output)?.as_ref()?;
+        // A clone source would need one consumer per copy of the shared texture.
+        let shown = s.outputs.iter().flatten().filter(|x| x.src == output).count();
+        (o.gpu && o.src == output && shown == 1 && o.gpu_luid != 0 && !o.lost).then_some(o.gpu_luid)
+    }
+
+    fn gpu_ready(&self, output: usize) -> bool {
+        lock(&self.shared).outputs.get(output).and_then(|o| o.as_ref()).is_none_or(|o| o.shared.is_none())
+    }
+
+    fn present_gpu(&mut self, frame: &GpuFrameRef<'_>) -> BackendResult<()> {
+        let src = frame.src;
+        let post = {
+            let mut s = lock(&self.shared);
+            let now = Instant::now();
+            let Some(o) = s.outputs.get_mut(frame.output).and_then(|o| o.as_mut()).filter(|o| o.gpu && o.src == frame.output) else {
+                return Err(BackendError::unsupported("GPU frames on this output"));
+            };
+            if src.width == 0 || src.height == 0 || src.x < 0 || src.y < 0 || src.x as u32 + src.width > frame.width || src.y as u32 + src.height > frame.height {
+                return Err(BackendError::new(ErrorKind::Internal, "bad_frame", "GPU frame source outside its texture"));
+            }
+            o.shared = Some(SharedFrame { handle: frame.handle, generation: frame.generation, src });
+            o.gpu_source = true;
+            o.blank = None;
+            o.fw = src.width;
+            o.fh = src.height;
+            o.pending = true;
+            o.frame_pending = true;
+            let mode = o.follower.as_mut().and_then(|f| f.observe((src.width, src.height), now)).map(|sz| (frame.output, sz));
+            if let Some(m) = mode {
+                s.mode_requests.push(m);
+            }
+            let post = !s.frame_posted;
+            s.frame_posted = true;
+            (post, mode.is_some())
+        };
+        if post.0 {
+            self.post(WM_APP_FRAME);
+        }
+        if post.1 {
+            self.post(WM_APP_MODE);
+        }
+        Ok(())
+    }
+
+    fn backlog(&self) -> u32 {
+        lock(&self.shared).outputs.iter().flatten().filter(|o| o.gpu && o.frame_pending).count() as u32
     }
 
     fn blank(&mut self, message: &str) -> BackendResult<()> {
@@ -681,6 +765,7 @@ fn retry_gpu(shared: &Arc<Mutex<Shared>>) {
         let Some(o) = s.outputs.get_mut(i).and_then(|o| o.as_mut()) else { continue };
         match res {
             Ok(c) => {
+                o.gpu_luid = c.luid();
                 CHAINS.with(|m| m.borrow_mut().insert(i, c));
                 log::info!("presenter: output {i}: flip chain re-created after a device loss");
                 o.gpu = true;
@@ -755,9 +840,11 @@ unsafe fn reconfigure(shared: &Arc<Mutex<Shared>>, hinst: windows::Win32::Founda
             }
             match FlipChain::new(HWND(h as *mut _), luid, r.width, r.height) {
                 Ok(c) => {
+                    let got = c.luid();
                     CHAINS.with(|m| m.borrow_mut().insert(i, c));
                     if let Some(o) = lock(shared).outputs[i].as_mut() {
                         o.gpu = true;
+                        o.gpu_luid = got;
                         o.pending = true;
                         o.pending_full = true;
                     }
@@ -778,6 +865,8 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
     enum Job {
         Message(String),
         Frame(u32, u32, Vec<(Rect, Vec<u8>)>),
+        /// GPU frame (`None`: keep the last one) and the cursor to draw over it.
+        Shared(Option<SharedFrame>, Option<(CursorState, Vec<u8>)>),
     }
     let (job, ww, wh, hwnd) = {
         let mut s = lock(shared);
@@ -790,8 +879,13 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
         let rects = std::mem::take(&mut o.pending_rects);
         o.pending = false;
         o.pending_full = false;
+        o.frame_pending = false;
         let job = match &o.blank {
             Some(text) => Job::Message(text.clone()),
+            None if o.gpu_source => {
+                let with_cursor = cursor.output == o.src && cursor.visible;
+                Job::Shared(o.shared.take(), with_cursor.then(|| (cursor.clone(), pm.clone())))
+            }
             None if o.fw == 0 || o.frame.is_empty() => Job::Message(String::new()),
             None => {
                 let regions = if full { None } else { coalesce_dirty(&rects, o.fw, o.fh) };
@@ -822,6 +916,12 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
                 ch.upload(w, h, &[(Rect { x: 0, y: 0, width: w, height: h }, img)])?;
             }
             Job::Frame(fw, fh, regions) => ch.upload(fw, fh, &regions)?,
+            Job::Shared(frame, cursor) => {
+                if let Some(f) = frame {
+                    ch.take_shared(f.handle, f.generation, f.src)?;
+                }
+                return ch.present_with_cursor(ww, wh, cursor.as_ref().map(|(c, p)| (c, p.as_slice())));
+            }
         }
         ch.present(ww, wh)
     });
@@ -830,6 +930,11 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
         CHAINS.with(|c| c.borrow_mut().remove(&i));
         if let Some(o) = lock(shared).outputs.get_mut(i).and_then(|o| o.as_mut()) {
             o.gpu = false;
+            o.gpu_luid = 0;
+            // GPU frames cannot reach GDI: the RDP client sees the output lose its adapter
+            // and sends CPU frames again.
+            o.shared = None;
+            o.frame_pending = false;
             if lost && o.gpu_lost < MAX_GPU_LOST {
                 o.gpu_lost += 1;
                 o.gpu_retry = true;

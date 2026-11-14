@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 pub use audio::{AudioBackendKind, AudioBinding, AudioCaps, AudioRoute, AudioRouter};
-pub use display::{DisplayBackendKind, DisplayBinding, DisplayCaps, FrameRef, FrameSink, SeatOutputs};
+pub use display::{DisplayBackendKind, DisplayBinding, DisplayCaps, FrameRef, FrameSink, GpuFrameRef, SeatOutputs};
 pub use gate::{DeviceGate, GateBackendKind, GateCaps, GatePlan, GateReport, IsolationStatus};
 pub use input::{InputBackendKind, InputCaps, InputPacket, InputRoute, InputRouter, InputSink};
 pub use session::{SessionBackend, SessionBackendKind, SessionCaps};

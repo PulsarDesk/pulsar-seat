@@ -856,9 +856,20 @@ monitor's same-container hub keeps a seat the monitor is not on.
   `ironrdp-egfx` (`seat-rdp/src/gfx.rs`) with Media Foundation H.264 decode
   (`seat-rdp/src/h264/`, hardware first, software fallback at start and at run time)
   composites into the same framebuffer; `ResetGraphics` resizes follow without a
-  reactivation; lost pictures trigger a redraw, then a graphics protocol reset. Decoded
-  pictures are read back to CPU memory (zero-copy D3D11 feed deferred). Overrides
-  `PULSAR_SEAT_GFX`, `PULSAR_SEAT_H264_DECODER`; metrics in `SessionEvent::Graphics`.
+  reactivation; lost pictures trigger a redraw, then a graphics protocol reset. The
+  decoder runs on the adapter of the seat's first output (`FrameSink::gpu_adapter`).
+  **Zero-copy (round 4, `seat-rdp/src/gpu/`):** `GfxChannel` wraps the IronRDP client;
+  surfaces mapped 1:1 over GPU-capable outputs move to the GPU at an AVC420 IDR (seeded
+  once from the image), are decoded and blitted NV12 to BGRA on the presenter's adapter
+  and reach the presenter as shared keyed-mutex textures (`FrameSink::present_gpu`,
+  `GpuFrameRef`: producer releases key 1, presenter copies and releases key 0); other
+  codecs' paints are copied up per frame; anything that reads AVC pixels sends the
+  surface back to the CPU path (protocol reset when its CPU pixels are stale).
+  **Back-pressure:** `FrameSink::backlog` (outputs whose last frame is not on screen)
+  defers CPU presents (≤ 50 ms) and holds `FrameAcknowledge` (≤ 3 frames / 100 ms, queue
+  depth = held bytes). Overrides `PULSAR_SEAT_GFX`, `PULSAR_SEAT_H264_DECODER`,
+  `PULSAR_SEAT_GFX_ZERO_COPY=0`; metrics in `SessionEvent::Graphics`. GPU behaviour is
+  HYPOTHESIS until the first hardware run (crate README, Known limits).
 - **Input:** `SeatInputSink` = `RdpInputSink` over `seat_rdp::Handle` (fast-path, MS-RDPEI
   touch / pen). `Move` packets become relative events while the server hides the pointer
   and announced `INPUT_FLAG_MOUSE_RELATIVE`.

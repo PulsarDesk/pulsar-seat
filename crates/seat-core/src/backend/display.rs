@@ -13,7 +13,7 @@
 //!
 //! Pulsar installs no Display-class filter and never touches graphics-kernel memory.
 
-use super::{Availability, BackendResult, DriverId, HotplugSink};
+use super::{Availability, BackendError, BackendResult, DriverId, HotplugSink};
 use crate::device::{Device, DisplayMode, Presentation, Rect};
 use crate::ids::{DeviceKey, SeatNumber};
 use serde::{Deserialize, Serialize};
@@ -202,6 +202,33 @@ pub struct FrameRef<'a> {
     pub dirty: &'a [Rect],
 }
 
+/// One GPU-side frame (zero-copy path, added 2026-11-14): a BGRA8 D3D11 texture the RDP
+/// client composed on the presenter's adapter, shared by an NT handle with a keyed mutex
+/// (`D3D11_RESOURCE_MISC_SHARED_NTHANDLE | SHARED_KEYEDMUTEX`). Protocol: the producer
+/// released the mutex with key 1 before the call; the presenter acquires key 1, copies
+/// `src` out and releases key 0 (the producer takes the texture again only with key 0).
+/// The handle stays open in the producer while `generation` is the same, so the
+/// presenter may keep its opened texture keyed by (`handle`, `generation`).
+/// **HYPOTHESIS** (untested on hardware): cross-device sharing on one adapter works this
+/// way on the drivers we target (x64 GPUs, Qualcomm Adreno on ARM64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuFrameRef<'a> {
+    /// Index into `SeatOutputs::outputs` (RDP monitor index).
+    pub output: usize,
+    /// NT handle value of the shared texture (owned by the producer).
+    pub handle: usize,
+    /// Changes whenever the producer re-creates its textures (handle values may repeat).
+    pub generation: u64,
+    /// Texture size.
+    pub width: u32,
+    pub height: u32,
+    /// The part of the texture this output shows (output size, texture coordinates).
+    pub src: Rect,
+    /// Changed areas since the previous frame of this output, output-relative (empty =
+    /// whole output).
+    pub dirty: &'a [Rect],
+}
+
 /// Pointer shape / position for software or composited cursors.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CursorState {
@@ -226,6 +253,30 @@ pub trait FrameSink: Send {
     fn cursor(&mut self, cursor: &CursorState) -> BackendResult<()>;
     /// Show our idle / "no session" frame (Turkish text drawn by us).
     fn blank(&mut self, message: &str) -> BackendResult<()>;
+
+    // ---- zero-copy GPU frames and back-pressure (added 2026-11-14, all optional) ----
+
+    /// Adapter LUID (`HighPart << 32 | LowPart`) whose D3D11 device presents `output`,
+    /// when that output can take [`GpuFrameRef`]s. `None` (default): CPU frames only.
+    fn gpu_adapter(&self, _output: usize) -> Option<u64> {
+        None
+    }
+    /// Whether `output` took its last GPU frame already (a new one may be sent). The
+    /// producer keeps the newest picture while this is false (frames are skipped, never
+    /// queued).
+    fn gpu_ready(&self, _output: usize) -> bool {
+        true
+    }
+    /// Show a GPU frame. Default: unsupported (the caller falls back to CPU frames).
+    fn present_gpu(&mut self, _frame: &GpuFrameRef<'_>) -> BackendResult<()> {
+        Err(BackendError::unsupported("GPU frames"))
+    }
+    /// Outputs whose last frame (CPU or GPU) is not on screen yet: the presenter is
+    /// behind. The RDP client then skips presents and holds frame acknowledgements
+    /// (MS-RDPEGFX flow control). Default 0 (never behind).
+    fn backlog(&self) -> u32 {
+        0
+    }
 }
 
 #[cfg(test)]

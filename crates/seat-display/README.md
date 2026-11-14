@@ -23,6 +23,14 @@ except for the remote `SET_SEAT_CONFIG` v2 (256 bytes, frame reader SID; the rem
 objects grant SYSTEM plus that SID only, no LOCAL SERVICE any more).
 `DisplayBackendId::own_iddcx` marks the two backends on it.
 
+**GPU frames (round 4, local `window_presenter`):** a flip-chain output that is not a clone
+source and not a Display Core target takes `FrameSink::present_gpu` frames (the RDP
+client's shared keyed-mutex BGRA texture on the same adapter; `win/flip.rs`
+`take_shared`, cursor drawn on the back buffer only) and reports `FrameSink::backlog`
+(outputs whose last frame waits for vblank). HYPOTHESIS until a hardware run: cross-device
+keyed-mutex sharing on the target drivers. A failed GPU frame drops the flip chain (GDI
+fallback); the RDP client then sees no GPU adapter for the output and sends CPU frames.
+
 Both kinds' `pulsar_idd` share a wire name and the driver binary, not the control interface. They never meet in one config
 field: local seats read `settings.backends.display`, remote seats
 `settings.remote.display_backend`.

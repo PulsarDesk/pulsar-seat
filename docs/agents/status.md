@@ -333,8 +333,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       input by device handle, software cursors)~~ built since (see the kiosk-shell +
       fix-kiosk-shell entry below).
     - ~~IronRDP EGFX / H.264, cliprdr / rdpdr / smart cards~~ built since (egfx-h264,
-      rdp-channels + fix-rdp-channels entries below). Still open there: zero-copy D3D11
-      decode into the flip presenter (see the egfx entry).
+      rdp-channels + fix-rdp-channels entries below). Zero-copy D3D11 decode into the
+      flip presenter built since (round 4 egfx-perf, untested on hardware).
     - ~~Read containment of the host (dedicated low-privilege account + window-station /
       desktop ACEs)~~ built since (host-containment + fix-host-containment entry below).
     - Release blockers: ~~arm64ec rustup target~~ (added, release entry), ~~`ACCEPTED_SIGNERS`
@@ -906,9 +906,10 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       RDSH (EGFX AVC420 / AVC444 and pacing, second listener, channels), a seat PC for the
       host account (grants, exit 44 fallback, IDD reader SID), LogonUI for the credential
       provider, the kiosk shell on a multi-monitor console.
-    - EGFX: zero-copy D3D11 decode into the flip presenter (own GPU compositor for EGFX
+    - ~~EGFX: zero-copy D3D11 decode into the flip presenter (own GPU compositor for EGFX
       surfaces); decoder on the presenter's adapter; no FrameAcknowledge queue-depth
-      back-pressure; vendor async hardware MFTs unused.
+      back-pressure~~ built since (round 4 egfx-perf, untested); vendor async hardware MFTs
+      unused.
     - Credential provider: seat 1 is not a switch target (FUS backend must remember seat
       1's session); temporary `std::string` copies may hold password pieces briefly
       (HYPOTHESIS); DLL unsigned.
@@ -1008,8 +1009,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     deadlines in LogonUI, and the wizard with the listener's reduced key set.
   - Still open:
     - Hardware: all of round 3 (Server + RDSH, a seat PC, LogonUI, kiosk console).
-    - EGFX: zero-copy D3D11 decode, presenter adapter, FrameAcknowledge back-pressure,
-      vendor async MFTs.
+    - EGFX: ~~zero-copy D3D11 decode, presenter adapter, FrameAcknowledge back-pressure~~
+      (round 4 egfx-perf, untested), vendor async MFTs.
     - Credential provider: DLL unsigned; JSON parser string growth (HYPOTHESIS above).
     - Host containment: one shared account, no loaded profile, `--console` never uses it.
     - Second listener: seats without an account need `extra_accounts` (secure default).
@@ -1229,3 +1230,49 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     next connection; `all` with the `printer_acl` gate cannot print to other seats'
     gated queues; spec 70 §3.8 (printers never redirected) needs the analyst to record
     the maintainer's opt-in.
+
+- 2026-11-14 (round 4 egfx-perf): **EGFX zero-copy GPU path, decoder on the presenter's
+  adapter, presenter back-pressure with held frame acknowledgements.** Nothing ran on
+  hardware or against a server. (a) seat-core `FrameSink` gained optional
+  `gpu_adapter` / `gpu_ready` / `present_gpu(GpuFrameRef)` / `backlog` (defaults: CPU
+  only, never behind); `GpuFrameRef` = shared NT handle of a BGRA keyed-mutex texture
+  (producer releases key 1, presenter copies its `src` and releases key 0). (b) seat-rdp
+  `gpu/`: `GfxChannel` wraps IronRDP's `GraphicsPipelineClient` (registered in its place,
+  own ZGFX decompress, PDUs split by byte range and passed on per frame); `route` (pure)
+  promotes a surface mapped 1:1 over outputs on the GPU compositor's adapter at an AVC420
+  IDR (decoded on both paths until the session seeds the GPU surface from its image
+  between frames), copies other codecs' paints into the texture at `EndFrame` minus later
+  GPU paints, and demotes on AVC444, progressive, scaled / window mapping, copies or
+  cache stores reading AVC areas, GPU errors, layout changes (protocol reset when CPU
+  pixels are stale); `ack` (pure) holds `FrameAcknowledge` while the presenter is behind
+  (≤ 3 frames / 100 ms, queue depth = held bytes, never suspend); `d3d` = Media
+  Foundation MFT per surface in D3D11 mode on the presenter's adapter (by LUID, refused
+  elsewhere), video processor NV12 -> BGRA (full-range BT.709) per region into a surface
+  texture, ring of three shared keyed-mutex textures (`publish` skips when none is free).
+  The readback decoder also runs on the presenter's adapter (`MfH264Decoder::on_adapter`).
+  Session: composites the channel's CPU output itself (`composite_graphics_pipeline` for
+  resets, `composite_rgba32` for updates), splitter skips GPU outputs (`set_skip`), CPU
+  presents wait while `backlog > 0` (≤ 50 ms), held acks are sent after presents and on
+  idle. Metrics: `gpu`, `gpu_surfaces`, `gpu_frames`, `gpu_skipped`, `promotions`,
+  `demotions`, `present_skipped`, `acks_held`, `acks_forced`; override
+  `PULSAR_SEAT_GFX_ZERO_COPY=0`; troubleshooting.md section 8 (Turkish). (c) seat-display
+  window presenter: GPU frames on flip-chain outputs that are not clone sources
+  (`FlipChain::take_shared`, cursor drawn on the back buffer through a small staging
+  copy), `backlog` = outputs whose last frame waits for vblank (cursor moves excluded);
+  `HybridPresenter` forwards only for window-only outputs; seat-host `SharedSink`
+  forwards with the RDP-to-seat output map (blank: GPU frames dropped). Gates green: cargo
+  1591 passed / 6 ignored (+26 seat-rdp gpu, +1 splitter, +1 seat-host), clippy aarch64 +
+  x86_64 clean, manager 198 / check / build, shim tests (host) 8 + x64 / i686 check,
+  installer scripts 49. No test deleted. The kiosk-isolation WIP was parked in `git stash`
+  during this package and restored afterwards (still uncommitted).
+  - Open (HYPOTHESIS, untested): hardware MFT NV12 texture-array slices as video
+    processor input views; the output target rectangle bounds each blit; cross-device
+    keyed-mutex sharing on one adapter on x64 GPUs and Adreno (ARM64); colour of the
+    video processor path vs the CPU path; Windows servers in AVC420 mode send an IDR when
+    a surface starts and keep AVC / other-codec regions apart enough that surfaces stay
+    on the GPU; servers throttle on held acknowledgements and read `queueDepth`; the
+    flip chain's frame latency waitable keeps `backlog` moving when the monitor sleeps.
+  - Open (limits): AVC444 surfaces stay on the CPU path; clone sources, Display Core
+    targets and GDI outputs get CPU frames; one GPU compositor per connection (adapter of
+    the seat's first output); a GPU error or presenter refusal turns the path off for the
+    connection; the manager does not show the new metrics (log line only).

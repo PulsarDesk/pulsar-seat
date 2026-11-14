@@ -20,9 +20,11 @@
 //!    `rdpsnd` playback and `AUDIO_INPUT` capture through [`crate::audio`]; display
 //!    control for layout changes; deactivation-reactivation handled. With
 //!    `SessionParams::graphics` on, the EGFX channel ([`crate::gfx`]) is registered and
-//!    `RNS_UD_CS_SUPPORT_DYNVC_GFX_PROTOCOL` set; IronRDP composites EGFX frames
+//!    `RNS_UD_CS_SUPPORT_DYNVC_GFX_PROTOCOL` set; the session composites EGFX frames
 //!    (H.264 through Media Foundation) into the same framebuffer, and a server that does
-//!    not open EGFX sends bitmap updates as before.
+//!    not open EGFX sends bitmap updates as before. The channel is our
+//!    `gpu::channel::GfxChannel` around IronRDP's client: surfaces on the zero-copy GPU
+//!    path go to the presenter as GPU frames instead (see [`crate::gpu`]).
 //!
 //! After step 6 the socket is non-blocking: the loop alternates between commands and
 //! server PDUs (a partial PDU stays buffered in `Framed`), writes wait until the socket
@@ -31,7 +33,8 @@
 use crate::audio::{CaptureHandler, CaptureSource, PlaybackHandler, PlaybackSink};
 use crate::config::{Geometry, MonitorDef, SessionParams, build_config, geometry};
 use crate::gfx::GfxMetrics;
-use ironrdp_egfx::client::GraphicsPipelineClient;
+use crate::gpu::channel::GfxChannel;
+use crate::gpu::route::{Event as GpuEvent, OutputSlot, Rect as GpuRect};
 use crate::events::{ChannelState, End, FailureKind, ReconnectPolicy, SessionEvent, error_info_code};
 use crate::input::{ContactSlots, Outgoing, relative, relative_button, translate};
 use crate::output::{Framebuffer, OutputSplitter, from_inclusive};
@@ -55,7 +58,7 @@ use ironrdp_rdpsnd::client::Rdpsnd;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_svc::{SvcMessage, SvcProcessorMessages};
-use seat_core::backend::display::FrameSink;
+use seat_core::backend::display::{FrameSink, GpuFrameRef};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_input::rdp::{RdpInputChannel, RdpInputEvent};
 use std::io::{Read, Write};
@@ -72,6 +75,8 @@ const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(45);
 const IDLE_WAIT: Duration = Duration::from_millis(2);
 /// Present at least this often while the server keeps sending.
 const PRESENT_INTERVAL: Duration = Duration::from_millis(8);
+/// While the presenter is behind, CPU presents wait (changes coalesce) at most this long.
+const MAX_PRESENT_DEFER: Duration = Duration::from_millis(50);
 /// A write the socket does not take within this time ends the connection.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bound on the reactivation sequence.
@@ -320,6 +325,7 @@ fn connect(
     password: Option<&str>,
     media: &Media,
     gfx: &Arc<GfxMetrics>,
+    adapter: Option<u64>,
     uplink: &Sender<Command>,
     connection: u64,
     hooks: &mut dyn Hooks,
@@ -362,9 +368,11 @@ fn connect(
         dvc = dvc.with_dynamic_channel(RdpeaiClient::new(Box::new(CaptureHandler::new(src.clone())), up));
     }
     // Graphics pipeline: registered exactly when the core data advertises it
-    // (`build_config`). The H.264 decoder starts when the server opens the channel.
+    // (`build_config`). The H.264 decoder starts when the server opens the channel, on the
+    // presenter's adapter; so does the zero-copy GPU path when the presenter takes GPU
+    // frames (`crate::gpu`).
     gfx.connection_reset();
-    if let Some(client) = crate::gfx::pipeline_client(p.graphics, gfx) {
+    if let Some(client) = crate::gfx::pipeline_client(p.graphics, adapter, gfx) {
         dvc = dvc.with_dynamic_channel(client);
     }
     connector.attach_static_channel(dvc);
@@ -436,6 +444,10 @@ struct Active<'a> {
     /// The pipeline client's dropped-update count already added to the metrics.
     gfx_dropped_seen: u64,
     resync: Resync,
+    /// Seat outputs as last given to the graphics channel's GPU router.
+    gpu_slots: Vec<OutputSlot>,
+    /// A CPU present is being put off for the presenter (counted once per stretch).
+    deferring: bool,
     pending_layout: Option<Vec<MonitorDef>>,
     /// When `pending_layout` started waiting for display control.
     pending_since: Option<Instant>,
@@ -652,11 +664,27 @@ impl Active<'_> {
     }
 
     fn present(&mut self) {
+        self.present_with(false);
+    }
+
+    /// `force`: present even while the presenter is behind (the connection ends).
+    fn present_with(&mut self, force: bool) {
+        self.present_gpu();
         if self.dirty.is_empty() {
             // Frames that changed nothing are not coalesced ones.
             self.frames_at_present = self.gfx.frames();
             return;
         }
+        // Back-pressure: while the presenter has not shown its last frame, changes
+        // coalesce here instead of being copied into it (bounded by MAX_PRESENT_DEFER).
+        if !force && self.sink.backlog() > 0 && self.last_present.elapsed() < MAX_PRESENT_DEFER {
+            if !self.deferring {
+                self.deferring = true;
+                self.gfx.record_present_skipped();
+            }
+            return;
+        }
+        self.deferring = false;
         let dirty = std::mem::take(&mut self.dirty);
         let fb = Framebuffer {
             data: self.image.data(),
@@ -677,6 +705,149 @@ impl Active<'_> {
         }
         self.frames_at_present = frames;
         self.last_present = Instant::now();
+    }
+
+    /// GPU frames of the zero-copy path: published surfaces whose outputs took their last
+    /// frame go to the presenter; a refusal turns the GPU path off for this connection.
+    fn present_gpu(&mut self) {
+        let frames = {
+            let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() else { return };
+            let sink: &dyn FrameSink = &*self.sink;
+            g.processor_mut().gpu_presents(&|o| sink.gpu_ready(o))
+        };
+        let mut failed = None;
+        for f in frames {
+            let src = seat_core::device::Rect { x: f.src.left as i32, y: f.src.top as i32, width: f.src.width(), height: f.src.height() };
+            let frame = GpuFrameRef {
+                output: f.output,
+                handle: f.texture.handle,
+                generation: f.texture.generation,
+                width: f.texture.width,
+                height: f.texture.height,
+                src,
+                dirty: &[],
+            };
+            if let Err(e) = self.sink.present_gpu(&frame) {
+                failed = Some(e.to_string());
+                break;
+            }
+        }
+        if let Some(why) = failed {
+            log_warn(&format!("GPU frame refused ({why}); CPU frames from now on"));
+            if let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() {
+                g.processor_mut().gpu_present_failed(&why);
+            }
+        }
+    }
+
+    /// Seat outputs for the GPU router: rectangles and the adapter presenting each.
+    fn gpu_slots_now(&self) -> Vec<OutputSlot> {
+        self.splitter
+            .geometry()
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(i, o)| OutputSlot { rect: GpuRect::xywh(o.x, o.y, o.width, o.height), adapter: self.sink.gpu_adapter(i) })
+            .collect()
+    }
+
+    /// After each PDU: the graphics channel's finished frames into the image (the stage
+    /// does not composite our channel type), then the GPU router's work: seed promoted
+    /// surfaces from the image between frames, follow demotions (whole CPU frames again,
+    /// a resync when CPU pixels are stale), and keep the splitter off GPU outputs.
+    /// `Err` only for a failed socket write.
+    fn drain_gfx(&mut self) -> Result<(), End> {
+        let slots = self.gpu_slots_now();
+        let (composited, updates, mut events, seeds) = {
+            let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() else { return Ok(()) };
+            let c = g.processor_mut();
+            if slots != self.gpu_slots {
+                c.set_outputs(slots.clone());
+            }
+            let composited = ironrdp_session::composite_graphics_pipeline(c.client_mut(), &mut self.image).map_err(session_err)?;
+            let seeds = if c.in_frame() { Vec::new() } else { c.seed_targets() };
+            (composited, c.take_cpu_output(), c.take_events(), seeds)
+        };
+        self.gpu_slots = slots;
+        let whole = crate::config::FbRect { x: 0, y: 0, width: u32::from(self.image.width()), height: u32::from(self.image.height()) };
+        if composited.reset {
+            self.splitter.invalidate();
+            self.mark_dirty(whole);
+        }
+        // Normally empty (the channel drains the client at each frame end); frames the
+        // client finished while our protocol reset was pending land here.
+        if let Some(r) = composited.region {
+            self.mark_dirty(from_inclusive(r.left, r.top, r.right, r.bottom));
+        }
+        if !updates.is_empty()
+            && let Some(r) = self.stage.composite_rgba32(&mut self.image, updates).map_err(session_err)?
+        {
+            self.mark_dirty(from_inclusive(r.left, r.top, r.right, r.bottom));
+        }
+        // Seeds: the surface's area of the image, as the CPU path last composed it.
+        for (id, rect) in seeds {
+            let img = GpuRect::new(0, 0, u32::from(self.image.width()), u32::from(self.image.height()));
+            let part = rect.intersect(&img).unwrap_or_default();
+            let mut px = Vec::with_capacity(part.width() as usize * part.height() as usize * 4);
+            let (data, stride) = (self.image.data(), self.image.stride());
+            for y in part.top..part.bottom {
+                let at = y as usize * stride + part.left as usize * 4;
+                px.extend_from_slice(&data[at..at + part.width() as usize * 4]);
+            }
+            let local = GpuRect::new(part.left - rect.left, part.top - rect.top, part.right - rect.left, part.bottom - rect.top);
+            if let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() {
+                let c = g.processor_mut();
+                c.seed(id, if part.is_empty() { GpuRect::default() } else { local }, &px);
+                events.extend(c.take_events());
+            }
+        }
+        let mut full = false;
+        let mut resync = false;
+        for ev in &events {
+            match ev {
+                GpuEvent::Promote { .. } => {}
+                GpuEvent::Demote { surface, resync: r, reason } => {
+                    log_warn(&format!("graphics surface {surface} back on the CPU path ({reason})"));
+                    full = true;
+                    resync |= *r;
+                }
+                GpuEvent::Resync { reason } => {
+                    log_warn(&format!("graphics resync ({reason})"));
+                    resync = true;
+                }
+            }
+        }
+        let mask = self.stage.get_dvc::<GfxChannel>().map(|c| c.processor().gpu_output_mask()).unwrap_or_default();
+        self.splitter.set_skip(mask);
+        if full {
+            self.splitter.invalidate();
+            self.mark_dirty(whole);
+        }
+        if resync {
+            // The CPU decoder missed pictures: a protocol reset brings a fresh IDR. Without
+            // one (before 10.3) the damage counter makes the rate-limited resync redraw.
+            self.gfx.record_resync();
+            if !self.gfx_protocol_reset()? {
+                self.gfx.record_gpu_damage();
+            }
+        }
+        Ok(())
+    }
+
+    /// Frame acknowledgements the presenter state now allows (held while it was behind).
+    fn flush_acks(&mut self) -> Result<(), End> {
+        let behind = self.sink.backlog() > 0;
+        let (id, msgs) = {
+            let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() else { return Ok(()) };
+            let id = g.channel_id();
+            (id, g.processor_mut().poll_acks(behind, Instant::now()))
+        };
+        if msgs.is_empty() || self.stage.dvc_tunnel_for_channel(id).is_some() {
+            return Ok(());
+        }
+        let svc = ironrdp_dvc::encode_dvc_messages(id, msgs, ironrdp_svc::ChannelFlags::empty()).map_err(|e| fail(FailureKind::Protocol, e.to_string()))?;
+        let frame = self.stage.encode_dvc_messages(svc).map_err(session_err)?;
+        self.write(&frame)
     }
 
     /// The output size changed without a reactivation (EGFX `ResetGraphics`, which
@@ -704,8 +875,8 @@ impl Active<'_> {
     /// escalating to a graphics protocol reset), so the screen converges without waiting
     /// for the server's next IDR. `Err` only for a failed socket write.
     fn gfx_resync(&mut self) -> Result<(), End> {
-        if let Some(c) = self.stage.get_dvc::<GraphicsPipelineClient>() {
-            let n = c.processor().dropped_updates();
+        if let Some(c) = self.stage.get_dvc::<GfxChannel>() {
+            let n = c.processor().client().dropped_updates();
             if n > self.gfx_dropped_seen {
                 self.gfx.record_dropped_updates(n - self.gfx_dropped_seen);
                 self.gfx_dropped_seen = n;
@@ -733,13 +904,13 @@ impl Active<'_> {
     /// `Ok(false)`: no EGFX channel, a version without protocol reset (before 10.3), or a
     /// channel routed through a multitransport tunnel (not used on loopback).
     fn gfx_protocol_reset(&mut self) -> Result<bool, End> {
-        let Some(id) = self.stage.get_dvc::<GraphicsPipelineClient>().map(|c| c.channel_id()) else {
+        let Some(id) = self.stage.get_dvc::<GfxChannel>().map(|c| c.channel_id()) else {
             return Ok(false);
         };
         if self.stage.dvc_tunnel_for_channel(id).is_some() {
             return Ok(false);
         }
-        let Some(pdu) = self.stage.get_dvc_mut::<GraphicsPipelineClient>().and_then(|mut c| c.processor_mut().request_protocol_reset()) else {
+        let Some(pdu) = self.stage.get_dvc_mut::<GfxChannel>().and_then(|mut c| c.processor_mut().request_protocol_reset()) else {
             return Ok(false);
         };
         // The client's state is reset now; its dropped-update count stays.
@@ -766,6 +937,7 @@ impl Active<'_> {
             self.send_layout(l)?;
         }
         self.gfx_resync()?;
+        self.flush_acks()?;
         self.report_gfx(false);
         Ok(())
     }
@@ -1056,7 +1228,7 @@ impl Active<'_> {
             }
             if self.pending_layout_expired() {
                 log_warn("display control did not open in time; reconnecting to apply the seat layout");
-                self.present();
+                self.present_with(true);
                 return Ok(End::Relayout);
             }
             // Channel timers (rate-limited inside): deferred smart-card completions and
@@ -1066,14 +1238,19 @@ impl Active<'_> {
             match self.framed.read_pdu() {
                 Ok((action, payload)) => {
                     let hidden = if action == ironrdp_pdu::Action::FastPath { fastpath_pointer_hidden(&payload) } else { None };
+                    let behind = self.sink.backlog() > 0;
+                    if let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() {
+                        g.processor_mut().set_presenter_behind(behind);
+                    }
                     let outs = self.stage.process(&mut self.image, action, &payload, self.framed.last_read_at()).map_err(session_err)?;
                     let end = self.outputs(outs, hidden)?;
+                    self.drain_gfx()?;
                     self.follow_output_size();
                     if end.is_none() {
                         self.gfx_resync()?;
                     }
                     if let Some(end) = end {
-                        self.present();
+                        self.present_with(true);
                         self.report_gfx(true);
                         return Ok(end);
                     }
@@ -1082,6 +1259,7 @@ impl Active<'_> {
                     // while the server keeps sending, and when the socket goes quiet.
                     if self.gfx.frames() != self.frames_at_present || self.last_present.elapsed() >= PRESENT_INTERVAL {
                         self.present();
+                        self.flush_acks()?;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1132,7 +1310,8 @@ pub fn run(
         hooks.event(SessionEvent::Connecting { attempt });
         params.monitors = layout.clone();
         connection += 1;
-        let end = match connect(&params, password.as_ref().map(|s| s.as_str()), media, &gfx, &handle.sender(), connection, hooks) {
+        let adapter = sink.gpu_adapter(0);
+        let end = match connect(&params, password.as_ref().map(|s| s.as_str()), media, &gfx, adapter, &handle.sender(), connection, hooks) {
             Err(e) => e,
             Ok(Connected { framed, result }) => {
                 ever_connected = true;
@@ -1177,6 +1356,8 @@ pub fn run(
                     frames_at_present: gfx.frames(),
                     gfx_dropped_seen: 0,
                     resync: Resync::new(gfx.damage_events()),
+                    gpu_slots: Vec::new(),
+                    deferring: false,
                     pending_layout: None,
                     pending_since: None,
                     splitter_layout: Some(used),

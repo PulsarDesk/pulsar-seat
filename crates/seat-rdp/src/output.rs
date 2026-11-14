@@ -37,11 +37,13 @@ pub struct OutputSplitter {
     buffers: Vec<Vec<u8>>,
     /// Next present sends whole frames (first frame, after a resize / reconfigure).
     full: bool,
+    /// Outputs shown from GPU frames (zero-copy path): no CPU frames for them.
+    skip: Vec<bool>,
 }
 
 impl OutputSplitter {
     pub fn new(geometry: Geometry) -> Self {
-        let mut s = Self { geometry, buffers: Vec::new(), full: true };
+        let mut s = Self { geometry, buffers: Vec::new(), full: true, skip: Vec::new() };
         s.alloc();
         s
     }
@@ -68,6 +70,20 @@ impl OutputSplitter {
         self.full = true;
     }
 
+    /// Outputs (by index) the GPU path shows; the others get CPU frames. An output that
+    /// comes back to CPU frames gets a whole frame first.
+    pub fn set_skip(&mut self, skip: Vec<bool>) {
+        let back = self.skip.iter().enumerate().any(|(i, &was)| was && !skip.get(i).copied().unwrap_or(false));
+        if back {
+            self.full = true;
+        }
+        self.skip = skip;
+    }
+
+    fn skipped(&self, i: usize) -> bool {
+        self.skip.get(i).copied().unwrap_or(false)
+    }
+
     fn zero_copy(&self, fb: &Framebuffer<'_>) -> bool {
         matches!(self.geometry.outputs.as_slice(), [o] if o.x == 0 && o.y == 0 && o.width == fb.width && o.height == fb.height)
     }
@@ -81,12 +97,18 @@ impl OutputSplitter {
             return Ok(0);
         }
         if self.zero_copy(fb) {
+            if self.skipped(0) {
+                return Ok(0);
+            }
             let rects: Vec<Rect> = if full { Vec::new() } else { dirty.iter().map(to_rect).collect() };
             sink.present(&FrameRef { output: 0, width: fb.width, height: fb.height, stride: fb.stride as u32, data: fb.data, dirty: &rects })?;
             return Ok(1);
         }
         let mut presented = 0;
         for (i, o) in self.geometry.outputs.iter().enumerate() {
+            if self.skipped(i) {
+                continue;
+            }
             let parts: Vec<FbRect> = dirty.iter().filter_map(|d| intersect(d, o)).collect();
             if parts.is_empty() {
                 continue;
@@ -212,5 +234,30 @@ mod tests {
         assert_eq!(rec.0.len(), 2);
         assert_eq!(rec.0[1].3, vec![Rect { x: 1, y: 1, width: 2, height: 2 }]);
         assert_eq!(rec.0[1].1, 500);
+    }
+
+    #[test]
+    fn gpu_outputs_get_no_cpu_frames_and_a_whole_frame_when_they_come_back() {
+        let g = geometry(&[mon(0, 200), mon(200, 300)]);
+        let (d, w, h) = fb2();
+        let fb = Framebuffer { data: &d, width: w, height: h, stride: w as usize * BPP };
+        let mut s = OutputSplitter::new(g);
+        let mut rec = Rec::default();
+        s.present(&fb, &[], &mut rec).unwrap();
+        s.set_skip(vec![false, true]);
+        rec.0.clear();
+        let all = FbRect { x: 0, y: 0, width: w, height: h };
+        assert_eq!(s.present(&fb, &[all], &mut rec).unwrap(), 1);
+        assert_eq!(rec.0[0].0, 0);
+        // Output 1 back on CPU frames: whole frames, even for a small change.
+        s.set_skip(vec![false, false]);
+        rec.0.clear();
+        assert_eq!(s.present(&fb, &[FbRect { x: 0, y: 0, width: 1, height: 1 }], &mut rec).unwrap(), 2);
+        assert!(rec.0.iter().all(|p| p.3.is_empty()), "whole frames");
+        // One output covering the framebuffer (zero-copy case) skipped too.
+        let g = geometry(&[MonitorDef { left: 0, top: 0, right: 499, bottom: 199, primary: true, scale: 100, orientation: 0 }]);
+        let mut s = OutputSplitter::new(g);
+        s.set_skip(vec![true]);
+        assert_eq!(s.present(&fb, &[], &mut rec).unwrap(), 0);
     }
 }

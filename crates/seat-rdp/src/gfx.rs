@@ -21,7 +21,9 @@
 //!   dropped updates (pipeline) and dropped pictures (decoder), resyncs, presents and
 //!   coalesced frames; reported as `SessionEvent::Graphics`.
 //! - the pending `ResetGraphics` size ([`GfxMetrics::take_reset`]): the session follows a
-//!   new output size without a reactivation (MS-RDPEDISP resize under EGFX).
+//!   new output size without a reactivation (MS-RDPEDISP resize under EGFX);
+//! - [`pipeline_client`] wraps the IronRDP client in [`crate::gpu::channel::GfxChannel`]
+//!   (zero-copy GPU path, frame-acknowledgement flow control; round 4).
 //!
 //! **Untested on hardware** (no RDP server on the dev box). The PDU path is covered by
 //! the tests below with hand-built MS-RDPEGFX PDUs.
@@ -105,6 +107,42 @@ impl DecoderKind {
     }
 }
 
+/// State of the zero-copy GPU path ([`crate::gpu`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GpuState {
+    /// Not offered (no GPU-capable presenter output, turned off, or no channel yet).
+    #[default]
+    Off,
+    /// The GPU compositor runs on the presenter's adapter.
+    Ready,
+    /// It did not start or failed at run time: CPU frames for this connection.
+    Failed,
+}
+
+impl GpuState {
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::Ready => 1,
+            Self::Failed => 2,
+        }
+    }
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Ready,
+            2 => Self::Failed,
+            _ => Self::Off,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// Shared counters (engine thread writes, anyone reads).
 #[derive(Debug, Default)]
 pub struct GfxMetrics {
@@ -136,6 +174,20 @@ pub struct GfxMetrics {
     decoder_fallbacks: AtomicU32,
     /// `ResetGraphics` size not yet followed by the session: `width << 32 | height`, 0 = none.
     pending_reset: AtomicU64,
+    /// Zero-copy path (round 4).
+    gpu_state: AtomicU8,
+    gpu_surfaces: AtomicU32,
+    gpu_frames: AtomicU64,
+    gpu_skipped: AtomicU64,
+    gpu_promotions: AtomicU32,
+    gpu_demotions: AtomicU32,
+    /// CPU presents put off because the presenter was behind.
+    presents_skipped: AtomicU64,
+    /// Frame acknowledgements held for the presenter / released by the limits.
+    acks_held: AtomicU64,
+    acks_forced: AtomicU64,
+    /// GPU-path damage that a protocol reset could not repair (feeds the resync).
+    gpu_damage: AtomicU64,
 }
 
 /// A copy of [`GfxMetrics`] at one moment (`SessionEvent::Graphics`).
@@ -167,6 +219,22 @@ pub struct GfxStats {
     pub frames_coalesced: u64,
     pub resyncs: u32,
     pub decoder_fallbacks: u32,
+    /// Zero-copy GPU path.
+    pub gpu: GpuState,
+    /// Surfaces composed on the GPU now.
+    pub gpu_surfaces: u32,
+    /// GPU frames handed to the presenter.
+    pub gpu_frames: u64,
+    /// GPU frames put off (presenter still showing the last one, no free texture).
+    pub gpu_skipped: u64,
+    pub gpu_promotions: u32,
+    pub gpu_demotions: u32,
+    /// CPU presents put off because the presenter was behind.
+    pub presents_skipped: u64,
+    /// Frame acknowledgements held while the presenter was behind / released by the
+    /// hold limits.
+    pub acks_held: u64,
+    pub acks_forced: u64,
 }
 
 impl GfxStats {
@@ -182,7 +250,7 @@ impl GfxStats {
             "bitmap"
         };
         format!(
-            "gfx {codec} v{:#x} decoder={} frames={} h264={} errors={} pic_dropped={} dropped={} resyncs={} fallbacks={} decode_avg={}us max={}us presents={} coalesced={} gap_max={}us",
+            "gfx {codec} v{:#x} decoder={} frames={} h264={} errors={} pic_dropped={} dropped={} resyncs={} fallbacks={} decode_avg={}us max={}us presents={} coalesced={} gap_max={}us gpu={} gpu_surfaces={} gpu_frames={} gpu_skipped={} promotions={} demotions={} present_skipped={} acks_held={} acks_forced={}",
             self.version,
             self.decoder.as_str(),
             self.frames,
@@ -196,7 +264,16 @@ impl GfxStats {
             self.decode_us_max,
             self.presents,
             self.frames_coalesced,
-            self.present_gap_us_max
+            self.present_gap_us_max,
+            self.gpu.as_str(),
+            self.gpu_surfaces,
+            self.gpu_frames,
+            self.gpu_skipped,
+            self.gpu_promotions,
+            self.gpu_demotions,
+            self.presents_skipped,
+            self.acks_held,
+            self.acks_forced
         )
     }
 }
@@ -227,6 +304,15 @@ impl GfxMetrics {
             frames_coalesced: self.frames_coalesced.load(Ordering::Relaxed),
             resyncs: self.resyncs.load(Ordering::Relaxed),
             decoder_fallbacks: self.decoder_fallbacks.load(Ordering::Relaxed),
+            gpu: GpuState::from_u8(self.gpu_state.load(Ordering::Relaxed)),
+            gpu_surfaces: self.gpu_surfaces.load(Ordering::Relaxed),
+            gpu_frames: self.gpu_frames.load(Ordering::Relaxed),
+            gpu_skipped: self.gpu_skipped.load(Ordering::Relaxed),
+            gpu_promotions: self.gpu_promotions.load(Ordering::Relaxed),
+            gpu_demotions: self.gpu_demotions.load(Ordering::Relaxed),
+            presents_skipped: self.presents_skipped.load(Ordering::Relaxed),
+            acks_held: self.acks_held.load(Ordering::Relaxed),
+            acks_forced: self.acks_forced.load(Ordering::Relaxed),
         }
     }
     /// Completed EGFX frames so far (the session presents on frame boundaries).
@@ -236,7 +322,10 @@ impl GfxMetrics {
     /// Everything that means part of the picture was not painted: failed decodes, updates
     /// the pipeline dropped, pictures the decoder dropped. The session resyncs when it grows.
     pub fn damage_events(&self) -> u64 {
-        self.h264_errors.load(Ordering::Relaxed) + self.dropped_updates.load(Ordering::Relaxed) + self.h264_dropped.load(Ordering::Relaxed)
+        self.h264_errors.load(Ordering::Relaxed)
+            + self.dropped_updates.load(Ordering::Relaxed)
+            + self.h264_dropped.load(Ordering::Relaxed)
+            + self.gpu_damage.load(Ordering::Relaxed)
     }
     /// Updates the pipeline dropped since the last call (the session reads the client's
     /// per-connection count and adds the difference).
@@ -261,6 +350,35 @@ impl GfxMetrics {
             0 => None,
             v => Some(((v >> 32) as u32, (v & 0xFFFF_FFFF) as u32)),
         }
+    }
+    pub fn set_gpu_state(&self, g: GpuState) {
+        self.gpu_state.store(g.to_u8(), Ordering::Relaxed);
+    }
+    pub fn set_gpu_surfaces(&self, n: u32) {
+        self.gpu_surfaces.store(n, Ordering::Relaxed);
+    }
+    pub fn record_gpu_frame(&self) {
+        self.gpu_frames.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_gpu_skip(&self) {
+        self.gpu_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_gpu_promotion(&self) {
+        self.gpu_promotions.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_gpu_demotion(&self) {
+        self.gpu_demotions.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_gpu_damage(&self) {
+        self.gpu_damage.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn record_present_skipped(&self) {
+        self.presents_skipped.fetch_add(1, Ordering::Relaxed);
+    }
+    /// The acknowledgement gate's counts on this connection's channel.
+    pub fn set_ack_counts(&self, held: u64, forced: u64) {
+        self.acks_held.store(held, Ordering::Relaxed);
+        self.acks_forced.store(forced, Ordering::Relaxed);
     }
     pub fn set_decoder(&self, k: DecoderKind) {
         self.decoder.store(k.to_u8(), Ordering::Relaxed);
@@ -289,6 +407,8 @@ impl GfxMetrics {
         self.surfaces.store(0, Ordering::Relaxed);
         self.decoder.store(DecoderKind::None.to_u8(), Ordering::Relaxed);
         self.pending_reset.store(0, Ordering::Relaxed);
+        self.gpu_state.store(GpuState::Off.to_u8(), Ordering::Relaxed);
+        self.gpu_surfaces.store(0, Ordering::Relaxed);
     }
 }
 
@@ -459,32 +579,37 @@ impl<D: H264Decoder> H264Decoder for MeteredDecoder<D> {
     }
 }
 
-/// The platform H.264 decoder for `mode` (`None`: no H.264 offered).
-pub fn platform_decoder(mode: GraphicsMode, metrics: &Arc<GfxMetrics>) -> Option<Box<dyn H264Decoder>> {
+/// The platform H.264 decoder for `mode` (`None`: no H.264 offered). `adapter`: LUID of
+/// the presenter's adapter (hardware decode runs there; `None`: the default adapter).
+pub fn platform_decoder(mode: GraphicsMode, adapter: Option<u64>, metrics: &Arc<GfxMetrics>) -> Option<Box<dyn H264Decoder>> {
     if !mode.wants_h264() {
         return None;
     }
     #[cfg(windows)]
     {
         let prefer_hw = !matches!(std::env::var("PULSAR_SEAT_H264_DECODER").as_deref(), Ok("software"));
-        let d = crate::h264::MfH264Decoder::new(prefer_hw, metrics.clone());
+        let d = crate::h264::MfH264Decoder::new(prefer_hw, metrics.clone()).on_adapter(adapter);
         Some(Box::new(MeteredDecoder::new(d, metrics.clone())))
     }
     #[cfg(not(windows))]
     {
-        let _ = metrics;
+        let _ = (metrics, adapter);
         None
     }
 }
 
-/// The EGFX dynamic channel for `mode` (`None` = do not offer EGFX).
-pub fn pipeline_client(mode: GraphicsMode, metrics: &Arc<GfxMetrics>) -> Option<GraphicsPipelineClient> {
+/// The EGFX dynamic channel for `mode` (`None` = do not offer EGFX). `adapter`: the
+/// adapter presenting the seat's first output when it takes GPU frames: H.264 is decoded
+/// there and the zero-copy path ([`crate::gpu`]) may start.
+pub fn pipeline_client(mode: GraphicsMode, adapter: Option<u64>, metrics: &Arc<GfxMetrics>) -> Option<crate::gpu::channel::GfxChannel> {
     if !mode.offers_egfx() {
         return None;
     }
-    let decoder = platform_decoder(mode, metrics);
+    let decoder = platform_decoder(mode, adapter, metrics);
     let h264 = decoder.is_some();
-    Some(GraphicsPipelineClient::new(Box::new(MetricsHandler::new(metrics.clone(), h264)), decoder))
+    let client = GraphicsPipelineClient::new(Box::new(MetricsHandler::new(metrics.clone(), h264)), decoder);
+    let factory = if h264 { crate::gpu::platform_factory(adapter) } else { None };
+    Some(crate::gpu::channel::GfxChannel::new(client, metrics.clone(), factory))
 }
 
 #[cfg(test)]
@@ -637,8 +762,8 @@ mod tests {
         assert!(!GraphicsMode::Bitmap.offers_egfx() && GraphicsMode::EgfxNoH264.offers_egfx());
         assert!(GraphicsMode::Egfx.wants_h264() && !GraphicsMode::EgfxNoH264.wants_h264());
         let m = GfxMetrics::new();
-        assert!(pipeline_client(GraphicsMode::Bitmap, &m).is_none(), "bitmap mode joins no EGFX channel");
-        assert!(platform_decoder(GraphicsMode::EgfxNoH264, &m).is_none());
+        assert!(pipeline_client(GraphicsMode::Bitmap, None, &m).is_none(), "bitmap mode joins no EGFX channel");
+        assert!(platform_decoder(GraphicsMode::EgfxNoH264, None, &m).is_none());
     }
 
     #[test]

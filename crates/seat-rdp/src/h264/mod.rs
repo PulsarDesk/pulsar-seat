@@ -11,11 +11,11 @@
 //! - The decoder returns NV12; [`nv12_planes`] turns it into the YUV 4:2:0 planes the
 //!   pipeline converts with the MS-RDPEGFX colour transform (and AVC444 recombines).
 //!
-//! The decoded picture is read back to system memory: the pipeline's compositor
-//! (surfaces, `SurfaceToSurface`, the bitmap cache) works on CPU pixels. **Deferred, not
-//! built:** D3D11 texture output and the zero-copy feed into the D3D11 flip presenter on
-//! the same adapter (the decode device is on the default adapter). See the crate README,
-//! "Known limits", and `docs/agents/status.md`.
+//! For IronRDP's pipeline the decoded picture is read back to system memory: its
+//! compositor (surfaces, `SurfaceToSurface`, the bitmap cache) works on CPU pixels. The
+//! decode device is on the presenter's adapter ([`MfH264Decoder::on_adapter`]). The
+//! zero-copy path ([`crate::gpu`]) uses the same MFT in GPU output mode
+//! (`mf::Mft::start_gpu` / `decode_gpu`): the picture stays in the decoder's texture.
 //!
 //! Robustness: each picture is paired with its access unit by sample time (a late
 //! picture is counted as dropped, never painted for the wrong unit); hardware decode that
@@ -23,7 +23,7 @@
 //! ([`FallbackPolicy`]).
 
 #[cfg(windows)]
-mod mf;
+pub(crate) mod mf;
 #[cfg(windows)]
 pub use mf::MfH264Decoder;
 

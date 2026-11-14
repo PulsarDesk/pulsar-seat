@@ -49,7 +49,33 @@ does not work against a real Server build (untested, see below).
   Metrics (`SessionEvent::Graphics`): version, codecs, decoder path, frames, decode time,
   errors, pictures the decoder dropped, updates the pipeline dropped, resyncs, hardware to
   software fallbacks, presents, coalesced frames, longest wait of a change for its present.
-  Overrides: `PULSAR_SEAT_GFX=bitmap|no-h264`, `PULSAR_SEAT_H264_DECODER=software`.
+  Overrides: `PULSAR_SEAT_GFX=bitmap|no-h264`, `PULSAR_SEAT_H264_DECODER=software`,
+  `PULSAR_SEAT_GFX_ZERO_COPY=0` (no GPU path).
+  - Decoder adapter: the H.264 decoder's D3D11 device is created on the adapter that
+    presents the seat's first output (`FrameSink::gpu_adapter`, by LUID), not the default
+    adapter.
+  - Zero-copy path (`gpu`, round 4): the EGFX channel is our `gpu::channel::GfxChannel`,
+    which wraps IronRDP's `GraphicsPipelineClient` (registered in its place, as
+    `ironrdp_session::composite_graphics_pipeline` documents) and decompresses / splits
+    the PDUs itself. A surface mapped 1:1 over seat outputs that all take GPU frames on
+    the decoder's adapter, with no other surface over them, moves to the GPU at an AVC420
+    IDR (`gpu::route`): it is seeded once from the session image between two frames, then
+    its AVC420 updates are decoded by a per-surface Media Foundation MFT in D3D11 mode and
+    blitted NV12 to BGRA by the D3D11 video processor into a surface texture
+    (`gpu::d3d`), never read back. Paints of the other codecs still run in IronRDP's
+    compositor and are copied into the texture at each `EndFrame` (minus later AVC paints
+    of the same frame). The texture is copied into one of three shared keyed-mutex
+    textures and handed to the presenter (`FrameSink::present_gpu`) when its output took
+    the last one; otherwise the frame waits (newest wins). The splitter skips GPU outputs.
+    AVC444, progressive tiles, scaled / window mappings, copies or cache stores that read
+    AVC areas, a GPU error or a presenter refusal send the surface (or the whole path)
+    back to the CPU path; when its CPU pixels are stale the session asks for a graphics
+    protocol reset (fresh IDR).
+  - Back-pressure: `FrameSink::backlog` counts outputs whose last frame is not on screen
+    yet. While it is non-zero, CPU presents wait (changes coalesce, at most 50 ms) and
+    `FrameAcknowledge` PDUs are held (`gpu::ack`: at most 3 frames / 100 ms, queue depth
+    = bytes of the held frames, released in order when the presenter catches up), so the
+    server slows down instead of queueing pictures we would drop.
   - `ResetGraphics` of a new size (the server's answer to a display-control resize while
     EGFX is open, no reactivation): IronRDP resizes the framebuffer, the session cuts it
     with the seat layout again and reports `DesktopSize` / `Outputs`. The PDU's monitor
@@ -147,15 +173,21 @@ dispatches the sub-command before anything else (`crates/seat-host/src/headless.
 - EGFX / H.264 is **untested against a real RDP server**. Decoding itself is tested: the
   system H.264 encoder feeds our decoder in `h264::mf` tests (hardware and software paths
   both returned every picture on the ARM64 dev laptop, Qualcomm GPU).
-- **Deferred:** D3D11 texture output and zero-copy from the decoder to the D3D11 flip
-  presenter. The decoded picture is read back to system memory, because the pipeline's
-  compositor (surfaces, surface copies, the bitmap cache) works on CPU pixels, and the
-  decode device is on the default adapter, not matched to the presenter's by LUID.
-  Zero-copy needs a GPU frame variant of `FrameRef`, the decode device on the presenter's
-  adapter and a GPU NV12 to BGRA path for surfaces mapped 1:1 that only get AVC updates.
-- Frame acknowledgement is not tied to the present: ironrdp-egfx 0.5 sends
-  `FrameAcknowledge` (queue depth "unavailable") inside its EndFrame handling, so a slow
-  presenter does not throttle the server; overwritten frames show as `coalesced`.
+- The zero-copy path and the acknowledgement gate are **untested on hardware and against
+  a server** (built 2026-11-14; the router, the gate and the channel are tested with
+  hand-built PDUs and a fake GPU compositor). HYPOTHESIS, to verify on the first runs:
+  hardware MFT pictures (NV12 texture-array slices) are accepted as video processor input
+  views; the output target rectangle limits each blit to its region; keyed-mutex sharing
+  between the decoder's device and the presenter's device on one adapter works on x64
+  GPUs and on Adreno (ARM64); the video processor's full-range BT.709 conversion matches
+  the CPU path; Windows servers in AVC420 mode keep AVC and other-codec regions mostly
+  apart and send an IDR when a surface starts (else surfaces rarely promote, or demote
+  often: `promotions` / `demotions` in the log line); Windows servers throttle on held
+  acknowledgements and read `queueDepth` as documented.
+- Zero-copy limits: AVC444 surfaces stay on the CPU path; outputs that are clone sources
+  or Display Core targets get CPU frames; one GPU compositor per connection (the adapter
+  of the seat's first output); the cursor over GPU frames is drawn through a small staging
+  copy per present.
 - The vendor's asynchronous hardware MFTs are not used; the Microsoft MFT already decodes
   on the GPU through D3D11 video decoding.
 

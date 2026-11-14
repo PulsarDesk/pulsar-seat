@@ -10,8 +10,9 @@ use crate::gfx::{DecoderKind, GfxMetrics};
 use ironrdp_egfx::decode::{DecodedFrame, DecoderError, DecoderResult, H264Decoder, Yuv420Frame};
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Foundation::{HMODULE, LUID};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory4};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11Multithread,
 };
@@ -68,11 +69,14 @@ impl Drop for Runtime {
 }
 
 /// The running MFT. Field order = drop order: the runtime goes last.
-struct Mft {
+pub(crate) struct Mft {
     transform: IMFTransform,
     _manager: Option<IMFDXGIDeviceManager>,
     device: Option<ID3D11Device>,
     kind: DecoderKind,
+    /// Keep decoded pictures on the GPU (the zero-copy compositor reads the sample's
+    /// texture); otherwise they are read back to NV12 planes.
+    gpu_out: bool,
     provides_samples: bool,
     out_size: u32,
     width: u32,
@@ -85,9 +89,15 @@ struct Mft {
     _rt: Runtime,
 }
 
+/// A decoded picture: read back, or the decoder's own sample (D3D11 texture inside).
+pub(crate) enum Picture {
+    Cpu(Yuv420Frame),
+    Gpu(IMFSample),
+}
+
 enum Pull {
     /// A picture and its sample time (`None`: the decoder did not stamp one).
-    Frame(Option<i64>, Yuv420Frame),
+    Frame(Option<i64>, Picture),
     Changed,
     NeedInput,
 }
@@ -117,19 +127,24 @@ fn err(ctx: &str, e: windows::core::Error) -> DecoderError {
     DecoderError::msg(format!("{ctx}: {e}"))
 }
 
-/// A D3D11 device with video support on the default adapter, handed to the MFT.
-///
-/// SAFETY: COM calls on live interfaces.
-unsafe fn attach_d3d(t: &IMFTransform) -> WinResult<(IMFDXGIDeviceManager, ID3D11Device)> {
+/// A D3D11 device with video support on the adapter `luid` (`HighPart << 32 | LowPart`;
+/// `None` or not found: the default adapter). Multithread-protected: the MFT uses it from
+/// its own threads.
+pub(crate) fn video_device(luid: Option<u64>) -> WinResult<ID3D11Device> {
+    let adapter: Option<IDXGIAdapter> = luid.and_then(|v| {
+        let l = LUID { LowPart: v as u32, HighPart: (v >> 32) as i32 };
+        // SAFETY: plain DXGI factory calls.
+        unsafe { CreateDXGIFactory1::<IDXGIFactory4>().and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter>(l)).ok() }
+    });
+    if luid.is_some() && adapter.is_none() {
+        eprintln!("seat-rdp: presenter adapter not found; H.264 decode on the default adapter");
+    }
+    let mut device: Option<ID3D11Device> = None;
+    // SAFETY: device creation with out-pointers we own.
     unsafe {
-        let aware = t.GetAttributes()?.GetUINT32(&MF_SA_D3D11_AWARE).unwrap_or(0);
-        if aware == 0 {
-            return Err(windows::core::Error::new(windows::Win32::Foundation::E_NOTIMPL, "MFT is not D3D11-aware"));
-        }
-        let mut device: Option<ID3D11Device> = None;
         D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
+            adapter.as_ref(),
+            if adapter.is_some() { D3D_DRIVER_TYPE_UNKNOWN } else { D3D_DRIVER_TYPE_HARDWARE },
             HMODULE::default(),
             D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             None,
@@ -138,11 +153,28 @@ unsafe fn attach_d3d(t: &IMFTransform) -> WinResult<(IMFDXGIDeviceManager, ID3D1
             None,
             None,
         )?;
-        let device = device.ok_or_else(|| windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "no D3D11 device"))?;
-        // The MFT uses the device from its own threads.
-        if let Ok(mt) = device.cast::<ID3D11Multithread>() {
-            let _ = mt.SetMultithreadProtected(true);
+    }
+    let device = device.ok_or_else(|| windows::core::Error::new(windows::Win32::Foundation::E_FAIL, "no D3D11 device"))?;
+    if let Ok(mt) = device.cast::<ID3D11Multithread>() {
+        // SAFETY: COM call on the live device.
+        let _ = unsafe { mt.SetMultithreadProtected(true) };
+    }
+    Ok(device)
+}
+
+/// Hand `device` (or a new video device on `luid`) to the MFT.
+///
+/// SAFETY: COM calls on live interfaces.
+unsafe fn attach_d3d(t: &IMFTransform, device: Option<ID3D11Device>, luid: Option<u64>) -> WinResult<(IMFDXGIDeviceManager, ID3D11Device)> {
+    unsafe {
+        let aware = t.GetAttributes()?.GetUINT32(&MF_SA_D3D11_AWARE).unwrap_or(0);
+        if aware == 0 {
+            return Err(windows::core::Error::new(windows::Win32::Foundation::E_NOTIMPL, "MFT is not D3D11-aware"));
         }
+        let device = match device {
+            Some(d) => d,
+            None => video_device(luid)?,
+        };
         let mut token = 0u32;
         let mut manager: Option<IMFDXGIDeviceManager> = None;
         MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
@@ -154,7 +186,22 @@ unsafe fn attach_d3d(t: &IMFTransform) -> WinResult<(IMFDXGIDeviceManager, ID3D1
 }
 
 impl Mft {
-    fn start(hardware: bool) -> WinResult<Self> {
+    fn start(hardware: bool, luid: Option<u64>) -> WinResult<Self> {
+        Self::start_with(hardware, luid, None)
+    }
+
+    /// Hardware decode on `device` (needs video support), pictures kept on the GPU
+    /// ([`Self::decode_gpu`]). No software fallback: the zero-copy path needs the texture.
+    pub(crate) fn start_gpu(device: &ID3D11Device) -> WinResult<Self> {
+        let m = Self::start_with(true, None, Some(device.clone()))?;
+        if m.kind != DecoderKind::Hardware {
+            return Err(windows::core::Error::new(windows::Win32::Foundation::E_NOTIMPL, "no hardware H.264 decode on this adapter"));
+        }
+        Ok(m)
+    }
+
+    fn start_with(hardware: bool, luid: Option<u64>, device: Option<ID3D11Device>) -> WinResult<Self> {
+        let gpu_out = device.is_some();
         let rt = Runtime::start()?;
         // SAFETY: COM calls on interfaces we own, on this thread.
         unsafe {
@@ -163,7 +210,7 @@ impl Mft {
                 let _ = a.SetUINT32(&MF_LOW_LATENCY, 1);
             }
             let (manager, device, kind) = if hardware {
-                match attach_d3d(&transform) {
+                match attach_d3d(&transform, device, luid) {
                     Ok((m, d)) => (Some(m), Some(d), DecoderKind::Hardware),
                     Err(e) => {
                         eprintln!("seat-rdp: H.264 hardware decode unavailable ({e}); using software");
@@ -182,6 +229,7 @@ impl Mft {
                 _manager: manager,
                 device,
                 kind,
+                gpu_out: gpu_out && kind == DecoderKind::Hardware,
                 provides_samples: false,
                 out_size: 0,
                 width: 0,
@@ -296,7 +344,10 @@ impl Mft {
                 Ok(()) => {
                     let sample = sample.ok_or_else(|| DecoderError::msg("decoder returned no sample"))?;
                     let time = sample.GetSampleTime().ok();
-                    self.read(&sample).map(|f| Pull::Frame(time, f))
+                    if self.gpu_out {
+                        return Ok(Pull::Frame(time, Picture::Gpu(sample)));
+                    }
+                    self.read(&sample).map(|f| Pull::Frame(time, Picture::Cpu(f)))
                 }
                 Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => Ok(Pull::NeedInput),
                 Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
@@ -359,7 +410,16 @@ impl Mft {
         }
     }
 
-    fn decode(&mut self, data: &[u8]) -> DecoderResult<Yuv420Frame> {
+    /// Decode one access unit (Annex B); the picture stays in the decoder's D3D11 texture
+    /// (`start_gpu` decoders only).
+    pub(crate) fn decode_gpu(&mut self, data: &[u8]) -> DecoderResult<IMFSample> {
+        match self.decode(data)? {
+            Picture::Gpu(s) => Ok(s),
+            Picture::Cpu(_) => Err(DecoderError::msg("decoder is not in GPU output mode")),
+        }
+    }
+
+    fn decode(&mut self, data: &[u8]) -> DecoderResult<Picture> {
         let time = self.input(data)?;
         let mut current = None;
         let mut untimed = None;
@@ -391,16 +451,16 @@ impl Mft {
     }
 
     /// The D3D11 device was removed (driver reset, GPU gone): hardware decode cannot recover.
-    fn device_lost(&self) -> bool {
+    pub(crate) fn device_lost(&self) -> bool {
         // SAFETY: COM call on the live device.
         self.device.as_ref().is_some_and(|d| unsafe { d.GetDeviceRemovedReason() }.is_err())
     }
 
-    fn take_dropped(&mut self) -> u64 {
+    pub(crate) fn take_dropped(&mut self) -> u64 {
         std::mem::take(&mut self.dropped)
     }
 
-    fn flush(&mut self) {
+    pub(crate) fn flush(&mut self) {
         // SAFETY: COM call on the live transform.
         unsafe {
             let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
@@ -413,6 +473,8 @@ impl Mft {
 /// the engine thread).
 pub struct MfH264Decoder {
     prefer_hardware: bool,
+    /// Adapter of the seat's presenter (hardware decode there).
+    adapter: Option<u64>,
     metrics: Arc<GfxMetrics>,
     mft: Option<Mft>,
     scratch: Vec<u8>,
@@ -426,7 +488,13 @@ unsafe impl Send for MfH264Decoder {}
 
 impl MfH264Decoder {
     pub fn new(prefer_hardware: bool, metrics: Arc<GfxMetrics>) -> Self {
-        Self { prefer_hardware, metrics, mft: None, scratch: Vec::new(), fallback: FallbackPolicy::default() }
+        Self { prefer_hardware, adapter: None, metrics, mft: None, scratch: Vec::new(), fallback: FallbackPolicy::default() }
+    }
+
+    /// Decode on the adapter with this LUID (the presenter's), not the default one.
+    pub fn on_adapter(mut self, adapter: Option<u64>) -> Self {
+        self.adapter = adapter;
+        self
     }
 
     /// Which path started (`None` before [`H264Decoder::wait_until_ready`]).
@@ -445,7 +513,7 @@ impl MfH264Decoder {
         self.mft = None;
         self.prefer_hardware = false;
         self.metrics.record_decoder_fallback();
-        match Mft::start(false) {
+        match Mft::start(false, None) {
             Ok(m) => {
                 self.metrics.set_decoder(m.kind);
                 self.mft = Some(m);
@@ -461,13 +529,13 @@ impl MfH264Decoder {
         if self.mft.is_some() {
             return true;
         }
-        let first = Mft::start(self.prefer_hardware);
+        let first = Mft::start(self.prefer_hardware, self.adapter);
         let started = match first {
             Ok(m) => Ok(m),
             // A hardware start that failed past the device step: try once without it.
             Err(e) if self.prefer_hardware => {
                 eprintln!("seat-rdp: H.264 decoder start failed ({e}); retrying in software");
-                Mft::start(false)
+                Mft::start(false, None)
             }
             Err(e) => Err(e),
         };
@@ -498,7 +566,10 @@ impl H264Decoder for MfH264Decoder {
         let mut scratch = std::mem::take(&mut self.scratch);
         let data = if annex_b(data, &mut scratch) { scratch.as_slice() } else { data };
         let r = match self.mft.as_mut() {
-            Some(m) => m.decode(data),
+            Some(m) => m.decode(data).and_then(|p| match p {
+                Picture::Cpu(f) => Ok(f),
+                Picture::Gpu(_) => Err(DecoderError::msg("GPU picture from a read-back decoder")),
+            }),
             None => Err(DecoderError::msg("H.264 decoder unavailable")),
         };
         self.scratch = scratch;

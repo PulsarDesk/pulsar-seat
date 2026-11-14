@@ -347,6 +347,11 @@ setx /M PULSAR_SEAT_GFX no-h264
   kodlayıcılar kullanılır).
 - `PULSAR_SEAT_GFX=bitmap` (ya da `off`): grafik hattı hiç açılmaz, eski bitmap
   güncellemeleri kullanılır. En yavaş ama en uyumlu yol.
+- `PULSAR_SEAT_GFX_ZERO_COPY=0`: ekran kartında çözülen görüntü işlemciye hiç kopyalanmadan
+  doğrudan ekrana verilir ("sıfır kopya" yolu). Görüntü yalnızca bu yol açıkken bozuluyorsa
+  (yanlış renkler, titreyen ya da eski kalan bölgeler, imleç izi) bu değişkenle yolu
+  kapatın; H.264 yine ekran kartında çözülür, görüntü eskisi gibi işlemci üzerinden
+  gelir.
 - Geri almak için değişkeni silin (`reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PULSAR_SEAT_GFX /f`)
   ve koltuğu yeniden başlatın.
 
@@ -361,6 +366,14 @@ seat host: gfx avc444 v0xa0701 decoder=hardware frames=… h264=… errors=… p
   hattı), `bitmap` (grafik hattı yok).
 - `decoder=`: `hardware` (ekran kartı), `software` (işlemci), `unavailable` (H.264
   çözücü başlamadı), `none` (henüz H.264 yok).
+- `gpu=`: sıfır kopya yolu. `ready` (açık), `off` (bu çıkış için yok ya da kapalı),
+  `failed` (başlamadı ya da çalışırken hata verdi; bu bağlantı boyunca işlemci yolu).
+  `gpu_frames` ekran kartından ekrana giden kare sayısıdır; `demotions` sürekli artıyorsa
+  sunucu bu yolun desteklemediği şeyler gönderiyor demektir (sorun değil, görüntü işlemci
+  yolundan gelir).
+- `present_skipped`, `acks_held` artıyorsa ekran yetişemiyor; koltuk sunucusu bu sırada
+  kareleri birleştirir ve sunucudan yavaşlamasını ister. `acks_forced` sürekli artıyorsa
+  ekran uzun süre takılı kalıyor demektir; günlüğü sorun bildirimine ekleyin.
 - `errors`, `pic_dropped`, `dropped` artıyorsa görüntünün bir kısmı çizilemedi; koltuk
   sunucusu bu durumda sunucudan ekranı yeniden ister (`resyncs`). `fallbacks` 0'dan
   büyükse ekran kartıyla çözme sürekli başarısız olduğu için çalışırken işlemciye

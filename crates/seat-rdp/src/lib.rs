@@ -43,6 +43,8 @@ pub mod events;
 #[cfg(feature = "client")]
 pub mod gfx;
 #[cfg(feature = "client")]
+pub mod gpu;
+#[cfg(feature = "client")]
 pub mod h264;
 #[cfg(feature = "client")]
 pub mod input;

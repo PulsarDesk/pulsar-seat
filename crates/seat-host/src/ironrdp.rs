@@ -29,7 +29,7 @@
 
 use crate::flow::{EXIT_OK, EXIT_RDP, Step};
 use seat_core::backend::BackendResult;
-use seat_core::backend::display::{CursorState, FrameRef, FrameSink, SeatOutputs};
+use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, SeatOutputs};
 use seat_core::backend::input::{InputPacket, InputSink};
 use seat_display::RdpLayout;
 use seat_input::rdp::{RdpInputChannel, RdpInputEvent, RdpInputSink, ptrflags};
@@ -212,6 +212,23 @@ impl FrameSink for SharedSink {
     }
     fn blank(&mut self, message: &str) -> BackendResult<()> {
         self.lock().blank(message)
+    }
+    fn gpu_adapter(&self, output: usize) -> Option<u64> {
+        self.lock().gpu_adapter(self.seat_output(output))
+    }
+    fn gpu_ready(&self, output: usize) -> bool {
+        self.lock().gpu_ready(self.seat_output(output))
+    }
+    fn present_gpu(&mut self, frame: &GpuFrameRef<'_>) -> BackendResult<()> {
+        if self.is_blanked() {
+            // The idle frame stays; the frame counts as shown.
+            return Ok(());
+        }
+        let f = GpuFrameRef { output: self.seat_output(frame.output), ..*frame };
+        self.lock().present_gpu(&f)
+    }
+    fn backlog(&self) -> u32 {
+        self.lock().backlog()
     }
 }
 
@@ -1188,6 +1205,51 @@ mod tests {
         // Single-output fallback: everything maps onto it.
         let one = [FbRect { x: 0, y: 0, width: 1024, height: 768 }];
         assert!(input_rects(&outs, &one).iter().all(|x| x.width == 1024));
+    }
+
+    /// Records GPU frames; output 2 takes them on adapter 9.
+    #[derive(Default, Clone)]
+    struct Gpu(Arc<Mutex<Vec<usize>>>);
+    impl FrameSink for Gpu {
+        fn configure(&mut self, _o: &SeatOutputs) -> BackendResult<()> {
+            Ok(())
+        }
+        fn present(&mut self, _f: &FrameRef<'_>) -> BackendResult<()> {
+            Ok(())
+        }
+        fn cursor(&mut self, _c: &CursorState) -> BackendResult<()> {
+            Ok(())
+        }
+        fn blank(&mut self, _m: &str) -> BackendResult<()> {
+            Ok(())
+        }
+        fn gpu_adapter(&self, output: usize) -> Option<u64> {
+            (output == 2).then_some(9)
+        }
+        fn present_gpu(&mut self, f: &GpuFrameRef<'_>) -> BackendResult<()> {
+            self.0.lock().unwrap().push(f.output);
+            Ok(())
+        }
+        fn backlog(&self) -> u32 {
+            1
+        }
+    }
+
+    #[test]
+    fn gpu_frames_go_to_seat_output_indices_and_stop_while_blank() {
+        let seat = SeatNumber::new(2).unwrap();
+        let outs = SeatOutputs { seat, outputs: vec![placement(0, None), placement(0, Some(0)), placement(1920, None)] };
+        let rec = Gpu::default();
+        let mut s = SharedSink::new(Box::new(rec.clone()), &outs);
+        assert_eq!(s.gpu_adapter(1), Some(9), "RDP monitor 1 is seat output 2");
+        assert_eq!(s.gpu_adapter(0), None);
+        assert_eq!(s.backlog(), 1);
+        let src = seat_core::device::Rect { x: 0, y: 0, width: 1, height: 1 };
+        let f = GpuFrameRef { output: 1, handle: 4, generation: 1, width: 1, height: 1, src, dirty: &[] };
+        s.present_gpu(&f).unwrap();
+        s.set_blank(Some("x")).unwrap();
+        s.present_gpu(&f).unwrap();
+        assert_eq!(*rec.0.lock().unwrap(), vec![2]);
     }
 
     #[test]

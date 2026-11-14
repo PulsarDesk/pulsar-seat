@@ -26,7 +26,7 @@
 
 use super::presenter::{premultiply, PresenterEvent, PresenterListener, WindowPresenter};
 use crate::model::{blend_cursor_region, closest_mode, pick_follow_mode, rotate_bgra, rotated, scale_nearest, ModeFollower, TargetInfo, MODE_FOLLOW_SETTLE};
-use seat_core::backend::display::{CursorState, FrameRef, FrameSink, SeatOutputs};
+use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, SeatOutputs};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_core::device::{DisplayMode, Presentation, Rect};
 use std::sync::Once;
@@ -514,6 +514,11 @@ impl HybridPresenter {
     }
 
     /// Slots that show output `src` (the output itself and its clones).
+    /// `src` is shown by exactly one slot, a presenter window.
+    fn window_only(&self, src: usize) -> bool {
+        matches!(self.showing(src).as_slice(), [i] if matches!(self.slots.get(*i), Some(Slot::Window)))
+    }
+
     fn showing(&self, src: usize) -> Vec<usize> {
         (0..self.slots.len()).filter(|&i| self.srcs.get(i).copied().unwrap_or(i) == src).collect()
     }
@@ -665,6 +670,24 @@ impl FrameSink for HybridPresenter {
             self.emit(i, false);
         }
         self.window.configure_subset(outputs, &include)
+    }
+
+    // GPU frames only for an output shown by one presenter window (no Display Core
+    // target, no clone): those go to the window presenter.
+    fn gpu_adapter(&self, output: usize) -> Option<u64> {
+        self.window_only(output).then(|| self.window.gpu_adapter(output)).flatten()
+    }
+    fn gpu_ready(&self, output: usize) -> bool {
+        self.window.gpu_ready(output)
+    }
+    fn present_gpu(&mut self, frame: &GpuFrameRef<'_>) -> BackendResult<()> {
+        if !self.window_only(frame.output) {
+            return Err(BackendError::unsupported("GPU frames on a Display Core output"));
+        }
+        self.window.present_gpu(frame)
+    }
+    fn backlog(&self) -> u32 {
+        self.window.backlog()
     }
 
     fn present(&mut self, frame: &FrameRef<'_>) -> BackendResult<()> {
