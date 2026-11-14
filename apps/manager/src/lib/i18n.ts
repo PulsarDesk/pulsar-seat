@@ -35,6 +35,7 @@ export const t = {
   relogon: 'Yeniden oturum aç',
   serviceDown: 'Pulsar Seat hizmetine ulaşılamıyor. Hizmetin kurulu ve çalışır durumda olduğundan emin olun; bir güvenlik yazılımı hizmeti durdurmuş olabilir.',
   adminNeeded: 'Bu işlem için yönetici olarak çalıştırmanız gerekir.',
+  adminToView: 'Koltuk ayarlarını görmek için yönetici olarak yeniden başlatın (üstteki düğme).',
   restartElevated: 'Yönetici olarak yeniden başlat',
   // Service start / stop / restart (SCM, elevated manager only; restored from Split).
   svc: {

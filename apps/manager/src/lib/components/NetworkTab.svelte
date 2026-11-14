@@ -39,6 +39,8 @@
   </table>
   <p class="hint">{t.network.programs}: {t.network.programsCount(programs.length)}</p>
   <p class="hint">{t.network.bestEffort}</p>
+{:else if store.needsElevation}
+  <p class="hint">{t.adminToView}</p>
 {:else}
   <p class="hint">{t.loading}</p>
 {/if}

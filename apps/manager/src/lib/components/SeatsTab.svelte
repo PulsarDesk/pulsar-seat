@@ -375,6 +375,8 @@
     </section>
   {/if}
   <p class="hint">{t.advanced.gpuHint}</p>
+{:else if store.needsElevation}
+  <p class="hint">{t.adminToView}</p>
 {:else if !store.serviceDown}
   <p class="hint">{t.loading}</p>
 {/if}
