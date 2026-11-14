@@ -16,6 +16,12 @@
 //! Seat switch (`fast_user_switch`, spec 35 §5.5(a)): a notification-area icon with
 //! "N. koltuğa geç" entries (`agent_switch_targets` / `agent_switch`); the agent locks its
 //! session before asking. **Untested on hardware.**
+//!
+//! GUI subsystem: started into the user's desktop, a console subsystem binary got a
+//! visible conhost window there (VM test 2026-11-15). `eprintln!` without a console is a
+//! no-op.
+
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 #[path = "pipe.rs"]
 #[allow(dead_code)]
