@@ -1344,3 +1344,49 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     - `PulsarSeat_0.1.0_x64.msi` SHA-256
       `c23177ccc9e9ced7674232c44d2ed634a1079b44ff031cf2c83622edf2522118` (65 505 555 bytes),
       `shim\x64` + `shim\x86`.
+- 2026-11-15 **VM tests (U1 + U3, ARM64 Hyper-V test VM, Windows 11 Pro 26300, not hardware).**
+  Harness: `tools/vm/` (control pipe client `seatctl.ps1` speaking protocol 3, `vm.ps1`
+  PowerShell Direct helpers, `ui.ps1` keyboard + screenshots, `scenarios.ps1` U1 / U3
+  steps). Last MSI tested: 9debd69 (ARM64, unsigned).
+  - **U1 (fast_user_switch) - PASS with fixes.** Config over the pipe (seat 2 = local user
+    seat1, seat 3 = seat2, passwords via `set_seat_password`), enable -> credential provider
+    registered (provider, filter, two CLSID keys, DLL path ok) and loaded by LogonUI. Lock
+    console + `start_seats [2]` -> console session disconnected, fresh session, one-time
+    logon armed / handed / accepted within ~0.6 s; quser `seat1 console 3`, `pstest Disc 2`.
+    Lock screen of seat 2 shows "Koltuk 2" + links "Koltuk 1'e geç" / "Koltuk 3'e geç";
+    the seat 1 link hands the console to a fresh logon screen; signing a user in there
+    reconnects that user's existing session (Windows FUS).
+  - **U3 (desktops kiosk) - BLOCKED in the VM (one monitor), partial.** Config, display
+    enumeration (after the fix), start / stop of kiosk seats 2 / 3 (`waiting_for_display`
+    -> `off`), `desktops` probe notes incl. `kiosk_audio_per_app`, no console windows.
+    Not verifiable here: kiosk shell windows, apps, hotkey guard, per-seat audio (seat 1
+    must keep the only monitor: `seat_one_no_display`; monitors are exclusive; the VM has
+    no audio endpoint).
+  - **Fixed (commits):** b5344ee installer shipped a stale MSI with a fresh build record
+    (relative `-CargoTargetDir`; the 2026-11-14 VM manager test used that older MSI);
+    082ee84 seat 1 took seat N's fresh logon session during a FUS hand-over (credential
+    provider answered for seat 1: no tile, no auto-logon); a80ba4b / e6f07c7 agent and
+    seat host opened conhost windows on user desktops (now GUI subsystem); 22215fd display
+    helper got `--display-helper` twice ("unknown helper command": no monitor ever
+    enumerated, kiosk seats waited forever, topology apply failed); c768d05 switch links
+    unreachable on Windows 11 lock screens (now in the seat tile); **9d636c5 SECURITY:**
+    `WTSConnectSessionW` from SYSTEM without a password shows a locked session unlocked
+    (also reproduced with SYSTEM `tscon`), so the switch links / agent switch let anyone at
+    a seat's lock screen into another seat's session (seat 1 admin included) without a
+    password; the backend now never connects without the stored password and hands the
+    console to the logon screen instead; 9debd69 switch tile of an account-less seat tied
+    to the session user; 7ac6c1b log text.
+  - **Open:** (1) seat 1's lock screen still shows no switch links (tile not listed for
+    pstest; HYPOTHESIS: Windows 11 does not list a provider tile without a password /
+    submit field in the unlock scenario, or LogonUI gives no user array there; needs DLL
+    tracing). (2) With `seat1_desktop = false` the seat-1 kiosk shell is never started:
+    seat 1 is not "managed" under `seat_one_console` and only `start_sequence` calls
+    `SessionBackend::start` (maintainer decision: seat 1 lifecycle in kiosk mode).
+    (3) `start_seats` on a running FUS seat answers `ack` and does nothing (no pipe way to
+    switch the console to a running seat; links / agent only). (4) After a switch away,
+    seat 2's status shows `at_logon` although its user is signed in. (5) Contained console
+    listener exits 0xc0000142 under the PulsarSeatHost account, the service falls back to
+    SYSTEM Low (HYPOTHESIS: desktop grant for the restricted logon SID). (6) After a
+    password-less switch the fresh logon screen preselects the last user, not the target
+    seat's user (UX). (7) Credential tiles have no image (blank sign-in option icon).
+    (8) Agent tray switch not exercised (synthetic mouse cannot click the tray).

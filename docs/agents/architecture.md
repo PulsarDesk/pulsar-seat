@@ -361,7 +361,10 @@ ARM64X: CredUI is refused) gives this backend auto-logon and a "switch seat" lin
   `credprov_report{status, sub_status}` (non-zero NTSTATUS → password failing, notice
   `credprov_logon_failed`); `credprov_switch{seat}` (seat session callers only, not the own
   seat, one per 3 s; a running seat is reconnected through `SessionBackend::start` **without
-  the stored password**, so the backend's `session_not_locked` refusal always applies; an
+  the stored password**, so the backend's `session_not_locked` refusal always applies, and
+  the backend never calls `WTSConnectSessionW` without a password: a SYSTEM connect without
+  one showed a locked session unlocked (VM test 2026-11-15), so the console goes to a fresh
+  logon screen where the target user signs in and Windows reconnects the session; an
   off seat goes through `start_sequence_with(unattended)`, no grant). Seat 1 is a target
   only while `SessionBackend::console_seat_away()` names its session (the FUS backend
   remembers seat 1's console session + user SID as `home` when it first moves the console
