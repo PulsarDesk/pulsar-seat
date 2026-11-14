@@ -48,4 +48,5 @@ when you add a doc.
 | Credential provider + filter | [credprov/README.md](credprov/README.md) |
 | Per-process HID shim (own x64 / x86 workspace) | [shim/README.md](shim/README.md) |
 | Package READMEs (build, test, untested parts, notices) | `crates/*/README.md`, `drivers/*/README.md` |
+| VM test harness (pipe client, Hyper-V helpers) | [tools/vm/README.md](tools/vm/README.md) |
 | Test machine access (local only) | `docs/local/README.md` |
