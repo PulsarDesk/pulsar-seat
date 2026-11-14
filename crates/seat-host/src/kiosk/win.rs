@@ -27,8 +27,9 @@
 
 use super::{
     FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SeatDevices, ShellArgs, ShellCommand, drag_rect, filter_active,
-    focus_policy, idle_text, notices, place, seat_devices, tr,
+    audio_notice, focus_policy, idle_text, notices, place, seat_devices, tr,
 };
+use seat_media::kiosk_audio::KioskAudio;
 use crate::pipe;
 use seat_core::backend::BackendResult;
 use seat_core::backend::input::{InputPacket, InputSink, buttons};
@@ -343,6 +344,8 @@ struct Shell {
     big_font: *mut c_void,
     /// Input since the last reset (the idle reset fires only then).
     dirty: bool,
+    /// Per-app default audio endpoint of the seat's apps (kiosk-audio).
+    audio: KioskAudio,
     /// The leader's clip is in place.
     clipped: bool,
     /// Last time the service answered (ms since start).
@@ -586,6 +589,7 @@ impl Shell {
                     r.set_units(&self.units);
                 }
             }
+            self.audio.set_endpoints(d.audio.clone());
             if !d.monitors.is_empty() {
                 self.apply_layout(d.monitors);
             }
@@ -653,8 +657,11 @@ impl Shell {
                 // Not in the job means not routable and not reset: do not run it.
                 windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
             } else {
-                ResumeThread(pi.hThread);
                 self.pids.insert(pi.dwProcessId);
+                // Before it runs: the app's first stream should already use the seat's
+                // endpoint (HYPOTHESIS: the setting takes for a suspended process).
+                self.audio.sync(&self.pids.iter().copied().collect());
+                ResumeThread(pi.hThread);
                 self.app_of_pid.insert(pi.dwProcessId, i);
                 self.pending_focus.push(pi.dwProcessId);
                 self.error_line = None;
@@ -668,6 +675,8 @@ impl Shell {
     fn reset(&mut self) {
         let acts = self.router.reset();
         self.run_actions(acts);
+        // Clear the per-app endpoints while the processes still live.
+        self.audio.clear_all();
         if !self.job.is_null() {
             // SAFETY: our job; ends every app process.
             unsafe {
@@ -797,6 +806,8 @@ impl Shell {
         if let Some(p) = job_pids(self.job) {
             self.pids = p;
         }
+        // New job processes (children too) get the seat's endpoints; gone ones are dropped.
+        self.audio.sync(&self.pids.iter().copied().collect());
         if self.tick % 2 == 0 {
             self.place_windows();
         }
@@ -914,6 +925,7 @@ impl Shell {
             unsafe { ReleaseMutex(self.mutex) };
             self.leader = false;
         }
+        self.audio.clear_all();
         if !self.job.is_null() {
             // SAFETY: our job; ends every app process.
             unsafe {
@@ -983,6 +995,9 @@ impl Shell {
                 fill(local(items.logout), BUTTON);
                 text(local(items.logout), tr::LOGOUT, TEXT, center);
                 let mut lines: Vec<String> = notices(&self.args.plan, self.filter, self.service_ok, self.have_units, self.stream_ok).into_iter().map(String::from).collect();
+                if let Some(a) = audio_notice(&self.audio) {
+                    lines.push(a.to_string());
+                }
                 if let Some(e) = &self.error_line {
                     lines.insert(0, e.clone());
                 }
@@ -1279,6 +1294,7 @@ pub fn run(args: ShellArgs) -> i32 {
         clipped: false,
         service_seen_ms: 0,
         stream_ok: false,
+        audio: KioskAudio::new(seat_media::create_app_endpoint_policy()),
         modified_threads: HashSet::new(),
         drag: None,
     };

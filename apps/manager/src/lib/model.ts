@@ -486,6 +486,42 @@ export function setKioskSeatOneDesktop(c: Config, on: boolean): Config {
   return out;
 }
 
+/** Audio of a kiosk seat (round 4 kiosk-audio). The shell gives each of the seat's apps
+ *  the seat's own endpoints as their per-app default (undocumented Windows API, from
+ *  Windows 10 1803; seat-media `kiosk_audio`). Mirrors the shell's pick: per flow the first
+ *  active endpoint whose effective mask is exactly this seat, else the first one. */
+export interface KioskAudioView {
+  state: 'routed' | 'no_endpoint' | 'unsupported';
+  render: string | null;
+  capture: string | null;
+  /** Other kiosk seats that list one of this seat's programs (Windows keeps the per-app
+   *  endpoint per program, so they share it; HYPOTHESIS). */
+  sharedWith: SeatNumber[];
+}
+
+/** `null` for a seat that does not run a kiosk shell. `sessionNotes` = the `desktops`
+ *  backend's notes (`kiosk_audio_shared` = Windows too old). */
+export function kioskAudio(c: Config, n: SeatNumber, devices: DeviceView[], sessionNotes: string[]): KioskAudioView | null {
+  const seatOf = (x: SeatConfig) => (x.number === 1 && kioskSeatOneDesktop(c) ? undefined : localOf(x).kiosk_shell);
+  const s = c.seats.find((x) => x.number === n);
+  const shell = s ? seatOf(s) : undefined;
+  if (!shell) return null;
+  const pick = (flow: 'render' | 'capture'): string | null => {
+    const mine = devices.filter((v) => v.device.present && v.device.details.type === 'audio' && v.device.details.flow === flow && M.single(v.effective) === n);
+    const best = mine.find((v) => v.device.details.type === 'audio' && v.device.details.state === 'active') ?? mine[0];
+    return best ? best.device.name : null;
+  };
+  const render = pick('render');
+  const capture = pick('capture');
+  const mineCmds = new Set(shell.apps.map((a) => a.command.trim().toLowerCase()));
+  const sharedWith = c.seats
+    .filter((x) => x.number !== n)
+    .filter((x) => seatOf(x)?.apps.some((a) => mineCmds.has(a.command.trim().toLowerCase())))
+    .map((x) => x.number);
+  const state = sessionNotes.includes('kiosk_audio_shared') ? 'unsupported' : render || capture ? 'routed' : 'no_endpoint';
+  return { state, render, capture, sharedWith };
+}
+
 /** Classes for the class-level default descriptors; empty = the service default. */
 export function setClassDefaultClasses(c: Config, classes: DeviceClassTarget[]): Config {
   const out = clone(c);

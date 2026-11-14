@@ -10,6 +10,7 @@ pub mod fltport;
 pub mod mmdevice;
 pub mod notify;
 pub mod pnp;
+pub mod policyconfig;
 pub mod setupdi;
 pub mod spooler;
 pub mod wasapi;

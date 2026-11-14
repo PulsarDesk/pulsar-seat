@@ -394,7 +394,7 @@ export const t = {
     intro:
       'Kiosk koltuğu 1. koltukla aynı Windows oturumunda, aynı kullanıcıyla çalışır. Koltuğun ekranlarında yalnızca aşağıdaki uygulamalar açılır. Klavyesi ve faresi yalnızca bu uygulamalara gider; ancak bu, 1. koltuk da kiosk koltuğuysa ya da giriş filtresi etkinse geçerlidir.',
     limits:
-      'Sınırlar: bütün koltuklar aynı kullanıcı profilini ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar, tam ekran oyunlar, Mağaza (UWP / MSIX) uygulamaları ve zaten açık bir kopyaya devreden programlar (ör. ayrı profil verilmemiş tarayıcılar) kiosk koltuğunda çalışmaz. Kiosk koltuğunun kendi sesi yoktur: uygulamaların sesi 1. koltuğun varsayılan ses aygıtından çıkar. Kiosk koltuğu tam bir kilit değildir: Windows sistem tuşları (Windows tuşu, Win+R, Win+E, Win+L, Alt+Tab, Ctrl+Shift+Esc) her klavyeden çalışır ve 1. koltuğun ekranında Başlat menüsünü, Çalıştır penceresini, Gezgin’i veya Görev Yöneticisi’ni açabilir. Ctrl+Alt+Del hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir; buradan oturumu kapatmak bütün koltukları kapatır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
+      'Sınırlar: bütün koltuklar aynı kullanıcı profilini ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar, tam ekran oyunlar, Mağaza (UWP / MSIX) uygulamaları ve zaten açık bir kopyaya devreden programlar (ör. ayrı profil verilmemiş tarayıcılar) kiosk koltuğunda çalışmaz. Ses: kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı verirseniz, koltuğun uygulamaları Windows 10 1803 ve sonrasında uygulama başına varsayılan aygıt olarak bunu kullanır (belgelenmemiş bir Windows arabirimi; Windows güncellemeleri bunu bozabilir, o zaman ses 1. koltuğun varsayılan aygıtından çıkar). Aynı programı iki kiosk koltuğunda kullanmak bu ayarı paylaştırır. Kiosk koltuğu tam bir kilit değildir: Windows sistem tuşları (Windows tuşu, Win+R, Win+E, Win+L, Alt+Tab, Ctrl+Shift+Esc) her klavyeden çalışır ve 1. koltuğun ekranında Başlat menüsünü, Çalıştır penceresini, Gezgin’i veya Görev Yöneticisi’ni açabilir. Ctrl+Alt+Del hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir; buradan oturumu kapatmak bütün koltukları kapatır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
     appTitle: 'Döşeme adı',
     program: 'Program yolu',
     args: 'Bağımsız değişkenler',
@@ -412,7 +412,14 @@ export const t = {
       'Açıkken kiosk koltukları öne geçmez. Giriş filtresi yoksa kiosk koltuklarının tuşları ve fareleri 1. koltuğa da gider: fareleri 1. koltuğun imlecini oynatır ve pencerelerine tıklar. 1. koltuğun imleci de kiosk ekranlarına girip oradaki uygulamaları etkinleştirebilir; o uygulamalar bundan sonra 1. koltukta yazılanları alır. Giriş filtresi etkinse kiosk koltuklarının girişi hizmet üzerinden yalnızca kendi kabuğuna gider. Kapalıyken 1. koltuk da kiosk koltuğu olur ve kendi uygulama listesini kullanır.',
     systemKeys:
       'Windows sistem tuşları (Windows tuşu, Alt+Tab, Ctrl+Shift+Esc) ve Ctrl+Alt+Del kiosk koltuklarından da çalışır ve bütün koltukları etkiler.',
-    backendOnly: 'Kiosk koltukları yalnızca “Eşzamanlı kiosk koltukları” oturum yöntemiyle çalışır.'
+    backendOnly: 'Kiosk koltukları yalnızca “Eşzamanlı kiosk koltukları” oturum yöntemiyle çalışır.',
+    audio: {
+      routed: (render: string | null, capture: string | null) =>
+        'Ses: ' + [render ? `çıkış ${render}` : null, capture ? `mikrofon ${capture}` : null].filter(Boolean).join(', '),
+      noEndpoint: 'Ses: koltuğa ayrı ses aygıtı atanmamış (1. koltuğun varsayılan aygıtı)',
+      unsupported: 'Ses: bu Windows sürümünde uygulama başına ses aygıtı yok (1. koltuğun varsayılan aygıtı)',
+      sharedApp: (seats: number[]) => `Aynı program ${seats.join(', ')}. koltukta da var: ses aygıtı ayarını paylaşırlar`
+    }
   },
 
   startModes: {
@@ -596,6 +603,7 @@ export const t = {
       'Sırası olmayan koltuklar donar: ekranları, girişleri ve sesleri yoktur, programları arka planda çalışır. Ekran kartı kullanan programlar (oyunlar, 3B) koltuk geri geldiğinde aygıtlarını kaybedip kapanabilir',
     fus_audio_per_user: 'Her koltuğun kullanıcısı varsayılan ses aygıtını kendi oturumunda bir kez seçer (Windows bunu kullanıcı başına saklar)',
     kiosk_audio_shared: 'Kiosk koltuklarındaki uygulamaların sesi 1. koltuğun varsayılan ses aygıtından çıkar',
+    kiosk_audio_per_app: 'Kiosk koltuklarındaki uygulamalar, koltuğa atanmış ses aygıtını uygulama başına varsayılan aygıt olarak kullanır (belgelenmemiş Windows arabirimi)',
     no_user_isolation: 'Koltuklar arasında kullanıcı yalıtımı yok',
     activity_needs_console_listener: 'Konsol dinleyicisi şu an çalışmıyor: etkinlik algılanmıyor',
     hotkey_needs_filter: 'Kısayol yalnızca konsol dinleyicisi ya da giriş süzgeciyle çalışır',

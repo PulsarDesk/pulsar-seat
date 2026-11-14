@@ -38,6 +38,12 @@
 //! - Idle reset and "Oturumu kapat": close the seat's apps, show the launcher, start the
 //!   autostart apps again. The idle reset fires only after some input since the last
 //!   reset, so an unused seat is not restarted over and over.
+//! - Audio: each app process of the seat gets the seat's own endpoints (devices whose
+//!   effective mask is exactly the seat) as its per-app default endpoint
+//!   ([`seat_media::kiosk_audio`], undocumented Windows API, HYPOTHESIS): set when an app
+//!   starts (still suspended) and for new job processes, re-applied when the endpoint id
+//!   changes, cleared before the job ends. Fallback: session default + bar line
+//!   ([`tr::AUDIO_UNAVAILABLE`], [`tr::AUDIO_FAILED`]).
 //! - Back to the launcher: the bar's "Uygulamalar" button or Ctrl+Alt+Home
 //!   ([`seat_input::kiosk::HOME_CHORD_VK`]).
 //!
@@ -66,6 +72,7 @@ pub mod win;
 
 use seat_core::SeatNumber;
 use seat_core::device::{DeviceDetails, Rect};
+use seat_media::kiosk_audio::{Flow, KioskAudio, KioskAudioState, SeatEndpoints, pick_endpoints};
 use seat_proto::messages::{BackendReport, DeviceView};
 use seat_session::kiosk::{KioskPlan, SHELL_FLAG, decode_plan};
 
@@ -81,6 +88,8 @@ pub mod tr {
     pub const NO_SERVICE: &str = "Pulsar Seat hizmetine ulaşılamadı; cihaz listesi alınamıyor";
     pub const NO_DEVICES: &str = "Bu koltuğa klavye veya fare atanmamış";
     pub const START_FAILED: &str = "Uygulama başlatılamadı";
+    pub const AUDIO_UNAVAILABLE: &str = "Bu Windows sürümünde uygulama başına ses aygıtı yok: ses 1. koltuğun varsayılan aygıtından çıkar";
+    pub const AUDIO_FAILED: &str = "Uygulamaların sesi bu koltuğun ses aygıtına yönlendirilemedi; varsayılan ses aygıtı kullanılıyor";
     pub const HINT: &str = "Uygulama listesine dönmek için: çubuktaki “Uygulamalar” düğmesi ya da Ctrl+Alt+Home. Ctrl+Alt+Del bütün koltukları etkiler.";
 }
 
@@ -125,13 +134,23 @@ pub struct SeatDevices {
     pub units: Vec<String>,
     /// Desktop rectangles of the seat's monitors, in device-list order.
     pub monitors: Vec<Rect>,
+    /// The seat's own audio endpoints (per-app default of its apps, kiosk-audio).
+    pub audio: SeatEndpoints,
 }
 
 pub fn seat_devices(views: &[DeviceView], seat: SeatNumber) -> SeatDevices {
     let mut out = SeatDevices::default();
+    let mut audio = Vec::new();
     for v in views.iter().filter(|v| v.device.present && v.effective.single() == Some(seat)) {
         match &v.device.details {
             DeviceDetails::Input(i) if !i.interface_path.is_empty() => out.units.push(i.interface_path.clone()),
+            DeviceDetails::Audio(a) => {
+                let flow = match a.flow {
+                    seat_core::device::AudioFlow::Render => Flow::Render,
+                    seat_core::device::AudioFlow::Capture => Flow::Capture,
+                };
+                audio.push((flow, a.endpoint_id.clone(), a.state == "active"));
+            }
             DeviceDetails::Display(d) if d.in_console_desktop => {
                 if let Some(r) = d.desktop_rect.filter(|r| r.width > 0 && r.height > 0) {
                     out.monitors.push(r);
@@ -140,7 +159,21 @@ pub fn seat_devices(views: &[DeviceView], seat: SeatNumber) -> SeatDevices {
             _ => {}
         }
     }
+    out.audio = pick_endpoints(audio);
     out
+}
+
+/// Bar line for the seat's audio: only when the seat has its own endpoint and its apps
+/// cannot be routed to it.
+pub fn audio_notice(audio: &KioskAudio) -> Option<&'static str> {
+    if audio.endpoints().is_empty() {
+        return None;
+    }
+    match audio.state() {
+        KioskAudioState::Unavailable { .. } => Some(tr::AUDIO_UNAVAILABLE),
+        KioskAudioState::Failed { .. } => Some(tr::AUDIO_FAILED),
+        KioskAudioState::NoEndpoint | KioskAudioState::Routed { .. } => None,
+    }
 }
 
 /// The input backend in use is the KMDF filter.
@@ -456,6 +489,40 @@ mod tests {
         let d = seat_devices(&views, seat(2));
         assert_eq!(d.units, vec![r"\\?\HID#A".to_string()]);
         assert_eq!(d.monitors, vec![Rect { x: 1920, y: 0, width: 1920, height: 1080 }]);
+    }
+
+    #[test]
+    fn seat_audio_endpoints_and_notice() {
+        use seat_core::device::{AudioFlow, AudioInfo};
+        use seat_media::kiosk_audio::fake::FakePolicy;
+        use std::sync::Arc;
+        const R: &str = "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}";
+        const R_OFF: &str = "{0.0.0.00000000}.{22222222-2222-3333-4444-555555555555}";
+        const C: &str = "{0.0.1.00000000}.{33333333-2222-3333-4444-555555555555}";
+        let audio = |flow: AudioFlow, id: &str, state: &str| DeviceDetails::Audio(AudioInfo { flow, endpoint_id: id.into(), form_factor: "speakers".into(), state: state.into() });
+        let m2 = SeatMask::from_seats([seat(2)]);
+        let views = vec![
+            view("spk-off", DeviceKind::AudioRender, audio(AudioFlow::Render, R_OFF, "unplugged"), m2, true),
+            view("spk", DeviceKind::AudioRender, audio(AudioFlow::Render, R, "active"), m2, true),
+            view("mic3", DeviceKind::AudioCapture, audio(AudioFlow::Capture, C, "active"), SeatMask::from_seats([seat(3)]), true),
+        ];
+        let d = seat_devices(&views, seat(2));
+        assert_eq!(d.audio, SeatEndpoints { render: Some(R.into()), capture: None });
+        assert_eq!(seat_devices(&views, seat(3)).audio.capture.as_deref(), Some(C));
+        // No own endpoint: no line, whatever the policy says.
+        let mut a = KioskAudio::new(Arc::new(FakePolicy::unavailable("os_too_old")));
+        assert_eq!(audio_notice(&a), None);
+        a.set_endpoints(d.audio.clone());
+        assert_eq!(audio_notice(&a), Some(tr::AUDIO_UNAVAILABLE));
+        let p = Arc::new(FakePolicy::available());
+        let mut a = KioskAudio::new(p.clone());
+        a.set_endpoints(d.audio.clone());
+        a.sync(&[5].into_iter().collect());
+        assert_eq!(audio_notice(&a), None);
+        p.failing.lock().unwrap().insert(6);
+        a.sync(&[5, 6].into_iter().collect());
+        assert_eq!(audio_notice(&a), Some(tr::AUDIO_FAILED));
+        assert!(tr::AUDIO_UNAVAILABLE.contains("1. koltuğun"));
     }
 
     #[test]

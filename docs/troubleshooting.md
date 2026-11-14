@@ -378,3 +378,23 @@ uygulamalara ulaşır. Ham giriş, DirectInput ya da XInput kullanan oyunlar, ta
 özel moddaki oyunlar ve mağaza (UWP / MSIX) uygulamaları kiosk koltuğunda çalışmaz.
 Giriş süzgeci kurulu değilse kiosk koltuklarının tuşları 1. koltuğun öndeki penceresine de
 ulaşabilir (yönetici uygulamasında "Giriş tam yalıtılmıyor" notu).
+
+## 10. Kiosk koltuğunun sesi kendi aygıtından çıkmıyor
+
+Kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı (hoparlör, kulaklık, mikrofon)
+verildiyse, kiosk kabuğu koltuğun her uygulamasına bu aygıtı "uygulama başına varsayılan
+aygıt" olarak verir (Windows 10 1803 ve sonrası). Yönetici uygulamasında Kiosk sütununun
+altındaki "Ses:" satırı koltuğun aygıtını gösterir.
+
+1. "koltuğa ayrı ses aygıtı atanmamış" yazıyorsa ses aygıtını yalnızca bu koltuğa atayın
+   (birden çok koltuğa atanmış aygıt sayılmaz).
+2. Koltuğun alt çubuğunda "uygulama başına ses aygıtı yok" ya da "yönlendirilemedi"
+   yazıyorsa Windows bu ayarı kabul etmedi; ses 1. koltuğun varsayılan aygıtından çıkar.
+   Bu ayar belgelenmemiş bir Windows arabirimiyle yapılır ve bir Windows güncellemesi onu
+   bozabilir.
+3. Uygulama sesi hâlâ eski aygıttan çalıyorsa uygulamayı "Oturumu kapat" ile yeniden
+   başlatın: bazı uygulamalar yeni aygıtı yalnızca yeni açtıkları seste kullanır.
+4. Aynı programı iki kiosk koltuğunda çalıştırmayın: Windows bu ayarı program başına
+   saklar, iki koltuk aynı aygıtı paylaşır (yönetici uygulaması bunu uyarır).
+5. Windows Ayarlar > Sistem > Ses > Uygulama ses düzeyi ve cihaz tercihleri sayfasında
+   kalmış bir kayıt varsa oradan "Sıfırla" ile temizleyebilirsiniz.

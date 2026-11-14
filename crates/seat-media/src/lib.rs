@@ -30,6 +30,10 @@
 //!   - `PrinterAcl` ([`gate::printer`]): print-queue DACL per seat (optional, spec 70 §5.2(5));
 //!   - class-level default descriptors ([`gate::classdefault`], run by `DeviceSecurity` when
 //!     `GatePlan::class_defaults` is set; spec 70 §5.2(2)).
+//! - [`kiosk_audio`] + [`create_app_endpoint_policy`]: per-app default endpoint of kiosk
+//!   seat apps (trait `AppEndpointPolicy`, planner `KioskAudio`, fake; Windows: the
+//!   undocumented `AudioPolicyConfig` factory). The only place that sets an endpoint
+//!   default, and only per app process, never the system default.
 //! - [`play_tone_on_endpoint`]: the WASAPI test tone itself, for the console helper
 //!   (`pulsar-seat-service --audio-helper`), so the tone plays from the console session.
 //! - [`redirect::seat_cameras`]: cameras a seat may offer over RDP camera redirection
@@ -45,6 +49,7 @@ pub mod gate;
 pub mod inventory;
 pub mod journal;
 pub mod keys;
+pub mod kiosk_audio;
 pub mod redirect;
 
 #[cfg(windows)]
@@ -86,6 +91,15 @@ pub fn play_tone_on_endpoint(endpoint_id: &str, duration_ms: u32) -> seat_core::
         let _ = (endpoint_id, duration_ms);
         Err(seat_core::backend::BackendError::unsupported("this platform"))
     }
+}
+
+/// The per-app default endpoint policy for kiosk seats (Windows: the undocumented
+/// `AudioPolicyConfig` factory, [`kiosk_audio`]; elsewhere always unavailable).
+pub fn create_app_endpoint_policy() -> Arc<dyn kiosk_audio::AppEndpointPolicy> {
+    #[cfg(windows)]
+    return Arc::new(win::policyconfig::WinAppEndpointPolicy::new());
+    #[cfg(not(windows))]
+    return Arc::new(kiosk_audio::NoPolicy("os_unsupported"));
 }
 
 /// The audio router for `kind` (Windows: MMDevice / WASAPI source).

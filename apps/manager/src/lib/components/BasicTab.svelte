@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setWallpaper, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -28,6 +28,8 @@
   const readOnly = $derived(!store.isAdmin);
   // Kiosk seats exist only with the desktops session method (spec 35 §5.1 U3).
   const kioskMode = $derived(draft?.settings.backends.session === 'desktops');
+  // `kiosk_audio_per_app` / `kiosk_audio_shared` of the desktops backend (Windows build).
+  const desktopsNotes = $derived(store.backends?.session.find((b) => b.kind === 'desktops')?.notes ?? []);
 
   function settings(f: (c: Config) => void) {
     store.edit((c) => {
@@ -64,6 +66,7 @@
       <tbody>
         {#each draft.seats as s (s.number)}
           {@const rt = store.status?.seats.find((r) => r.seat === s.number)}
+          {@const ka = kioskMode ? kioskAudio(draft, s.number, store.devices, desktopsNotes) : null}
           <tr>
             <td>
               <button type="button" class="link" onclick={() => (dialog = { kind: 'name', seat: s.number })}>{s.number}. {s.name === String(s.number) ? '' : s.name}</button>
@@ -115,6 +118,12 @@
                 <button type="button" class="link" aria-label={`${s.number}. ${t.kiosk.column}`} onclick={() => (dialog = { kind: 'kiosk', seat: s.number })}>
                   {localOf(s).kiosk_shell ? t.kiosk.count(localOf(s).kiosk_shell!.apps.length) : t.kiosk.off}
                 </button>
+                {#if ka}
+                  <br /><small class="hint" data-testid={`kiosk-audio-${s.number}`}>
+                    {ka.state === 'unsupported' ? t.kiosk.audio.unsupported : ka.state === 'no_endpoint' ? t.kiosk.audio.noEndpoint : t.kiosk.audio.routed(ka.render, ka.capture)}
+                  </small>
+                  {#if ka.sharedWith.length}<br /><small class="warn-text">{t.kiosk.audio.sharedApp(ka.sharedWith)}</small>{/if}
+                {/if}
               </td>
             {/if}
             <td class="hint">{rt ? seatLabel(rt.state) : t.none}</td>

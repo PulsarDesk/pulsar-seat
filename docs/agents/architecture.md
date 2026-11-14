@@ -440,6 +440,43 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   every keyboard without the filter and act as the console user on seat 1's desktop;
   `RIDEV_NOLEGACY` / `RIDEV_NOHOTKEYS` cannot stop them and a `WH_KEYBOARD_LL` hook cannot
   tell keyboards apart. Shown in the manager limits text and `tr::HINT`.
+- **Audio (round 4 kiosk-audio, 2026-11-14):** one session = one system default endpoint,
+  so the shell gives each app process of the seat a **per-app** default endpoint (the one
+  in Settings > Sound > App volume and device preferences) instead. Endpoints: the seat's
+  audio devices whose effective mask is exactly the seat (`SeatDevices::audio`, per flow
+  the first `active` one, else the first; `seat_media::kiosk_audio::pick_endpoints`).
+  Planner `seat_media::kiosk_audio::KioskAudio` over the trait `AppEndpointPolicy`
+  (fake: `kiosk_audio::fake::FakePolicy`): `sync(pids)` sets new job processes (called in
+  `launch` while the app is still suspended, and every 250 ms tick for children),
+  `set_endpoints` re-applies to every tracked pid when the device-list poll (3 s) reports
+  another endpoint id (hot-plug, port move) and clears a flow that lost its endpoint,
+  `clear_all` runs before the job is terminated (reset / log out / shutdown). Windows:
+  `seat_media::win::policyconfig::WinAppEndpointPolicy`, the **undocumented** WinRT factory
+  `Windows.Media.Internal.AudioPolicyConfig` (layout as in open-source EarTrumpet, MIT):
+  vtable slot 25 `SetPersistedDefaultAudioEndpoint(pid, flow, role, HSTRING)` for the roles
+  console, multimedia and communications, device string
+  `\\?\SWD#MMDEVAPI#<endpoint id>#<DEVINTERFACE_AUDIO_RENDER|CAPTURE>`, empty = clear.
+  Build from `HKLM\...\Windows NT\CurrentVersion\CurrentBuildNumber`: < 17134 none
+  (`os_too_old`), 17134..21389 IID `2a59116d-…`, ≥ 21390 IID `ab3d4648-…`
+  (`seat_core::consts::PER_APP_AUDIO_*`). Fallback for every failure (old build, factory
+  missing, a call failing): log once, the app stays on the session default, bar line
+  `tr::AUDIO_UNAVAILABLE` / `tr::AUDIO_FAILED` (only when the seat has its own endpoint).
+  The `desktops` probe reports `kiosk_audio_per_app` (build ≥ 17134) or `kiosk_audio_shared`;
+  the manager shows per kiosk seat "Ses: çıkış … / mikrofon …", "koltuğa ayrı ses aygıtı
+  atanmamış" or "bu Windows sürümünde … yok" under the Kiosk column (`model.kioskAudio`), and
+  warns when two kiosk seats list the same program. This is not the system default
+  endpoint setter that spec 35 §5.3 / spec 60 §5 exclude; it is a maintainer decision
+  (2026-11-14) to use the per-app one. **Risk:** the interface is not a public contract;
+  a Windows update may change its id or slot order (a wrong slot would call another
+  method); the build gates and the activation check catch only an id change.
+  **HYPOTHESIS (all untested on hardware):** the call works from the non-packaged shell
+  (console user, medium integrity) and for a suspended process; running apps pick it up for
+  new streams only (most re-open streams on a device change); Windows persists it per
+  executable, so two kiosk seats running the same exe share one entry (last writer wins);
+  clearing works only while the pid lives, so an app that ended on its own or a crashed
+  shell leaves a persisted entry for that exe until its next kiosk launch overwrites it;
+  child processes (browser audio services) are covered by the job tick or by the per-exe
+  entry; capture routing works the same as render.
 - **Limits / open:** apps reading raw input, DirectInput, XInput, `GetAsyncKeyState`,
   `GetCursorPos`; exclusive full-screen games; packaged apps; apps that hand off to a running
   instance. Untested on hardware: everything in the shell, the stop event across sessions,

@@ -1014,7 +1014,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     - Host containment: one shared account, no loaded profile, `--console` never uses it.
     - Second listener: seats without an account need `extra_accounts` (secure default).
     - Kiosk: system hotkeys / SAS reach every seat without the input filter; U3 app limits;
-      no per-seat audio for kiosk apps.
+      no per-seat audio for kiosk apps (built 2026-11-14 round 4 kiosk-audio as a per-app
+      default endpoint, untested; see the round 4 kiosk-audio entry).
     - Gamepads per seat: not built (HID pads only via the never-loaded KMDF filter, XInput
       always shared; `gamepads_shared`). **Decision item.**
     - Merge plan: draft only; needs the joint pass with the Pulsar Split session.
@@ -1063,3 +1064,30 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   **Next:** step 5 (`SecretStore` slots + LSA for the remote seat's Pulsar secrets), then
   step 6 (Split engine as the remote seat worker; it then reads `SeatConfig.remote` instead
   of the record store and answers the protocol 3 requests).
+- 2026-11-14: **round 4 kiosk-audio done** (architecture.md 4.1.3 "Audio"). Kiosk seats
+  (one console session, one system default endpoint) now give each app process the seat's
+  own endpoints as its **per-app** default: `seat_media::kiosk_audio` (trait
+  `AppEndpointPolicy`, planner `KioskAudio`: set on launch while suspended, every tick for
+  new job processes, re-applied on an endpoint id change, cleared before the job ends;
+  fake `FakePolicy`), Windows `seat_media::win::policyconfig` (undocumented WinRT factory
+  `Windows.Media.Internal.AudioPolicyConfig`, slot 25 `SetPersistedDefaultAudioEndpoint`,
+  IID by build: < 17134 none, < 21390 downlevel, else current; `seat_core::consts::
+  PER_APP_AUDIO_*`). Fallback: log + bar line (`tr::AUDIO_UNAVAILABLE` / `AUDIO_FAILED`).
+  `desktops` probe note `kiosk_audio_per_app` (build ≥ 17134) instead of
+  `kiosk_audio_shared`. Manager: "Ses: …" line per kiosk seat under the Kiosk column
+  (`model.kioskAudio`), warning when two kiosk seats list the same program, new limits copy,
+  troubleshooting.md section 10. Maintainer decision (this round): the per-app setter is
+  allowed; spec 35 §5.3 / 60 §5 exclude only the system default setter.
+  Gates green: cargo 1515 passed / 6 ignored (+1 ignored: live factory probe), clippy
+  aarch64 + x86_64 clean, manager 183 / check / build, shim 8 (host) + x64 / i686 check,
+  installer scripts 49.
+  - Open (all HYPOTHESIS, nothing ran on hardware): the factory works from the
+    non-packaged shell and for a suspended pid; running apps pick it up only for new
+    streams; Windows keys the entry per executable (two seats with one exe share it);
+    clearing needs a live pid (an app that ended by itself or a crashed shell leaves an
+    entry until the next launch of that exe overwrites it); child processes; capture.
+  - Risk: undocumented interface; a Windows update can change the IID (caught: factory
+    missing -> fallback) or the slot order (not caught: a wrong method would be called).
+    Recheck on each new Windows feature update.
+  - Note: the unfinished kiosk-isolation work was parked in `git stash` during this
+    package and restored afterwards (still uncommitted).

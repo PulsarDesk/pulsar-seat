@@ -242,8 +242,10 @@ impl SessionBackend for DesktopsBackend {
         }
         // Kiosk shell seats: same user for all seats, input as posted messages (spec 35 §4 U3).
         notes.push("kiosk_shell_seat_aware_apps_only".into());
-        // Spec 35 U3: no per-seat audio for kiosk apps (one session, one default device).
-        notes.push("kiosk_audio_shared".into());
+        // Spec 35 U3: one session, one default device. From Windows 10 1803 the kiosk shell
+        // gives each app the seat's own endpoint as its per-app default (kiosk-audio,
+        // undocumented API, HYPOTHESIS); before that the apps share the default device.
+        notes.push(if e.build >= seat_core::consts::PER_APP_AUDIO_MIN_BUILD { "kiosk_audio_per_app" } else { "kiosk_audio_shared" }.into());
         let availability = match self.d.console_info() {
             None => Availability::Unavailable { reason: reason::CONSOLE_NOT_READY.into() },
             Some(i) if i.user_name.is_none() => Availability::NeedsSetup { what: "console_sign_in".into() },

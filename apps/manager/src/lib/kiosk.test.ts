@@ -2,8 +2,9 @@
 // Kiosk seats (spec 35 §5.1 U3): config editing and the local checks that mirror seat-core.
 import { describe, expect, it } from 'vitest';
 import { demoConfig } from './demo.ts';
-import { kioskSeatOneDesktop, localIssues, setKioskSeatOneDesktop, setKioskShell } from './model.ts';
-import { issueText, t } from './i18n.ts';
+import { addSeat, kioskAudio, kioskSeatOneDesktop, localIssues, setKioskSeatOneDesktop, setKioskShell } from './model.ts';
+import { issueText, noteLabel, t } from './i18n.ts';
+import type { DeviceView } from './types.ts';
 
 describe('kiosk shell config', () => {
   it('cleans rows and clamps numbers', () => {
@@ -47,6 +48,41 @@ describe('kiosk shell config', () => {
     expect(localIssues(c, null).map((i) => i.code)).toContain('invalid_kiosk_shell');
     expect(issueText.invalid_kiosk_shell).toBeTruthy();
     expect(issueText.kiosk_shell_ignored_on_seat_one).toBeTruthy();
+  });
+});
+
+describe('kiosk audio', () => {
+  const dev = (key: string, flow: 'render' | 'capture', name: string, seat: number, state = 'active', present = true): DeviceView => ({
+    device: { key, kind: flow === 'render' ? 'audio_render' : 'audio_capture', name, present, details: { type: 'audio', flow, endpoint_id: `{0.0.${flow === 'render' ? 0 : 1}.00000000}.{${key}}`, form_factor: 'speakers', state } },
+    effective: 1 << (seat - 1),
+    source: { type: 'explicit' },
+    arrived_ms: 0
+  });
+  const app = (command: string) => ({ title: 'x', command, autostart: false, monitor: 0 });
+
+  it('shows the seat-only endpoints, prefers active ones and flags shared programs', () => {
+    let c = setKioskShell(addSeat(demoConfig())!.config, 2, { apps: [app('C:\\Web\\web.exe')], idle_reset_minutes: 0 });
+    const devices = [dev('a', 'render', 'Kapalı hoparlör', 2, 'unplugged'), dev('b', 'render', 'Kulaklık', 2), dev('c', 'capture', 'Mikrofon', 3), dev('d', 'render', 'Yok', 2, 'active', false)];
+    expect(kioskAudio(c, 2, devices, ['kiosk_audio_per_app'])).toEqual({ state: 'routed', render: 'Kulaklık', capture: null, sharedWith: [] });
+    expect(kioskAudio(c, 3, devices, [])).toBeNull();
+    // Seat 1 as the normal desktop is never a kiosk seat.
+    c = setKioskShell(c, 1, { apps: [app('C:\\Web\\web.exe')], idle_reset_minutes: 0 });
+    expect(kioskAudio(c, 1, devices, [])).toBeNull();
+    c = setKioskShell(c, 3, { apps: [app(' c:\\web\\WEB.exe ')], idle_reset_minutes: 0 });
+    expect(kioskAudio(c, 2, devices, [])?.sharedWith).toEqual([3]);
+    expect(kioskAudio(c, 3, devices, [])?.state).toBe('routed');
+    expect(kioskAudio(c, 3, [], [])?.state).toBe('no_endpoint');
+    expect(kioskAudio(c, 2, devices, ['kiosk_audio_shared'])?.state).toBe('unsupported');
+  });
+
+  it('has Turkish copy for every state', () => {
+    expect(t.kiosk.audio.routed('Kulaklık', null)).toBe('Ses: çıkış Kulaklık');
+    expect(t.kiosk.audio.routed('A', 'B')).toContain('mikrofon B');
+    expect(t.kiosk.audio.noEndpoint).toContain('1. koltuğun');
+    expect(t.kiosk.audio.unsupported).toContain('Windows');
+    expect(t.kiosk.audio.sharedApp([3, 4])).toContain('3, 4. koltukta');
+    expect(t.kiosk.limits).toContain('belgelenmemiş');
+    expect(noteLabel('kiosk_audio_per_app')).toContain('uygulama başına');
   });
 });
 

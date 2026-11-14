@@ -604,7 +604,9 @@ fn desktops_kiosk_shell_seats() {
     assert_eq!(w.launcher.launched.lock().unwrap().len(), 2);
     b.log_off(seat(1), 1).unwrap();
     assert!(b.probe().unwrap().notes.contains(&"kiosk_shell_seat_aware_apps_only".to_string()));
-    assert!(b.probe().unwrap().notes.contains(&"kiosk_audio_shared".to_string()));
+    // Fake edition: build 26100, so the kiosk apps get the per-app endpoint.
+    assert!(b.probe().unwrap().notes.contains(&"kiosk_audio_per_app".to_string()));
+    assert!(!b.probe().unwrap().notes.contains(&"kiosk_audio_shared".to_string()));
 }
 
 #[test]

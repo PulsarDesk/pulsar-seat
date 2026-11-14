@@ -80,3 +80,10 @@ pub const DRIVER_INTERFACE_MAJOR: u16 = 1;
 /// Coexistence: service keys of the reference product (interop identifiers, used for
 /// detection only, spec 90 §11 item 4).
 pub const REFERENCE_SERVICE_KEYS: [&str; 2] = ["MUTESV_SERVICE", "MUTENX_SERVICE"];
+
+/// First Windows build with the per-app default audio endpoint (Windows 10 1803; the
+/// undocumented `Windows.Media.Internal.AudioPolicyConfig` factory). Kiosk seats route
+/// each app's audio to the seat's endpoint from this build on (`seat_media::kiosk_audio`).
+pub const PER_APP_AUDIO_MIN_BUILD: u32 = 17134;
+/// From this build the factory answers a newer interface id (Windows 11 21H2 / 21390).
+pub const PER_APP_AUDIO_NEW_IID_BUILD: u32 = 21390;
