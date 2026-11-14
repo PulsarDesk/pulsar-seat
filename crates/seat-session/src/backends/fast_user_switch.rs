@@ -15,9 +15,12 @@
 //!   seats 2..N) safe: they never switch an active user away; the service should not
 //!   auto-start seats on this non-concurrent backend at all;
 //! - a session of the seat's account exists (matched by **account SID**, never by name)
-//!   → `WTSConnectSessionW(that, console)` brings it to the console (the current console
-//!   session is disconnected, not logged off). Without a stored password the target must
-//!   be locked, so Windows asks for the password (`session_not_locked` otherwise);
+//!   → with the stored password `WTSConnectSessionW(that, console)` brings it to the
+//!   console (the current console session is disconnected, not logged off). Without one the
+//!   target must be locked (`session_not_locked` otherwise) and is **not** connected: a
+//!   SYSTEM connect without a password shows a locked session unlocked (VM test
+//!   2026-11-15). The console goes to a fresh logon screen instead, where the user signs in
+//!   and Windows reconnects their session;
 //! - otherwise → `WTSDisconnectSession(console)`: Windows shows a fresh logon screen on
 //!   the console (a new session), where the seat's user signs in.
 //!
@@ -25,9 +28,11 @@
 //! (spec 30 §6.2.1). Instead, while the Pulsar credential provider is registered
 //! ([`crate::credprov`], spec 35 §5.4), the service arms a one-time credential for the fresh
 //! logon session this backend reports (`SessionState::AtLogon`, no user) and LogonUI's
-//! provider in that session submits it; `caps().auto_logon` says whether it is registered. **Untested on hardware**: `WTSConnectSessionW` from session
-//! 0 as SYSTEM (HYPOTHESIS: needs the target user's password unless the caller holds the
-//! Connect permission on the session — the password is passed when stored).
+//! provider in that session submits it; `caps().auto_logon` says whether it is registered.
+//! Seen in the ARM64 Hyper-V test VM (2026-11-15, Windows 11 Pro 26300): the console
+//! disconnect, the fresh logon session, the credential-provider auto-logon and
+//! `WTSConnectSessionW` from session 0 as SYSTEM (which needs no password and unlocks the
+//! target, hence the rule above). Not on hardware yet.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -143,6 +148,24 @@ impl FastUserSwitchBackend {
             .map(|s| s.id))
     }
 
+    /// Bring the existing session `id` onto the console. With the seat's stored password:
+    /// `WTSConnectSessionW`. Without one, never: a connect from the SYSTEM service without a
+    /// password shows a **locked** session's desktop unlocked (VM test 2026-11-15, Windows 11
+    /// 26300 ARM64; the earlier HYPOTHESIS that Windows then asks for the password was
+    /// false). The console is handed to a fresh logon screen instead, where the session's
+    /// user signs in and Windows reconnects that session (its own fast user switching).
+    /// A console at the logon screen already (no user) is left as it is.
+    fn bring_to_console(&self, id: u32, console: u32, pw: Option<&seat_core::Secret>, all: &[WtsSession]) -> BackendResult<()> {
+        if pw.is_some() {
+            return Ok(self.d.wts.connect(id, console, pw)?);
+        }
+        if all.iter().any(|s| s.id == console && !s.user.is_empty()) {
+            self.d.wts.disconnect(console)?;
+            log::info!("session {id}: no password; console session {console} handed to the logon screen for its user");
+        }
+        Ok(())
+    }
+
     fn timeout(settings: &GlobalSettings) -> Duration {
         Duration::from_secs(u64::from(settings.timings.seat_start_timeout_s.clamp(30, 120)))
     }
@@ -218,7 +241,7 @@ impl SessionBackend for FastUserSwitchBackend {
                         format!("seat 1's session {id} is not locked; it is not switched onto the console"),
                     ));
                 }
-                self.d.wts.connect(id, console, pw)?;
+                self.bring_to_console(id, console, pw, &all)?;
                 log::info!("seat 1: switched its session {id} back onto the console");
                 self.seats().insert(req.seat, (id, None));
                 let info = self.info_of(id)?.unwrap_or(SessionInfo { session_id: id, state: SessionState::Active, user_sid: None, user_name: None, client_name: None });
@@ -281,7 +304,7 @@ impl SessionBackend for FastUserSwitchBackend {
                         format!("session {id} is not locked and no password is stored; it is not switched onto the console"),
                     ));
                 }
-                self.d.wts.connect(id, console, pw)?;
+                self.bring_to_console(id, console, pw, &all)?;
                 log::info!("seat {}: switched session {id} onto the console", req.seat);
                 id
             }

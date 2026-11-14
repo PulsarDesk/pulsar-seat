@@ -484,15 +484,23 @@ fn fsu_seat1_comes_back_onto_the_console() {
     w.wts.add(FakeWts::local(i2.session_id, "ali", true));
     w.wts.set_sid(i2.session_id, "S-1-5-21-1-1002");
     assert_eq!(b.start(&req(&s1, &settings, None)).unwrap_err().reason, "console_in_use");
-    // 2 -> 1: seat 2 locked, seat 1's own session comes back (it is locked: no password).
+    // 2 -> 1: seat 2 locked, seat 1's own session (locked, no password). A SYSTEM connect
+    // without a password would show it unlocked (VM test 2026-11-15): the console goes to
+    // a fresh logon screen instead, where seat 1's user signs in to their session.
     w.wts.set_locked(i2.session_id, Some(true));
+    let disc = w.wts.disconnects.lock().unwrap().len();
     let StartStep::Started(back) = b.start(&req(&s1, &settings, None)).unwrap() else { panic!() };
     assert_eq!(back.session_id, 1);
-    assert_eq!(w.wts.connects.lock().unwrap().last().copied(), Some((1, i2.session_id, false)));
+    assert!(w.wts.connects.lock().unwrap().is_empty(), "never connected without a password");
+    assert_eq!(w.wts.disconnects.lock().unwrap()[disc..], [i2.session_id]);
+    // Windows reconnects seat 1's session once its user signed in.
+    w.wts.connect(1, w.wts.console_session().unwrap(), None).unwrap();
     assert_eq!(w.wts.console_session(), Some(1));
     // An unlocked seat-1 session without a password is never connected back.
     w.wts.set_locked(1, Some(true));
     b.start(&req(&s2, &settings, None)).unwrap();
+    // (no password: fresh logon screen; seat 2's user signs in, Windows reconnects i2)
+    w.wts.connect(i2.session_id, w.wts.console_session().unwrap(), None).unwrap();
     w.wts.set_locked(1, Some(false));
     assert_eq!(b.start(&req(&s1, &settings, None)).unwrap_err().reason, "session_not_locked");
     // A reused session id of another user is not seat 1's.
@@ -514,11 +522,14 @@ fn fsu_remembers_seat1_at_the_first_switch_away() {
     w.wts.set_locked(1, Some(true));
     let StartStep::Started(i2) = b.start(&req(&seat_cfg(2, Some("ali")), &settings, None)).unwrap() else { panic!() };
     assert_eq!(b.console_seat_away(), Some(1));
-    // Seat 2's logon session at the logon screen (no user): seat 1 comes back.
+    // Seat 2's logon session at the logon screen (no user): it is a logon screen already,
+    // seat 1's user signs in there (no connect without a password, nothing disconnected).
+    let disc = w.wts.disconnects.lock().unwrap().len();
     let StartStep::Started(back) = b.start(&req(&seat_cfg(1, None), &settings, None)).unwrap() else { panic!() };
     assert_eq!(back.session_id, 1);
-    assert_eq!(w.wts.connects.lock().unwrap().last().copied(), Some((1, i2.session_id, false)));
-    assert_eq!(b.console_seat_away(), None, "seat 1 holds the console again");
+    assert!(w.wts.connects.lock().unwrap().is_empty());
+    assert_eq!(w.wts.disconnects.lock().unwrap().len(), disc);
+    let _ = i2;
 }
 
 // ---------- desktops ----------
