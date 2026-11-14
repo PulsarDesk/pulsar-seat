@@ -6,6 +6,9 @@
 //! Install layout (installer package):
 //! `<install>\shim\x64\{pulsar-split-launch.exe, PulsarSplitShim.dll}` and
 //! `<install>\shim\x86\{pulsar-split-launch32.exe, PulsarSplitShim.dll}`.
+//! There is **no ARM64 module** (round 4 decision: no ARM64 inline-hooking backend). Native
+//! ARM64 targets start without the module; x64 (and ARM64EC) targets would take the x64
+//! module under emulation (HYPOTHESIS, never run on an ARM64 PC).
 
 use crate::dxvk::Bitness;
 use crate::error::ShimError;
@@ -38,6 +41,39 @@ pub fn bitness_of_machine(m: u16) -> Option<Bitness> {
     }
 }
 
+/// Process architecture of a launcher or target image. `Arm64` is detected only so that
+/// such targets start without the module (there is no ARM64 module build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arch {
+    X86,
+    X64,
+    Arm64,
+}
+
+impl Arch {
+    /// Install sub-folder under `<install>\shim\` and launcher file name; `None` for ARM64
+    /// (no module build).
+    pub fn launcher_path(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::X86 => Some(("x86", LAUNCHER_X86)),
+            Self::X64 => Some(("x64", LAUNCHER_X64)),
+            Self::Arm64 => None,
+        }
+    }
+}
+
+/// Architecture of a process started from an image with this COFF machine. ARM64EC images
+/// carry the AMD64 machine value and run x64-compatible processes (x64 module, HYPOTHESIS);
+/// ARM64X images carry ARM64 and start native ARM64 processes (no module).
+pub fn arch_of_machine(m: u16) -> Option<Arch> {
+    match m {
+        IMAGE_FILE_MACHINE_I386 => Some(Arch::X86),
+        IMAGE_FILE_MACHINE_AMD64 => Some(Arch::X64),
+        IMAGE_FILE_MACHINE_ARM64 => Some(Arch::Arm64),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchArgs {
     /// Inject the given module instead of the one next to the launcher.
@@ -46,11 +82,26 @@ pub struct LaunchArgs {
     pub no_inject: bool,
     /// Wait for the target and return its exit code.
     pub wait: bool,
+    /// `--attach <pid>` (round 4, kiosk shell): inject into an existing process that its
+    /// creator started suspended, and do not resume it (the creator does). `exe` is then
+    /// empty; the image is read from the process.
+    pub attach: Option<u32>,
     pub exe: PathBuf,
     pub args: Vec<String>,
 }
 
-pub const USAGE: &str = "usage: pulsar-split-launch [--module <dll>] [--no-inject] [--wait] -- <exe> [args...]";
+pub const USAGE: &str =
+    "usage: pulsar-split-launch [--module <dll>] [--no-inject] [--wait] -- <exe> [args...] | [--module <dll>] --attach <pid>";
+
+/// Exit codes of `--attach`: hooks active, module loaded but no hooks active, injection
+/// failed (blocked or missing module), a remote thread timed out (the creator must kill
+/// the suspended process and start it again without the module).
+pub mod attach_exit {
+    pub const ACTIVE: i32 = 0;
+    pub const INACTIVE: i32 = 3;
+    pub const BLOCKED: i32 = 4;
+    pub const TIMED_OUT: i32 = 5;
+}
 
 /// Parses `[--module <dll>] [--no-inject] [--wait] [--x86] -- <exe> <args…>` (argv without
 /// argv[0]). `--x86` is accepted for compatibility and ignored: the bitness is read from
@@ -59,6 +110,7 @@ pub fn parse_launch_args(argv: &[String]) -> Result<LaunchArgs, ShimError> {
     let mut module = None;
     let mut no_inject = false;
     let mut wait = false;
+    let mut attach = None;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -71,6 +123,15 @@ pub fn parse_launch_args(argv: &[String]) -> Result<LaunchArgs, ShimError> {
                 module = Some(PathBuf::from(argv.get(i).ok_or_else(|| ShimError::InvalidValue(USAGE.into()))?));
             }
             "--no-inject" => no_inject = true,
+            "--attach" => {
+                i += 1;
+                let pid = argv
+                    .get(i)
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|p| *p != 0)
+                    .ok_or_else(|| ShimError::InvalidValue(USAGE.into()))?;
+                attach = Some(pid);
+            }
             "--wait" => wait = true,
             "--x86" => {}
             other if other.starts_with("--") => {
@@ -81,11 +142,18 @@ pub fn parse_launch_args(argv: &[String]) -> Result<LaunchArgs, ShimError> {
         }
         i += 1;
     }
+    if attach.is_some() {
+        // Attach mode takes no target command line and never waits.
+        if i < argv.len() || wait {
+            return Err(ShimError::InvalidValue(USAGE.into()));
+        }
+        return Ok(LaunchArgs { module, no_inject, wait, attach, exe: PathBuf::new(), args: Vec::new() });
+    }
     let exe = argv.get(i).ok_or_else(|| ShimError::InvalidValue(USAGE.into()))?;
     if exe.is_empty() {
         return Err(ShimError::InvalidValue(USAGE.into()));
     }
-    Ok(LaunchArgs { module, no_inject, wait, exe: PathBuf::from(exe), args: argv[i + 1..].to_vec() })
+    Ok(LaunchArgs { module, no_inject, wait, attach, exe: PathBuf::from(exe), args: argv[i + 1..].to_vec() })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,25 +162,26 @@ pub enum LaunchPlan {
     InjectHere { module: PathBuf },
     /// The target has the other bitness: re-run the matching launcher with the same args.
     Delegate { launcher: PathBuf },
-    /// ARM64 (out of scope, spec 50 §14) or `--no-inject`: start without the module.
+    /// Unknown machine, native ARM64 target or `--no-inject`: start without the module.
     NoInject { reason: &'static str },
 }
 
-/// `own` = bitness of the running launcher; `target` = machine of the target image.
-pub fn plan_launch(own: Bitness, target_machine: Option<u16>, launcher_dir: &Path, a: &LaunchArgs) -> LaunchPlan {
+/// `own` = architecture of the running launcher; `target` = machine of the target image.
+/// A target of the other bitness is handed to the sibling launcher (`..\x86\` /
+/// `..\x64\`); a native ARM64 target starts without the module (`arm64_unsupported`).
+pub fn plan_launch(own: Arch, target_machine: Option<u16>, launcher_dir: &Path, a: &LaunchArgs) -> LaunchPlan {
     if a.no_inject {
         return LaunchPlan::NoInject { reason: "no_inject" };
     }
-    let Some(target) = target_machine.and_then(bitness_of_machine) else {
+    let Some(target) = target_machine.and_then(arch_of_machine) else {
         return LaunchPlan::NoInject { reason: "unsupported_machine" };
+    };
+    let Some((folder, launcher)) = target.launcher_path() else {
+        return LaunchPlan::NoInject { reason: "arm64_unsupported" };
     };
     if target != own {
         let sibling = launcher_dir.parent().unwrap_or(launcher_dir);
-        let launcher = match target {
-            Bitness::X86 => sibling.join("x86").join(LAUNCHER_X86),
-            Bitness::X64 => sibling.join("x64").join(LAUNCHER_X64),
-        };
-        return LaunchPlan::Delegate { launcher };
+        return LaunchPlan::Delegate { launcher: sibling.join(folder).join(launcher) };
     }
     let module = a.module.clone().unwrap_or_else(|| launcher_dir.join(crate::MODULE_X64));
     LaunchPlan::InjectHere { module }
@@ -161,6 +230,11 @@ pub fn delegate_args(a: &LaunchArgs) -> Vec<String> {
     if let Some(m) = &a.module {
         v.push("--module".into());
         v.push(m.to_string_lossy().into_owned());
+    }
+    if let Some(pid) = a.attach {
+        v.push("--attach".into());
+        v.push(pid.to_string());
+        return v;
     }
     if a.wait {
         v.push("--wait".into());
@@ -218,6 +292,13 @@ mod tests {
         assert!(parse_launch_args(&s(&["--bogus", "x"])).is_err());
         assert!(parse_launch_args(&s(&["--"])).is_err());
         assert!(parse_launch_args(&s(&["--module"])).is_err());
+        let at = parse_launch_args(&s(&["--module", r"D:\m.dll", "--attach", "4242"])).unwrap();
+        assert_eq!(at.attach, Some(4242));
+        assert_eq!(delegate_args(&at), s(&["--module", r"D:\m.dll", "--attach", "4242"]));
+        assert!(parse_launch_args(&s(&["--attach", "0"])).is_err());
+        assert!(parse_launch_args(&s(&["--attach", "x"])).is_err());
+        assert!(parse_launch_args(&s(&["--attach", "5", "--", "g.exe"])).is_err());
+        assert!(parse_launch_args(&s(&["--wait", "--attach", "5"])).is_err());
         assert_eq!(delegate_args(&parse_launch_args(&s(&["--wait", "--", "g.exe", "x"])).unwrap()), s(&["--wait", "--", "g.exe", "x"]));
     }
 
@@ -226,19 +307,25 @@ mod tests {
         let dir = Path::new(r"C:\PF\Pulsar Split\shim\x64");
         let a = parse_launch_args(&s(&["--", "g.exe"])).unwrap();
         assert_eq!(
-            plan_launch(Bitness::X64, Some(0x8664), dir, &a),
+            plan_launch(Arch::X64, Some(0x8664), dir, &a),
             LaunchPlan::InjectHere { module: dir.join("PulsarSplitShim.dll") }
         );
         assert_eq!(
-            plan_launch(Bitness::X64, Some(0x14c), dir, &a),
+            plan_launch(Arch::X64, Some(0x14c), dir, &a),
             LaunchPlan::Delegate { launcher: PathBuf::from(r"C:\PF\Pulsar Split\shim\x86\pulsar-split-launch32.exe") }
         );
+        // Round 4: no ARM64 module; native ARM64 targets start without it.
         assert_eq!(
-            plan_launch(Bitness::X64, Some(IMAGE_FILE_MACHINE_ARM64), dir, &a),
-            LaunchPlan::NoInject { reason: "unsupported_machine" }
+            plan_launch(Arch::X64, Some(IMAGE_FILE_MACHINE_ARM64), dir, &a),
+            LaunchPlan::NoInject { reason: "arm64_unsupported" }
         );
+        assert_eq!(plan_launch(Arch::X86, Some(0x1c4), dir, &a), LaunchPlan::NoInject { reason: "unsupported_machine" });
         let n = parse_launch_args(&s(&["--no-inject", "--", "g.exe"])).unwrap();
-        assert_eq!(plan_launch(Bitness::X64, Some(0x8664), dir, &n), LaunchPlan::NoInject { reason: "no_inject" });
+        assert_eq!(plan_launch(Arch::X64, Some(0x8664), dir, &n), LaunchPlan::NoInject { reason: "no_inject" });
+        assert_eq!(arch_of_machine(IMAGE_FILE_MACHINE_I386), Some(Arch::X86));
+        assert_eq!(arch_of_machine(IMAGE_FILE_MACHINE_ARM64), Some(Arch::Arm64));
+        assert_eq!(Arch::Arm64.launcher_path(), None);
+        assert_eq!(Arch::X86.launcher_path(), Some(("x86", LAUNCHER_X86)));
     }
 
     #[test]

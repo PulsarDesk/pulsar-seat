@@ -425,7 +425,38 @@ pub(crate) fn admin_member_sids() -> Vec<String> {
     }
 }
 
+/// Kiosk seat map as last published by this service run (`None` = not yet: the first
+/// publish clears whatever a previous run left in the volatile key).
+static KIOSK_MAP: std::sync::Mutex<Option<Vec<seat_shim_core::KioskSeatEntry>>> = std::sync::Mutex::new(None);
+
 impl Platform for WinPlatform {
+    fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
+        use seat_shim_core::kiosk::{KioskMapWriter, kiosk_map_diff};
+        let w = seat_shim_core::win::RegKioskMap;
+        let mut cur = KIOSK_MAP.lock().unwrap_or_else(|e| e.into_inner());
+        let current = match cur.as_ref() {
+            Some(c) => c.clone(),
+            None => {
+                w.clear().map_err(|e| e.to_string())?;
+                Vec::new()
+            }
+        };
+        let (publish, remove) = kiosk_map_diff(&current, entries);
+        if publish.is_empty() && remove.is_empty() && cur.is_some() {
+            return Ok(());
+        }
+        // Forget the state first: a failure below makes the next call start from a clear.
+        *cur = None;
+        for seat in remove {
+            w.remove(seat).map_err(|e| e.to_string())?;
+        }
+        for e in &publish {
+            w.publish(e).map_err(|e| e.to_string())?;
+        }
+        *cur = Some(entries.to_vec());
+        Ok(())
+    }
+
     fn console_session(&self) -> Option<u32> {
         // SAFETY: trivially safe.
         let id = unsafe { WTSGetActiveConsoleSessionId() };

@@ -14,7 +14,7 @@ type PublishFn = unsafe extern "system" fn(u64, *const c_void, *const c_void, u3
 
 unsafe extern "system" fn publish(name: u64, type_id: *const c_void, buf: *const c_void, len: u32, scope: *const c_void) -> i32 {
     if WNF_FOCUS_CANDIDATES.contains(&name) && !buf.is_null() && len >= 4 {
-        if let Some((role, plan, _)) = super::live() {
+        if let Some((role, plan, _, _)) = super::live() {
             if plan.focus_filter {
                 // SAFETY: the caller passes `len` readable bytes.
                 let payload = unsafe { std::slice::from_raw_parts(buf as *const u8, len as usize) };

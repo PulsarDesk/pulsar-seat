@@ -26,13 +26,14 @@ static REPORTED: AtomicBool = AtomicBool::new(false);
 static ROLE: AtomicU8 = AtomicU8::new(0);
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
-const ROLES: [&str; 3] = ["none", "console", "seat"];
+const ROLES: [&str; 4] = ["none", "console", "seat", "kiosk"];
 
 fn role_index(r: &Role) -> u8 {
     match r {
         Role::None => 0,
         Role::Console => 1,
         Role::Seat { .. } => 2,
+        Role::Kiosk { .. } => 3,
     }
 }
 
@@ -42,7 +43,7 @@ pub fn set_role(r: &Role) {
 }
 
 struct Prepared {
-    frames: [Vec<u8>; 3],
+    frames: [Vec<u8>; 4],
     /// `\??\pipe\PulsarSplit.ShimHealth`, UTF-16, no NUL.
     name: Vec<u16>,
     nt_create: usize,
@@ -96,7 +97,7 @@ fn report_fault() {
     let Some(p) = PREPARED.get() else { return };
     // Through our hook's trampoline when hooked (never the detour), else the export.
     let create = super::hid::nt_create_trampoline().unwrap_or(p.nt_create);
-    let frame = &p.frames[(ROLE.load(Ordering::Relaxed) as usize).min(2)];
+    let frame = &p.frames[(ROLE.load(Ordering::Relaxed) as usize).min(3)];
     let name = UnicodeString {
         length: (p.name.len() * 2) as u16,
         maximum_length: (p.name.len() * 2) as u16,

@@ -26,8 +26,9 @@
 //! windows (`IsHungAppWindow`) are skipped, so a hung seat app never blocks this thread.
 
 use super::{
-    FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SeatDevices, ShellArgs, ShellCommand, drag_rect, filter_active,
-    audio_notice, focus_policy, idle_text, notices, place, seat_devices, tr,
+    AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SHIM_LAUNCHER, SeatDevices, ShellArgs, ShellCommand,
+    attach_action, drag_rect, filter_active, audio_notice, focus_policy, idle_text, kiosk_env_value, notices, place,
+    seat_devices, tr,
 };
 use seat_media::kiosk_audio::KioskAudio;
 use crate::pipe;
@@ -609,6 +610,12 @@ impl Shell {
     }
 
     fn launch(&mut self, i: usize) {
+        let shim = shim_launcher();
+        self.launch_with(i, shim.as_deref());
+    }
+
+    /// `shim` = the shim launcher to attach with (`None`: start without the module).
+    fn launch_with(&mut self, i: usize, shim: Option<&std::path::Path>) {
         let Some(app) = self.args.plan.apps.get(i).cloned() else { return };
         if self.pids.len() >= MAX_RUNNING {
             return;
@@ -657,6 +664,25 @@ impl Shell {
                 // Not in the job means not routable and not reset: do not run it.
                 windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
             } else {
+                // Per-process shim (round 4 kiosk-isolation, x86 / x64 apps only): load the
+                // module while the app is still suspended. HYPOTHESIS: never run on hardware.
+                if let Some(l) = shim {
+                    let code = std::process::Command::new(l)
+                        .args(["--attach", &pi.dwProcessId.to_string()])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .ok()
+                        .and_then(|s| s.code());
+                    if attach_action(code) == AttachAction::Restart {
+                        windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
+                        CloseHandle(pi.hThread);
+                        CloseHandle(pi.hProcess);
+                        self.launch_with(i, None);
+                        return;
+                    }
+                }
                 self.pids.insert(pi.dwProcessId);
                 // Before it runs: the app's first stream should already use the seat's
                 // endpoint (HYPOTHESIS: the setting takes for a suspended process).
@@ -1197,8 +1223,88 @@ fn watch_stop(seat: seat_core::SeatNumber, tid: u32) {
     }
 }
 
+/// The shim launcher when the operator turned per-process isolation on (our AppHelp
+/// database is registered) and the x64 shim is installed next to this binary.
+fn shim_launcher() -> Option<std::path::PathBuf> {
+    let key = format!(
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\InstalledSDB\{}",
+        seat_shim_core::SHIM_DB_GUID
+    );
+    seat_shim_core::win::read_value(&key, "DatabasePath")?;
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let p = dir.join(SHIM_LAUNCHER);
+    p.is_file().then_some(p)
+}
+
+/// `WH_KEYBOARD_LL` procedure of the hotkey guard (`seat_input::hotkey_guard`).
+unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    use seat_input::hotkey_guard::{Mods, blocks};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN};
+    if code == HC_ACTION as i32 && lparam != 0 {
+        // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
+        let k = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        // SAFETY: plain state queries.
+        let (ctrl, shift) = unsafe { (GetAsyncKeyState(VK_CONTROL as i32) < 0, GetAsyncKeyState(VK_SHIFT as i32) < 0) };
+        if blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift }) {
+            return 1;
+        }
+    }
+    // SAFETY: pass on to the next hook.
+    unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
 /// Runs the shell; returns the process exit code.
 pub fn run(args: ShellArgs) -> i32 {
+    // Kiosk seat of every app this shell starts (seat-shim-core `kiosk`, round 4).
+    // SAFETY: still single-threaded here (no thread of ours started yet).
+    unsafe { std::env::set_var(seat_shim_core::KIOSK_SEAT_ENV, kiosk_env_value(args.seat)) };
+    // Hotkey guard (round 4): only when seat 1 is not the console user's desktop.
+    let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop).then(start_hotkey_guard).flatten();
+    let code = run_shell(args);
+    if let Some(tid) = guard {
+        // SAFETY: plain call; the guard thread unhooks and ends on WM_QUIT.
+        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(tid, windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT, 0, 0) };
+    }
+    code
+}
+
+/// Runs the `WH_KEYBOARD_LL` hotkey guard on its own thread with its own message loop: a
+/// low-level hook is called on the installing thread, and the shell's UI thread blocks
+/// while the shim launcher attaches (`launch_with`), which would stall every key press of
+/// the PC. Returns the thread id (post `WM_QUIT` to stop it).
+fn start_hotkey_guard() -> Option<u32> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("hotkey-guard".into())
+        .spawn(move || {
+            // SAFETY: low-level hook served by this thread's message loop; module handle of
+            // our image.
+            let h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0) };
+            if h.is_null() {
+                eprintln!("kiosk shell: hotkey guard not installed: {}", std::io::Error::last_os_error());
+                let _ = tx.send(None);
+                return;
+            }
+            // SAFETY: plain call.
+            let _ = tx.send(Some(unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() }));
+            // SAFETY: standard message loop of this thread; ends on WM_QUIT or an error.
+            unsafe {
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    DispatchMessageW(&msg);
+                }
+                UnhookWindowsHookEx(h);
+            }
+        })
+        .ok()?;
+    rx.recv().ok().flatten()
+}
+
+fn run_shell(args: ShellArgs) -> i32 {
     // SAFETY: process-wide DPI mode before any window exists (physical pixels match the
     // desktop rectangles of the device list).
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };

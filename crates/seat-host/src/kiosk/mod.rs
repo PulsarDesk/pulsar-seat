@@ -65,7 +65,10 @@
 //!   the session. A `WH_KEYBOARD_LL` hook cannot tell the keyboards apart (no device
 //!   handle; timing correlation with raw input is unreliable and was not built); only the
 //!   input filter keeps kiosk keyboards out of the system hotkey path. Without the filter
-//!   this mode is a convenience, not a lock-down.
+//!   this mode is a convenience, not a lock-down. Round 4: with `seat1_desktop = false`
+//!   the shell's hotkey guard (`seat_input::hotkey_guard`) swallows the Windows keys,
+//!   Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard (there is no seat-1
+//!   desktop user to take them from); Win+L stays (HYPOTHESIS, untested).
 
 #[cfg(windows)]
 pub mod win;
@@ -125,6 +128,36 @@ pub fn parse_args(args: &[String]) -> Option<Result<ShellArgs, String>> {
         }
         Ok(ShellArgs { seat, plan })
     })())
+}
+
+/// Shim launcher of the per-process module, relative to the install folder (x64 MSI only;
+/// the ARM64 MSI carries no shim, so kiosk isolation is off there).
+pub const SHIM_LAUNCHER: &str = r"shim\x64\pulsar-split-launch.exe";
+
+/// What the shell does with a suspended app after `pulsar-split-launch --attach <pid>`
+/// (round 4, kiosk-isolation; HYPOTHESIS: never run on hardware).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachAction {
+    /// Hooks in place, not needed, or the module could not be loaded: resume the app (pad
+    /// device security and the kiosk router still apply).
+    Resume,
+    /// A remote thread of the launcher may still run in the app: kill it and start it again
+    /// without the module.
+    Restart,
+}
+
+/// `code` = exit code of the launcher (`None` = it could not be started or was killed).
+pub fn attach_action(code: Option<i32>) -> AttachAction {
+    match code {
+        Some(seat_shim_core::launch::attach_exit::TIMED_OUT) => AttachAction::Restart,
+        _ => AttachAction::Resume,
+    }
+}
+
+/// Value of [`seat_shim_core::KIOSK_SEAT_ENV`] the shell puts into its own environment, so
+/// every app it starts (and their children) inherits it.
+pub fn kiosk_env_value(seat: SeatNumber) -> String {
+    seat.get().to_string()
 }
 
 /// The seat's units and monitors from the service's device list.
@@ -445,6 +478,17 @@ mod tests {
             details,
         };
         DeviceView { device, effective: mask, source: MaskSource::Explicit, isolation: None, arrived_ms: 0, port_key: None, container_key: None }
+    }
+
+    #[test]
+    fn shim_attach_and_env() {
+        use seat_shim_core::launch::attach_exit;
+        assert_eq!(attach_action(Some(attach_exit::TIMED_OUT)), AttachAction::Restart);
+        for c in [Some(attach_exit::ACTIVE), Some(attach_exit::INACTIVE), Some(attach_exit::BLOCKED), Some(2), None] {
+            assert_eq!(attach_action(c), AttachAction::Resume);
+        }
+        assert_eq!(kiosk_env_value(seat(7)), "7");
+        assert_eq!(seat_shim_core::kiosk::parse_kiosk_env(Some(&kiosk_env_value(seat(16)))), Some(16));
     }
 
     #[test]

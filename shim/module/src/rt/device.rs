@@ -3,7 +3,9 @@
 //! (`CM_Get_Device_Interface_PropertyW`, `CM_Locate_DevNodeW`, `CM_Get_Parent`,
 //! `CM_Get_Device_IDW`, `CM_Get_DevNode_Registry_PropertyW`), cached per path.
 
-use seat_shim_core::decide::{Access, DevNodeInfo, DeviceOrigin, classify_nodes, hid_access, interface_path_to_instance_id};
+use seat_shim_core::decide::{
+    Access, DevNodeInfo, DeviceOrigin, classify_full, hid_access, interface_path_to_instance_id, rule_applies,
+};
 use seat_shim_core::regval::utf16_to_multi_sz;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -114,20 +116,40 @@ fn origin_label(o: &DeviceOrigin) -> &'static str {
         DeviceOrigin::RemoteSession(_) => "remote_session",
         DeviceOrigin::SeatPad { .. } => "seat_pad",
         DeviceOrigin::ViGEmUnowned => "vigem_unowned",
+        DeviceOrigin::KioskDevice { .. } => "kiosk_device",
         DeviceOrigin::Unknown => "unknown",
     }
 }
 
-/// HID / XUSB access decision for a device-interface path, `None` when the HID groups are
-/// off right now (pass through).
-pub fn decide(path: &str, enumeration: bool) -> Option<Access> {
-    let (role, plan, map) = super::live()?;
-    let on = if enumeration { plan.hid_enumeration } else { plan.hid_open };
-    if !on {
+/// Which hook group asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// An open (`NtCreateFile`, `CreateFile*`).
+    Open,
+    /// An enumeration (CfgMgr32, SetupAPI, `GetRawInputDeviceList`).
+    Enumeration,
+    /// A raw-input record (`GetRawInputData` / `GetRawInputBuffer`, kiosk role only).
+    RawData,
+}
+
+/// HID / XUSB (and, while kiosk seats run, keyboard / mouse class) access decision for a
+/// device-interface path; `None` when the group is off right now or the rule does not
+/// look at this path (pass through).
+pub fn decide(path: &str, check: Check) -> Option<Access> {
+    let (role, plan, map, kiosk) = super::live()?;
+    let on = match check {
+        Check::Open => plan.hid_open,
+        Check::Enumeration => plan.hid_enumeration,
+        Check::RawData => plan.raw_input_data,
+    };
+    if !on || !rule_applies(&role, !kiosk.is_empty(), path) {
         return None;
     }
-    let origin = classify_nodes(&chain(path), &map);
+    let origin = classify_full(&chain(path), &map, &kiosk);
     let a = hid_access(&role, &origin);
-    super::log::hid(path, origin_label(&origin), a == Access::Grant);
+    // Raw-input records arrive at input rate: not logged one by one.
+    if check != Check::RawData {
+        super::log::hid(path, origin_label(&origin), a == Access::Grant);
+    }
     Some(a)
 }

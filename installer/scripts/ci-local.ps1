@@ -39,7 +39,8 @@ $sw = [System.Diagnostics.Stopwatch]::StartNew()
 function Gate([string] $Name, [scriptblock] $Block) {
     Write-Host ""
     Write-Host "== $Name" -ForegroundColor Cyan
-    $t = [System.Diagnostics.Stopwatch]::StartNew()
+    # Not $t: the block runs in this scope (dynamic scoping) and the callers' loops use $t.
+    $gateClock = [System.Diagnostics.Stopwatch]::StartNew()
     $global:LASTEXITCODE = 0
     $failure = $null
     try { & $Block } catch { $failure = $_.Exception.Message }
@@ -49,10 +50,12 @@ function Gate([string] $Name, [scriptblock] $Block) {
         Write-Host "passed before it: $($done -join ', ')"
         exit 1
     }
-    $done.Add("$Name ($([int]$t.Elapsed.TotalSeconds) s)")
+    $done.Add("$Name ($([int]$gateClock.Elapsed.TotalSeconds) s)")
 }
 
 # Each native command checked on its own (a block only reports its last exit code).
+# Callers quote '--': PowerShell eats a bare -- as its own end-of-parameters marker when it
+# binds a function call, so cargo would never see it.
 function Run([string] $Exe) {
     & $Exe @args
     if ($LASTEXITCODE -ne 0) { throw "$Exe $($args -join ' ') failed (exit $LASTEXITCODE)" }
@@ -69,42 +72,55 @@ try {
         if ($t -eq $native) {
             Gate "cargo test ($t)" { Run cargo test --locked --target $t }
         }
-        Gate "clippy ($t)" { Run cargo clippy --locked --target $t --all-targets --features seat-core/mock -- -D warnings }
+        Gate "clippy ($t)" { Run cargo clippy --locked --target $t --all-targets --features seat-core/mock '--' -D warnings }
     }
     Gate "manager frontend build" { Push-Location apps/manager; try { Run bun run build } finally { Pop-Location } }
     foreach ($t in $Targets) {
         if ($t -eq $native) { Gate "manager (Rust) test ($t)" { Run cargo test --locked --target $t -p pulsar-seat-manager } }
-        Gate "manager (Rust) clippy ($t)" { Run cargo clippy --locked --target $t -p pulsar-seat-manager --all-targets -- -D warnings }
+        Gate "manager (Rust) clippy ($t)" { Run cargo clippy --locked --target $t -p pulsar-seat-manager --all-targets '--' -D warnings }
     }
-    $helperDir = Join-Path $targetDir "apihelper"
+    # Separate Cargo workspaces, same target dir (debug builds only; the release builds of
+    # build-installer.ps1 keep their own sub-folders, see installer/README.md).
     foreach ($t in $Targets) {
         if ($t -eq $native) {
-            Gate "API helper test ($t)" { Run cargo test --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $t --target-dir $helperDir }
+            Gate "API helper test ($t)" { Run cargo test --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $t }
         }
-        Gate "API helper clippy ($t)" { Run cargo clippy --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $t --target-dir $helperDir --all-targets -- -D warnings }
+        Gate "API helper clippy ($t)" { Run cargo clippy --locked --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $t --all-targets '--' -D warnings }
     }
 
     # ---- bun job
     Gate "manager check / test" { Push-Location apps/manager; try { Run bun run check; Run bun run test } finally { Pop-Location } }
     Gate "installer scripts (bun test)" { Run bun test installer/scripts }
 
+    # ---- shim job (remote kind's per-process shim, own x64 / x86 workspace). CI runs it on
+    # the x64 runner; on an ARM64 host the x64 test binaries run under x64 emulation.
+    Gate "shim test + clippy (x64), check (x86)" {
+        Run cargo test --locked --manifest-path shim/Cargo.toml --target x86_64-pc-windows-msvc
+        Run cargo clippy --locked --manifest-path shim/Cargo.toml --target x86_64-pc-windows-msvc --all-targets '--' -D warnings
+        Run cargo check --locked --manifest-path shim/Cargo.toml --target i686-pc-windows-msvc --all-targets
+    }
+
     if ($Release) {
         Gate "release key list (tag gate)" {
-            Run cargo run --locked --quiet -p seat-release --bin pulsar-seat-release -- check-signers installer/release-signers.txt --require
+            Run cargo run --locked --quiet -p seat-release --bin pulsar-seat-release '--' check-signers installer/release-signers.txt --require
         }
     }
 
     # ---- credprov job (C++ credential provider: Release + Debug, /WX, self-test)
+    # -Command, not -File: -File passes the array Release,Debug as the text "System.Object[]".
     if ($CredProv -or $Payload -or $Installers) {
         foreach ($p in "ARM64", "x64") {
             Gate "credprov $p (build, self-test, PE)" {
-                Run powershell -NoProfile -ExecutionPolicy Bypass -File installer/scripts/build-credprov.ps1 -Platforms $p -Configurations Release,Debug
+                Run powershell -NoProfile -ExecutionPolicy Bypass -Command "& ./installer/scripts/build-credprov.ps1 -Platforms $p -Configurations Release,Debug; exit `$LASTEXITCODE"
             }
         }
     }
 
     # ---- payload (rust job release part)
     if ($Payload -or $Installers) {
+        # Release helper DLLs in their own folder: Tauri's MSI bundler would pick up a DLL
+        # in <target>\<triple>elease (same rule as build-installer.ps1).
+        $helperDir = Join-Path $targetDir "apihelper"
         foreach ($t in $Targets) {
             $arch = $archOf[$t]
             $out = Join-Path $repo "target\payload\$arch"
@@ -147,7 +163,7 @@ try {
     if ($Drivers) {
         foreach ($p in "x64", "ARM64") {
             Gate "drivers $p (build, infverif, PE)" {
-                Run powershell -NoProfile -ExecutionPolicy Bypass -File installer/scripts/build-drivers.ps1 -Platforms $p -Configurations Release,Debug
+                Run powershell -NoProfile -ExecutionPolicy Bypass -Command "& ./installer/scripts/build-drivers.ps1 -Platforms $p -Configurations Release,Debug; exit `$LASTEXITCODE"
             }
             Gate "drivers $p (WDK code analysis)" {
                 Run powershell -NoProfile -ExecutionPolicy Bypass -File installer/scripts/build-drivers.ps1 -Platforms $p -Configurations Release -Analyze -SkipInfVerif -OutRoot target/drivers-analyze

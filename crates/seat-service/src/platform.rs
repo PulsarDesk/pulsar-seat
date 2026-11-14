@@ -118,6 +118,12 @@ pub trait Platform: Send + Sync {
     fn live_app_count(&self, _session_id: u32) -> usize {
         0
     }
+    /// Publish the kiosk seat map (seat-shim-core `kiosk`, round 4): exactly `entries`
+    /// afterwards (stale seats removed). Default: nothing (no shim on this platform).
+    fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
+        let _ = entries;
+        Ok(())
+    }
     /// Whether a process this platform holds a verified handle for is still running.
     /// Unknown PIDs are reported as not running.
     fn process_alive(&self, pid: u32) -> bool;

@@ -25,13 +25,13 @@ fn wide(s: &str) -> Vec<u16> {
 
 fn seat_id() -> Option<String> {
     match super::live()? {
-        (Role::Seat { seat_id, .. }, plan, _) if plan.steam_cmdline || plan.hkcu_redirect => Some(seat_id),
+        (Role::Seat { seat_id, .. }, plan, _, _) if plan.steam_cmdline || plan.hkcu_redirect => Some(seat_id),
         _ => None,
     }
 }
 
 fn active() -> bool {
-    super::live().is_some_and(|(r, p, _)| p.steam_cmdline && matches!(r, Role::Seat { .. }))
+    super::live().is_some_and(|(r, p, _, _)| p.steam_cmdline && matches!(r, Role::Seat { .. }))
 }
 
 unsafe extern "system" fn cmd_w() -> *const u16 {

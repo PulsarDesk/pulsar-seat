@@ -483,6 +483,46 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   every keyboard without the filter and act as the console user on seat 1's desktop;
   `RIDEV_NOLEGACY` / `RIDEV_NOHOTKEYS` cannot stop them and a `WH_KEYBOARD_LL` hook cannot
   tell keyboards apart. Shown in the manager limits text and `tr::HINT`.
+  **Hotkey guard (round 4 kiosk-isolation):** with `seat1_desktop = false` every shell runs
+  a `WH_KEYBOARD_LL` hook on its own message-loop thread (`seat_input::hotkey_guard`; not on
+  the UI thread, which blocks while the shim launcher attaches) that swallows both Windows
+  keys, Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. Not with
+  `seat1_desktop = true` (the hook cannot tell keyboards apart and would take these keys
+  from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode. HYPOTHESIS:
+  untested on hardware.
+- **Per-process isolation (round 4 kiosk-isolation, 2026-11-14):** all kiosk seats share
+  one session, so Windows hands every HID device and every raw-input record to any app of
+  any seat. Kiosk apps can now load the remote kind's per-process module
+  (`shim/README.md` "Kiosk seats"):
+  - **Kiosk seat map:** the service publishes `HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats\<NN>`
+    (volatile, Everyone read, SYSTEM write; `seat_shim_core::kiosk`) on the input tick:
+    one key per kiosk-shell seat on the console session (never under `dedicated_host`)
+    with the instance ids of the keyboards, mice and HID devices whose effective mask is
+    exactly that seat (`service::kiosk_map_entries`, `Platform::publish_kiosk_map`; the
+    first publish of a service run clears the key, later ones apply a diff).
+  - **Shell:** sets `PULSAR_SEAT_KIOSK=<seat>` in its own environment (inherited by every
+    app and its children) and, when our AppHelp database is registered and
+    `shimd\pulsar-split-launch.exe` exists, runs `pulsar-split-launch --attach <pid>`
+    on each app while it is still suspended (x86 targets are handed to the x86 launcher).
+    Exit 5 (remote thread timed out) = kill the app and start it again without the module;
+    any other result = resume (pad device security and the router still apply).
+  - **Module:** role `kiosk` only when the variable names a published seat of the
+    process's own session (`decide::role_full`; not a security boundary: every kiosk
+    seat is the same Windows user). Kiosk processes get the HID open / enumeration groups
+    and the raw-input data group (`GetRawInputData`, `GetRawInputBuffer` in 64-bit
+    processes): devices of other seats and unassigned console devices are denied or
+    dropped; while a kiosk seat runs, enumeration also looks at keyboard / mouse class
+    interfaces (PS/2). Seat-1 console processes get the HID groups while a kiosk seat of
+    their session wants HID isolation (kiosk devices denied to them).
+  - **Limits:** x86 / x64 processes only. There is **no ARM64 module** (decision of this
+    round: no ARM64 inline-hooking backend); native ARM64 apps start without it
+    (`arm64_unsupported`). The ARM64 MSI carries no shim, so on ARM64 PCs kiosk isolation
+    is off entirely; x64 apps under emulation on ARM64 would need the x64 module, which
+    only the x64 MSI ships (HYPOTHESIS that it would work under emulation). 32-bit apps:
+    `GetRawInputBuffer` is passed through (WOW64 buffer layout reported to differ, HYPOTHESIS). Seat-1 console apps still
+    receive raw-input data of kiosk keyboards (only the HID groups apply to them). The
+    launcher blocks the shell's UI thread while it attaches (≤ 15 s per remote thread).
+    **HYPOTHESIS: nothing of this ran on hardware.**
 - **Audio (round 4 kiosk-audio, 2026-11-14):** one session = one system default endpoint,
   so the shell gives each app process of the seat a **per-app** default endpoint (the one
   in Settings > Sound > App volume and device preferences) instead. Endpoints: the seat's
@@ -911,8 +951,10 @@ monitor's same-container hub keeps a seat the monitor is not on.
   device id (`printer_not_redirected`). The `printer_acl` gate gives the seat's own host
   account the use right on the seat's queues (`GatePlan.printer_hosts`). ActiveX:
   `printers_need_ironrdp`. Changes apply at the next connection. Untested on hardware;
-  HYPOTHESES: printing from a Low-integrity batch token works; spec 70 §3.8 (no printer
-  redirection) is superseded for this opt-in by maintainer request. Ports: never. Refusals: `channels::RefusalLog` (stderr,
+  HYPOTHESES: printing from a Low-integrity batch token works. **Spec deviation, not yet
+  confirmed:** spec/local/70 §3.8 says the product does nothing with printers; this
+  opt-in (default `off`) waits for the analyst to record the maintainer's opt-in there,
+  or for the maintainer to confirm it (status.md, review 2026-11-14). Ports: never. Refusals: `channels::RefusalLog` (stderr,
   once per 10 s per reason). The clipboard bridge is the host session's clipboard (shared
   with seat 1 and every seat that has it on: note `clipboard_shared_with_host_session`).
 - **Redirection hardening (2026-11-13, fix-rdp-channels).** Single source of truth:

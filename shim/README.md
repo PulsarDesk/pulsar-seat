@@ -85,6 +85,25 @@ is opened with `FILE_WRITE_DATA | SYNCHRONIZE` and `SECURITY_IDENTIFICATION` QoS
 `PulsarSplitShim` (at most 5 per process). `Shim\Verbosity` gates both (0 nothing,
 1 errors = default, 3 info, 4 verbose decisions). No SIDs, user names or user paths are logged.
 
+## Kiosk seats (round 4, local kind)
+
+Local kiosk seats (architecture.md §4.1.3) all run in the console session, so the session
+map cannot tell their processes apart. Instead (`seat_shim_core::kiosk`):
+
+| Piece | What |
+| --- | --- |
+| Kiosk map | `HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats\<NN>` (volatile, same SDDL as the seat map): `Seat`, `SessionId`, `Generation`, `Devices` (MULTI_SZ, upper-case instance-id prefixes), `Flags` (1 = HID isolation, 2 = raw-input data filter). Written by seat-service only. |
+| Seat of a process | `PULSAR_SEAT_KIOSK=<seat>`, set by the kiosk shell and inherited. Role `kiosk` only when it names a published seat of the process's own session; otherwise the usual rules. Not a security boundary. |
+| Loading | kiosk shell: `pulsar-split-launch --attach <pid>` on the suspended app (exit 0 hooks on, 3 no hooks, 4 blocked / not supported, 5 timed out = shell restarts the app without the module). Or AppHelp, as for remote seats. |
+| HID groups | kiosk K: its own kiosk devices and unowned ViGEm pads only; console devices, other seats' devices, remote session devices and seat pads denied. Console: kiosk devices denied while a kiosk seat of its session wants HID isolation. With kiosk seats running, enumeration also filters keyboard / mouse class interfaces (`GUID_DEVINTERFACE_KEYBOARD` / `_MOUSE`). |
+| Raw-input data (`rt/raw.rs`) | `GetRawInputData`: a denied device's header / input fails with `ERROR_INVALID_HANDLE`. `GetRawInputBuffer` (64-bit processes only): denied records removed in place (`filter::compact_raw_records`, layout checked first; a buffer that does not parse is passed on unchanged). Records without a device (injected input) pass. |
+
+**No ARM64 module:** native ARM64 targets start without it (`arm64_unsupported`); this
+round decided against an ARM64 inline-hooking backend. x64 apps under emulation on an
+ARM64 PC would take the x64 module (HYPOTHESIS; the ARM64 MSI ships no shim today).
+32-bit apps keep `GetRawInputBuffer` unfiltered (WOW64 layout). HYPOTHESIS: nothing here
+ran on hardware.
+
 ## DXVK (opt-in per game, spec 50 §10.2)
 
 No system DLL redirect and no DXVK binaries in this repo or the installer. `shimctl dxvk
@@ -170,6 +189,9 @@ pulsar-split-shimctl restore            # replay %ProgramData%\Pulsar Seat\shim\
 - Known limitation: a console process decides at start whether it needs the HID hooks; one
   started before any seat with HID isolation ran keeps no hooks (device security still
   applies). Seat-session processes always get the seat hook set and follow the live map.
+- Kiosk seats (round 4): `--attach` on a suspended process, the kiosk map read in kiosk
+  apps, raw-input data / buffer filtering, keyboard / mouse class enumeration, the x64
+  module in x64 apps under emulation on ARM64.
 - WNF focus payload layout (`HYPOTHESIS`: target PID first); the filter is off everywhere
   until a build is verified.
 

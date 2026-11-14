@@ -210,6 +210,10 @@ password path still work (OQ pulsar-host-6).
 
 ### 3.8 Microphone (additive, 2026-11-14; service side implemented, `pulsar-host` side not built)
 
+**Status: proposed.** This section and §6 item 20 extend the binding contract and wait
+for pulsar-desktop to accept them. Until then nothing above changes for existing hosts and
+every Pulsar seat reports `mic` = `unsupported`.
+
 Spec/remote 70 §5.1. **Additive:** protocol stays `1`, nothing above changes, and a host
 without the capability behaves exactly as before. It still needs a pulsar-desktop change
 (§6 item 20); the request is in `docs/agents/status.md`.

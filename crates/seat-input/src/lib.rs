@@ -31,6 +31,7 @@ pub mod convert;
 pub mod filter_proto;
 pub mod forward;
 pub mod gamepad;
+pub mod hotkey_guard;
 pub mod inventory;
 pub mod kiosk;
 pub mod kmdf_router;

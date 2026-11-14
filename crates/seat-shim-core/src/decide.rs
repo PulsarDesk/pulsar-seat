@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pure isolation decisions (spec 50 §3–§8). Every hook in the module calls one of these.
 
+use crate::kiosk::{KioskSeatEntry, kiosk_owner};
 use crate::seatmap::{SeatMapEntry, seat_id_from_seat32};
 
 /// What a process is, from the isolation layer's point of view (spec 50 §3.2).
@@ -13,6 +14,9 @@ pub enum Role {
     /// A running seat. `session_id` is an addition to the contract (the HID rule needs it
     /// for RDS input devices of the caller's own session).
     Seat { seat_id: String, session_id: u32 },
+    /// A process started by a local kiosk shell (round 4): same session as the console,
+    /// told apart by [`crate::kiosk::KIOSK_SEAT_ENV`] and the kiosk map.
+    Kiosk { seat: u32, session_id: u32 },
 }
 
 impl Role {
@@ -21,6 +25,7 @@ impl Role {
             Self::None => "none",
             Self::Console => "console",
             Self::Seat { .. } => "seat",
+            Self::Kiosk { .. } => "kiosk",
         }
     }
 }
@@ -37,6 +42,8 @@ pub struct ProcessFacts {
     pub exe_lower: String,
     /// Image is under our install folder (service, manager, launcher, helpers).
     pub is_our_binary: bool,
+    /// Seat number from [`crate::kiosk::KIOSK_SEAT_ENV`] (parsed), if the variable is set.
+    pub kiosk_seat: Option<u32>,
 }
 
 impl ProcessFacts {
@@ -67,6 +74,24 @@ pub fn role(p: &ProcessFacts, map: &[SeatMapEntry]) -> Role {
     }
 }
 
+/// [`role`] with the kiosk map (round 4). A process whose [`ProcessFacts::kiosk_seat`]
+/// names a published kiosk seat of its own session is [`Role::Kiosk`]; everything else is
+/// decided by [`role`]. The hard exclusions (kill switch, safe mode, our binaries,
+/// session 0) apply first.
+pub fn role_full(p: &ProcessFacts, map: &[SeatMapEntry], kiosk: &[KioskSeatEntry]) -> Role {
+    if p.kill_switch || p.safe_mode || p.is_our_binary || p.session_id == 0 {
+        return Role::None;
+    }
+    if let Some(n) = p.kiosk_seat {
+        if let Some(e) =
+            kiosk.iter().filter(|e| e.seat == n && e.session_id == p.session_id).max_by_key(|e| e.generation)
+        {
+            return Role::Kiosk { seat: e.seat, session_id: e.session_id };
+        }
+    }
+    role(p, map)
+}
+
 /// Where an input device comes from (spec 50 §4.2, contracts §5.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceOrigin {
@@ -79,6 +104,8 @@ pub enum DeviceOrigin {
     SeatPad { seat_id: String },
     /// A ViGEm pad that we did not create (global, spec 80 §4.2 known limitation).
     ViGEmUnowned,
+    /// A physical device of the PC that the kiosk map assigns to local kiosk seat `seat`.
+    KioskDevice { seat: u32 },
     /// The chain could not be read.
     Unknown,
 }
@@ -131,6 +158,18 @@ pub fn classify_nodes(chain: &[DevNodeInfo], map: &[SeatMapEntry]) -> DeviceOrig
         }
     }
     if vigem { DeviceOrigin::ViGEmUnowned } else { DeviceOrigin::Console }
+}
+
+/// [`classify_nodes`] plus the kiosk map: a physical (console) device that a kiosk seat
+/// claims becomes [`DeviceOrigin::KioskDevice`].
+pub fn classify_full(chain: &[DevNodeInfo], map: &[SeatMapEntry], kiosk: &[KioskSeatEntry]) -> DeviceOrigin {
+    match classify_nodes(chain, map) {
+        DeviceOrigin::Console => match kiosk_owner(chain.iter().map(|n| n.instance_id.as_str()), kiosk) {
+            Some(seat) => DeviceOrigin::KioskDevice { seat },
+            None => DeviceOrigin::Console,
+        },
+        o => o,
+    }
 }
 
 fn seat_for(seat32: &str, map: &[SeatMapEntry]) -> String {
@@ -188,6 +227,10 @@ pub enum Access {
 /// | none | grant | grant | grant | grant | grant |
 /// | console | grant | deny | deny | grant | grant |
 /// | seat X (session M) | deny | grant iff N = M | grant iff S = X | grant | deny |
+/// | kiosk K | deny | deny | deny | grant | deny |
+///
+/// Kiosk devices (physical devices the kiosk map gives to seat K) are granted to kiosk K
+/// and to role none only: the console (seat 1 apps) and remote seats are denied.
 ///
 /// Unknown fails closed for seats (protects console pads), open for the console.
 pub fn hid_access(role: &Role, origin: &DeviceOrigin) -> Access {
@@ -195,8 +238,13 @@ pub fn hid_access(role: &Role, origin: &DeviceOrigin) -> Access {
     let grant = match role {
         Role::None => true,
         Role::Console => matches!(origin, O::Console | O::ViGEmUnowned | O::Unknown),
+        Role::Kiosk { seat, .. } => match origin {
+            O::KioskDevice { seat: s } => s == seat,
+            O::ViGEmUnowned => true,
+            O::Console | O::Unknown | O::RemoteSession(_) | O::SeatPad { .. } => false,
+        },
         Role::Seat { seat_id, session_id } => match origin {
-            O::Console | O::Unknown => false,
+            O::Console | O::Unknown | O::KioskDevice { .. } => false,
             O::RemoteSession(n) => n == session_id,
             O::SeatPad { seat_id: s } => s.eq_ignore_ascii_case(seat_id),
             O::ViGEmUnowned => true,
@@ -271,6 +319,28 @@ pub fn hkcu_redirect(role: &Role, path: &str) -> Option<String> {
 /// interface, so XInput opens of an owned X360 pad are filtered too.
 pub const GUID_DEVINTERFACE_XUSB: &str = "{ec87f1e3-c13b-4100-b5f7-8b84d54260cb}";
 
+/// Keyboard and mouse device-interface classes (`GUID_DEVINTERFACE_KEYBOARD` /
+/// `GUID_DEVINTERFACE_MOUSE`): the raw-input names of PS/2 and other non-HID devices.
+pub const GUID_DEVINTERFACE_KEYBOARD: &str = "{884b96c3-56ef-11d1-bc8c-00a0c91e6ec6}";
+pub const GUID_DEVINTERFACE_MOUSE: &str = "{378de44c-56ef-11d1-bc8c-00a0c91e6ec6}";
+
+/// A device-interface path the kiosk rule also looks at: keyboard / mouse interfaces of
+/// any bus (HID keyboards are already [`is_filtered_device_path`]).
+pub fn is_input_class_path(path: &str) -> bool {
+    let l = path.to_ascii_lowercase();
+    (l.starts_with(r"\\?\") || l.starts_with(r"\??\") || l.starts_with(r"\\.\"))
+        && (l.contains(&format!("#{GUID_DEVINTERFACE_KEYBOARD}")) || l.contains(&format!("#{GUID_DEVINTERFACE_MOUSE}")))
+}
+
+/// Whether the HID rule looks at `path` for this role. `kiosk_active` = the kiosk map has
+/// at least one entry. Keyboard / mouse class paths matter only while kiosk seats run
+/// (kiosk processes and the console apps); remote seats never see console devices
+/// through raw input anyway (RDS sessions get their own input devices).
+pub fn rule_applies(role: &Role, kiosk_active: bool, path: &str) -> bool {
+    is_filtered_device_path(path)
+        || (kiosk_active && matches!(role, Role::Kiosk { .. } | Role::Console) && is_input_class_path(path))
+}
+
 pub fn is_filtered_device_path(path: &str) -> bool {
     let l = path.to_ascii_lowercase();
     // The GLOBALROOT form first: it also starts with `\\?\` (review fix 2026-11-12; before,
@@ -331,6 +401,9 @@ pub struct HookPlan {
     pub steam_cmdline: bool,
     /// HKCU Steam key redirect (shared-account fallback only).
     pub hkcu_redirect: bool,
+    /// `GetRawInputData` / `GetRawInputBuffer` drop records of other seats' devices
+    /// (kiosk role only, round 4).
+    pub raw_input_data: bool,
 }
 
 impl HookPlan {
@@ -341,11 +414,28 @@ impl HookPlan {
             || self.mask_remote
             || self.steam_cmdline
             || self.hkcu_redirect
+            || self.raw_input_data
     }
 }
 
 /// Decide the hook groups for this process. `build` = Windows build number.
 pub fn hook_plan(role: &Role, p: &ProcessFacts, map: &[SeatMapEntry], cfg: &ShimConfig, build: u32) -> HookPlan {
+    hook_plan_full(role, p, map, &[], cfg, build)
+}
+
+/// [`hook_plan`] with the kiosk map (round 4). Kiosk processes get the HID groups and the
+/// raw-input data filter from the flags of their kiosk entry; nothing else (focus WNF,
+/// masking and Steam are per session, and every kiosk seat shares the console session).
+/// The console gets the HID groups also while a kiosk seat of its session asks for HID
+/// isolation.
+pub fn hook_plan_full(
+    role: &Role,
+    p: &ProcessFacts,
+    map: &[SeatMapEntry],
+    kiosk: &[KioskSeatEntry],
+    cfg: &ShimConfig,
+    build: u32,
+) -> HookPlan {
     let exe = p.exe_name();
     if cfg.disabled_targets.iter().any(|d| file_name(&d.to_ascii_lowercase()) == exe) {
         return HookPlan::default();
@@ -355,8 +445,22 @@ pub fn hook_plan(role: &Role, p: &ProcessFacts, map: &[SeatMapEntry], cfg: &Shim
         Role::Console => {
             // Console-side rule (spec 50 §4.4 / contracts §4.1): the console must not see
             // seat-owned input while any running seat asks for HID isolation.
-            let hid = map.iter().any(|e| e.flags.hid_isolation);
+            let hid = map.iter().any(|e| e.flags.hid_isolation)
+                || kiosk.iter().any(|e| e.flags.hid_isolation && e.session_id == p.session_id);
             HookPlan { hid_open: hid, hid_enumeration: hid, ..HookPlan::default() }
+        }
+        Role::Kiosk { seat, session_id } => {
+            let Some(e) =
+                kiosk.iter().filter(|e| e.seat == *seat && e.session_id == *session_id).max_by_key(|e| e.generation)
+            else {
+                return HookPlan::default();
+            };
+            HookPlan {
+                hid_open: e.flags.hid_isolation,
+                hid_enumeration: e.flags.hid_isolation,
+                raw_input_data: e.flags.raw_input,
+                ..HookPlan::default()
+            }
         }
         Role::Seat { session_id, .. } => {
             let Some(e) = map.iter().filter(|e| e.session_id == *session_id).max_by_key(|e| e.generation) else {
@@ -372,6 +476,7 @@ pub fn hook_plan(role: &Role, p: &ProcessFacts, map: &[SeatMapEntry], cfg: &Shim
                 mask_remote: mask_remote(role, &p.exe_lower, &cfg.mask_apps),
                 steam_cmdline: steam && exe == "steam.exe",
                 hkcu_redirect: steam && f.shared_account,
+                raw_input_data: false,
             }
         }
     }
@@ -563,6 +668,100 @@ mod tests {
             r"HID\VID_054C&PID_0CE6\7&1A2B&0&0000"
         );
         assert!(interface_path_to_instance_id(r"\\?\hid#nope").is_none());
+    }
+
+    fn kiosk(seat: u32, devices: &[&str]) -> crate::kiosk::KioskSeatEntry {
+        crate::kiosk::KioskSeatEntry {
+            seat,
+            session_id: 1,
+            generation: 1,
+            devices: devices.iter().map(|d| d.to_string()).collect(),
+            flags: crate::kiosk::KioskFlags::default(),
+        }
+    }
+
+    #[test]
+    fn kiosk_role_needs_env_and_published_seat_of_own_session() {
+        let k = vec![kiosk(2, &[r"HID\VID_1&PID_1"]), kiosk(3, &[])];
+        let mut p = facts(1, 1, r"c:\apps\a.exe");
+        assert_eq!(role_full(&p, &[], &k), Role::Console);
+        p.kiosk_seat = Some(2);
+        assert_eq!(role_full(&p, &[], &k), Role::Kiosk { seat: 2, session_id: 1 });
+        p.kiosk_seat = Some(4);
+        assert_eq!(role_full(&p, &[], &k), Role::Console, "unpublished seat = plain console");
+        // Another session (for example a remote seat that inherited the variable).
+        let mut q = facts(3, 1, "x.exe");
+        q.kiosk_seat = Some(2);
+        let map = vec![entry(SEAT_A, 3, 1)];
+        assert_eq!(role_full(&q, &map, &k), seat_a());
+        p.kiosk_seat = Some(2);
+        p.is_our_binary = true;
+        assert_eq!(role_full(&p, &[], &k), Role::None);
+        assert_eq!(Role::Kiosk { seat: 2, session_id: 1 }.label(), "kiosk");
+    }
+
+    #[test]
+    fn kiosk_classification_and_access() {
+        use Access::*;
+        let k = vec![kiosk(2, &[r"USB\VID_046D&PID_C52B\5&AB"]), kiosk(3, &[r"HID\VID_054C&PID_0CE6"])];
+        let node = |id: &str| DevNodeInfo { instance_id: id.into(), hardware_ids: vec![] };
+        let kb2 = vec![node(r"HID\VID_046D&PID_C52B&MI_00\7&1&0&0000"), node(r"USB\VID_046D&PID_C52B\5&AB")];
+        let pad3 = vec![node(r"HID\VID_054C&PID_0CE6&MI_03\8&2&0&0000")];
+        let free = vec![node(r"HID\VID_1234&PID_0001\7&9")];
+        assert_eq!(classify_full(&kb2, &[], &k), DeviceOrigin::KioskDevice { seat: 2 });
+        assert_eq!(classify_full(&pad3, &[], &k), DeviceOrigin::KioskDevice { seat: 3 });
+        assert_eq!(classify_full(&free, &[], &k), DeviceOrigin::Console);
+        // Markers of remote seats win over the kiosk map.
+        let rds = vec![node(r"TERMINPUT_BUS\UMB\2&3&0&SESSION3KEYBOARD0")];
+        assert_eq!(classify_full(&rds, &[], &k), DeviceOrigin::RemoteSession(3));
+        let k2 = Role::Kiosk { seat: 2, session_id: 1 };
+        let o = |s| DeviceOrigin::KioskDevice { seat: s };
+        let rows: Vec<(Role, DeviceOrigin, Access)> = vec![
+            (k2.clone(), o(2), Grant),
+            (k2.clone(), o(3), Deny),
+            (k2.clone(), DeviceOrigin::Console, Deny),
+            (k2.clone(), DeviceOrigin::Unknown, Deny),
+            (k2.clone(), DeviceOrigin::RemoteSession(1), Deny),
+            (k2.clone(), DeviceOrigin::SeatPad { seat_id: SEAT_A.into() }, Deny),
+            (k2, DeviceOrigin::ViGEmUnowned, Grant),
+            (Role::Console, o(2), Deny),
+            (seat_a(), o(2), Deny),
+            (Role::None, o(2), Grant),
+        ];
+        for (r, o, want) in rows {
+            assert_eq!(hid_access(&r, &o), want, "{r:?} {o:?}");
+        }
+    }
+
+    #[test]
+    fn kiosk_paths_and_plans() {
+        let ps2 = r"\\?\ACPI#PNP0303#4&1d401fb5&0#{884b96c3-56ef-11d1-bc8c-00a0c91e6ec6}";
+        let mouse = r"\\?\ACPI#PNP0F13#4&1&0#{378DE44C-56EF-11D1-BC8C-00A0C91E6EC6}";
+        assert!(is_input_class_path(ps2) && is_input_class_path(mouse));
+        assert!(!is_input_class_path(r"C:\x#{884b96c3-56ef-11d1-bc8c-00a0c91e6ec6}"));
+        let k2 = Role::Kiosk { seat: 2, session_id: 1 };
+        assert!(rule_applies(&k2, true, ps2));
+        assert!(rule_applies(&Role::Console, true, ps2));
+        assert!(!rule_applies(&Role::Console, false, ps2));
+        assert!(!rule_applies(&seat_a(), true, ps2));
+        assert!(rule_applies(&seat_a(), false, r"\\?\HID#VID_1#1#{x}"));
+
+        let k = vec![kiosk(2, &[])];
+        let mut p = facts(1, 1, r"c:\apps\a.exe");
+        p.kiosk_seat = Some(2);
+        let r = role_full(&p, &[], &k);
+        let plan = hook_plan_full(&r, &p, &[], &k, &ShimConfig::default(), 26100);
+        assert!(plan.hid_open && plan.hid_enumeration && plan.raw_input_data);
+        assert!(!plan.focus_filter && !plan.mask_remote && !plan.steam_cmdline && !plan.hkcu_redirect);
+        let mut off = k.clone();
+        off[0].flags = crate::kiosk::KioskFlags { hid_isolation: false, raw_input: false };
+        assert!(!hook_plan_full(&r, &p, &[], &off, &ShimConfig::default(), 26100).any());
+        // Seat 1 apps: HID rule while a kiosk seat of the session wants it.
+        let c = facts(1, 1, r"c:\apps\b.exe");
+        assert!(hook_plan_full(&Role::Console, &c, &[], &k, &ShimConfig::default(), 26100).hid_open);
+        assert!(!hook_plan_full(&Role::Console, &c, &[], &off, &ShimConfig::default(), 26100).any());
+        let cfg = ShimConfig { disabled_targets: vec!["a.exe".into()], ..Default::default() };
+        assert!(!hook_plan_full(&r, &p, &[], &k, &cfg, 26100).any());
     }
 
     #[test]

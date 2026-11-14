@@ -4618,6 +4618,7 @@ dependencies = [
  "seat-proto",
  "seat-rdp",
  "seat-session",
+ "seat-shim-core",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

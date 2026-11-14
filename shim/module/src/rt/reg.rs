@@ -31,7 +31,7 @@ fn target(hkey: HKEY, sub: Option<String>) -> Option<Vec<u16>> {
         return None;
     }
     let sub = sub?;
-    let (role, plan, map) = super::live()?;
+    let (role, plan, map, _) = super::live()?;
     if !plan.hkcu_redirect {
         return None;
     }

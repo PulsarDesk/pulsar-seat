@@ -30,7 +30,7 @@ pub fn real_console_session() -> u32 {
 }
 
 fn masking() -> Option<u32> {
-    let (_, plan, _) = super::live()?;
+    let (_, plan, _, _) = super::live()?;
     if !plan.mask_remote {
         return None;
     }

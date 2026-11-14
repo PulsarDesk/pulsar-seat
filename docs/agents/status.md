@@ -1276,3 +1276,62 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     targets and GDI outputs get CPU frames; one GPU compositor per connection (adapter of
     the seat's first output); a GPU error or presenter refusal turns the path off for the
     connection; the manager does not show the new metrics (log line only).
+- 2026-11-14 (round 4 kiosk-isolation + review fixes, "fix: apply round 4 review"):
+  **per-process isolation for local kiosk seats** (architecture.md §4.1.3 "Per-process
+  isolation", "Hotkey guard"; shim/README.md "Kiosk seats"). (a) seat-shim-core `kiosk`:
+  volatile kiosk seat map `HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats\<NN>` (codec,
+  diff, `RegKioskMap`, fake), env `PULSAR_SEAT_KIOSK`, role `kiosk` (`role_full`), origin
+  `KioskDevice` (`classify_full`), access row for kiosk K, keyboard / mouse class paths
+  while kiosk seats run (`rule_applies`), plan group `raw_input_data`
+  (`hook_plan_full`). (b) Launcher: `--attach <pid>` (exit 0 / 3 / 4 / 5), `Arch`, **no
+  ARM64 module** (decision: no ARM64 inline-hooking backend after an earlier attempt hit a
+  safety block; native ARM64 targets start without it, `arm64_unsupported`). (c) Module:
+  live snapshot carries the kiosk map, `rt/raw.rs` filters `GetRawInputData` and (64-bit
+  only) `GetRawInputBuffer` (`filter::compact_raw_records`, tested), fault frames know
+  `kiosk`. (d) Service publishes the map on the input tick (`kiosk_map_entries`,
+  `Platform::publish_kiosk_map`). (e) Kiosk shell: sets the env, attaches the x64 launcher
+  to each suspended app when our AppHelp database is registered and the shim is installed
+  (restart without the module on exit 5), and runs the `WH_KEYBOARD_LL` hotkey guard
+  (`seat_input::hotkey_guard`) on its own message-loop thread when `seat1_desktop` is off
+  (Turkish limits copy updated). Installer: nothing new (the x64 MSI already ships
+  `shim\x64` / `shim\x86`; the ARM64 MSI ships no shim, so kiosk isolation is off on ARM64).
+  - Open (HYPOTHESIS, nothing ran on hardware): `--attach` into a suspended app, module
+    load in kiosk apps, the kiosk map read path, raw-input data / buffer filtering,
+    keyboard / mouse class enumeration filtering, the hotkey guard swallowing these keys
+    without stalling input, the x64 module in x64 apps under emulation on ARM64 (and
+    shipping a shim in the ARM64 MSI for that).
+  - Open (limits): x86 / x64 processes only; 32-bit apps keep `GetRawInputBuffer`
+    unfiltered (WOW64 layout, HYPOTHESIS); seat-1 console apps still get raw-input data of kiosk
+    keyboards; the shell's UI thread blocks while the launcher attaches; the env variable
+    is not a security boundary (one Windows user for every kiosk seat).
+  - **Review fixes (round 4 review):** installer/README.md service row now says the MSI
+    sets no recovery actions and `install --msi` (`scm::configure_existing`) sets
+    5 / 30 / 60 s then none, reset 1 day, privileges and DACL; ci-local's debug shim and
+    API helper gates build into the shared target dir (release builds keep their own
+    sub-folders because Tauri's MSI bundler picks up DLLs next to the manager exe;
+    reason in installer/README.md); spec deviation and contract status recorded below.
+  - **50602cd (fix(installer): service recovery actions in the setup step):** the MSI's
+    `ServiceConfigFailureActions` was removed after MSI error 1939 in the ARM64 test VM
+    (Windows Installer opens the service without `SERVICE_START`, so restart actions fail
+    with error 5). MSI-mode `install` now calls `scm::configure_existing`
+    (`OpenService(ALL_ACCESS)`, failure actions, required privileges, service DACL); any
+    failure there fails the install custom action and rolls the MSI back (before, MSI mode
+    only registered the event source and created the data folders). HYPOTHESIS: the
+    deferred no-impersonate custom action (LocalSystem) can open the service with
+    `ALL_ACCESS` and apply all of it. Open: rerun the fixed MSI on the VM (install, repair,
+    major upgrade) and check `sc qfailure PulsarSeat` / `sc qprivs PulsarSeat`.
+  - **Spec deviation waiting for confirmation:** printer redirection
+    (`SeatRedirect.printers`, round 4 local-gaps) is product behaviour that spec/local/70
+    §3.8 says the reference product does not have. It stays default `off`. Open: the
+    analyst records the maintainer's opt-in in spec/local/70 §3.8, or the maintainer
+    confirms it; until then it is a deviation, not a decision.
+  - **Contract status:** `pulsar-host-backend.md` §3.8 (microphone: capability `mic`,
+    `config.apply` key `mic`, second pipe `...\pulsar-host-mic`) and §6 item 20 are a
+    **proposed** additive extension (protocol stays 1, control pipe unchanged) waiting for
+    pulsar-desktop acceptance. Until then every Pulsar seat reports `mic` = `unsupported`.
+  - ci-msi package: `ci-local.ps1` fixes (gate clock variable, quoted `'--'`, `-Command`
+    for array parameters, shim job) finished with this commit; a stray repo-root `Debug\`
+    (credprov DLL of an earlier run) was removed.
+  - Gates green: cargo 1602 passed / 6 ignored (+11), clippy aarch64 + x86_64 clean,
+    manager 198 / check / build, shim tests (host) 10 (+2) + x64 tests + clippy + i686
+    check, installer scripts 49, `ci-local.ps1` (default jobs) green. No test deleted.

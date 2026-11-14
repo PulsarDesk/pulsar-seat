@@ -16,7 +16,7 @@ pub struct ShimHealth {
     /// File name only (no user path, no user names).
     pub exe: String,
     pub module_version: String,
-    /// `none` / `console` / `seat`.
+    /// `none` / `console` / `seat` / `kiosk` (round 4).
     pub role: String,
     pub hooks_on: bool,
     /// Reason code, e.g. `shim_kill_switch`, `shim_target_disabled`, `hook_failed`, `fault`.

@@ -24,6 +24,8 @@ seat-proto.workspace = true
 seat-display.workspace = true
 seat-input.workspace = true
 seat-media.workspace = true
+# Kiosk shell: kiosk seat variable and `--attach` exit codes of the shim launcher (round 4).
+seat-shim-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -789,6 +789,26 @@ impl Service {
                 log::warn(&format!("input seat sessions: {e}"));
             }
         }
+        // Kiosk seat -> device map for the per-process shim (round 4 kiosk-isolation).
+        {
+            let all: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
+            let entries = {
+                let st = self.lock();
+                let kiosk: std::collections::BTreeSet<SeatNumber> = st
+                    .config
+                    .seats
+                    .iter()
+                    .filter(|c| seat_session::kiosk::wants_shell(c.number, c, &st.config.settings))
+                    .map(|c| c.number)
+                    .collect();
+                kiosk_map_entries(&all, &kiosk, self.platform.console_session(), dedicated, &eff, |k| {
+                    st.inventory.get(k).and_then(|e| e.device.instance_id.clone())
+                })
+            };
+            if let Err(e) = self.platform.publish_kiosk_map(&entries) {
+                log::warn(&format!("kiosk seat map: {e}"));
+            }
+        }
         let mut iso: HashMap<DeviceKey, IsolationStatus> = HashMap::new();
         let overrides = self.lock().input_overrides.clone();
         let routes: Vec<InputRoute> = eff
@@ -1261,6 +1281,86 @@ pub(crate) fn filter_session_map(all: &[(SeatNumber, u32)], console: Option<u32>
         })
         .copied()
         .collect()
+}
+
+/// Kiosk seat map entries (round 4 kiosk-isolation, seat-shim-core `kiosk`): one per kiosk
+/// shell seat that runs in the console session (the seats [`filter_session_map`] leaves
+/// out), with the instance ids of the keyboards, mice and HID devices whose effective mask
+/// names exactly that seat. Never under `dedicated` (every seat has its own session then).
+/// The shim acts on it only in processes that loaded the module. HYPOTHESIS: never run on
+/// hardware.
+pub(crate) fn kiosk_map_entries(
+    logons: &[(SeatNumber, u32)],
+    kiosk: &std::collections::BTreeSet<SeatNumber>,
+    console: Option<u32>,
+    dedicated: bool,
+    eff: &[seat_core::assign::Effective],
+    instance_of: impl Fn(&DeviceKey) -> Option<String>,
+) -> Vec<seat_shim_core::KioskSeatEntry> {
+    if dedicated {
+        return Vec::new();
+    }
+    logons
+        .iter()
+        .filter(|(seat, sid)| kiosk.contains(seat) && *sid != 0 && console == Some(*sid))
+        .map(|(seat, sid)| {
+            let n = u32::from(seat.get());
+            let mut devices: Vec<String> = eff
+                .iter()
+                .filter(|e| matches!(e.kind, DeviceKind::Keyboard | DeviceKind::Mouse | DeviceKind::Hid))
+                .filter(|e| e.mask.single() == Some(*seat))
+                .filter_map(|e| instance_of(&e.key))
+                .collect();
+            devices.sort();
+            devices.dedup();
+            seat_shim_core::KioskSeatEntry {
+                seat: n,
+                session_id: *sid,
+                generation: 1,
+                devices,
+                flags: seat_shim_core::KioskFlags::default(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod kiosk_map_tests {
+    use super::*;
+    use seat_core::assign::{Effective, MaskSource};
+    use seat_core::SeatMask;
+
+    fn s(n: u8) -> SeatNumber {
+        SeatNumber::new(n).unwrap()
+    }
+
+    fn eff(key: &str, kind: DeviceKind, mask: SeatMask) -> Effective {
+        Effective { key: DeviceKey::new(key).unwrap(), kind, mask, source: MaskSource::Explicit }
+    }
+
+    #[test]
+    fn kiosk_seats_get_their_own_input_devices() {
+        let devs = vec![
+            eff("kb2", DeviceKind::Keyboard, SeatMask::from_seats([s(2)])),
+            eff("ms2", DeviceKind::Mouse, SeatMask::from_seats([s(2)])),
+            eff("pad3", DeviceKind::Hid, SeatMask::from_seats([s(3)])),
+            eff("mon2", DeviceKind::Monitor, SeatMask::from_seats([s(2)])),
+            eff("shared", DeviceKind::Keyboard, SeatMask::SHARED),
+            eff("noid", DeviceKind::Mouse, SeatMask::from_seats([s(2)])),
+        ];
+        let inst = |k: &DeviceKey| (k.as_str() != "noid").then(|| format!(r"HID\{}\1", k.as_str()));
+        let kiosk = [s(2), s(3)].into_iter().collect();
+        // Seat 1 desktop, kiosk seats 2 and 3 in console session 1, RDP seat 4.
+        let logons = [(s(1), 1), (s(2), 1), (s(3), 1), (s(4), 5)];
+        let e = kiosk_map_entries(&logons, &kiosk, Some(1), false, &devs, inst);
+        assert_eq!(e.len(), 2);
+        assert_eq!((e[0].seat, e[0].session_id), (2, 1));
+        assert_eq!(e[0].devices, vec![r"HID\kb2\1".to_string(), r"HID\ms2\1".into()]);
+        assert_eq!(e[1].devices, vec![r"HID\pad3\1".to_string()]);
+        // Not in the console session (switching) or dedicated host: nothing.
+        assert!(kiosk_map_entries(&logons, &kiosk, None, false, &devs, inst).is_empty());
+        assert!(kiosk_map_entries(&logons, &kiosk, Some(1), true, &devs, inst).is_empty());
+    }
 }
 
 #[cfg(test)]

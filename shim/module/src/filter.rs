@@ -100,6 +100,67 @@ pub fn may_be_device_path(name: &[u16]) -> bool {
         && (0..=body.len() - needle_len).any(|i| body[i] == u16::from(b'#') && starts_ci(&body[i + 1..], guid))
 }
 
+/// Layout of `RAWINPUT` records in a `GetRawInputBuffer` buffer for this process:
+/// `RAWINPUTHEADER` = `dwType` (u32), `dwSize` (u32), `hDevice` (pointer), `wParam`
+/// (pointer); records follow each other at `NEXTRAWINPUTBLOCK` alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawLayout {
+    /// Pointer size in bytes (4 or 8).
+    pub ptr: usize,
+    /// `RAWINPUT_ALIGN`: 8 on 64-bit, 4 on 32-bit.
+    pub align: usize,
+}
+
+impl RawLayout {
+    pub const NATIVE: Self = Self { ptr: size_of::<usize>(), align: size_of::<usize>() };
+
+    pub fn header_size(self) -> usize {
+        8 + 2 * self.ptr
+    }
+
+    fn align_up(self, x: usize) -> usize {
+        x.div_ceil(self.align) * self.align
+    }
+}
+
+/// Drops the `RAWINPUT` records of `buf` (the first `count` records written by
+/// `GetRawInputBuffer`) whose device handle `keep` rejects; the kept records move to the
+/// front, still aligned. Returns the number of records kept, or `None` (buffer untouched)
+/// when the records do not fit `buf` (unknown layout: the caller passes everything on).
+pub fn compact_raw_records(buf: &mut [u8], count: usize, l: RawLayout, mut keep: impl FnMut(usize) -> bool) -> Option<usize> {
+    let hs = l.header_size();
+    let read_u32 = |b: &[u8], at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize;
+    let read_ptr = |b: &[u8], at: usize| {
+        let mut v = [0u8; 8];
+        v[..l.ptr].copy_from_slice(&b[at..at + l.ptr]);
+        u64::from_le_bytes(v) as usize
+    };
+    // First pass: validate every record so a bad layout never leaves a half-moved buffer.
+    let mut records = Vec::with_capacity(count.min(4096));
+    let mut at = 0usize;
+    for _ in 0..count {
+        if at.checked_add(hs).is_none_or(|e| e > buf.len()) {
+            return None;
+        }
+        let size = read_u32(buf, at + 4);
+        if size < hs || at.checked_add(size).is_none_or(|e| e > buf.len()) {
+            return None;
+        }
+        records.push((at, size, read_ptr(buf, at + 8)));
+        at = l.align_up(at + size);
+    }
+    let mut write = 0usize;
+    let mut kept = 0usize;
+    for (at, size, device) in records {
+        if keep(device) {
+            buf.copy_within(at..at + size, write);
+            write = l.align_up(write + size);
+            kept += 1;
+        }
+    }
+    Some(kept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +235,62 @@ mod tests {
             let core = seat_shim_core::decide::is_filtered_device_path(c);
             assert_eq!(may_be_device_path(&u(c)), core, "{c}");
         }
+    }
+    fn record(l: RawLayout, device: usize, payload: &[u8]) -> Vec<u8> {
+        let mut r = vec![0u8; l.header_size()];
+        r[..4].copy_from_slice(&1u32.to_le_bytes());
+        let size = (l.header_size() + payload.len()) as u32;
+        r[4..8].copy_from_slice(&size.to_le_bytes());
+        r[8..8 + l.ptr].copy_from_slice(&(device as u64).to_le_bytes()[..l.ptr]);
+        r.extend_from_slice(payload);
+        r
+    }
+
+    fn pack(l: RawLayout, recs: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = Vec::new();
+        for r in recs {
+            b.extend_from_slice(r);
+            while b.len() % l.align != 0 {
+                b.push(0xEE);
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn raw_records_compacted_per_device() {
+        for l in [RawLayout { ptr: 8, align: 8 }, RawLayout { ptr: 4, align: 4 }] {
+            let recs = vec![record(l, 0x10, &[1, 2, 3]), record(l, 0x20, &[4; 6]), record(l, 0x10, &[5]), record(l, 0x30, &[6, 7])];
+            let mut b = pack(l, &recs);
+            let n = compact_raw_records(&mut b, 4, l, |d| d != 0x20).unwrap();
+            assert_eq!(n, 3);
+            let want = pack(l, &[recs[0].clone(), recs[2].clone(), recs[3].clone()]);
+            // Padding bytes are not compared (they are never read).
+            let mut at = 0;
+            for r in [&recs[0], &recs[2], &recs[3]] {
+                assert_eq!(&b[at..at + r.len()], r.as_slice());
+                at = l.align_up(at + r.len());
+            }
+            assert!(at <= want.len());
+            let mut all = pack(l, &recs);
+            assert_eq!(compact_raw_records(&mut all, 4, l, |_| false), Some(0));
+            assert_eq!(compact_raw_records(&mut pack(l, &recs), 0, l, |_| true), Some(0));
+        }
+    }
+
+    #[test]
+    fn raw_records_bad_layout_untouched() {
+        let l = RawLayout { ptr: 8, align: 8 };
+        let recs = vec![record(l, 1, &[1]), record(l, 2, &[2])];
+        let mut b = pack(l, &recs);
+        let orig = b.clone();
+        // More records claimed than present.
+        assert_eq!(compact_raw_records(&mut b, 3, l, |d| d == 2), None);
+        assert_eq!(b, orig);
+        // dwSize smaller than the header.
+        let mut bad = orig.clone();
+        bad[4..8].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(compact_raw_records(&mut bad, 1, l, |_| false), None);
+        assert_eq!(RawLayout::NATIVE.header_size(), 8 + 2 * size_of::<usize>());
     }
 }

@@ -24,14 +24,16 @@ mod hid;
 mod hook;
 mod log;
 mod mask;
+mod raw;
 mod reg;
 mod steam;
 mod threads;
 
 use seat_shim_core::decide::{
-    FOCUS_HOSTS, HookPlan, ProcessFacts, Role, STEAM_EXES, ShimConfig, WNF_FOCUS_CANDIDATES, hook_plan, role,
-    wnf_known_with,
+    FOCUS_HOSTS, HookPlan, ProcessFacts, Role, STEAM_EXES, ShimConfig, WNF_FOCUS_CANDIDATES, hook_plan_full,
+    role_full, wnf_known_with,
 };
+use seat_shim_core::kiosk::{KioskMapReader, KioskSeatEntry};
 use seat_shim_core::seatmap::{SeatMapEntry, SeatMapReader};
 use seat_shim_core::win;
 use std::cell::Cell;
@@ -49,6 +51,8 @@ struct Live {
     role: Role,
     plan: HookPlan,
     map: Arc<Vec<SeatMapEntry>>,
+    /// Kiosk seat map (round 4, kiosk-isolation).
+    kiosk: Arc<Vec<KioskSeatEntry>>,
 }
 
 pub(crate) struct State {
@@ -75,6 +79,7 @@ fn mask(plan: HookPlan, installed: HookPlan) -> HookPlan {
         mask_remote: plan.mask_remote && installed.mask_remote,
         steam_cmdline: plan.steam_cmdline && installed.steam_cmdline,
         hkcu_redirect: plan.hkcu_redirect && installed.hkcu_redirect,
+        raw_input_data: plan.raw_input_data && installed.raw_input_data,
     }
 }
 
@@ -83,12 +88,19 @@ fn compute(facts: &ProcessFacts, cfg: &ShimConfig, build: u32) -> Live {
         log::error("seat_map_read", &e.to_string());
         Vec::new()
     });
+    // Only processes started by a kiosk shell read the kiosk map; every other process
+    // only needs to know whether a kiosk seat of its session wants HID isolation, so the
+    // console reads it too.
+    let kiosk = win::RegKioskMap.read_all().unwrap_or_else(|e| {
+        log::error("kiosk_map_read", &e.to_string());
+        Vec::new()
+    });
     let mut f = facts.clone();
     f.kill_switch = win::kill_switch();
     f.console_session = mask::real_console_session();
-    let r = role(&f, &map);
-    let plan = hook_plan(&r, &f, &map, cfg, build);
-    Live { at: Instant::now(), role: r, plan, map: Arc::new(map) }
+    let r = role_full(&f, &map, &kiosk);
+    let plan = hook_plan_full(&r, &f, &map, &kiosk, cfg, build);
+    Live { at: Instant::now(), role: r, plan, map: Arc::new(map), kiosk: Arc::new(kiosk) }
 }
 
 thread_local! {
@@ -98,9 +110,9 @@ thread_local! {
 /// One refresh at a time; other threads keep using the previous snapshot meanwhile.
 static REFRESH_BUSY: AtomicBool = AtomicBool::new(false);
 
-type Snapshot = (Role, HookPlan, Arc<Vec<SeatMapEntry>>);
+type Snapshot = (Role, HookPlan, Arc<Vec<SeatMapEntry>>, Arc<Vec<KioskSeatEntry>>);
 
-/// Current role, plan (masked by what is installed) and seat map. `None` before init and
+/// Current role, plan (masked by what is installed), seat map and kiosk map. `None` before init and
 /// on a thread that is inside a refresh. No lock is held while `compute` runs.
 pub(crate) fn live() -> Option<Snapshot> {
     let s = STATE.get()?;
@@ -109,13 +121,13 @@ pub(crate) fn live() -> Option<Snapshot> {
     }
     let (snap, stale) = {
         let l = lock(&s.live);
-        ((l.role.clone(), l.plan, l.map.clone()), l.at.elapsed() >= REFRESH)
+        ((l.role.clone(), l.plan, l.map.clone(), l.kiosk.clone()), l.at.elapsed() >= REFRESH)
     };
-    let (role, plan, map) = if stale && !REFRESH_BUSY.swap(true, Ordering::AcqRel) {
+    let (role, plan, map, kiosk) = if stale && !REFRESH_BUSY.swap(true, Ordering::AcqRel) {
         let _ = REFRESHING.try_with(|c| c.set(true));
         let fresh = compute(&s.facts, &s.cfg, s.build);
         let _ = REFRESHING.try_with(|c| c.set(false));
-        let out = (fresh.role.clone(), fresh.plan, fresh.map.clone());
+        let out = (fresh.role.clone(), fresh.plan, fresh.map.clone(), fresh.kiosk.clone());
         *lock(&s.live) = fresh;
         REFRESH_BUSY.store(false, Ordering::Release);
         out
@@ -124,7 +136,7 @@ pub(crate) fn live() -> Option<Snapshot> {
     };
     fault::set_role(&role);
     let installed = *lock(&s.installed);
-    Some((role, mask(plan, installed), map))
+    Some((role, mask(plan, installed), map, kiosk))
 }
 
 pub(crate) fn state() -> Option<&'static State> {
@@ -140,6 +152,11 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
     let exe = facts.exe_name();
     if is_disabled(cfg, exe) {
         return HookPlan::default();
+    }
+    if matches!(now.role, Role::Kiosk { .. }) || (matches!(now.role, Role::Console) && facts.kiosk_seat.is_some()) {
+        // Started by a kiosk shell (round 4): the HID groups and the raw-input data filter,
+        // also when the kiosk map entry is not published yet (the live plan decides).
+        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, ..Default::default() };
     }
     if matches!(now.role, Role::Console) {
         // The console only needs the HID rule, and only while a seat asks for it.
@@ -157,6 +174,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         ),
         steam_cmdline: exe == "steam.exe",
         hkcu_redirect: STEAM_EXES.contains(&exe),
+        raw_input_data: false,
     }
 }
 
@@ -239,7 +257,8 @@ fn init_once() {
             || (want.focus_filter && !got.focus_filter)
             || (want.mask_remote && !got.mask_remote)
             || (want.steam_cmdline && !got.steam_cmdline)
-            || (want.hkcu_redirect && !got.hkcu_redirect);
+            || (want.hkcu_redirect && !got.hkcu_redirect)
+            || (want.raw_input_data && !got.raw_input_data);
         health::send(&facts, role_label, got.any(), failed.then_some("hook_failed"));
     }
 }
@@ -255,6 +274,7 @@ unsafe fn install_hooks(want: HookPlan) -> HookPlan {
             mask_remote: want.mask_remote && mask::install(),
             steam_cmdline: want.steam_cmdline && steam::install(),
             hkcu_redirect: want.hkcu_redirect && reg::install(),
+            raw_input_data: want.raw_input_data && raw::install(),
         }
     }
 }

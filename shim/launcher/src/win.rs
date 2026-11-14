@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Windows part of the launcher.
 
-use seat_shim_core::dxvk::Bitness;
-use seat_shim_core::launch::{LaunchArgs, LaunchPlan, build_cmdline, delegate_args, pe_machine, plan_launch};
+use seat_shim_core::launch::{Arch, LaunchArgs, LaunchPlan, attach_exit, build_cmdline, delegate_args, pe_machine, plan_launch};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
@@ -14,8 +13,9 @@ use windows_sys::Win32::System::LibraryLoader::{DONT_RESOLVE_DLL_REFERENCES, Get
 use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx, VirtualFreeEx};
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, CreateRemoteThread, GetExitCodeProcess,
-    GetExitCodeThread, INFINITE, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
-    WaitForSingleObject,
+    GetExitCodeThread, INFINITE, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
+    QueryFullProcessImageNameW, ResumeThread, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 
 const REMOTE_TIMEOUT_MS: u32 = 15_000;
@@ -29,8 +29,8 @@ fn wide_path(p: &Path) -> Vec<u16> {
     p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
 }
 
-fn own_bitness() -> Bitness {
-    if cfg!(target_pointer_width = "64") { Bitness::X64 } else { Bitness::X86 }
+fn own_arch() -> Arch {
+    if cfg!(target_pointer_width = "64") { Arch::X64 } else { Arch::X86 }
 }
 
 /// Resolves a bare exe name through `PATH` (with `.exe` appended when missing).
@@ -64,10 +64,13 @@ impl Drop for Owned {
 }
 
 pub fn run(a: &LaunchArgs) -> i32 {
+    if let Some(pid) = a.attach {
+        return attach(pid, a);
+    }
     let exe = resolve_exe(&a.exe);
     let machine = read_head(&exe).as_deref().and_then(pe_machine);
     let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
-    match plan_launch(own_bitness(), machine, &dir, a) {
+    match plan_launch(own_arch(), machine, &dir, a) {
         LaunchPlan::Delegate { launcher } => match std::process::Command::new(&launcher).args(delegate_args(a)).status() {
             Ok(s) => s.code().unwrap_or(1),
             Err(e) => {
@@ -82,6 +85,63 @@ pub fn run(a: &LaunchArgs) -> i32 {
             start(&exe, a, None)
         }
         LaunchPlan::InjectHere { module } => start(&exe, a, Some(&module)),
+    }
+}
+
+/// Image path of a process (`QueryFullProcessImageNameW`).
+fn process_image(process: HANDLE) -> Option<PathBuf> {
+    let mut buf = vec![0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: buffer valid for `len` characters.
+    if unsafe { QueryFullProcessImageNameW(process, 0, buf.as_mut_ptr(), &mut len) } == 0 {
+        return None;
+    }
+    Some(PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+}
+
+/// `--attach <pid>` (round 4, kiosk shell): the creator started the process suspended and
+/// resumes it itself after we exit. Never resumes, never kills: on a timeout the exit code
+/// tells the creator to kill and restart it without the module. No `__COMPAT_LAYER` (the
+/// child's environment is already fixed). HYPOTHESIS: never run on hardware.
+fn attach(pid: u32, a: &LaunchArgs) -> i32 {
+    let access = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION
+        | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE;
+    // SAFETY: plain call; the handle is owned by the guard.
+    let process = Owned(unsafe { OpenProcess(access, 0, pid) });
+    if process.0.is_null() {
+        eprintln!("shim_blocked: OpenProcess {pid}: {}", std::io::Error::last_os_error());
+        return attach_exit::BLOCKED;
+    }
+    let Some(exe) = process_image(process.0) else {
+        eprintln!("shim_blocked: image of {pid}: {}", std::io::Error::last_os_error());
+        return attach_exit::BLOCKED;
+    };
+    let machine = read_head(&exe).as_deref().and_then(pe_machine);
+    let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
+    match plan_launch(own_arch(), machine, &dir, a) {
+        LaunchPlan::Delegate { launcher } => match std::process::Command::new(&launcher).args(delegate_args(a)).status() {
+            Ok(s) => s.code().unwrap_or(attach_exit::BLOCKED),
+            Err(e) => {
+                eprintln!("shim_blocked: cannot start {}: {e}", launcher.display());
+                attach_exit::BLOCKED
+            }
+        },
+        LaunchPlan::NoInject { reason } => {
+            eprintln!("shim_unsupported: {reason}");
+            attach_exit::BLOCKED
+        }
+        LaunchPlan::InjectHere { module } => match inject(process.0, pid, &module) {
+            Ok(Injected::Active) => attach_exit::ACTIVE,
+            Ok(Injected::Inactive) => attach_exit::INACTIVE,
+            Ok(Injected::TimedOut) => {
+                eprintln!("shim_blocked: remote thread timed out");
+                attach_exit::TIMED_OUT
+            }
+            Err(e) => {
+                eprintln!("shim_blocked: {e}");
+                attach_exit::BLOCKED
+            }
+        },
     }
 }
 

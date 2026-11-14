@@ -6,7 +6,10 @@
 //! second remote thread (hooks are in place before the target's first instruction), then
 //! resumes it. A target of the other bitness is handed to the sibling launcher build
 //! (`..\x86\pulsar-split-launch32.exe` / `..\x64\pulsar-split-launch.exe`); ARM64 targets
-//! start without the module (spec 50 §14).
+//! start without the module (spec 50 §14; no ARM64 module build, round 4).
+//!
+//! `--attach <pid>` (round 4, local kiosk shell): inject into a process its creator started
+//! suspended; the creator resumes it. Exit codes: `seat_shim_core::launch::attach_exit`.
 //!
 //! When our AppHelp database is installed, the child also gets our compatibility layer in
 //! its own `__COMPAT_LAYER` (never machine-wide), so processes it starts (games started by

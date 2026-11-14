@@ -239,6 +239,65 @@ impl SeatMapReader for RegSeatMap {
     }
 }
 
+/// Service writes, module reads (`HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats`).
+pub struct RegKioskMap;
+
+impl crate::kiosk::KioskMapWriter for RegKioskMap {
+    fn publish(&self, e: &crate::kiosk::KioskSeatEntry) -> Result<(), ShimError> {
+        if e.session_id == 0 || e.seat == 0 || e.seat > crate::kiosk::MAX_KIOSK_SEAT {
+            return Err(ShimError::InvalidValue("kiosk map: bad seat or session".into()));
+        }
+        let sd = Sd::new(SEATMAP_SDDL)?;
+        let parent = crate::REG_KIOSKMAP.rsplit_once('\\').map(|(p, _)| p).unwrap_or(crate::REG_KIOSKMAP);
+        for p in [parent, crate::REG_KIOSKMAP] {
+            let h = create_volatile(p, &sd)?;
+            // SAFETY: handle from RegCreateKeyExW.
+            unsafe { RegCloseKey(h) };
+        }
+        let path = format!(r"{}\{}", crate::REG_KIOSKMAP, crate::kiosk::key_name(e.seat));
+        let _ = hklm_delete_tree(&path);
+        let h = create_volatile(&path, &sd)?;
+        let res = crate::kiosk::encode_kiosk_entry(e).iter().try_for_each(|(n, v)| set_value(h, n, v));
+        // SAFETY: handle from RegCreateKeyExW.
+        unsafe { RegCloseKey(h) };
+        res
+    }
+
+    fn remove(&self, seat: u32) -> Result<(), ShimError> {
+        match hklm_delete_tree(&format!(r"{}\{}", crate::REG_KIOSKMAP, crate::kiosk::key_name(seat))) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(reg_err("kiosk map remove", e)),
+            _ => Ok(()),
+        }
+    }
+
+    fn clear(&self) -> Result<(), ShimError> {
+        match hklm_delete_tree(crate::REG_KIOSKMAP) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(reg_err("kiosk map clear", e)),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl crate::kiosk::KioskMapReader for RegKioskMap {
+    fn read_all(&self) -> Result<Vec<crate::kiosk::KioskSeatEntry>, ShimError> {
+        let root = match hklm_open(crate::REG_KIOSKMAP, KEY_READ) {
+            Ok(k) => k,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(reg_err("kiosk map", e)),
+        };
+        let mut out = Vec::new();
+        for name in root.enum_keys().filter_map(Result::ok) {
+            let Ok(vals) = read_values(&format!(r"{}\{}", crate::REG_KIOSKMAP, name)) else { continue };
+            match crate::kiosk::decode_kiosk_entry(&vals) {
+                Ok(e) if crate::kiosk::key_name(e.seat) == name => out.push(e),
+                Ok(_) => log::warn!("kiosk map entry {name}: Seat differs from key name; skipped"),
+                Err(err) => log::warn!("kiosk map entry {name}: {err}"),
+            }
+        }
+        Ok(out)
+    }
+}
+
 // ---------------------------------------------------------------- process facts
 
 /// Session of the current process.
@@ -317,6 +376,7 @@ pub fn process_facts() -> crate::decide::ProcessFacts {
         kill_switch: kill_switch(),
         exe_lower: exe,
         is_our_binary: ours,
+        kiosk_seat: crate::kiosk::parse_kiosk_env(std::env::var(crate::kiosk::KIOSK_SEAT_ENV).ok().as_deref()),
     }
 }
 

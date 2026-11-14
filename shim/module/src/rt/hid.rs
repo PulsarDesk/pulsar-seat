@@ -8,10 +8,10 @@
 //! UCRT and Windows.Gaming.Input all end there. Only if those hooks fail are the
 //! kernelbase (then kernel32) `CreateFileW/A` / `CreateFile2` exports hooked instead.
 
-use super::device::decide;
+use super::device::{Check, decide};
 use super::hook::{Hook, guarded, install, install_first};
 use crate::filter::{Probe, compact, filter_multi_sz, may_be_device_path, nth_kept};
-use seat_shim_core::decide::{Access, is_filtered_device_path};
+use seat_shim_core::decide::{Access, is_filtered_device_path, is_input_class_path};
 use std::ffi::c_void;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CONFIGRET, CR_SUCCESS, HDEVINFO, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
@@ -130,9 +130,12 @@ fn denied_units(name: &[u16]) -> bool {
     may_be_device_path(name) && denied(&String::from_utf16_lossy(name), false)
 }
 
+/// Opens look at HID / XUSB paths only; enumerations also at keyboard / mouse class paths
+/// (kiosk seats, round 4; `decide` applies `rule_applies` for the role).
 fn denied(path: &str, enumeration: bool) -> bool {
-    is_filtered_device_path(path)
-        && guarded(|| decide(path, enumeration)).flatten() == Some(Access::Deny)
+    let check = if enumeration { Check::Enumeration } else { Check::Open };
+    (is_filtered_device_path(path) || (enumeration && is_input_class_path(path)))
+        && guarded(|| decide(path, check)).flatten() == Some(Access::Deny)
 }
 
 unsafe extern "system" fn nt_create_file(
@@ -282,7 +285,7 @@ unsafe extern "system" fn setupdi_enum(
 ) -> BOOL {
     // SAFETY: trampoline has SetupDiEnumDeviceInterfaces's signature.
     let orig: EnumFn = unsafe { std::mem::transmute(SETUPDI_ENUM.trampoline()) };
-    let active = super::live().is_some_and(|(_, p, _)| p.hid_enumeration);
+    let active = super::live().is_some_and(|(_, p, _, _)| p.hid_enumeration);
     if !active || out.is_null() {
         // SAFETY: pass-through with the caller's arguments.
         return unsafe { orig(set, devinfo, guid, index, out) };
@@ -319,7 +322,7 @@ unsafe extern "system" fn setupdi_enum(
     }
 }
 
-fn raw_device_name(h: HANDLE) -> Option<String> {
+pub(crate) fn raw_device_name(h: HANDLE) -> Option<String> {
     let mut chars = 0u32;
     // SAFETY: size query (null buffer).
     unsafe { GetRawInputDeviceInfoW(h, RIDI_DEVICENAME, std::ptr::null_mut(), &mut chars) };
@@ -343,7 +346,7 @@ unsafe extern "system" fn raw_list(list: *mut RAWINPUTDEVICELIST, count: *mut u3
         let f: RawListFn = std::mem::transmute(RAW_LIST.trampoline());
         f(list, count, cb)
     };
-    let active = super::live().is_some_and(|(_, p, _)| p.hid_enumeration);
+    let active = super::live().is_some_and(|(_, p, _, _)| p.hid_enumeration);
     if !active || list.is_null() || n == u32::MAX || n == 0 || cb as usize != std::mem::size_of::<RAWINPUTDEVICELIST>() {
         return n;
     }

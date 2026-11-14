@@ -9,6 +9,7 @@
 //! | Module | What |
 //! | --- | --- |
 //! | [`seatmap`] | authoritative session -> seat map (`HKLM\SOFTWARE\PulsarSplit\Runtime\Seats`) |
+//! | [`kiosk`] | local kiosk seat -> device map (`HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats`), round 4 |
 //! | [`decide`] | role of a process, device classification, HID access, focus filter, masking, HKCU redirect, hook plan |
 //! | [`steam`] | per-seat Steam IPC name: launch arguments, environment, command-line patch |
 //! | [`guard`] | crash guard (fault counter per target) |
@@ -29,6 +30,7 @@ pub mod guard;
 pub mod health;
 pub mod install;
 pub mod journal;
+pub mod kiosk;
 pub mod launch;
 pub mod regval;
 pub mod sdb;
@@ -43,9 +45,10 @@ pub mod win;
 pub mod winfs;
 
 pub use decide::{
-    Access, DevNodeInfo, DeviceOrigin, HookPlan, ProcessFacts, Role, ShimConfig, classify, classify_nodes,
-    filter_focus, hid_access, hkcu_redirect, hook_plan, mask_remote, role, wnf_known,
+    Access, DevNodeInfo, DeviceOrigin, HookPlan, ProcessFacts, Role, ShimConfig, classify, classify_full, classify_nodes,
+    filter_focus, hid_access, hkcu_redirect, hook_plan, hook_plan_full, mask_remote, role, role_full, wnf_known,
 };
+pub use kiosk::{KIOSK_SEAT_ENV, KioskFlags, KioskMapReader, KioskMapWriter, KioskSeatEntry};
 pub use dxvk::{Bitness, DXVK_NOTICE, DxvkDeployer, DxvkDll, DxvkRelease, FileCopy, dxvk_plan, verify_sha256};
 pub use error::ShimError;
 pub use guard::FaultCounter;
@@ -73,6 +76,9 @@ pub const MODULE_X86: &str = "PulsarSplitShim.dll"; // SysWOW64 (x86)
 pub const REG_SHIM: &str = r"SOFTWARE\PulsarSplit\Shim";
 /// Volatile; Everyone read, SYSTEM write. Subkey per running seat: `<session id>`.
 pub const REG_SEATMAP: &str = r"SOFTWARE\PulsarSplit\Runtime\Seats";
+/// Volatile; Everyone read, SYSTEM write. Subkey per running kiosk shell: `<NN>` (seat
+/// number, two digits). See [`kiosk`].
+pub const REG_KIOSKMAP: &str = r"SOFTWARE\PulsarSplit\Runtime\KioskSeats";
 pub const HEALTH_PIPE: &str = r"\\.\pipe\PulsarSplit.ShimHealth";
 /// ETW (TraceLogging) provider of the module. Generated for Pulsar Split.
 pub const ETW_PROVIDER_GUID: &str = "81916b1b-e779-43f0-9ba0-6ecf949e9db9";

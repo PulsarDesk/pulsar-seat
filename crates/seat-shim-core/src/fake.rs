@@ -287,6 +287,34 @@ impl SeatMapReader for FakeSeatMap {
     }
 }
 
+/// Kiosk map in memory, keyed by seat number.
+#[derive(Default)]
+pub struct FakeKioskMap(Mutex<BTreeMap<u32, crate::kiosk::KioskSeatEntry>>);
+
+impl crate::kiosk::KioskMapWriter for FakeKioskMap {
+    fn publish(&self, e: &crate::kiosk::KioskSeatEntry) -> Result<(), ShimError> {
+        if e.session_id == 0 || e.seat == 0 || e.seat > crate::kiosk::MAX_KIOSK_SEAT {
+            return Err(ShimError::InvalidValue("kiosk map: bad seat or session".into()));
+        }
+        lock(&self.0).insert(e.seat, e.clone());
+        Ok(())
+    }
+    fn remove(&self, seat: u32) -> Result<(), ShimError> {
+        lock(&self.0).remove(&seat);
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), ShimError> {
+        lock(&self.0).clear();
+        Ok(())
+    }
+}
+
+impl crate::kiosk::KioskMapReader for FakeKioskMap {
+    fn read_all(&self) -> Result<Vec<crate::kiosk::KioskSeatEntry>, ShimError> {
+        Ok(lock(&self.0).values().cloned().collect())
+    }
+}
+
 pub struct FakeClock(pub AtomicU64);
 
 impl crate::Clock for FakeClock {
