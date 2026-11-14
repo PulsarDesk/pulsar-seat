@@ -154,16 +154,17 @@ impl FastUserSwitchBackend {
     /// 26300 ARM64; the earlier HYPOTHESIS that Windows then asks for the password was
     /// false). The console is handed to a fresh logon screen instead, where the session's
     /// user signs in and Windows reconnects that session (its own fast user switching).
-    /// A console at the logon screen already (no user) is left as it is.
-    fn bring_to_console(&self, id: u32, console: u32, pw: Option<&seat_core::Secret>, all: &[WtsSession]) -> BackendResult<()> {
+    /// A console at the logon screen already (no user) is left as it is. `true` = connected.
+    fn bring_to_console(&self, id: u32, console: u32, pw: Option<&seat_core::Secret>, all: &[WtsSession]) -> BackendResult<bool> {
         if pw.is_some() {
-            return Ok(self.d.wts.connect(id, console, pw)?);
+            self.d.wts.connect(id, console, pw)?;
+            return Ok(true);
         }
         if all.iter().any(|s| s.id == console && !s.user.is_empty()) {
             self.d.wts.disconnect(console)?;
             log::info!("session {id}: no password; console session {console} handed to the logon screen for its user");
         }
-        Ok(())
+        Ok(false)
     }
 
     fn timeout(settings: &GlobalSettings) -> Duration {
@@ -241,8 +242,11 @@ impl SessionBackend for FastUserSwitchBackend {
                         format!("seat 1's session {id} is not locked; it is not switched onto the console"),
                     ));
                 }
-                self.bring_to_console(id, console, pw, &all)?;
-                log::info!("seat 1: switched its session {id} back onto the console");
+                if self.bring_to_console(id, console, pw, &all)? {
+                    log::info!("seat 1: switched its session {id} back onto the console");
+                } else {
+                    log::info!("seat 1: its session {id} comes back once its user signs in on the logon screen");
+                }
                 self.seats().insert(req.seat, (id, None));
                 let info = self.info_of(id)?.unwrap_or(SessionInfo { session_id: id, state: SessionState::Active, user_sid: None, user_name: None, client_name: None });
                 return Ok(StartStep::Started(info));
@@ -304,8 +308,11 @@ impl SessionBackend for FastUserSwitchBackend {
                         format!("session {id} is not locked and no password is stored; it is not switched onto the console"),
                     ));
                 }
-                self.bring_to_console(id, console, pw, &all)?;
-                log::info!("seat {}: switched session {id} onto the console", req.seat);
+                if self.bring_to_console(id, console, pw, &all)? {
+                    log::info!("seat {}: switched session {id} onto the console", req.seat);
+                } else {
+                    log::info!("seat {}: session {id} comes back once its user signs in on the logon screen", req.seat);
+                }
                 id
             }
             None => {
