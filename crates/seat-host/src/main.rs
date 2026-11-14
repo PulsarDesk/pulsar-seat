@@ -40,6 +40,13 @@
 //! - `activex` (fallback, `host.rs` above): the Remote Desktop ActiveX control. It plays
 //!   audio on the host session's default endpoint, has no certificate pinning, touch or
 //!   relative mouse. Never chosen automatically.
+//!
+//! GUI subsystem: the service starts this binary into user sessions (console listener,
+//! kiosk shell, display helper, seat host); as a console binary each got a visible conhost
+//! window there (VM test 2026-11-15). Token, helper replies and the headless hold use
+//! inherited pipe handles, which work without a console.
+
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 // `--headless-hold …`: remote seat session hold (no frames), started by the service.
 mod headless;
