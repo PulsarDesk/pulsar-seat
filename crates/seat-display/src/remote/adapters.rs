@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DisplayError;
+use crate::remote::error::DisplayError;
 
 /// Locally unique adapter id (`LUID`), as DXGI / IddCx report it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -1,8 +1,46 @@
-# split-display
+# seat-display
 
-Per-seat virtual display for Pulsar Split: one `DisplayBackend` trait, three backends,
+Display backends for both seat kinds. GPL-3.0-only.
+
+| Seat kind | Where | Operation trait | Backends | Contract / behaviour |
+| --- | --- | --- | --- | --- |
+| `local` | `src/` (crate root) | `seat_core::backend::display::DisplayBinding` (service) + `FrameSink` (seat host) | `window_presenter`, `display_core`, `pulsar_idd` (`drivers/seat-idd`), `console_only` | `docs/agents/architecture.md` §4.2, `spec/local/40-display.md` |
+| `remote` | `src/remote/` (was the `split-display` crate until merge step 8) | `seat_display::remote::DisplayBackend` | `rdp_session`, `vdd`, `pulsar_idd` (`drivers/split-idd`) | `docs/split/agents/contracts.md` §3, `spec/remote/40-display-hdr.md` |
+
+**One display trait over both kinds:** `seat_display::SeatDisplayBackend` (`src/kinds.rs`)
+gives every backend of either kind a `DisplayBackendId` (`{"kind": "local" | "remote",
+"backend": "<wire name>"}`, the per-kind wire names unchanged) and one
+`DisplayBackendStatus` (available, signed, HDR, reason). `seat_display::Local` and
+`seat_display::Remote` adapt the two operation traits to it; `statuses_for(kind, ..)`
+lists one kind's backends. The operation traits stay per kind because the work differs
+(physical CCD targets vs. a session display).
+
+Driver direction: both kinds have an own IddCx driver today (`drivers/seat-idd`,
+`drivers/split-idd`), both unsigned and never loaded. The plan is **one own IddCx driver
+later** for both kinds, signed once (`drivers/README.md`). `DisplayBackendId::own_iddcx`
+marks the two backends that move onto it. The two C++ drivers are not merged now.
+
+Both kinds' `pulsar_idd` share a wire name but not a driver. They never meet in one config
+field: local seats read `settings.backends.display`, remote seats
+`settings.remote.display_backend`.
+
+## Build and test
+
+```
+cargo test -p seat-display                         # both kinds (remote fakes are on in tests)
+cargo clippy -p seat-display --all-targets --all-features
+cargo check -p seat-display --target x86_64-pc-windows-msvc
+cargo test -p seat-display remote -- --ignored --nocapture   # read-only smoke tests (remote impls)
+```
+
+Feature `fake` exports `seat_display::remote::fake` (in-memory fakes of every remote system
+trait) for the integrator's tests.
+
+# Remote kind (`seat_display::remote`)
+
+Per-seat virtual display for remote seats: one `DisplayBackend` trait, three backends,
 the pure mode / HDR / GPU rules and the wire formats shared with the own driver.
-GPL-3.0-only. Contract: `docs/split/agents/contracts.md` §3. Behaviour: `spec/remote/40-display-hdr.md`.
+Module paths below are relative to `seat_display::remote` (`src/remote/`).
 
 ## Design
 
@@ -77,17 +115,9 @@ the console session; else `RdpSession`.
   `vdd_monitor_rebound` once (re-send the mode).
 - The device ACL of the own driver admits SYSTEM only (plus Administrators read).
 
-## Build and test
+## Tests (remote kind)
 
-```
-cargo test -p split-display
-cargo clippy -p split-display --all-targets
-cargo clippy -p split-display --all-targets --features fake
-cargo check -p split-display --target x86_64-pc-windows-msvc
-cargo test -p split-display -- --ignored --nocapture   # read-only smoke test of the real Windows impls
-```
-
-Unit tests (51) cover: mode rules and the spec 40 §4.3 examples, dynamic scale steps, the
+Commands: see "Build and test" at the top. Unit tests (51) cover: mode rules and the spec 40 §4.3 examples, dynamic scale steps, the
 HDR matrix, adapter resolution, frame header offsets (`offset_of!` + byte tests), IOCTL
 buffer round trips and byte layout, Win32 error mapping, all three backends against fakes
 (PulsarIdd against a simulated driver that decodes the real buffers), VDD drift repair

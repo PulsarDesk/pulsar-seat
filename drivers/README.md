@@ -19,14 +19,40 @@ only, never copied (spec 00 §3.9 item 5).
 | `seat-idd/` | Virtual monitor per seat (sources written, see its README) | IddCx (UMDF 2) | root device via INF with a real hardware id | `DisplayBinding` / `pulsar_idd`; `DriverId::Idd` | `IDD_INTERFACE_GUID` |
 | `seat-storage-filter/` | Strict storage isolation | FltMgr minifilter | allocated altitude (to request; placeholder `UNALLOCATED` today) | `DeviceGate` / `storage_minifilter`; `DriverId::StorageMinifilter` | service `STORAGE_FILTER_SERVICE` (`PulsarSeatStorageGate`); port `MINIFILTER_PORT_NAME` |
 
-Remote seat kind (from Pulsar Split, merge-plan.md; one IddCx driver direction at step 8,
-both display backends behind one trait until then). **Unbuilt, untested, unsigned**; not
+Remote seat kind (from Pulsar Split, merge-plan.md). **Unbuilt, untested, unsigned**; not
 part of `installer/scripts/build-drivers.ps1` yet:
 
 | Dir | Driver | Framework | Notes |
 | --- | --- | --- | --- |
-| `split-idd/` | Per-session virtual display, HDR via IddCx (`split-display` backend `pulsar_idd`) | IddCx (UMDF 2, C++) | [split-idd/README.md](split-idd/README.md); behaviour `spec/remote/40-display-hdr.md` |
+| `split-idd/` | Per-session virtual display, HDR via IddCx (`seat_display::remote` backend `pulsar_idd`) | IddCx (UMDF 2, C++) | [split-idd/README.md](split-idd/README.md); behaviour `spec/remote/40-display-hdr.md` |
 | `split-pad/` | Per-seat virtual gamepad (`seat-pads` backend PulsarPad) | UMDF 2 HID minidriver (Rust, windows-drivers-rs, own Cargo workspace) | [split-pad/README.md](split-pad/README.md); shares `crates/seat-pads/src/{layout,descriptors,features}.rs` via `#[path]` |
+
+## Direction: one own IddCx driver later (merge step 8)
+
+Today there are two own IddCx drivers, one per seat kind:
+
+| | `seat-idd/` (local kind) | `split-idd/` (remote kind) |
+| --- | --- | --- |
+| Language | C++17 | C++ |
+| Monitors | virtual monitor per local seat | per-session virtual display of a remote seat, HDR (FP16) |
+| Control | `IDD_INTERFACE_GUID`, `seat_display::idd_proto` | `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, `seat_display::remote::ioctl` |
+| Rust backend | `DisplayBinding` kind `pulsar_idd` | `remote::DisplayBackend` kind `pulsar_idd` |
+| Built / signed | built, unsigned, never loaded | unbuilt, unsigned |
+
+Decision (merge-plan.md section 5, item 5): **one own IddCx driver for both kinds**, so it is
+signed once. Until then both stay as they are. Each sits behind its kind's backend, and both
+kinds are listed through the one display trait `seat_display::SeatDisplayBackend`
+(`DisplayBackendId::own_iddcx` marks the two). The two drivers are **not merged now**: the
+control contracts, the build state and the HDR / remote-session paths differ too much for a
+trivial merge. Merge sketch for later:
+
+1. One INF and one hardware id. One control interface with a version query first, as the
+   common rules below require. Remote-session and HDR support are reported as capabilities.
+2. The superset of both IOCTL sets under one new interface GUID. Both Rust clients
+   (`idd_proto`, `remote::ioctl`) then move to one module.
+3. `build-drivers.ps1` builds it for ARM64 + x64. The second driver directory goes.
+4. Signing (attestation / WHQL) once. Then `signed = true` lets
+   `remote::choose_backend` pick it, and `driver_not_signed` goes away for local seats.
 
 `seat-storage-filter` is outside the rules.md driver list: an exception that needs the
 maintainer's explicit OK before it is ever installed (spec 70 §5.3, spec 90 §11 item 2).

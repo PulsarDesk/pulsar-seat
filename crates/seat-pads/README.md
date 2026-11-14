@@ -1,7 +1,39 @@
 # seat-pads
 
-Virtual controllers for Pulsar Split seats (package **pads**, `docs/split/agents/contracts.md` §5,
-behaviour in `spec/remote/60-controllers.md`). Licence GPL-3.0-only.
+Virtual controllers, shared by both seat kinds (package **pads**,
+`docs/split/agents/contracts.md` §5, behaviour in `spec/remote/60-controllers.md`). Licence
+GPL-3.0-only. Remote seats get pads from the stream client; local seats can get a seat-owned
+virtual pad for a routed physical pad (see "Local seats" below).
+
+## Local seats (merge step 8, feature `local-pads` of `seat-input`, off by default)
+
+`seat_input::local_pads` is the bridge. A physical pad that `seat-input` routes to a local
+seat gets a virtual pad from this crate:
+
+- `mirror_kind`: PlayStation pads keep their kind (DS4 / DualSense / Edge by USB id);
+  everything else becomes an Xbox One pad.
+- `plan`: the same `mapping::resolve` rules as remote seats. ViGEm and usbip-win2 are used
+  only when installed. PulsarPad is used only when the seat prefers it.
+- `LocalPads::attach` creates the pad with the seat's session id and user SID.
+  `forward_state` sends an XInput-shaped state (`xinput_to_state`). `forward_report` passes a
+  raw HID report through, but only when the layouts match.
+  `detach` / `detach_seat` remove pads.
+
+Design limits:
+
+| Topic | Limit |
+| --- | --- |
+| ViGEmBus | **only if already installed**; never installed or bundled by us (X360 / DS4) |
+| DualSense | usbip-win2 (signed, must be installed) + our loopback USB/IP DualSense server |
+| Own pad driver (`drivers/split-pad`) | **unsigned**; only on explicit preference, never default |
+| Physical pad | stays visible to every session unless the HID visibility filter runs (unsigned, not loaded); XInput pads are always shared. A game in another seat can still read the physical pad. |
+| Which pad a game picks | HYPOTHESIS: many games take the first XInput slot, which may be the physical pad |
+| Device security, orphan cleanup, feedback to the physical pad | `PadManager` work; the bridge takes a plain `PadBackend` and is not wired into the service yet |
+| Per-process HID shim (`seat-shim-core`, `shim/`) | remote kind only for now; x64 / x86 only, so off on ARM64 |
+
+Untested on hardware. `cargo test -p seat-input --features local-pads local_pads` runs the
+bridge tests against a fake backend. `cargo test --workspace` runs them too, because
+`seat-service` enables the feature as a dev-dependency.
 
 ## What it does
 

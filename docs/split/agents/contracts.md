@@ -29,7 +29,7 @@ progress note so the integrator can adapt.
 | --- | --- | --- |
 | session | `crates/split-session`, `crates/split-rdp-helper` | everything else |
 | termwrap | `crates/split-termwrap` | |
-| display | `crates/split-display`, `drivers/split-idd` | |
+| display | `crates/seat-display` (`remote`), `drivers/split-idd` | |
 | shim | `crates/seat-shim-core`, `shim/` | |
 | pads | `crates/seat-pads`, `drivers/split-pad` | |
 | audio | `crates/seat-audio` | |
@@ -508,7 +508,7 @@ Error codes: `warning_not_acknowledged`, `not_client_sku`, `foreign_wrapper`,
 
 ---
 
-## 3. display — `crates/split-display`, `drivers/split-idd`
+## 3. display — `crates/seat-display` (`remote`), `drivers/split-idd`
 
 Spec: 40 (all), 80 §3. Phase 2 reality (spec 40 §2.3): a third-party or own IDD cannot
 attach a monitor to an RDP session unless the session's protocol stack names it; only
@@ -517,7 +517,7 @@ the stock RdpIdd display exists in a loopback seat session. Consequence for the 
 it can only serve a **console** seat (or a future protocol-provider path) until OQ 20 is
 answered. The integrator's default for remote seats is Backend 2 (`RdpSession`).
 
-### 3.1 Public API (`split_display`)
+### 3.1 Public API (`seat_display::remote`)
 
 ```rust
 pub mod modes;    // pure mode rules (spec 40 §4.3/§4.4)

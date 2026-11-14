@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 use seat_proto::remote::RemoteSeatRecord;
 
-use crate::adapters::{AdapterChoice, Luid};
-use crate::modes::ScaleMode;
+use crate::remote::adapters::{AdapterChoice, Luid};
+use crate::remote::modes::ScaleMode;
 
 pub const SDR_WHITE_MIN: u16 = 80;
 pub const SDR_WHITE_MAX: u16 = 480;
@@ -131,7 +131,7 @@ impl SeatDisplay {
     }
 
     pub fn with_refresh(mut self, hz: u32) -> Self {
-        self.refresh_hz = hz.clamp(crate::modes::MIN_HZ, crate::modes::MAX_HZ);
+        self.refresh_hz = hz.clamp(crate::remote::modes::MIN_HZ, crate::remote::modes::MAX_HZ);
         self
     }
 }

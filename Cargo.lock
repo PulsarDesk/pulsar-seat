@@ -4650,6 +4650,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "seat-core",
+ "seat-proto",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4684,6 +4685,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "seat-core",
+ "seat-pads",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4695,6 +4697,7 @@ name = "seat-media"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-audio",
  "seat-core",
  "serde",
  "serde_json",
@@ -4801,7 +4804,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "split-display",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",
@@ -5350,18 +5352,6 @@ checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
 dependencies = [
  "base64ct",
  "der 0.8.3",
-]
-
-[[package]]
-name = "split-display"
-version = "0.1.0"
-dependencies = [
- "log",
- "seat-proto",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "windows",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use crate::error::DisplayError;
+use crate::remote::error::DisplayError;
 
 pub const PACKAGE: &str = "display";
 

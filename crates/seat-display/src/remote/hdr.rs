@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::backend::BackendKind;
+use crate::remote::backend::BackendKind;
 
 /// `IddCxGetVersion` value of IddCx 1.10 (Windows 11 23H2 class); first version with HDR.
 pub const IDDCX_VERSION_1_10: u32 = 0x1A00;

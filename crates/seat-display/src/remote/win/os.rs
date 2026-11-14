@@ -5,7 +5,7 @@ use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
 use windows::Win32::System::SystemInformation::{OSVERSIONINFOEXW, OSVERSIONINFOW};
 
-use crate::backend::vdd::ConsoleSession;
+use crate::remote::backend::vdd::ConsoleSession;
 
 /// `VER_NT_WORKSTATION`.
 const VER_NT_WORKSTATION: u8 = 1;

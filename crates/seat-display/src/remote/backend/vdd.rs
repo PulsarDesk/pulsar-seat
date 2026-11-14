@@ -28,17 +28,17 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::adapters::{AdapterChoice, AdapterEnumerator, Luid};
-use crate::backend::vdd_xml::{self, VddDesired};
-use crate::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
-use crate::error::DisplayError;
-use crate::hdr::{HdrCaps, hdr_availability, iddcx_for_build};
-use crate::journal::{self, RestoreLog, Status};
-use crate::modes::{ModeLimits, ModeRequest, pinned_luid, resolve_mode};
-use crate::seat::{
+use crate::remote::adapters::{AdapterChoice, AdapterEnumerator, Luid};
+use crate::remote::backend::vdd_xml::{self, VddDesired};
+use crate::remote::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
+use crate::remote::error::DisplayError;
+use crate::remote::hdr::{HdrCaps, hdr_availability, iddcx_for_build};
+use crate::remote::journal::{self, RestoreLog, Status};
+use crate::remote::modes::{ModeLimits, ModeRequest, pinned_luid, resolve_mode};
+use crate::remote::seat::{
     DisplayPhase, DisplayState, FrameFormat, ModeResult, ModeStatus, ReadyInfo, SeatDisplay,
 };
-use crate::{Clock, Sleeper};
+use crate::remote::{Clock, Sleeper};
 
 pub const VDD_PIPE_NAME: &str = r"\\.\pipe\MTTVirtualDisplayPipe";
 pub const VDD_DEFAULT_DIR: &str = r"C:\VirtualDisplayDriver";
@@ -724,8 +724,8 @@ impl<P: VddPipe, F: VddSettingsFile> DisplayBackend for VddBackend<P, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::RenderAdapter;
-    use crate::fake::*;
+    use crate::remote::adapters::RenderAdapter;
+    use crate::remote::fake::*;
     use seat_proto::remote::RemoteSeatRecord;
 
     struct Rig {
@@ -813,7 +813,7 @@ mod tests {
         r.pipe.set_absent(true);
         let i = r.b.probe().unwrap();
         assert!(!i.installed);
-        assert_eq!(i.hdr, Err(crate::hdr::HdrUnavailable::DriverNotInstalled));
+        assert_eq!(i.hdr, Err(crate::remote::hdr::HdrUnavailable::DriverNotInstalled));
     }
 
     #[test]

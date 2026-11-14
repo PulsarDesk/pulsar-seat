@@ -351,15 +351,15 @@ fn console_session() -> Option<u32> {
 
 /// Virtual-Display-Driver backend on the real machine; also used by the `display` restore
 /// hook of the setup sub-commands. Journal: `<data_root>\journal\display.jsonl`.
-pub type WinVdd = split_display::VddBackend<split_display::win::vdd::WinVddPipe, split_display::win::vdd::WinVddSettingsFile>;
+pub type WinVdd = seat_display::remote::VddBackend<seat_display::remote::win::vdd::WinVddPipe, seat_display::remote::win::vdd::WinVddSettingsFile>;
 
-pub fn vdd_backend(data_root: &Path, clock: Arc<split_display::SystemClock>) -> WinVdd {
-    use split_display::win::{dxgi::DxgiAdapters, journal::FileRestoreLog, os, vdd};
+pub fn vdd_backend(data_root: &Path, clock: Arc<seat_display::remote::SystemClock>) -> WinVdd {
+    use seat_display::remote::win::{dxgi::DxgiAdapters, journal::FileRestoreLog, os, vdd};
     let (build, server) = os::os_version();
-    split_display::VddBackend::new(
+    seat_display::remote::VddBackend::new(
         vdd::WinVddPipe::default(),
         vdd::WinVddSettingsFile::discover(),
-        split_display::VddEnv {
+        seat_display::remote::VddEnv {
             monitors: Box::new(vdd::WinVddMonitors),
             modes: Box::new(vdd::WinModeSetter),
             console: Box::new(os::WinConsole),
@@ -369,7 +369,7 @@ pub fn vdd_backend(data_root: &Path, clock: Arc<split_display::SystemClock>) -> 
             sleeper: clock,
             os_build: build,
             server,
-            limits: split_display::ModeLimits::default(),
+            limits: seat_display::remote::ModeLimits::default(),
         },
     )
 }
@@ -385,7 +385,7 @@ pub fn build(
     service_version: &str,
     pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore>,
 ) -> Result<Deps, String> {
-    use split_display::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
+    use seat_display::remote::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
     // The headless session hold is `pulsar-seat-host.exe --headless-hold` (merge step 7).
     let helper = install_dir.join(seat_core::consts::HOST_EXE);
     let session = seat_session::remote::manager::WindowsSessionManager::new(
@@ -395,12 +395,12 @@ pub fn build(
     )
     .map_err(|e| format!("session manager ({}): {e}", helper.display()))?;
 
-    let dclock: Arc<split_display::SystemClock> = Arc::new(split_display::SystemClock::default());
+    let dclock: Arc<seat_display::remote::SystemClock> = Arc::new(seat_display::remote::SystemClock::default());
     let (build, server) = os::os_version();
-    let displays: Vec<Arc<dyn split_display::DisplayBackend>> = vec![
-        Arc::new(split_display::RdpSessionDisplay::new(WinSessionProbe, dclock.clone(), dclock.clone())),
+    let displays: Vec<Arc<dyn seat_display::remote::DisplayBackend>> = vec![
+        Arc::new(seat_display::remote::RdpSessionDisplay::new(WinSessionProbe, dclock.clone(), dclock.clone())),
         Arc::new(vdd_backend(data_root, dclock.clone())),
-        Arc::new(split_display::PulsarIdd::new(WinDeviceIo, dclock.clone(), dclock, build, server)),
+        Arc::new(seat_display::remote::PulsarIdd::new(WinDeviceIo, dclock.clone(), dclock, build, server)),
     ];
 
     let fs: Arc<dyn seat_stream::seatdir::SecureFs> = Arc::new(seat_stream::win::WinSecureFs);

@@ -133,6 +133,24 @@ pub fn mmdevapi_endpoint_id(instance_id: &str) -> Option<&str> {
     Some(rest)
 }
 
+/// `SWD\MMDEVAPI\` + an endpoint id: the devnode instance id of an MMDevice endpoint.
+pub fn mmdevapi_instance_id(endpoint_id: &str) -> String {
+    format!("{MMDEVAPI_PREFIX}{endpoint_id}")
+}
+
+/// Coarse marker of a session-scoped (RDP Remote Audio) endpoint id: the leading number of
+/// `{a.b.f.hhhhhhhh}` is [`RDP_ENDPOINT_KIND`]. Used by the local kind to keep other
+/// sessions' endpoints out of a seat's hardware list (spec `spec/local/60-audio.md` §4.1
+/// step 5); it does not check the rest of the id. The remote kind's strict form is
+/// [`parse_endpoint_id`] + [`EndpointIdParts::is_rdp`]. HYPOTHESIS: the leading number is
+/// the only marker.
+pub fn is_session_endpoint_id(endpoint_id: &str) -> bool {
+    endpoint_id
+        .strip_prefix('{')
+        .and_then(|r| r.split('.').next())
+        .is_some_and(|k| k == RDP_ENDPOINT_KIND.to_string())
+}
+
 /// Raw device node as the CfgMgr32 layer returns it (input of [`endpoint_from_node`]).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DevNode {
@@ -272,6 +290,16 @@ pub fn plan_stale_endpoints(all: &[Endpoint], live_sessions: &[u32]) -> Vec<Stri
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn session_endpoint_marker_and_instance_id() {
+        assert!(is_session_endpoint_id("{3.0.0.00000002}.{guid}"));
+        assert!(is_session_endpoint_id("{3.1.1.00000000}"));
+        assert!(!is_session_endpoint_id("{0.0.0.00000000}.{0a1b2c3d-0000-4000-8000-00000000abcd}"));
+        assert!(!is_session_endpoint_id("{33.0.0.00000000}"));
+        assert!(!is_session_endpoint_id("3.0.0"));
+        assert_eq!(mmdevapi_instance_id("{0.0.0.00000000}.{x}"), r"SWD\MMDEVAPI\{0.0.0.00000000}.{x}");
+    }
+
     use super::*;
 
     pub const GUID: &str = "{6C26BA7D-F0B2-4225-B422-8168C5261E45}";

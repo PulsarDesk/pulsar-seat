@@ -14,7 +14,7 @@ how Pulsar Split is built. Open design questions: [open-questions.md](open-quest
 | `crates/split-service` | Windows service binary `pulsar-split-service.exe`: SCM glue, control pipe, shim health pipe, registry store, DPAPI, `engine/` (seat orchestration over the package traits, tested with the packages' fakes), `wiring.rs` (real package implementations), `WindowsPlatform`, setup sub-commands (`setup_cmd.rs`). |
 | `crates/split-session`, `split-rdp-helper` | Path A multi-session (Server + RDSH), loopback RDP helper. |
 | `crates/split-termwrap` | EXPERIMENTAL client-SKU module (operator-installed wrapper), off by default. |
-| `crates/split-display`, `seat-audio`, `seat-stream`, `seat-pads`, `seat-shim-core`, `seat-setup` | Packages per [contracts.md](contracts.md). |
+| `crates/seat-display` (`remote`), `seat-audio`, `seat-stream`, `seat-pads`, `seat-shim-core`, `seat-setup` | Packages per [contracts.md](contracts.md). |
 | `apps/split-manager` | Tauri 2 + SvelteKit 3 + Svelte 5 (runes), `adapter-static` SPA. `src-tauri` = Rust side. |
 | `drivers/`, `shim/`, `installer/split/` | Own drivers (unbuilt, unsigned), shim workspace (x64/x86), installer scripts. |
 
@@ -28,7 +28,7 @@ manager (elevated, console session)            seat service (LocalSystem, sessio
                                                               |-- WindowsPlatform (users, SCM start type)
                                                                     `-- Engine (seat workers)
                                                                           |-- split-session (helper child, sessions)
-                                                                          |-- split-display, seat-audio
+                                                                          |-- seat-display (remote), seat-audio
                                                                           |-- seat-stream (StreamBackend per seat: Sunshine | pulsar-host)
                                                                           |-- seat-pads, seat-shim-core (seat map)
                                                                           `-- split-termwrap, seat-setup (coexistence)

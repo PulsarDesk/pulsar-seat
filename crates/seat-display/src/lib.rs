@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pulsar Seat display — implements [`seat_core::backend::DisplayBinding`] (service side)
-//! and [`seat_core::backend::FrameSink`] (seat-host side). Spec `spec/local/40-display.md` §6,
-//! `spec/local/00-architecture.md` §5.2, T1, T6; contract `docs/agents/architecture.md` §4.2.
+//! Pulsar Seat display for both seat kinds.
+//!
+//! - **local** kind: implements [`seat_core::backend::DisplayBinding`] (service side) and
+//!   [`seat_core::backend::FrameSink`] (seat-host side). Spec `spec/local/40-display.md` §6,
+//!   `spec/local/00-architecture.md` §5.2, T1, T6; contract `docs/agents/architecture.md` §4.2.
+//! - **remote** kind: [`remote`] (the `split-display` crate until merge step 8):
+//!   `remote::DisplayBackend` with `rdp_session` / `vdd` / `pulsar_idd`.
+//! - [`kinds`]: [`SeatDisplayBackend`], the one display trait over both kinds.
 //!
 //! | module | what |
 //! | --- | --- |
@@ -10,6 +15,8 @@
 //! | [`topology`] | pure: which targets leave / rejoin the console desktop, journal, CCD path plan |
 //! | [`binding`] | the `DisplayBinding` for all four kinds |
 //! | [`idd_proto`] | wire contract with `drivers/seat-idd` |
+//! | [`kinds`] | one display trait over both kinds, backend ids and status |
+//! | [`remote`] | remote kind: backends, modes, HDR rules, frame header, IOCTL buffers (`remote::win`, `remote::fake`) |
 //! | `win` (Windows) | CCD, GDI/DDC-CI, identify overlays, hot-plug, window + Display Core presenters, IddCx client |
 //! | `helper` (Windows) | `pulsar-seat-host.exe --display-helper …` entry point |
 //!
@@ -18,7 +25,9 @@
 pub mod binding;
 pub mod console;
 pub mod idd_proto;
+pub mod kinds;
 pub mod model;
+pub mod remote;
 pub mod topology;
 
 #[cfg(windows)]
@@ -28,6 +37,7 @@ pub mod win;
 
 pub use binding::{caps_for, Binding, EdidSource, IddControl, IddMonitor, PresenterCommand, PresenterRouter, SeatDisplayOptions};
 pub use console::{Console, ConsoleCommand, ConsoleRunner, HelperReply, IdentifyItem, RunnerConsole, HELPER_FLAG};
+pub use kinds::{DisplayBackendId, DisplayBackendStatus, Local, Remote, SeatDisplayBackend};
 pub use model::{rdp_layout, RdpLayout, RdpMonitor};
 
 #[cfg(windows)]

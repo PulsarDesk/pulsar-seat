@@ -17,8 +17,8 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::core::{GUID, Interface, PCWSTR};
 
-use crate::adapters::{AdapterEnumerator, Luid, RenderAdapter, filter_adapters};
-use crate::error::DisplayError;
+use crate::remote::adapters::{AdapterEnumerator, Luid, RenderAdapter, filter_adapters};
+use crate::remote::error::DisplayError;
 
 use super::{from_wide, win32_of};
 

@@ -106,32 +106,32 @@ impl RestoreHook for PadsHook {
 /// `journal\display.jsonl` (spec 90 §9.2). Nothing journaled = nothing touched; a driver
 /// that is already gone only skips the reload. The restore closure is the real
 /// `VddBackend::restore_all` in production and a fake one in tests.
-struct DisplayHook<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> {
+struct DisplayHook<R: Fn() -> Result<(), seat_display::remote::DisplayError> + Send + Sync> {
     restore: R,
 }
 
-impl<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> RestoreHook for DisplayHook<R> {
+impl<R: Fn() -> Result<(), seat_display::remote::DisplayError> + Send + Sync> RestoreHook for DisplayHook<R> {
     fn name(&self) -> &str {
-        split_display::journal::PACKAGE
+        seat_display::remote::journal::PACKAGE
     }
     fn restore_all(&self) -> Result<(), SetupError> {
         (self.restore)().map_err(other)
     }
 }
 
-impl<R: Fn() -> Result<(), split_display::DisplayError> + Send + Sync> ReconcileHook for DisplayHook<R> {
+impl<R: Fn() -> Result<(), seat_display::remote::DisplayError> + Send + Sync> ReconcileHook for DisplayHook<R> {
     fn name(&self) -> &str {
-        split_display::journal::PACKAGE
+        seat_display::remote::journal::PACKAGE
     }
     fn reconcile(&self) -> Result<(), SetupError> {
         (self.restore)().map_err(other)
     }
 }
 
-fn display_hook(data_root: PathBuf) -> DisplayHook<impl Fn() -> Result<(), split_display::DisplayError> + Send + Sync> {
+fn display_hook(data_root: PathBuf) -> DisplayHook<impl Fn() -> Result<(), seat_display::remote::DisplayError> + Send + Sync> {
     DisplayHook {
         restore: move || {
-            crate::remote::win::wiring::vdd_backend(&data_root, std::sync::Arc::new(split_display::SystemClock::default())).restore_all()
+            crate::remote::win::wiring::vdd_backend(&data_root, std::sync::Arc::new(seat_display::remote::SystemClock::default())).restore_all()
         },
     }
 }
@@ -158,16 +158,16 @@ pub fn run(cmd: SetupCommand) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use split_display::fake::{FakeAdapters, FakeClock, FakeConsole, FakeModeSetter, FakeRestoreLog, FakeVddMonitors, FakeVddPipe, FakeVddSettings};
-    use split_display::journal::RestoreLog;
-    use split_display::{AdapterChoice, DisplayBackend, Luid, ModeLimits, SeatDisplay, VddBackend, VddEnv};
+    use seat_display::remote::fake::{FakeAdapters, FakeClock, FakeConsole, FakeModeSetter, FakeRestoreLog, FakeVddMonitors, FakeVddPipe, FakeVddSettings};
+    use seat_display::remote::journal::RestoreLog;
+    use seat_display::remote::{AdapterChoice, DisplayBackend, Luid, ModeLimits, SeatDisplay, VddBackend, VddEnv};
     use std::sync::Arc;
 
     const XML: &str = "<vdd_settings><monitors><count>1</count></monitors><gpu><friendlyname>default</friendlyname></gpu><resolutions><resolution><width>1920</width><height>1080</height><refresh_rate>60</refresh_rate></resolution></resolutions><colour><SDR10bit>false</SDR10bit><HDRPlus>false</HDRPlus></colour></vdd_settings>";
 
     fn backend(pipe: &FakeVddPipe, file: &FakeVddSettings, mons: &FakeVddMonitors, journal: &FakeRestoreLog) -> VddBackend<FakeVddPipe, FakeVddSettings> {
         let clock = Arc::new(FakeClock::default());
-        let gpu = split_display::RenderAdapter {
+        let gpu = seat_display::remote::RenderAdapter {
             pnp_instance_id: r"PCI\X".into(),
             description: "GPU X".into(),
             luid: Luid { low: 42, high: 0 },
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn display_hook_reports_failures() {
-        let hook = DisplayHook { restore: || Err(split_display::DisplayError::Io("access denied".into())) };
+        let hook = DisplayHook { restore: || Err(seat_display::remote::DisplayError::Io("access denied".into())) };
         assert!(RestoreHook::restore_all(&hook).is_err());
     }
 }

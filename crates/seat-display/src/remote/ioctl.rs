@@ -7,10 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::Luid;
-use crate::error::DisplayError;
-use crate::modes::{ModeRequest, ScaleMode};
-use crate::seat::{DisplayPhase, FrameFormat, ModeResult, ModeStatus, SeatDisplay};
+use crate::remote::adapters::Luid;
+use crate::remote::error::DisplayError;
+use crate::remote::modes::{ModeRequest, ScaleMode};
+use crate::remote::seat::{DisplayPhase, FrameFormat, ModeResult, ModeStatus, SeatDisplay};
 
 /// Binary GUID (Windows `GUID` layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -332,15 +332,15 @@ impl SeatConfigIn {
         let l = s.luminance.validated();
         Ok(SeatConfigIn {
             seat_guid: Guid::parse(&s.seat_id)?,
-            adapter_luid: crate::modes::pinned_luid(&s.adapter),
+            adapter_luid: crate::remote::modes::pinned_luid(&s.adapter),
             hdr_allowed: s.hdr_allowed,
-            sdr_white_nits: crate::seat::sdr_white_level(s.sdr_white_nits) as u32,
+            sdr_white_nits: crate::remote::seat::sdr_white_level(s.sdr_white_nits) as u32,
             min_luminance_x10000: l.min_nits_x10000,
             max_luminance_nits: l.max_nits,
             max_full_frame_nits: l.max_full_frame_nits,
             scale_static,
             scale_percent,
-            super_sampling_percent: crate::seat::clamp_percent(s.super_sampling_percent) as u32,
+            super_sampling_percent: crate::remote::seat::clamp_percent(s.super_sampling_percent) as u32,
         })
     }
 
@@ -644,8 +644,8 @@ impl EventOut {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::AdapterChoice;
-    use crate::seat::HdrLuminance;
+    use crate::remote::adapters::AdapterChoice;
+    use crate::remote::seat::HdrLuminance;
     use seat_proto::remote::RemoteSeatRecord;
 
     #[test]

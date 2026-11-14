@@ -75,7 +75,7 @@ impl IsolationPort for FakeIsolation {
 struct World {
     engine: Engine,
     session: FakeHost,
-    probe: split_display::fake::FakeSessionProbe,
+    probe: seat_display::remote::fake::FakeSessionProbe,
     fs: Arc<sf::MemFs>,
     launcher: sf::FakeLauncher,
     connector: sf::FakeConnector,
@@ -119,9 +119,9 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     session.accounts.add_user("seat1", USER_SID, "pw");
     let manager = Manager::new(d, SessionTimeouts::default());
 
-    let dclock = Arc::new(split_display::fake::FakeClock::default());
-    let probe = split_display::fake::FakeSessionProbe::default();
-    let rdp = split_display::RdpSessionDisplay::new(probe.clone(), dclock.clone(), dclock);
+    let dclock = Arc::new(seat_display::remote::fake::FakeClock::default());
+    let probe = seat_display::remote::fake::FakeSessionProbe::default();
+    let rdp = seat_display::remote::RdpSessionDisplay::new(probe.clone(), dclock.clone(), dclock);
 
     let fs = Arc::new(sf::MemFs::default());
     let launcher = sf::FakeLauncher::default();
@@ -195,7 +195,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     let engine = Engine::new(Deps {
         session: Arc::new(manager),
         displays: vec![Arc::new(rdp)],
-        adapters: Arc::new(split_display::fake::FakeAdapters(Vec::new())),
+        adapters: Arc::new(seat_display::remote::fake::FakeAdapters(Vec::new())),
         audio: Arc::new(seat_audio::fake::FakeAudioProbe::default()),
         stream,
         pads: Some(Arc::new(Mutex::new(pads))),

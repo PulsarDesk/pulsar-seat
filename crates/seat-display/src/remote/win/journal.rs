@@ -10,8 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::DisplayError;
-use crate::journal::RestoreLog;
+use crate::remote::error::DisplayError;
+use crate::remote::journal::RestoreLog;
 
 use super::secure::{FsError, TrustedDir};
 

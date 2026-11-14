@@ -46,7 +46,6 @@ seat-rdp = { path = "../seat-rdp", default-features = false }
 seat-release = { path = "../seat-release", default-features = false }
 # Remote seat worker (Pulsar Split's engine, merge step 6).
 uuid.workspace = true
-split-display.workspace = true
 seat-audio.workspace = true
 seat-stream.workspace = true
 seat-pads.workspace = true
@@ -93,10 +92,13 @@ windows-sys = { workspace = true, features = [
 [dev-dependencies]
 seat-core = { workspace = true, features = ["mock"] }
 seat-session = { workspace = true, features = ["fake"] }
-split-display = { workspace = true, features = ["fake"] }
+seat-display = { workspace = true, features = ["fake"] }
 seat-audio = { workspace = true, features = ["fake"] }
 seat-stream = { workspace = true, features = ["fake"] }
 seat-pads = { workspace = true, features = ["fake"] }
+# Only so `cargo test --workspace` also builds and runs `seat_input::local_pads` (feature
+# off by default; the service does not use it yet, merge step 8).
+seat-input = { workspace = true, features = ["local-pads"] }
 seat-shim-core = { workspace = true, features = ["fake"] }
 seat-release = { path = "../seat-release" }
 tempfile = "3.27.0"

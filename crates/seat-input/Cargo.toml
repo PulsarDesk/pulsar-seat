@@ -8,8 +8,14 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Seat-owned virtual pads for local seats from the shared pads crate (merge-plan.md step 8,
+# `seat_input::local_pads`). Off by default; nothing enables it yet.
+local-pads = ["dep:seat-pads"]
+
 [dependencies]
 seat-core.workspace = true
+seat-pads = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

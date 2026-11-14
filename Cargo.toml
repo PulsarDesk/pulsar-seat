@@ -21,10 +21,8 @@ default-members = [
     "crates/seat-host",
     "crates/seat-rdp",
     "crates/seat-release",
-    # Remote seat kind (from Pulsar Split). split-* crates clash with a seat-* crate and are
-    # merged into it at merge-plan.md steps 4-8 (proto / core: step 4, service: step 6,
-    # session / rdp-helper / termwrap: step 7, done; display: step 8).
-    "crates/split-display",
+    # Remote seat kind (from Pulsar Split). Its split-* crates were merged into the seat-*
+    # crate of the same role at merge-plan.md steps 4-8; none is left.
     "crates/seat-audio",
     "crates/seat-stream",
     "crates/seat-pads",
@@ -54,7 +52,6 @@ seat-stream = { path = "crates/seat-stream" }
 seat-pads = { path = "crates/seat-pads" }
 seat-shim-core = { path = "crates/seat-shim-core" }
 seat-setup = { path = "crates/seat-setup" }
-split-display = { path = "crates/split-display" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"

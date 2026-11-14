@@ -306,7 +306,7 @@ Numbered `audio-N` so parallel packages do not collide; the integrator may renum
   computed once with `wrapper_active = false` (client SKU = 1 seat). The service should
   call `host_info` with the real wrapper state at start. Integrator.
 
-## From the display package (2026-11-12, `crates/split-display`, `drivers/split-idd`)
+## From the display package (2026-11-12, `crates/seat-display` (`remote`), `drivers/split-idd`)
 
 - display-1. **VDD monitors are console-only.** Confirms OQ 20 from the implementer side:
   Virtual-Display-Driver monitors live in the console session's display configuration, and

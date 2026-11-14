@@ -587,7 +587,7 @@ pub enum ResponseBody {
     /// `seat_session::termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
     TermwrapStatus(serde_json::Value),
     RemoteRuntime(remote::SeatRuntime),
-    /// `split_display::RenderAdapter` values.
+    /// `seat_display::remote::RenderAdapter` values.
     RenderAdapters(Vec<serde_json::Value>),
     /// `seat_pads::BackendAvailability` values.
     PadBackends(Vec<serde_json::Value>),

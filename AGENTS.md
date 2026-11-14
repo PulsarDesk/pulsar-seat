@@ -12,8 +12,9 @@ Clean-room implementation, part of the Pulsar umbrella (`../`). Runs natively on
 ARM64** (the remote kind's per-process shim is x64 / x86 only). No payment, no activation,
 no telemetry.
 
-Until the merge is done, remote-kind code keeps its own docs under `docs/split/` and its own
-`split-*` crates where a `seat-*` crate of the same role exists (merged at steps 4-8).
+Until the merge is done, remote-kind code keeps its own docs under `docs/split/`. Its
+`split-*` crates are merged into the `seat-*` crates (steps 4-8, done); apps and installer
+pieces follow at steps 9-10.
 
 This file is an **index only**. Facts live in the files below. Keep it short; add a row
 here when you add a doc.

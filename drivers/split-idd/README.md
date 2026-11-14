@@ -16,7 +16,7 @@ Status, plainly:
   that session's Remote Desktop protocol stack names its hardware id
   (`PulsarSplit_IndirectDisplay`). That provider does not exist yet (spec 40 §2.3,
   spec 30 §11, maintainer decision). Installing this INF alone makes no device appear.
-- The Rust side (`crates/split-display`, backend `PulsarIdd`) is complete and unit-tested
+- The Rust side (`crates/seat-display` (`remote`), backend `PulsarIdd`) is complete and unit-tested
   against an in-memory simulation of this driver's IOCTL interface. It is never chosen
   automatically: `probe` reports `signed = false` (`OWN_DRIVER_SIGNED`).
 
@@ -26,7 +26,7 @@ Status, plainly:
 | --- | --- |
 | Adapter (§2.3) | `REMOTE_SESSION_DRIVER` + `USE_SMALLEST_MODE`; with IddCx 1.10 also `CAN_PROCESS_FP16` + `ALL_TARGET_MODES_MONITOR_COMPATIBLE`. One monitor, no EDID, target modes only. Host process sharing disabled, no device group. |
 | Run-time 1.10 check (§8.4) | `IDD_IS_FIELD_AVAILABLE` for the 1.10 callbacks, `IDD_IS_FUNCTION_AVAILABLE` for `IddCxSwapChainReleaseAndAcquireBuffer2`, `IddCxMonitorUpdateModes2`, `IddCxAdapterDisplayConfigUpdate2`. Without them: SDR, legacy calls. Reported in `GET_INFO`. |
-| Control channel (§7) | Device interface `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, buffered IOCTLs `0x0022E000`–`0x0022E014`, versioned buffers (`include/PulsarIddShared.h`, mirrored and byte-tested in `crates/split-display/src/ioctl.rs`). Device security `D:P(A;;GA;;;SY)(A;;GR;;;BA)` in the INF. |
+| Control channel (§7) | Device interface `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, buffered IOCTLs `0x0022E000`–`0x0022E014`, versioned buffers (`include/PulsarIddShared.h`, mirrored and byte-tested in `crates/seat-display/src/remote/ioctl.rs`). Device security `D:P(A;;GA;;;SY)(A;;GR;;;BA)` in the INF. |
 | Seat binding (§3.3) | `SET_SEAT_CONFIG` (seat GUID, render LUID, HDR allowed, SDR white, luminance, scale, super-sampling). No registry, nothing persisted. |
 | Render GPU (§5) | `IddCxAdapterSetRenderAdapter` with the LUID from the seat config. |
 | Modes (§4.4) | `REQUEST_MODE` is pended; the driver sets one target mode at the render size (`IddCxMonitorUpdateModes2`) and asks the OS with `IddCxAdapterDisplayConfigUpdate2` (mode, scale factor 100–500, colorimetry BT.2020 RGB + ST 2084 and SDR white level when HDR). The request completes from `EvtIddCxAdapterCommitModes2`; `busy` while one is in flight; the service cancels after 5 s. |

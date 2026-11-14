@@ -21,6 +21,7 @@
 //! | [`kiosk`] | kiosk shell | one kiosk seat's packets → posted window messages + software cursor (spec 35 §5.1 U3), pure |
 //! | [`rdp`] | host | [`seat_core::backend::InputSink`] over an RDP client ([`rdp::RdpInputChannel`]) |
 //! | [`gamepad`] | both | pad families and their limits |
+//! | `local_pads` (feature `local-pads`) | host / service | physical pad routed to a seat -> seat-owned virtual pad (`seat-pads`) |
 //! | `win` | both | Windows: CfgMgr32 platform, filter control device, raw input reader, HID parsing |
 //!
 //! No global low-level hooks, no injection into other sessions, no console-state changes.
@@ -33,6 +34,8 @@ pub mod gamepad;
 pub mod inventory;
 pub mod kiosk;
 pub mod kmdf_router;
+#[cfg(feature = "local-pads")]
+pub mod local_pads;
 pub mod platform;
 pub mod raw_router;
 pub mod rdp;

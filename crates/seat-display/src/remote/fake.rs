@@ -7,19 +7,19 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::adapters::{AdapterEnumerator, Luid, RenderAdapter};
-use crate::backend::pulsar_idd::{DeviceHandle, DeviceIo};
-use crate::backend::rdp::SessionDisplayProbe;
-use crate::backend::vdd::{
+use crate::remote::adapters::{AdapterEnumerator, Luid, RenderAdapter};
+use crate::remote::backend::pulsar_idd::{DeviceHandle, DeviceIo};
+use crate::remote::backend::rdp::SessionDisplayProbe;
+use crate::remote::backend::vdd::{
     ConsoleSession, ModeSetter, VddMonitor, VddMonitors, VddPipe, VddSettingsFile,
 };
-use crate::error::DisplayError;
-use crate::ioctl::{
+use crate::remote::error::DisplayError;
+use crate::remote::ioctl::{
     self, DriverInfo, EventOut, Guid, ModeOut, PULSAR_IDD_INTERFACE, SeatConfigIn, StateOut,
 };
-use crate::journal::RestoreLog;
-use crate::seat::{FrameFormat, ModeStatus};
-use crate::{Clock, Sleeper};
+use crate::remote::journal::RestoreLog;
+use crate::remote::seat::{FrameFormat, ModeStatus};
+use crate::remote::{Clock, Sleeper};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())

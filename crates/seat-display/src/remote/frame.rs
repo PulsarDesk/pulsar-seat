@@ -3,9 +3,9 @@
 //! 4 KiB header section layout shared by the driver (producer) and the stream server
 //! (consumer). Pure; the driver's C++ mirror is `drivers/split-idd/include/PulsarIddShared.h`.
 
-use crate::adapters::Luid;
-use crate::error::DisplayError;
-use crate::seat::FrameFormat;
+use crate::remote::adapters::Luid;
+use crate::remote::error::DisplayError;
+use crate::remote::seat::FrameFormat;
 
 /// Protected DACL: SYSTEM and LOCAL SERVICE (the WUDF host) full access, nobody else.
 pub const OBJECT_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;LS)";

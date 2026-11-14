@@ -10,6 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 seat-core.workspace = true
+# Shared endpoint discovery (CfgMgr32 primitives, endpoint-id model; merge step 8).
+seat-audio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

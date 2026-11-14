@@ -248,7 +248,7 @@ Plan:
    default**. The default display backends stay the signed third-party ones (plan.md).
 4. Display modes: `pulsar-host` does **not** change modes itself (today
    `desk:src-tauri/src/display_mode.rs:1` changes the host monitor). It sends
-   `display.mode.request`; the service applies it through split-display and answers
+   `display.mode.request`; the service applies it through seat-display (`seat_display::remote`) and answers
    `display.mode.result`. On failure it streams the current mode scaled.
 
 ## 5. Pads

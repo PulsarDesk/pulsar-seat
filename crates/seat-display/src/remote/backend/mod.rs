@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::DisplayError;
-use crate::hdr::HdrUnavailable;
-use crate::modes::ModeRequest;
-use crate::seat::{DisplayState, ModeResult, ReadyInfo, SeatDisplay};
+use crate::remote::error::DisplayError;
+use crate::remote::hdr::HdrUnavailable;
+use crate::remote::modes::ModeRequest;
+use crate::remote::seat::{DisplayState, ModeResult, ReadyInfo, SeatDisplay};
 
 pub mod pulsar_idd;
 pub mod rdp;
@@ -109,8 +109,8 @@ pub fn choose_backend(
 
 /// Waits with an injected clock until `f` returns `Some`, or the deadline passes.
 pub(crate) fn poll_until<T>(
-    clock: &dyn crate::Clock,
-    sleeper: &dyn crate::Sleeper,
+    clock: &dyn crate::remote::Clock,
+    sleeper: &dyn crate::remote::Sleeper,
     timeout: Duration,
     mut f: impl FnMut() -> Result<Option<T>, DisplayError>,
 ) -> Result<Option<T>, DisplayError> {

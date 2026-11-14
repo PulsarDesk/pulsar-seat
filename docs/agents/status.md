@@ -722,6 +722,27 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   Open: `installer/split/` (WiX, NSIS conf, README) still names
   `pulsar-split-rdp-helper.exe` (step 10: the MSI ships only `pulsar-seat-host.exe`).
   **Next:** step 8 (audio, pads + shim, display traits).
+- 2026-11-14: **merge step 8 done** (audio, pads + shim, display; architecture.md 10.6).
+  **Audio**: `seat_audio::cfgmgr` is the one copy of the CfgMgr32 read primitives
+  (`seat_media::pnp::WinPnpTree` and the remote kind's `CfgMgrNodes` use it). The endpoint-id
+  model (`mmdevapi_instance_id`, `is_session_endpoint_id`, `parse_endpoint_id`) is shared with
+  `seat_media::audio`. Routing stays per kind. **Pads**: `seat_input::local_pads` (feature
+  `local-pads`, off by default, not wired into the service): physical pad, then `mirror_kind`,
+  then `seat_pads::mapping::resolve`, then a seat-owned virtual pad (session id + user SID).
+  Limits are in `crates/seat-pads/README.md`: ViGEm only if installed, usbip-win2 DualSense,
+  own pad driver unsigned and only on explicit preference, physical pad still shared without
+  the HID filter. `seat-shim-core` / `shim/` stay remote-only. **Display**: `split-display`
+  is gone; it is now `seat_display::remote` (README merged into `crates/seat-display/README.md`).
+  `seat_display::SeatDisplayBackend` is one trait over both kinds (`DisplayBackendId`,
+  `DisplayBackendStatus`, `Local` / `Remote` adapters). drivers/README.md has the "one own
+  IddCx driver later" direction and a merge sketch; the two C++ drivers are not merged. No
+  `split-*` crate is left. Gates green: cargo 1501 passed / 5 ignored (was 1489; +12, none
+  deleted: seat-audio's `multi_sz_split` moved into `cfgmgr::multi_sz_and_wide`), clippy
+  aarch64 + x86_64 clean, x64 check, vitest 115 + 45, installer scripts 29, shim 8 (host;
+  x64 + i686 check only). Read-only live probes (`seat-audio live_read_only_probe`,
+  `seat-media live_tree`) pass on the ARM64 dev laptop. Untested on hardware: every pad and
+  display path; `local_pads` never ran against a real backend.
+  **Next:** step 9 (one manager).
 - 2026-11-14: **merge steps 5 + 6 done** (merge-plan.md section 3). Step 5: `SecretStore`
   gained the remote seats' Pulsar slots (`RemoteSecretSlot` identity / connect password /
   relay key, `set_remote` / `get_remote`, LSA names `L$PulsarSeat.Remote.<seat-id>.<slot>`,

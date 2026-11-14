@@ -38,12 +38,12 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-use crate::adapters::Luid;
-use crate::backend::vdd::{
+use crate::remote::adapters::Luid;
+use crate::remote::backend::vdd::{
     ModeSetter, VDD_DEFAULT_DIR, VDD_MONITOR_ID, VDD_PIPE_NAME, VDD_REGISTRY_KEY,
     VDD_SETTINGS_FILE, VddMonitor, VddMonitors, VddPipe, VddSettingsFile,
 };
-use crate::error::DisplayError;
+use crate::remote::error::DisplayError;
 
 use super::secure::{FsError, TrustedDir};
 use super::{from_wide, pcwstr, wide, win32_of};

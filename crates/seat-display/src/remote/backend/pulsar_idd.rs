@@ -11,17 +11,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
-use crate::error::DisplayError;
-use crate::hdr::{HdrCaps, hdr_availability};
-use crate::ioctl::{
+use crate::remote::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
+use crate::remote::error::DisplayError;
+use crate::remote::hdr::{HdrCaps, hdr_availability};
+use crate::remote::ioctl::{
     self, DriverInfo, EventOut, Guid, ModeOut, PULSAR_IDD_INTERFACE, SeatConfigIn, StateOut,
 };
-use crate::modes::{ModeLimits, ModeRequest, pinned_luid, resolve_mode};
-use crate::seat::{
+use crate::remote::modes::{ModeLimits, ModeRequest, pinned_luid, resolve_mode};
+use crate::remote::seat::{
     DisplayPhase, DisplayState, FrameFormat, ModeResult, ModeStatus, ReadyInfo, SeatDisplay,
 };
-use crate::{Clock, Sleeper};
+use crate::remote::{Clock, Sleeper};
 
 /// Flip to `true` only in the release that ships a signed driver package.
 pub const OWN_DRIVER_SIGNED: bool = false;
@@ -512,8 +512,8 @@ impl<D: DeviceIo> DisplayBackend for PulsarIdd<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::{AdapterChoice, Luid};
-    use crate::fake::{FakeClock, FakeDeviceIo};
+    use crate::remote::adapters::{AdapterChoice, Luid};
+    use crate::remote::fake::{FakeClock, FakeDeviceIo};
     use seat_proto::remote::RemoteSeatRecord;
 
     const SEAT: &str = "8a1b2c3d-0000-4000-8000-00000000abcd";

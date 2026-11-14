@@ -1,7 +1,27 @@
 # seat-audio
 
-Per-seat audio for Pulsar Split (spec `spec/remote/70-audio.md`, contract
-`docs/split/agents/contracts.md` §6). GPL-3.0-only.
+The one audio crate for endpoint discovery, shared by both seat kinds, plus the remote kind's
+audio rules (spec `spec/remote/70-audio.md`, contract `docs/split/agents/contracts.md` §6).
+GPL-3.0-only.
+
+## Shared endpoint discovery (merge step 8)
+
+| What | API | Used by |
+| --- | --- | --- |
+| CfgMgr32 read primitives: device id lists, devnode lookup (present / phantom), typed properties (string, list, UINT32, GUID), UTF-16 helpers | `seat_audio::cfgmgr` (Windows) | `seat_media::pnp::WinPnpTree` (local kind's device tree), `CfgMgrNodes` (remote kind's endpoint list) |
+| Endpoint-id model: `SWD\MMDEVAPI\` prefix, `{a.b.f.hhhhhhhh}.{guid}` parsing, session id field | `MMDEVAPI_PREFIX`, `mmdevapi_instance_id`, `parse_endpoint_id`, `is_session_endpoint_id` | `seat_media::audio` (skips other sessions' endpoints), this crate (finds a remote seat's own endpoint) |
+| `DEVPKEY_Device_SessionId` on endpoint devnodes | `DeviceNodes::list` / `AudioProbe::endpoints` | remote kind |
+
+Routing stays per kind:
+- **local**: `seat-media` bridges the RDP audio channels to the seat's physical endpoints
+  (`rdp_bridge`, MMDevice / WASAPI).
+- **remote**: the stream server records the session's Remote Audio endpoint (this crate's
+  keys and state).
+
+`is_session_endpoint_id` is the coarse marker of the local kind: the leading number is 3.
+The remote kind uses the strict form, `parse_endpoint_id(..).is_rdp()`.
+
+## Remote kind
 
 ## Purpose
 

@@ -85,7 +85,7 @@ pub enum PadBackendPref {
     PulsarPad,
 }
 
-/// Same wire names as `split_display::BackendKind`.
+/// Same wire names as `seat_display::remote::BackendKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayBackendPref {
@@ -138,7 +138,7 @@ impl Default for DisplaySettings {
     }
 }
 
-/// Same fields as `split_display::HdrLuminance`.
+/// Same fields as `seat_display::remote::HdrLuminance`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HdrLuminanceSettings {

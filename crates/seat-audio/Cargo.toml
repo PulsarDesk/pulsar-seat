@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-only
 [package]
 name = "seat-audio"
-description = "Pulsar Split per-seat audio: session Remote Audio endpoint, stream-server audio keys, RDP audio flags, limitations"
+description = "Pulsar Seat audio: endpoint discovery shared by both seat kinds (CfgMgr32, endpoint ids, session id); remote kind: session Remote Audio endpoint, stream-server audio keys, RDP audio flags, limitations"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

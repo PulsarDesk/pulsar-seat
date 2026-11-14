@@ -106,7 +106,7 @@ pub struct HostInfo {
     pub coexistence: Option<serde_json::Value>,
     /// `seat_session::termwrap::TermwrapStatus`.
     pub termwrap: Option<serde_json::Value>,
-    /// `split_display::BackendInfo[]`: driver backend status and HDR availability.
+    /// `seat_display::remote::BackendInfo[]`: driver backend status and HDR availability.
     pub display_backends: Vec<serde_json::Value>,
     /// `seat_pads::BackendAvailability[]`.
     pub pad_backends: Vec<serde_json::Value>,

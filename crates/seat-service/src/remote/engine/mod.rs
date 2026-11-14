@@ -16,7 +16,7 @@
 
 use seat_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
 use crate::remote::control::SeatEvent;
-use split_display::{
+use seat_display::remote::{
     AdapterChoice, AdapterEnumerator, BackendInfo, BackendKind, DisplayBackend, DisplayError, HdrLuminance, HdrUnavailable,
     ModeRequest, ModeResult, ModeStatus, SeatDisplay, SeatDisplayHandle, choose_backend, resolve_adapter,
 };
@@ -715,7 +715,7 @@ impl Engine {
                 max_full_frame_nits: l.max_full_frame_nits,
             });
         let handle = backend.attach(&cfg).map_err(|e| Failure::new(e.code(), &e))?;
-        if let Err(e) = backend.wait_ready(&handle, split_display::backend::READY_TIMEOUT) {
+        if let Err(e) = backend.wait_ready(&handle, seat_display::remote::backend::READY_TIMEOUT) {
             let _ = backend.detach(&handle);
             let reason = if matches!(e, DisplayError::Timeout(_)) { "display_timeout" } else { e.code() };
             return Err(Failure::new(reason, &e));

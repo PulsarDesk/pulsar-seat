@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Per-seat virtual display for Pulsar Split (contract: `docs/split/agents/contracts.md` §3,
-//! behaviour: `spec/remote/40-display-hdr.md`).
+//! Remote seat kind: per-seat virtual display (contract: `docs/split/agents/contracts.md` §3,
+//! behaviour: `spec/remote/40-display-hdr.md`). Was the `split-display` crate until merge
+//! step 8; both kinds' backends are listed behind one [`crate::SeatDisplayBackend`] trait.
 //!
 //! * [`modes`], [`adapters`], [`hdr`], [`seat`], [`frame`], [`ioctl`] are pure and
 //!   platform-neutral; their unit tests run anywhere.
@@ -47,7 +48,7 @@ pub use seat::{
     SeatDisplay,
 };
 
-/// Injected wall/monotonic time in milliseconds (same shape in every Pulsar Split crate).
+/// Injected wall/monotonic time in milliseconds (same shape in every remote-kind module).
 pub trait Clock: Send + Sync {
     fn now_ms(&self) -> u64;
 }

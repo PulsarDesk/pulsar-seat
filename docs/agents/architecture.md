@@ -36,9 +36,9 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `crates/seat-core` | lib | contracts | model, config, validation, effective masks, states, stores, PnP helpers, **backend traits**, mocks (feature `mock`), shared constants |
 | `crates/seat-proto` | lib | contracts | pipe messages, framing, authorisation table |
 | `crates/seat-session` | lib | session | `SessionBackend` impls (RDS loopback, experimental termsrv wrapper, fast user switch, desktops), WTS, accounts, launch-into-session, edition probe |
-| `crates/seat-display` | lib | display | `DisplayBinding` impls (CCD topology, monitor keys, window presenter, Display Core, IddCx client), `FrameSink` presenters, identify overlays, DDC/CI |
-| `crates/seat-input` | lib | input | `InputRouter` impls (raw input host, KMDF filter client), unit enumeration + keys, hot-plug, activity, hotkey; `raw` reader for the seat host |
-| `crates/seat-media` | lib | media | `AudioRouter` (RDP audio bridge), `DeviceGate`s (device security, session drive letters, camera consent, minifilter client), **`pnp::WinPnpTree`**, `bridge::AudioBridge` for the host |
+| `crates/seat-display` | lib | display | `DisplayBinding` impls (CCD topology, monitor keys, window presenter, Display Core, IddCx client), `FrameSink` presenters, identify overlays, DDC/CI; `remote` = the remote kind's `DisplayBackend` (was `split-display`); `kinds::SeatDisplayBackend` = one display trait over both kinds (§10.6) |
+| `crates/seat-input` | lib | input | `InputRouter` impls (raw input host, KMDF filter client), unit enumeration + keys, hot-plug, activity, hotkey; `raw` reader for the seat host; `local_pads` (feature `local-pads`, off) = seat-owned virtual pads from `seat-pads` (§10.6) |
+| `crates/seat-media` | lib | media | `AudioRouter` (RDP audio bridge; endpoint discovery from `seat-audio`), `DeviceGate`s (device security, session drive letters, camera consent, minifilter client), **`pnp::WinPnpTree`**, `bridge::AudioBridge` for the host |
 | `crates/seat-compat` | lib | compat | preflight + coexistence checks, CPU sets + job launcher, reversible tweaks + journal, reference-config importer, app seat API helpers |
 | `crates/seat-service` | bin `pulsar-seat-service` | service | SCM service, pipe server, controller / state machine, boot sequence, LSA secret store, events, logs, diagnostics, sub-commands; `src/remote/` = the remote seat worker (Split's controller + engine, §10.5) |
 | `crates/seat-host` | bins `pulsar-seat-host`, `pulsar-seat-agent` | host | per-seat host (RDP client + presenter + input + audio bridge) and per-session agent |
@@ -57,12 +57,12 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | (removed) `crates/split-service` | bin `pulsar-split-service` | Split service | step 6 (done 2026-11-14): `seat-service/src/remote/` (§10.5); DPAPI + HKLM store + own pipe deleted |
 | (removed) `crates/split-session`, `crates/split-termwrap` | lib | Server + RDSH sessions, wrapper integration | step 7 (done 2026-11-14): `seat_session::remote`, shared `edition` / `rds` / `wts` / `launch`; one `seat_session::termwrap` (§10.4) |
 | (removed) `crates/split-rdp-helper` | bin `pulsar-split-rdp-helper` | headless IronRDP client | step 7 (done 2026-11-14): `seat_rdp::headless` + `pulsar-seat-host --headless-hold` (§10.4) |
-| `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8, one display trait |
-| `crates/seat-audio` | lib | Session Remote Audio discovery, stream-server audio keys (was `split-audio`; target name for the audio merge with `seat-media` discovery at step 8) | — |
+| (removed) `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8 (done 2026-11-14): `seat_display::remote` + `seat_display::SeatDisplayBackend` (§10.6) |
+| `crates/seat-audio` | lib | the one endpoint-discovery crate for both kinds (`cfgmgr`, endpoint-id model) + the remote kind's Remote Audio rules and stream-server keys (was `split-audio`) | step 8 (done 2026-11-14, §10.6) |
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
 | `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 into `apps/manager` |
 | `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
-| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | step 8 / 10 |
+| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | one own IddCx driver later ([../../drivers/README.md](../../drivers/README.md)); build at step 10 |
 | `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 into one MSI |
 | `spec/remote/` | analyst spec | remote kind ([../../spec/README.md](../../spec/README.md)); the local kind is `spec/local/` | — |
 
@@ -71,9 +71,10 @@ the protocol), **never on each other** — except `seat-service` (wires everythi
 `seat-host` (uses display / input / media host-side helpers). Shared PnP access goes
 through `Arc<dyn seat_core::pnp::PnpTree>` built by the service from `seat-media`.
 Package crates add their own deps in their own `Cargo.toml` with explicit versions; only
-the contracts owner edits the root `workspace.dependencies`. Until merge steps 4-8 the
-remote-kind crates keep their own dependency rules (docs/split/agents/architecture.md);
-`seat-*` local-kind crates do not depend on `split-*` crates.
+the contracts owner edits the root `workspace.dependencies`. Shared crates (merge step 8)
+are the exception: `seat-media` depends on `seat-audio` (endpoint discovery), `seat-input`
+optionally on `seat-pads` (feature `local-pads`), `seat-stream` on `seat-audio`. No `split-*`
+crate is left.
 
 ## 3. Processes
 
@@ -1330,3 +1331,32 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   (the config document migrates itself). The one MSI (step 10) calls them.
 - Untested on hardware: everything above that touches Windows (nothing of it ran on a real
   machine; the remote kind never did).
+
+### 10.6 Audio, pads, display (step 8, done 2026-11-14)
+
+- **Audio.** One crate for endpoint discovery: `seat-audio`. `seat_audio::cfgmgr`
+  (Windows) holds the only copy of the CfgMgr32 read primitives. `seat_media::pnp::WinPnpTree`
+  and the remote kind's `CfgMgrNodes` both use them. The endpoint-id model
+  (`MMDEVAPI_PREFIX`, `mmdevapi_instance_id`, `parse_endpoint_id`, `is_session_endpoint_id`)
+  is shared too: `seat_media::audio` uses it to skip other sessions' endpoints. Routing stays
+  per kind. Local seats use `rdp_bridge` (`seat-media`, physical endpoints by MMDevice id).
+  Remote seats use the session's Remote Audio endpoint, read by the stream server.
+- **Pads + shim.** `seat-pads` and `seat-shim-core` are the shared crates. Local seats get
+  seat-owned virtual pads through `seat_input::local_pads` (cargo feature `local-pads`, off by
+  default, not wired into the service). The flow: a physical pad routed to the seat gets
+  `mirror_kind`, then the `seat_pads::mapping::resolve` backend choice, then
+  `LocalPads::attach` (session id + user SID), then `forward_state` / `forward_report`.
+  Limits: ViGEm only if already installed; DualSense via usbip-win2; the own pad driver is
+  unsigned and only used on explicit preference. The physical pad stays visible to every
+  session without the (unsigned) HID filter. Details: `crates/seat-pads/README.md`. The
+  per-process shim (`shim/`, x64 / x86) stays remote-only. Its registry key
+  `HKLM\SOFTWARE\PulsarSplit\Shim` and its health pipe keep their names, because `shim/`
+  depends on them.
+- **Display.** `split-display` is now `seat_display::remote`; the crate is gone. Each kind
+  keeps its operation trait: `DisplayBinding` for local, `remote::DisplayBackend` for remote.
+  `seat_display::SeatDisplayBackend` is the one trait over both. It has `backend_id()`, a
+  `DisplayBackendId` serialised as `{"kind", "backend"}` (per-kind wire names unchanged),
+  and `backend_status()`, a `DisplayBackendStatus` (`available`, `signed`, `hdr`,
+  `reason`). Adapters: `Local`, `Remote`, `statuses_for`. Both kinds have a `pulsar_idd`
+  (`seat-idd` and `split-idd`). The direction is one own IddCx driver later, signed once
+  (`drivers/README.md`). The two C++ drivers are not merged now.

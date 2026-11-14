@@ -15,6 +15,12 @@
 //! seat host into a virtual pad *inside* a remote session that has its own bus (Pulsar
 //! Split's model), which is outside Phase 4. Nothing here loads or installs ViGEmBus.
 //!
+//! Since merge step 8 that model exists for local seats too, behind the cargo feature
+//! `local-pads` (off by default): `local_pads` creates a seat-owned virtual pad (shared
+//! `seat-pads` crate: ViGEm only if installed, usbip-win2 DualSense, own pad driver only on
+//! explicit preference) and forwards the routed physical pad into it. The physical pad itself
+//! stays shared without the HID visibility filter.
+//!
 //! The manager shows pads as `gamepads_shared` (raw input host) or `xinput_pads_shared`
 //! (filter) so nobody expects isolation that does not exist.
 

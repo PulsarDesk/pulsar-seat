@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
-use crate::error::DisplayError;
-use crate::hdr::HdrUnavailable;
-use crate::modes::ModeRequest;
-use crate::seat::{DisplayPhase, DisplayState, ModeResult, ModeStatus, ReadyInfo, SeatDisplay};
-use crate::{Clock, Sleeper};
+use crate::remote::backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, poll_until};
+use crate::remote::error::DisplayError;
+use crate::remote::hdr::HdrUnavailable;
+use crate::remote::modes::ModeRequest;
+use crate::remote::seat::{DisplayPhase, DisplayState, ModeResult, ModeStatus, ReadyInfo, SeatDisplay};
+use crate::remote::{Clock, Sleeper};
 
 /// Does the session have a display device (any Display-class device node whose
 /// `DEVPKEY_Device_SessionId` equals the session id)?
@@ -151,8 +151,8 @@ impl<P: SessionDisplayProbe> DisplayBackend for RdpSessionDisplay<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::AdapterChoice;
-    use crate::fake::{FakeClock, FakeSessionProbe};
+    use crate::remote::adapters::AdapterChoice;
+    use crate::remote::fake::{FakeClock, FakeSessionProbe};
     use seat_proto::remote::RemoteSeatRecord;
 
     fn seat(session: u32) -> SeatDisplay {

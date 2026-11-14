@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Pulsar Split per-seat audio (spec 70, contracts §6).
+//! Pulsar Seat audio: the endpoint discovery shared by both seat kinds, plus the remote
+//! kind's audio rules (spec `spec/remote/70-audio.md`, `docs/split/agents/contracts.md` §6).
 //!
-//! No audio driver: every seat is an RDP session, and Windows gives it a session-scoped
-//! *Remote Audio* render endpoint. This crate
+//! Shared by both kinds (merge-plan.md step 8):
+//! - [`cfgmgr`] (Windows): the one copy of the CfgMgr32 read primitives (id lists, devnode
+//!   lookup, typed properties). `seat_media::pnp::WinPnpTree` (local kind) builds its tree
+//!   on them, [`CfgMgrNodes`] (remote kind) its endpoint list.
+//! - The endpoint-id model ([`parse_endpoint_id`], [`MMDEVAPI_PREFIX`],
+//!   [`is_session_endpoint_id`], [`mmdevapi_instance_id`]): `seat_media::audio` uses it to
+//!   skip other sessions' endpoints, this crate to find a remote seat's own one.
+//!
+//! Routing stays per kind: a local seat's audio is bridged to its physical endpoints by
+//! `seat_media` (`rdp_bridge`), a remote seat's audio is its session's Remote Audio
+//! endpoint read by the stream server (this crate).
+//!
+//! Remote kind: no audio driver. Every remote seat is an RDP session, and Windows gives it
+//! a session-scoped *Remote Audio* render endpoint. This crate
 //! - finds that endpoint (CfgMgr32 + `DEVPKEY_Device_SessionId`) and plans optional,
 //!   operator-triggered cleanup of phantom nodes,
 //! - reads (never writes) the Terminal Services audio policy,
@@ -19,6 +32,8 @@ mod probe;
 mod state;
 
 #[cfg(windows)]
+pub mod cfgmgr;
+#[cfg(windows)]
 mod win;
 
 #[cfg(any(test, feature = "fake"))]
@@ -30,7 +45,7 @@ pub use config::{
     rdp_client_flags, server_keys,
 };
 pub use endpoint::{
-    DevNode, Endpoint, EndpointIdParts, Flow, MMDEVAPI_PREFIX, RDP_ENDPOINT_KIND,
+    DevNode, Endpoint, EndpointIdParts, Flow, MMDEVAPI_PREFIX, is_session_endpoint_id, mmdevapi_instance_id, RDP_ENDPOINT_KIND,
     RDP_ENDPOINT_SUB, StaleNode, endpoint_from_node, endpoint_guid_suffix, is_braced_guid,
     live_sessions_plausible, mmdevapi_endpoint_id, parse_endpoint_id, plan_stale_endpoints,
     plan_stale_nodes, rdp_guid_suffixes, session_capture_endpoint, session_endpoint,

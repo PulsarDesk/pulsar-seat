@@ -8,9 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::{AdapterChoice, Luid};
-use crate::hdr::{HdrCaps, caps_allow_hdr};
-use crate::seat::{FrameFormat, ModeResult, ModeStatus, SeatDisplay, clamp_percent};
+use crate::remote::adapters::{AdapterChoice, Luid};
+use crate::remote::hdr::{HdrCaps, caps_allow_hdr};
+use crate::remote::seat::{FrameFormat, ModeResult, ModeStatus, SeatDisplay, clamp_percent};
 
 pub const MIN_HZ: u32 = 15;
 pub const MAX_HZ: u32 = 500;
@@ -213,7 +213,7 @@ pub fn resolve_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hdr::IDDCX_VERSION_24H2;
+    use crate::remote::hdr::IDDCX_VERSION_24H2;
     use seat_proto::remote::RemoteSeatRecord;
 
     fn seat(ss: u16, scale: ScaleMode, hdr_allowed: bool) -> SeatDisplay {

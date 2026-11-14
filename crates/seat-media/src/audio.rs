@@ -42,7 +42,7 @@ pub struct EndpointRecord {
 
 impl EndpointRecord {
     pub fn devnode(&self) -> String {
-        format!(r"SWD\MMDEVAPI\{}", self.endpoint_id)
+        seat_audio::mmdevapi_instance_id(&self.endpoint_id)
     }
     pub fn active(&self) -> bool {
         self.state & 0xF == 1
@@ -51,9 +51,10 @@ impl EndpointRecord {
         if self.render { AudioFlow::Render } else { AudioFlow::Capture }
     }
     /// Per-session remote-audio endpoints of other RDP sessions (`{3.…}`, spec 60 §4.1
-    /// step 5) are never seat hardware. HYPOTHESIS: the prefix is the only marker.
+    /// step 5) are never seat hardware. The marker is the shared endpoint-id model
+    /// (`seat_audio::is_session_endpoint_id`). HYPOTHESIS: the prefix is the only marker.
     pub fn is_remote_session_endpoint(&self) -> bool {
-        self.endpoint_id.starts_with("{3.")
+        seat_audio::is_session_endpoint_id(&self.endpoint_id)
     }
 }
 

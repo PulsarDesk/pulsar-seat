@@ -15,9 +15,9 @@ use windows::Win32::System::IO::{
 use windows::Win32::System::Threading::{CreateEventW, INFINITE};
 use windows::core::PCWSTR;
 
-use crate::backend::pulsar_idd::{DeviceHandle, DeviceIo};
-use crate::error::DisplayError;
-use crate::ioctl::{self, Guid};
+use crate::remote::backend::pulsar_idd::{DeviceHandle, DeviceIo};
+use crate::remote::error::DisplayError;
+use crate::remote::ioctl::{self, Guid};
 
 use super::{devices, pcwstr, wide, win32_of};
 

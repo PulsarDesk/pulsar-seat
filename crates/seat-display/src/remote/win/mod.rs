@@ -52,13 +52,13 @@ pub(crate) fn from_wide(buf: &[u16]) -> String {
 #[cfg(test)]
 mod tests {
     //! Read-only smoke test of the real implementations. `#[ignore]`: run by hand with
-    //! `cargo test -p split-display -- --ignored`. It changes nothing on the system (no
+    //! `cargo test -p seat-display remote -- --ignored`. It changes nothing on the system (no
     //! pipe commands, no file writes, no mode changes).
     use super::*;
-    use crate::adapters::AdapterEnumerator;
-    use crate::backend::pulsar_idd::DeviceIo;
-    use crate::backend::rdp::SessionDisplayProbe;
-    use crate::backend::vdd::{ConsoleSession, VddMonitors};
+    use crate::remote::adapters::AdapterEnumerator;
+    use crate::remote::backend::pulsar_idd::DeviceIo;
+    use crate::remote::backend::rdp::SessionDisplayProbe;
+    use crate::remote::backend::vdd::{ConsoleSession, VddMonitors};
 
     #[test]
     #[ignore]
@@ -82,7 +82,7 @@ mod tests {
         println!("vdd monitors {:?}", vdd::WinVddMonitors.monitors());
         println!(
             "own driver sessions {:?}",
-            deviceio::WinDeviceIo.sessions(&crate::ioctl::PULSAR_IDD_INTERFACE)
+            deviceio::WinDeviceIo.sessions(&crate::remote::ioctl::PULSAR_IDD_INTERFACE)
         );
         println!(
             "vdd settings path {}",

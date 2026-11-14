@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Mode rules on the driver side (mirror of crates/split-display/src/modes.rs for what the
+// Mode rules on the driver side (mirror of crates/seat-display/src/remote/modes.rs for what the
 // driver applies: super-sampling, scale) and the remote display-config update.
 // UNBUILT · UNTESTED · UNSIGNED.
 

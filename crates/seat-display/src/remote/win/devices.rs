@@ -12,9 +12,9 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 use windows::Win32::Devices::Properties::{DEVPKEY_Device_SessionId, DEVPROPTYPE};
 use windows::core::{GUID, PCWSTR};
 
-use crate::backend::rdp::SessionDisplayProbe;
-use crate::error::DisplayError;
-use crate::ioctl::Guid;
+use crate::remote::backend::rdp::SessionDisplayProbe;
+use crate::remote::error::DisplayError;
+use crate::remote::ioctl::Guid;
 
 use super::{from_wide, win32_of};
 

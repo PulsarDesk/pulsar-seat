@@ -13,7 +13,7 @@
 //! Upstream note: the driver reads `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver` values
 //! first and falls back to the XML, so a registry override there beats this file.
 
-use crate::error::DisplayError;
+use crate::remote::error::DisplayError;
 
 /// The state this backend wants in the file.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
