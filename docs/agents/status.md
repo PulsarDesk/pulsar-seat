@@ -763,10 +763,9 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   build, installer scripts 49, shim 8 (host; x64 + i686 check). None deleted (2 controller
   `DeleteSeat` assertions now call `forget_seat`; the legacy round-trip test uses
   `StopSeat`).
-  **Open (needs a decision):** pulsar-desktop's seat host checks that the pipe server image
-  is `pulsar-split-service.exe` (`desk:src-tauri/src/seat/win.rs:18`); the merged service
-  is `pulsar-seat-service.exe`, so a real `pulsar-host` would refuse it. Fix in
-  pulsar-desktop (accept both) or decide otherwise. Several doc comments in seat-stream /
+  **Resolved 2026-11-14 (pulsar-desktop ad6c9ca):** the seat host check
+  (`desk:src-tauri/src/seat/win.rs`) now accepts `pulsar-seat-service.exe` and the old
+  `pulsar-split-service.exe` image name. Several doc comments in seat-stream /
   seat-pads / seat-display still say `%ProgramData%\PulsarSplit` where the data root is a
   parameter (the service passes `Pulsar Seat`).
 - 2026-11-14: **merge step 10 done** (one MSI for x64 and ARM64; installer/README.md "Remote
