@@ -18,7 +18,7 @@
 //! shared-mode playback on the console's endpoints.
 
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
-use seat_display::{ConsoleRunner, HELPER_FLAG};
+use seat_display::ConsoleRunner;
 use std::io::Read;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::PathBuf;
@@ -26,15 +26,13 @@ use std::time::Duration;
 use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
-use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, TerminateProcess, WaitForSingleObject};
 
 /// Largest helper reply read (a CCD snapshot is a few KiB).
 const MAX_REPLY: u64 = 4 * 1024 * 1024;
 
 pub struct SessionConsoleRunner {
     exe: PathBuf,
-    /// Arguments before the caller's (`--display-helper` for the seat host).
-    prefix: Vec<String>,
 }
 
 fn install_dir() -> PathBuf {
@@ -42,15 +40,22 @@ fn install_dir() -> PathBuf {
 }
 
 impl SessionConsoleRunner {
-    /// The display helper is the seat host next to the service executable.
+    /// The display helper is the seat host next to the service executable. The caller
+    /// (`seat_display::RunnerConsole`) passes `--display-helper` itself; a second copy here
+    /// made every helper call fail with `unknown helper command` (VM test 2026-11-15).
     pub fn new() -> Self {
-        Self { exe: install_dir().join(seat_core::consts::HOST_EXE), prefix: vec![HELPER_FLAG.to_string()] }
+        Self { exe: install_dir().join(seat_core::consts::HOST_EXE) }
     }
 
     /// The audio helper is this service executable (`--audio-helper ...`).
     pub fn audio() -> Self {
         let exe = std::env::current_exe().unwrap_or_else(|_| install_dir().join("pulsar-seat-service.exe"));
-        Self { exe, prefix: Vec::new() }
+        Self { exe }
+    }
+
+    /// Command line of one helper run: the exe and exactly the caller's arguments.
+    fn command_line(&self, args: &[String]) -> BackendResult<String> {
+        seat_session::launch::command_line(&self.exe, args).map_err(|e| os("helper_command_line", e))
     }
 }
 
@@ -118,9 +123,7 @@ impl ConsoleRunner for SessionConsoleRunner {
         }
         // SAFETY: fresh handles we own from here on.
         let (reader, writer) = unsafe { (std::fs::File::from_raw_handle(r as _), std::fs::File::from_raw_handle(w as _)) };
-        let mut all = self.prefix.clone();
-        all.extend(args.iter().cloned());
-        let cmd = seat_session::launch::command_line(&self.exe, &all).map_err(|e| os("helper_command_line", e))?;
+        let cmd = self.command_line(args)?;
         let wh = writer.as_raw_handle() as HANDLE;
         let spawned = seat_session::win::process::spawn(&seat_session::win::process::SpawnSpec {
             token: Some(token.as_raw_handle() as HANDLE),
@@ -129,7 +132,9 @@ impl ConsoleRunner for SessionConsoleRunner {
             env: None,
             desktop: Some(r"winsta0\default"),
             stdio: Some([std::ptr::null_mut(), wh, std::ptr::null_mut()]),
-            extra_flags: 0,
+            // Console-subsystem helper on the user's desktop: no conhost window (stdout is
+            // the pipe above).
+            extra_flags: CREATE_NO_WINDOW,
             placement: None,
             // SYSTEM helper in the console user's session: SYSTEM-only process DACL.
             object_sddl: Some(seat_session::win::process::SYSTEM_ONLY_SDDL),
@@ -163,6 +168,27 @@ impl ConsoleRunner for SessionConsoleRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `RunnerConsole` hands the runner already starts with `--display-helper`; the
+    /// helper's `dispatch` takes the arguments after the first flag as the command.
+    #[test]
+    fn display_helper_flag_passed_once() {
+        use seat_display::{Console, HELPER_FLAG, RunnerConsole};
+        use std::sync::{Arc, Mutex};
+        struct Rec(Mutex<Vec<String>>);
+        impl ConsoleRunner for Rec {
+            fn run_in_console(&self, args: &[String], _t: Duration) -> BackendResult<Vec<u8>> {
+                *self.0.lock().unwrap() = args.to_vec();
+                Err(BackendError::new(ErrorKind::Internal, "rec", "recorded"))
+            }
+        }
+        let rec = Arc::new(Rec(Mutex::new(Vec::new())));
+        let _ = RunnerConsole::new(rec.clone()).snapshot(true);
+        let args = rec.0.lock().unwrap().clone();
+        let cmd = SessionConsoleRunner::new().command_line(&args).unwrap();
+        assert_eq!(cmd.matches(HELPER_FLAG).count(), 1, "{cmd}");
+        assert!(cmd.contains(&format!("{HELPER_FLAG} snapshot")), "{cmd}");
+    }
 
     #[test]
     fn tone_reply() {
