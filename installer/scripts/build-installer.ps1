@@ -56,7 +56,12 @@ if (-not $Arch) {
 }
 $triple = if ($Arch -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
 if (-not $CargoTargetDir) { $CargoTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" } }
+# Absolute, so tauri (run from apps\manager) builds into the same folder as cargo here; a
+# relative dir made it write its own MSI under apps\manager\src-tauri and this script
+# picked up a stale one (VM test 2026-11-15).
+$CargoTargetDir = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($CargoTargetDir)) { $CargoTargetDir } else { Join-Path (Get-Location).Path $CargoTargetDir }))
 $env:CARGO_TARGET_DIR = $CargoTargetDir
+$buildStarted = Get-Date
 $work = Join-Path $repo "target\installer\$Arch"
 $payload = Join-Path $repo "target\payload\$Arch"
 $dist = Join-Path $repo "target\installer\dist"
@@ -314,6 +319,7 @@ $msiDir = Join-Path $CargoTargetDir "$triple\release\bundle\msi"
 $msi = Get-ChildItem $msiDir -Filter "*_${Version}_*.msi" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $msi) { $msi = Get-ChildItem $msiDir -Filter *.msi | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 if (-not $msi) { throw "no MSI in $msiDir" }
+if ($msi.LastWriteTime -lt $buildStarted) { throw "stale MSI $($msi.FullName) (written $($msi.LastWriteTime), build started $buildStarted)" }
 
 # ---------------------------------------------------------------- 7: check inside the MSI
 $extract = Join-Path $work "msi-extract"
