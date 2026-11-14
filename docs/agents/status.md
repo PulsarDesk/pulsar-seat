@@ -743,6 +743,29 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   `seat-media live_tree`) pass on the ARM64 dev laptop. Untested on hardware: every pad and
   display path; `local_pads` never ran against a real backend.
   **Next:** step 9 (one manager).
+- 2026-11-14: **merge step 9 done** (one manager; architecture.md 10.7). `apps/split-manager`
+  and its Tauri crate are gone; Split's pages moved with history to
+  `apps/manager/src/lib/remote/`. New tab **Uzak koltuklar** (remote seat list with avatars,
+  seat editor with GPU warnings, pair dialog with QR, host, logs, DXVK, remote settings); the
+  seats tab shows each seat's kind (local containers get `Yerel`, remote seats are listed
+  under the canvas with `Uzak` and an edit button; no devices on remote seats). One
+  `i18n.ts` (Split copy = `rt` + `remote*` helpers, "Pulsar Split" now "Pulsar Seat"). The
+  manager speaks protocol 3 only: remote requests in `remote/api.ts`; remote seat create /
+  edit / delete and remote settings are config edits (`ManagerStore.applyRemote`: validate,
+  apply on top of the saved config, merge the remote part into an unsaved draft);
+  `remote/model.ts` maps record / status / events (inverse of `to_record`, `runtime_of`,
+  `map_legacy_event`). Dropped with Split's Tauri crate: SCM start / stop buttons and
+  `tauri-plugin-dialog`. Kept: LAN address order (`lan_addresses`). Gates green: cargo 1501
+  passed / 5 ignored (unchanged: Split's 2 manager Rust tests ported into
+  `pulsar-seat-manager`, `net::physical_adapters_come_first` and
+  `pipe_client::secret_requests_fail_closed_and_never_print_the_secret`; none deleted),
+  clippy aarch64 + x86_64 clean, manager vitest 178 (was 115 + 45; +18 mapping and tab
+  tests), installer scripts 29 (+ installer/split 15), shim 8 (host; x64 check). Untested
+  on hardware and against a real service. Open: protocol 3 drops Split's `otp_changed` /
+  `trust_changed` / `relay_auth_required` events, so the Pulsar pair dialog no longer
+  refreshes on them; installer/split bundle configs still name `apps/split-manager`
+  (step 10).
+  **Next:** step 10 (one MSI, x64 + ARM64).
 - 2026-11-14: **merge steps 5 + 6 done** (merge-plan.md section 3). Step 5: `SecretStore`
   gained the remote seats' Pulsar slots (`RemoteSecretSlot` identity / connect password /
   relay key, `set_remote` / `get_remote`, LSA names `L$PulsarSeat.Remote.<seat-id>.<slot>`,

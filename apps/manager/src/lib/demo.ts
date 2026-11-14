@@ -6,6 +6,7 @@
 import type { Api, TrayAction, Unlisten } from './api.ts';
 import { clone, effectiveMasks, hasErrors, localIssues, conflicts, normalize, newSeat } from './model.ts';
 import * as M from './mask.ts';
+import { createDemoRemoteApi } from './remote/demo.ts';
 import {
   type Config,
   type Device,
@@ -204,10 +205,16 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
   state.inventory.forEach((d, i) => arrived.set(d.key, i));
 
   const runtime = (): SeatRuntime[] =>
-    state.config.seats.map((s) => state.seats.find((r) => r.seat === s.number) ?? { seat: s.number, state: { state: 'off' }, since_ms: 0 });
+    state.config.seats.map(
+      (s) => state.seats.find((r) => r.seat === s.number) ?? { seat: s.number, kind: s.kind ?? 'local', state: { state: 'off' }, since_ms: 0 }
+    );
 
+  /** Recent frames for `poll_events` (the demo keeps the last 200). */
+  const frames: EventFrame[] = [];
   const emit = (event: ServiceEvent) => {
     const f: EventFrame = { seq: ++seq, at_ms: Date.now(), event };
+    frames.push(f);
+    if (frames.length > 200) frames.shift();
     for (const cb of eventCbs) cb(f);
   };
 
@@ -524,6 +531,19 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     wizardStop: async (save) => {
       await step('wizard_stop');
       emit({ type: 'wizard_progress', data: { ...wizProgress(), step: save ? 'done' : 'cancelled', seat: null } });
+    },
+    pollEvents: async (after, _waitMs, topics) => {
+      await step('poll_events');
+      if (topics.includes('stream')) needAdmin();
+      const topicOf = (t: ServiceEvent['type']) =>
+        t === 'stream' ? 'stream' : t.startsWith('device_') ? (t === 'device_activity' ? 'activity' : 'devices') : t === 'wizard_progress' ? 'wizard' : 'status';
+      const events = frames.filter((f) => f.seq > after && (topics.length === 0 || topics.includes(topicOf(f.event.type))));
+      return { events, last_seq: seq };
+    },
+    remote: createDemoRemoteApi(step, needAdmin, () => state.config),
+    lanAddresses: async () => {
+      calls.push('lan_addresses');
+      return ['192.168.1.20', '172.20.0.1'];
     },
     listAddresses: async () => {
       calls.push('list_ipv4_addresses');

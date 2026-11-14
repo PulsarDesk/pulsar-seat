@@ -14,6 +14,14 @@ import type {
   SeatState,
   StartMode
 } from './types.ts';
+import type {
+  ErrorCode as RemoteErrorCode,
+  ProtoError as RemoteProtoError,
+  SeatState as RemoteSeatState,
+  ServiceRunState,
+  Verbosity
+} from './remote/types.ts';
+import type { FieldError as RemoteFieldError } from './remote/validation.ts';
 
 export const t = {
   appTitle: 'Pulsar Seat Yönetici',
@@ -52,7 +60,19 @@ export const t = {
     basic: 'Temel ayarlar',
     advanced: 'Gelişmiş',
     network: 'Ağ adresleri',
+    remote: 'Uzak koltuklar',
     status: 'Durum'
+  },
+
+  /** Seat kinds (config schema 2): shown next to every seat. */
+  seatKind: {
+    local: 'Yerel',
+    remote: 'Uzak',
+    localHint: 'Bu bilgisayara takılı ekran, klavye ve fareyle kullanılan koltuk',
+    remoteHint: 'Pulsar ya da Moonlight ile ağ üzerinden kullanılan koltuk',
+    remoteList: 'Uzak koltuklar',
+    remoteListHint: 'Uzak koltuklara cihaz atanmaz; ayarları Uzak koltuklar sekmesindedir.',
+    open: 'Düzenle'
   },
 
   network: {
@@ -1327,4 +1347,622 @@ export function seatList(seats: number[]): string {
 
 export function kindLabel(k: DeviceKind): string {
   return t.kinds[k] ?? k;
+}
+
+// ---------------------------------------------------------------- remote seats
+// Copy of the remote seat pages (from Pulsar Split's manager, merge-plan.md step 9). Kept as
+// its own object so the remote pages keep their keys; one file holds all UI copy.
+
+export const rt = {
+  appTitle: 'Pulsar Seat Yönetici',
+  nav: {
+    newSeat: 'Yeni uzak koltuk',
+    startService: 'Servisi başlat',
+    restartService: 'Servisi yeniden başlat',
+    stopService: 'Servisi durdur',
+    settings: 'Ayarlar',
+    host: 'Ana bilgisayar',
+    logs: 'Günlükler',
+    dxvk: 'DXVK oyunları',
+    noSeats: 'Henüz uzak koltuk yok',
+    session: (id: number) => `Oturum ${id}`,
+    streaming: 'yayında',
+    streamingTo: (client: string) => `yayında: ${client}`
+  },
+  dxvk: {
+    title: 'DXVK oyunları',
+    intro:
+      'DXVK, eski Direct3D 8/9 oyunlarını Vulkan üzerinden çalıştırır. Dosyalar yalnızca oyunun klasörüne kopyalanır; kapatınca eski dosyalar geri gelir.',
+    release: (v: string) => `İndirilmiş DXVK sürümü: ${v}`,
+    noRelease: 'DXVK henüz indirilmedi. Önce yönetici komut isteminde "pulsar-split-shimctl dxvk download" çalıştırın.',
+    games: 'Oyunlar',
+    noGames: 'Henüz DXVK açılmış oyun yok.',
+    exe: 'Oyun dosyası (.exe)',
+    browse: 'Gözat…',
+    pickTitle: 'Oyunun .exe dosyasını seçin',
+    dlls: 'Yönlendirilecek Direct3D sürümleri',
+    enable: 'DXVK aç',
+    disable: 'DXVK kapat',
+    deployed: (v: string | null, dlls: string) => `Açık (${dlls}${v ? `, sürüm ${v}` : ''})`,
+    notDeployed: 'Kapalı (dosyalar kaldırılmış)',
+    markerUnreadable: 'İşaret dosyası okunamadı; dosyalar elle kontrol edilmeli.',
+    enabled: 'DXVK açıldı.',
+    disabled: 'DXVK kapatıldı.',
+    needDll: 'En az bir Direct3D sürümü seçin.',
+    needExe: 'Oyunun tam .exe yolunu girin.',
+    refresh: 'Yenile'
+  },
+  logs: {
+    title: 'Günlükler',
+    source: 'Kaynak',
+    service: 'Servis',
+    seat: 'Koltuk',
+    refresh: 'Yenile',
+    redacted: 'Şifre, PIN ya da anahtar içerebilecek satırlar gizlenir.',
+    empty: 'Günlükte satır yok.'
+  },
+  service: {
+    title: 'Servis',
+    reachable: 'Servise bağlı',
+    unreachable: 'Servise ulaşılamıyor',
+    consoleMode: 'geliştirici (konsol) modu',
+    version: 'Sürüm',
+    starting: 'Servis başlatılıyor…',
+    stopping: 'Servis durduruluyor…',
+    restarting: 'Servis yeniden başlatılıyor…',
+    pendingHint: 'Servis şu an durum değiştiriyor, biraz bekleyin.'
+  },
+  serviceState: {
+    not_installed: 'Kurulu değil',
+    stopped: 'Durdu',
+    running: 'Çalışıyor',
+    pending: 'Geçişte',
+    unknown: 'Bilinmiyor'
+  } satisfies Record<ServiceRunState, string>,
+  settings: {
+    title: 'Ayarlar',
+    windows: 'Windows',
+    startWithWindows: 'Windows ile başlat',
+    isolation: 'Yalıtım',
+    hidIsolation: 'HID aygıtlarını yalıt',
+    processPatching: 'İşlem yamalamayı etkinleştir',
+    steamIsolation: 'Steam’i koltuklara ayır',
+    isolationNote:
+      'HID yalıtımı ve Steam ayrımı yeni başlatılan koltuklarda geçerli olur. İşlem yamalama, Pulsar Seat modülünü seçtiğiniz uygulamalara yükler (yalnızca x64 bilgisayarlar).',
+    antiCheat:
+      'Uyarı: Hile önleme yazılımı kullanan bazı oyunlar, işlemlere yüklenen modülü ya da uzak oturum gizlemeyi sorun olarak görebilir.',
+    isolationState: 'Yalıtım durumu',
+    installed: 'Modül kurulu',
+    notInstalled: 'Modül kurulu değil (yalnızca aygıt güvenliği)',
+    unsupportedArch: 'Bu bilgisayarda işlem yamalama modülü yok (ARM64 desteklenmiyor).',
+    killSwitch: 'Acil kapatma açık: modül hiçbir işlemde kanca kurmuyor.',
+    foreign: (s: string) => `Başka bir ürünün yamalama veritabanı bulundu (${s}). Önce o ürünün işlem yamalamasını kapatın.`,
+    targets: 'Modülün yükleneceği uygulamalar (dosya adı)',
+    addTarget: 'Ekle',
+    maskApps: 'Uzak oturumu gizlenecek uygulamalar (tam yol)',
+    maskHint: 'Uygulama, koltukta “uzak oturumda çalışıyorum” bilgisini görmez. Yalnızca gerekli oyunlar için açın.',
+    pads: 'Oyun kumandaları',
+    padBackend: 'Sanal kumanda sürücüsü',
+    auto: 'Otomatik',
+    bluetoothConsoleOnly: 'Bluetooth yalnızca fiziksel ekranda (konsol oturumu) kullanılsın',
+    displayBackend: 'Sanal ekran yöntemi',
+    log: 'Kayıt',
+    verbosity: 'Ayrıntı düzeyi'
+  },
+  verbosity: {
+    none: 'Hiçbiri',
+    error: 'Hata',
+    warning: 'Uyarı',
+    info: 'Bilgi',
+    debug: 'Hata ayıklama'
+  } satisfies Record<Verbosity, string>,
+  seat: {
+    actions: 'İşlemler',
+    start: 'Koltuğu başlat',
+    stop: 'Koltuğu durdur',
+    delete: 'Koltuğu sil',
+    pair: 'Yeni cihaz eşleştir',
+    general: 'Koltuk ayarları',
+    displayName: 'Görünen ad',
+    port: 'Port',
+    portHint: (p: number) => `Kullanılan port aralığı: ${p - 5}–${p + 21}`,
+    startWithService: 'Servisle birlikte başlat',
+    stopAction: 'Durdurunca oturum',
+    stopLogOff: 'Oturumu kapat',
+    stopDisconnect: 'Bağlantıyı kes, oturumu açık bırak',
+    user: 'Kullanıcı',
+    userName: 'Windows kullanıcısı',
+    chooseUser: 'Kullanıcı seçin',
+    password: 'Şifre',
+    passwordSet: 'Şifre kayıtlı',
+    passwordMissing: 'Şifre girilmedi',
+    savePassword: 'Şifreyi kaydet',
+    passwordSaved: 'Şifre kaydedildi.',
+    testCredentials: 'Kullanıcı bilgilerini sına',
+    show: 'Göster',
+    hide: 'Gizle',
+    display: 'Görüntü',
+    renderAdapter: 'Ekran kartı (boş: en uygun)',
+    scale: 'Masaüstü ölçeği',
+    scaleDynamic: 'Dinamik (istemciyi izle)',
+    scaleStatic: 'Sabit',
+    superSampling: 'Süper örnekleme',
+    sdrWhite: 'SDR beyaz düzeyi',
+    forceSdr: 'HDR akışlarda SDR’ye zorla',
+    autostart: 'Otomatik başlayan uygulamalar',
+    autostartPath: 'Uygulama yolu (.exe)',
+    autostartArgs: 'Parametreler',
+    autostartAsSystem: 'SYSTEM olarak çalıştır',
+    addApp: 'Uygulama ekle',
+    remove: 'Kaldır',
+    lockedHint: 'Koltuk çalışırken ayarları değiştirilemez.',
+    saved: 'Kaydedildi',
+    crashes: (n: number) => `Akış sunucusu ${n} kez çöktü`,
+    lastError: 'Son hata',
+    failure: 'Başarısız olma nedeni',
+    phase: 'Adım',
+    runtime: 'Çalışma durumu',
+    session: (id: number) => `Windows oturumu: ${id}`,
+    clientName: 'RDP istemci adı',
+    displayBackend: 'Ekran',
+    hdr: 'HDR',
+    hdrOk: 'Kullanılabilir',
+    audio: 'Ses',
+    pads: 'Kumandalar',
+    noPads: 'Bağlı sanal kumanda yok',
+    stream: 'Akış sunucusu',
+    streamRunning: 'Çalışıyor',
+    streamActive: 'Yayın sürüyor',
+    isolationHealth: 'Yalıtım modülü',
+    adapterAuto: 'En uygun ekran kartı',
+    refresh: 'Yenileme hızı (Hz)',
+    luminance: 'HDR parlaklığı (gelişmiş)',
+    maxNits: 'En yüksek (nit)',
+    maxFullFrame: 'Tam ekran en yüksek (nit)',
+    audioSection: 'Ses',
+    streamAudio: 'Koltuğun sesini akışa ekle',
+    microphone: 'Mikrofon (yalnızca Pulsar istemcisi)',
+    microphoneHint:
+      'Ayar saklanır; mikrofon sesinin koltuğa aktarılması henüz yapılmadı (Uzak Masaüstü ses girişi kanalı ve Pulsar istemci akışı eksik). Moonlight mikrofon taşımaz.',
+    browse: 'Gözat…',
+    pickAutostart: 'Başlatılacak programı seçin',
+    gpuNoHardware: 'Donanım ekran kartı bulunamadı: görüntü işlemcide kodlanır, yayın yavaş olabilir.',
+    gpuNoEncoder: (name: string) => `${name} için donanım video kodlayıcısı bilinmiyor; kodlama işlemciye düşebilir.`,
+    gpuHybrid:
+      'Birden çok ekran kartı var (hibrit sistem). Kodlayıcısı olan kartı burada elle seçin; otomatik seçim en çok belleği olanı alır.',
+    streamSection: 'Akış',
+    gamepad: 'Kumanda türü',
+    gamepadAuto: 'Otomatik',
+    capture: 'Görüntü yakalama',
+    captureDefault: 'Varsayılan',
+    minFps: 'En düşük FPS hedefi',
+    firewallDomain: 'Güvenlik duvarında etki alanı ağlarına da aç',
+    keepPairing: 'Koltuk silinince eşleşmeleri sakla',
+    apps: 'Uygulama listesi (istemcide görünenler)',
+    appName: 'Ad',
+    appCmd: 'Komut',
+    saveApps: 'Listeyi kaydet',
+    appsSaved: 'Uygulama listesi kaydedildi.',
+    identity: 'Koltuk kimliği',
+    regenerate: 'Kimliği yenile (bütün eşleşmeler silinir)',
+    regenerateConfirm: 'Koltuğun sertifikası yenilenir ve eşleşmiş bütün cihazların yeniden eşleşmesi gerekir.',
+    regenerateConfirmPulsar:
+      'Koltuğun kimliği yenilenir: Pulsar kimlik numarası değişir ve eşleşmiş bütün cihazların yeniden eşleşmesi gerekir.',
+    identityDone: 'Kimlik yenilendi.',
+    streamBackend: 'Yayın sunucusu',
+    backendSunshine: 'Sunshine (Moonlight uyumlu)',
+    backendPulsar: 'Pulsar',
+    backendMissing: 'kurulu değil',
+    backendMissingHint: (b: string) => `${b} bu bilgisayarda kurulu değil; koltuk bu yayın sunucusuyla başlatılamaz.`,
+    backendStopFirst: 'Yayın sunucusunu değiştirmek için önce koltuğu durdurun.',
+    relayId: 'Pulsar kimliği',
+    relayState: (s: string) =>
+      (({ ok: 'bağlı', auth_required: 'giriş bekliyor', unreachable: 'ulaşılamıyor', version_mismatch: 'sürüm uyumsuz' }) as Record<string, string>)[s] ?? s
+  },
+  seatState: {
+    stopped: 'Durdu',
+    booting: 'Açılıyor',
+    running: 'Çalışıyor',
+    stopping: 'Duruyor',
+    failed: 'Başarısız'
+  } satisfies Record<RemoteSeatState, string>,
+  phase: {
+    user: 'Kullanıcı denetleniyor',
+    session: 'Oturum açılıyor',
+    display: 'Ekran hazırlanıyor',
+    audio: 'Ses hazırlanıyor',
+    stream: 'Akış sunucusu başlatılıyor',
+    pads: 'Kumandalar hazırlanıyor',
+    isolation: 'Yalıtım ayarlanıyor',
+    autostart: 'Uygulamalar başlatılıyor'
+  } as Record<string, string>,
+  host: {
+    title: 'Ana bilgisayar',
+    audioCleanup: 'Eski ses aygıtları',
+    audioCleanupHint:
+      'Biten Uzak Masaüstü oturumlarından kalan, artık bağlı olmayan "Uzak Ses" aygıt kayıtlarını siler. Bağlı aygıtlara ve konsol aygıtlarına dokunmaz.',
+    audioCleanupRun: 'Eski ses aygıtlarını temizle',
+    audioCleanupConfirm: 'Kalan aygıt kayıtları kalıcı olarak silinsin mi? Her silme servis günlüğüne yazılır.',
+    audioCleanupYes: 'Evet, temizle',
+    audioCleanupNo: 'Vazgeç',
+    audioCleanupDone: (removed: number, failed: number) =>
+      removed === 0 && failed === 0 ? 'Silinecek eski aygıt yok.' : `${removed} aygıt silindi, ${failed} aygıt bırakıldı.`,
+    edition: 'Windows sürümü',
+    class: 'Çoklu koltuk durumu',
+    rdsReady: 'Uzak Masaüstü hizmeti',
+    ready: 'Hazır',
+    notReady: 'Hazır değil',
+    port: 'RDP portu',
+    maxSeats: 'Aynı anda en fazla koltuk',
+    unlimited: 'Sınırsız',
+    licensing: 'RDS lisanslama',
+    licensingMode: (m: number | null) => (m === 2 ? 'Cihaz başına' : m === 4 ? 'Kullanıcı başına' : 'Yapılandırılmamış'),
+    graceDays: (d: number) => `Deneme süresinden ${d} gün kaldı`,
+    warnings: 'Uyarılar',
+    noWarnings: 'Uyarı yok.',
+    multiSeat: 'Çoklu koltuk',
+    multiSeatToggle: 'Bu bilgisayarı çoklu koltuk için hazırla',
+    multiSeatHint:
+      'Uzak Masaüstü ayarlarını koltuklar için değiştirir (özgün değerler saklanır ve kapatınca geri yüklenir). Kapatmak bütün koltukları durdurur.',
+    passive:
+      'Başka bir çoklu koltuk ürünü bulundu. Pulsar Seat pasif modda: sistemde hiçbir şey değiştirmez ve koltuk başlatmaz.',
+    coexistence: 'Uyumluluk denetimi',
+    noFindings: 'Sorun bulunmadı.',
+    drivers: 'Sürücüler',
+    displayDrivers: 'Sanal ekran',
+    padDrivers: 'Sanal kumanda',
+    installedYes: 'Kurulu',
+    installedNo: 'Kurulu değil',
+    signed: 'İmzalı',
+    unsigned: 'İmzasız',
+    remoteCapable: 'Uzak oturumda çalışır',
+    consoleOnly: 'Yalnızca fiziksel ekranda',
+    hdrAvailable: 'HDR kullanılabilir',
+    hdrUnavailable: (why: string) => `HDR yok: ${why}`,
+    experimental: 'Deneysel: istemci Windows’ta çoklu oturum',
+    experimentalHint:
+      'Yalnızca Windows Pro / Enterprise içindir ve sizin kurduğunuz açık kaynaklı bir sarmalayıcı gerektirir. Varsayılan olarak kapalıdır.',
+    twState: {
+      off: 'Kapalı',
+      on: 'Açık',
+      foreign_active: 'Başka bir araç Uzak Masaüstü hizmetini yönlendirmiş; Pulsar Seat dokunmaz.',
+      blocked: 'Otomatik kapatıldı (desteklenmeyen sürüm ya da sarmalayıcı sorunu)'
+    } as Record<string, string>,
+    twEnable: 'Aç…',
+    twDisable: 'Kapat',
+    twNoCandidate: 'Kurulu bir sarmalayıcı bulunamadı.',
+    refresh: 'Yenile'
+  },
+  hostClass: {
+    home: 'Windows Home: çoklu koltuk desteklenmiyor.',
+    client_multi_session_unavailable: 'Windows istemci sürümü: aynı anda yalnızca bir uzak oturum.',
+    server_without_rdsh: 'Windows Server, Uzak Masaüstü Oturumu Ana Bilgisayarı rolü yok: yalnızca bir deneme koltuğu.',
+    server_rdsh: 'Windows Server + Uzak Masaüstü Oturumu Ana Bilgisayarı: çoklu koltuk hazır.'
+  } as Record<string, string>,
+  hostWarning: {
+    rdsh_missing: 'Uzak Masaüstü Oturumu Ana Bilgisayarı rolü kurulu değil.',
+    licensing_not_configured: 'RDS lisanslama yapılandırılmamış; yalnızca bir koltuk çalışır.',
+    grace_ends: 'RDS lisanslama deneme süresi bitmek üzere.',
+    policy_override: 'Bir grup ilkesi Pulsar Seat’in ayarını geçersiz kılıyor.',
+    seat_user_is_admin: 'Koltuk kullanıcısı yönetici; normal bir kullanıcı önerilir.',
+    foreign_wrapper: 'Uzak Masaüstü hizmeti başka bir sarmalayıcıya yönlendirilmiş.',
+    autostart_run_as_system_ignored: '“SYSTEM olarak çalıştır” yok sayıldı; uygulama koltuk kullanıcısıyla başlatıldı.',
+    autostart_failed: 'Otomatik başlayan bir uygulama başlatılamadı.',
+    adapter_fallback: 'Seçilen ekran kartı bulunamadı; varsayılan kullanılıyor.',
+    firewall: 'Güvenlik duvarı kuralları eklenemedi; yerel ağdaki cihazlar koltuğa bağlanamayabilir.',
+    control_unavailable: 'Akış sunucusunun denetim kanalı açılamadı; eşleştirme bu koltukta kullanılamıyor.',
+    capture_error: 'Akış sunucusu görüntü yakalayamadı.'
+  } as Record<string, string>,
+  signal: {
+    ref_arp: 'Başka bir çoklu koltuk ürünü kurulu.',
+    ref_service: 'Başka bir çoklu koltuk ürününün hizmeti var.',
+    termsrv_wrapped: 'Uzak Masaüstü hizmeti yönlendirilmiş.',
+    bluetooth_wrapped: 'Bluetooth hizmeti yönlendirilmiş.',
+    rdp_idd_redirected: 'RDP ekran sürücüsü değiştirilmiş.',
+    ref_shim_db: 'Başka bir ürünün uyumluluk veritabanı kurulu.',
+    ref_shim_exe_map: 'Başka bir ürünün uyumluluk eşlemesi var.',
+    ref_shim_arp: 'Başka bir ürünün yamalama bileşeni kurulu.',
+    ref_shim_file: 'Başka bir ürünün yamalama dosyası var.',
+    compat_layer_forced: 'Bilgisayar genelinde bir uyumluluk katmanı zorlanmış.',
+    ref_pad_driver: 'Başka bir ürünün kumanda sürücüsü kurulu.',
+    ref_root_cert: 'Başka bir ürünün kök sertifikası kurulu.',
+    kernel_helper_residue: 'Eski bir çekirdek yardımcısından kalıntı var.',
+    defender_exclusions: 'Microsoft Defender dışlamaları bulundu.',
+    ref_firewall_rules: 'Başka bir ürünün güvenlik duvarı kuralları var.',
+    rds_residue: 'Uzak Masaüstü ayarlarında kalıntı var.',
+    upstream_sunshine: 'Ayrıca kurulmuş bir Sunshine var (port çakışabilir).',
+    vigem_present: 'ViGEmBus sürücüsü kurulu.'
+  } as Record<string, string>,
+  hdrReason: {
+    force_sdr: 'koltukta SDR zorlanmış',
+    rdp_display: 'Uzak Masaüstü ekranı HDR desteklemez',
+    os_too_old: 'Windows sürümü çok eski',
+    iddcx_too_old: 'ekran sürücüsü arayüzü eski',
+    driver_no_fp16: 'sürücü HDR yüzeylerini desteklemiyor',
+    gpu_unsupported: 'ekran kartı desteklemiyor',
+    driver_not_installed: 'sürücü kurulu değil',
+    server_needs_whql: 'Windows Server’da WHQL imzalı sürücü gerekir'
+  } as Record<string, string>,
+  displayBackend: {
+    rdp_session: 'Uzak Masaüstü ekranı (varsayılan)',
+    vdd: 'Virtual Display Driver (imzalı, yalnızca fiziksel ekran)',
+    pulsar_idd: 'Pulsar sanal ekran sürücüsü (imzasız, deneme)'
+  } as Record<string, string>,
+  padBackend: {
+    vigem: 'ViGEmBus (Xbox 360 / DualShock 4)',
+    usbip_ds5: 'usbip-win2 (DualSense)',
+    pulsar_pad: 'Pulsar kumanda sürücüsü (imzasız, deneme)'
+  } as Record<string, string>,
+  audioState: {
+    capturing: 'Ses akışa ekleniyor',
+    no_device: 'Oturumda ses aygıtı yok',
+    blocked_by_policy: 'Grup ilkesi sesi engelliyor',
+    disabled: 'Kapalı',
+    unknown: 'Bilinmiyor'
+  } as Record<string, string>,
+  audioLimitation: {
+    no_microphone: 'Mikrofon henüz koltuğa aktarılmıyor.',
+    no_controller_audio: 'Kumanda hoparlörü / kulaklık girişi desteklenmiyor.',
+    steam_remote_play_unsupported: 'Steam Remote Play koltuklarda desteklenmiyor.',
+    surround_is_stereo: 'Çok kanallı ses stereo olarak aktarılır.',
+    policy_blocks_audio: 'Grup ilkesi ses yönlendirmeyi engelliyor.',
+    mic_policy_blocked: 'Grup ilkesi mikrofon yönlendirmeyi engelliyor.'
+  } as Record<string, string>,
+  failure: {
+    seat_booting: 'Bir koltuk açılıyor; bitince yeniden deneyin.',
+    dxvk_hash_mismatch: 'DXVK dosyaları beklenen sürümle eşleşmiyor; yeniden indirin.',
+    backend_missing: 'Seçilen yayın sunucusu bu bilgisayarda kurulu değil.',
+    backend_pulsar: 'Bu işlem Pulsar yayın sunucusunda yok.',
+    backend_sunshine: 'Bu işlem Sunshine yayın sunucusunda yok.',
+    edition_unsupported: 'Bu Windows sürümü çoklu koltuğu desteklemiyor.',
+    coexistence: 'Başka bir çoklu koltuk ürünü bulunduğu için koltuk başlatılmadı.',
+    rds_not_ready: 'Uzak Masaüstü hizmeti hazır değil.',
+    seat_limit: 'Aynı anda çalışabilecek koltuk sınırına ulaşıldı.',
+    account: 'Koltuk kullanıcısı kullanılamıyor.',
+    password_expired: 'Koltuk kullanıcısının şifresinin süresi dolmuş.',
+    rdu_membership: 'Kullanıcı “Uzak Masaüstü Kullanıcıları” grubuna eklenemedi.',
+    profile: 'Kullanıcı profili yüklenemedi.',
+    client_auth: 'Oturum açılamadı: kullanıcı adı ya da şifre yanlış.',
+    cert_mismatch: 'Uzak Masaüstü sertifikası beklenenle eşleşmiyor.',
+    session_timeout: 'Oturum zamanında açılmadı.',
+    client_exited: 'Oturumu tutan yardımcı program beklenmedik şekilde kapandı.',
+    token: 'Yardımcı program için güvenli bir kimlik oluşturulamadı.',
+    display_timeout: 'Koltuğun ekranı zamanında hazır olmadı.',
+    no_display: 'Koltuk oturumunda ekran yok.',
+    driver_not_installed: 'Seçilen sanal ekran sürücüsü kurulu değil.',
+    session_attach_unsupported: 'Bu ekran sürücüsü uzak oturumlarda çalışmıyor.',
+    stream_server: 'Akış sunucusu tekrar tekrar çöktü.',
+    server_binary_missing: 'Akış sunucusu kurulu değil.',
+    server_hash_mismatch: 'Akış sunucusu dosyası doğrulanamadı.',
+    port_in_use: 'Koltuğun portlarından biri kullanımda.',
+    firewall: 'Güvenlik duvarı kuralları eklenemedi.',
+    multi_session_off: 'Önce “Ana bilgisayar” sayfasında çoklu koltuğu açın.',
+    shim_foreign: 'Başka bir ürünün işlem yamalaması açık.',
+    shim_blocked: 'Windows uygulama denetimi modülün yüklenmesini engelledi.',
+    server_without_control_pipe: 'Bu koltukta uygulama içinden eşleştirme kullanılamıyor.',
+    no_pending_request: 'Bekleyen bir eşleştirme isteği yok.',
+    wrong_pin: 'PIN yanlış.',
+    pair_timeout: 'Eşleştirme süresi doldu.',
+    warning_not_acknowledged: 'Önce uyarıyı okuyup onaylayın.',
+    not_client_sku: 'Bu modül yalnızca Windows Pro / Enterprise içindir.',
+    foreign_wrapper: 'Uzak Masaüstü hizmeti başka bir araç tarafından yönlendirilmiş.',
+    unknown_termsrv_build: 'Bu Windows güncellemesi sarmalayıcı tarafından henüz desteklenmiyor.',
+    wrapper_missing: 'Sarmalayıcı bulunamadı.',
+    wrapper_unsigned: 'Sarmalayıcının imzası kabul edilmedi.',
+    wrapper_insecure_acl: 'Sarmalayıcı klasörüne yönetici olmayanlar yazabiliyor; izinleri düzeltin.',
+    wrapper_arch: 'Sarmalayıcı bu bilgisayarın mimarisine uygun değil.',
+    termservice_restart: 'Uzak Masaüstü hizmeti yeniden başlatılamadı.',
+    reference_product_present: 'Başka bir çoklu koltuk ürünü kurulu.',
+    dxvk_not_downloaded: 'DXVK henüz indirilmedi.',
+    bad_app_list: 'Uygulama listesi geçersiz.',
+    unsupported: 'Bu özellik bu bilgisayarda kullanılamıyor.',
+    cancelled: 'Başlatma iptal edildi.'
+  } as Record<string, string>,
+  experimental: {
+    title: 'Deneysel özelliği aç',
+    wrapper: 'Sarmalayıcı',
+    ack: 'Riskleri okudum ve anladım; sorumluluğu kabul ediyorum.',
+    enable: 'Aç ve Uzak Masaüstü hizmetini yeniden başlat',
+    cancel: 'Vazgeç',
+    working: 'Koltuklar durduruluyor ve hizmet yeniden başlatılıyor…'
+  },
+  newSeat: {
+    title: 'Yeni uzak koltuk',
+    name: 'Ad',
+    hint: 'Yalnızca İngilizce harfler ve rakamlar; boşluk yok.',
+    create: 'Oluştur',
+    cancel: 'Vazgeç'
+  },
+  deleteSeat: {
+    title: (n: string) => `“${n}” silinsin mi?`,
+    body: 'Koltuğun ayarları ve oluşturulan dosyaları silinir.',
+    warning: 'Bu işlem geri alınamaz.',
+    confirm: 'Sil',
+    cancel: 'Vazgeç'
+  },
+  pair: {
+    title: (n: string) => `${n} için cihaz eşleştirme`,
+    waiting: 'Cihazdan eşleştirme isteği bekleniyor…',
+    pending: (d: string) => `“${d}” eşleşmek istiyor. Cihazdaki PIN’i yazın.`,
+    paired: 'Cihaz eşleştirildi.',
+    result: (r: string) => (r === 'paired' ? 'Cihaz eşleştirildi.' : remoteFailureText(r)),
+    unavailable: 'Bu koltukta uygulama içinden eşleştirme kullanılamıyor (akış sunucusu denetim kanalı yok).',
+    notRunning: 'Eşleştirme için koltuk çalışıyor olmalı.',
+    cancelRequest: 'İsteği reddet',
+    clients: 'Eşleşmiş cihazlar',
+    noClients: 'Eşleşmiş cihaz yok.',
+    unpair: 'Eşleşmeyi kaldır',
+    unpairAll: 'Hepsini kaldır',
+    step1: 'Cihazınızda Pulsar ya da Moonlight uygulamasını açın.',
+    step2: 'Yeni ana bilgisayar ekleyin ve aşağıdaki adreslerden birini yazın.',
+    step3: 'Eklenen bilgisayarı seçin; ekranda dört haneli bir PIN görünecek.',
+    step4: 'PIN’i buraya yazıp gönderin.',
+    addresses: 'Adresler',
+    recommended: 'önerilen',
+    qr: (a: string) => `Adres için QR kodu: ${a}`,
+    qrHint: 'Telefonla okutarak adresi kopyalayabilirsiniz.',
+    noAddress: 'Yerel ağ adresi bulunamadı.',
+    pin: 'PIN',
+    clientName: 'Cihaz adı',
+    submit: 'PIN’i gönder',
+    sent: 'PIN gönderildi.',
+    close: 'Kapat',
+    pinInvalid: 'PIN dört rakamdan oluşmalı.',
+    // Pulsar seats: the operator approves requests instead of typing a PIN.
+    pulsarStep1: 'Cihazınızda Pulsar uygulamasını açın.',
+    pulsarStep2: 'Aşağıdaki Pulsar kimliğini ya da yerel ağdaki koltuk adını seçin.',
+    pulsarStep3: 'Bağlantı isteği burada görünür; izin verin ya da reddedin.',
+    pulsarWaiting: 'Bağlantı isteği bekleniyor…',
+    requestTitle: 'Bağlantı isteği',
+    requestFrom: (d: string, kind: string) => `“${d}” ${kind === 'pair' ? 'eşleşmek' : 'bağlanmak'} istiyor.`,
+    keyFp: 'Anahtar parmak izi',
+    passwordWrong: 'Cihaz yanlış şifre girdi.',
+    allow: 'İzin ver',
+    viewOnly: 'Yalnızca izle',
+    deny: 'Reddet',
+    answered: 'Yanıt gönderildi.',
+    otp: 'Tek kullanımlık şifre',
+    showOtp: 'Göster',
+    refreshOtp: 'Yenile',
+    connectPassword: 'Kalıcı bağlantı şifresi',
+    connectPasswordHint: 'Yalnızca yazılır; kayıtlı şifre gösterilmez.',
+    connectPasswordSave: 'Şifreyi kaydet',
+    connectPasswordRemove: 'Şifreyi kaldır',
+    connectPasswordRemoveConfirm: 'Kalıcı bağlantı şifresi kaldırılsın mı? Cihazlar bu şifreyle artık bağlanamaz.',
+    connectPasswordRemoveYes: 'Evet, kaldır',
+    connectPasswordRemoveNo: 'Vazgeç',
+    connectPasswordSaved: 'Bağlantı şifresi kaydedildi.',
+    connectPasswordCleared: 'Bağlantı şifresi kaldırıldı.',
+    relayAuth: 'Aktarım sunucusu giriş istiyor',
+    relayPassword: 'Aktarım sunucusu şifresi',
+    relayTotp: 'Doğrulama kodu (6 hane, isteğe bağlı)',
+    relayAuthSend: 'Giriş bilgilerini gönder',
+    relayAuthSent: 'Giriş bilgileri gönderildi.',
+    results: {
+      allowed: 'Bağlantıya izin verildi.',
+      allowed_view_only: 'Yalnızca izleme izni verildi.',
+      denied: 'İstek reddedildi.',
+      password: 'Cihaz şifreyle bağlandı.',
+      paired: 'Cihaz eşleştirildi.',
+      timeout: 'İsteğin süresi doldu.',
+      client_gone: 'Cihaz bağlantıyı kesti.',
+      locked_out: 'Çok fazla yanlış deneme; cihaz bir süre engellendi.'
+    } as Record<string, string>
+  },
+  patching: {
+    install: {
+      title: 'İşlem yamalama kurulsun mu?',
+      bullets: [
+        'Denetleyici (HID) yalıtımını iyileştirir.',
+        'Steam yalıtımını kullanılabilir hâle getirir.',
+        'Uzak oturumda çalışmayı reddeden uygulamaları düzeltir.'
+      ],
+      question: 'Uyumluluk katmanı şimdi kurulsun mu?',
+      confirm: 'Kur',
+      progress: 'Uyumluluk katmanı kuruluyor…'
+    },
+    remove: {
+      title: 'İşlem yamalama kaldırılsın mı?',
+      bullets: [
+        'Denetleyici (HID) yalıtımı zayıflar.',
+        'Steam yalıtımı kapanır.',
+        'Uzak oturumda çalışmayı reddeden uygulamalar yeniden çalışmayabilir.'
+      ],
+      question: 'Uyumluluk katmanı şimdi kaldırılsın mı?',
+      confirm: 'Kaldır',
+      progress: 'Uyumluluk katmanı kaldırılıyor…'
+    },
+    warning:
+      'Uyumluluk katmanları Windows’un program yükleme yolunda çalışır; bir hata tüm sistemi kullanılamaz hâle getirebilir.',
+    caution: 'Dikkatli olun.',
+    cancel: 'Vazgeç',
+    rebootTitle: 'Yeniden başlatma gerekiyor',
+    rebootBody: 'Değişikliğin tam olarak etkili olması için Windows’un yeniden başlatılması gerekir.',
+    rebootNow: 'Şimdi yeniden başlat',
+    rebootLater: 'Sonra kendim başlatırım'
+  },
+  cred: {
+    title: 'Kullanıcı bilgileri sınanıyor',
+    pending: 'Windows oturum açma denemesi yapılıyor…',
+    okTitle: 'Kullanıcı bilgileri doğru',
+    okBody: 'Kayıtlı şifreyle bu kullanıcı adına oturum açılabiliyor.',
+    failTitle: 'Oturum açılamadı',
+    failHint: 'Kullanıcı adını ve şifreyi kontrol edip yeniden kaydedin.',
+    disabled: 'Bu hesap devre dışı.',
+    locked: 'Bu hesap kilitli (çok sayıda hatalı deneme).',
+    expired: 'Bu hesabın şifresinin süresi dolmuş; Windows’ta yeni bir şifre belirleyin.',
+    fix: 'Hesabı etkinleştir / kilidini aç',
+    confirmTitle: 'Hesap değiştirilsin mi?',
+    confirmBody: 'Pulsar Seat bu Windows hesabını etkinleştirecek ve kilidini açacak. Bu, hesabın kendisini değiştirir.',
+    confirm: 'Evet, değiştir',
+    retest: 'Yeniden sına',
+    close: 'Kapat'
+  },
+  common: {
+    loading: 'Yükleniyor…',
+    close: 'Kapat',
+    error: 'Hata'
+  }
+};
+
+export const remoteFieldErrorText: Record<RemoteFieldError, string> = {
+  name_empty: 'Bir ad yazın.',
+  name_chars: 'Yalnızca İngilizce harf ve rakam kullanılabilir.',
+  name_long: 'Ad en fazla 128 karakter olabilir.',
+  name_duplicate: 'Bu adda bir koltuk zaten var.',
+  display_name: 'Görünen ad boş olamaz, başında ya da sonunda boşluk olamaz.',
+  display_name_duplicate: 'Bu görünen ad başka bir koltukta kullanılıyor.',
+  port: 'Port 1029 ile 65514 arasında bir sayı olmalı.',
+  port_overlap: 'Bu port aralığı başka bir koltukla çakışıyor.'
+};
+
+const remoteErrorText: Record<RemoteErrorCode, string> = {
+  version_mismatch: 'Yönetici ile servisin sürümleri uyuşmuyor.',
+  bad_request: 'Geçersiz istek.',
+  not_found: 'Koltuk bulunamadı.',
+  invalid_name: remoteFieldErrorText.name_chars,
+  duplicate_name: remoteFieldErrorText.name_duplicate,
+  invalid_display_name: remoteFieldErrorText.display_name,
+  invalid_port: remoteFieldErrorText.port,
+  port_overlap: remoteFieldErrorText.port_overlap,
+  no_free_port: 'Boş port aralığı kalmadı.',
+  invalid_value: 'Geçersiz değer.',
+  invalid_user: 'Windows kullanıcısı kullanılamıyor (yok, devre dışı, kilitli ya da şifresinin süresi dolmuş).',
+  user_in_use: 'Bu kullanıcı başka bir koltukta ya da konsolda kullanılıyor.',
+  missing_credentials: 'Önce kullanıcı ve şifre girin.',
+  seat_running: 'Koltuk çalışırken bu değiştirilemez.',
+  not_implemented: 'Bu özellik henüz hazır değil (sonraki aşamada gelecek).',
+  store: 'Ayarlar kaydedilemedi.',
+  service_unavailable: 'Servise ya da koltuğun akış sunucusuna ulaşılamıyor.',
+  internal: 'Beklenmeyen bir hata oluştu.',
+  unsupported: 'Bu özellik bu bilgisayarda kullanılamıyor.',
+  edition_unsupported: 'Bu Windows sürümü çoklu koltuğu desteklemiyor.',
+  coexistence: 'Başka bir çoklu koltuk ürünü bulunduğu için işlem yapılmadı.',
+  seat_failed: 'Koltuk başlatılamadı.',
+  timeout: 'İşlem zaman aşımına uğradı.',
+  driver_missing: 'Gerekli sürücü kurulu değil.',
+  policy_blocked: 'Bir grup ilkesi bu işlemi engelliyor.',
+  warning_not_acknowledged: 'Önce uyarıyı okuyup onaylayın.',
+  no_pending_request: 'Bekleyen bir eşleştirme isteği yok.',
+  wrong_pin: 'PIN yanlış.',
+  hash_mismatch: 'Dosya doğrulanamadı.',
+  firewall: 'Güvenlik duvarı ayarlanamadı.'
+};
+
+/** Turkish text for a package reason code; unknown codes fall back to a generic text. */
+export function remoteFailureText(reason: string | null | undefined): string {
+  if (!reason) return rt.failure.unsupported;
+  return rt.failure[reason] ?? remoteErrorText[reason as RemoteErrorCode] ?? `${remoteErrorText.internal} (${reason})`;
+}
+
+export function isRemoteProtoError(e: unknown): e is RemoteProtoError {
+  return typeof e === 'object' && e !== null && 'code' in e && typeof (e as RemoteProtoError).code === 'string';
+}
+
+/** Turkish text for any error thrown by the API layer. */
+export function remoteErrorMessage(e: unknown): string {
+  if (!isRemoteProtoError(e)) return remoteErrorText.internal;
+  if (e.reason && rt.failure[e.reason]) return rt.failure[e.reason];
+  if (e.code === 'duplicate_name' && e.field === 'display_name') return remoteFieldErrorText.display_name_duplicate;
+  return remoteErrorText[e.code] ?? remoteErrorText.internal;
 }

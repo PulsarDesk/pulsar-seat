@@ -32,8 +32,11 @@ import type {
   LocalAddress,
   PickedProgram,
   UserPicture,
-  WizardProgress
+  WizardProgress,
+  EventBatch,
+  Topic
 } from './types.ts';
+import { createRemoteApi, type RemoteApi } from './remote/api.ts';
 
 export type Unlisten = () => void;
 export type TrayAction = 'show' | 'start_seats' | 'toggle_enabled' | 'quit';
@@ -42,6 +45,8 @@ export type TrayAction = 'show' | 'start_seats' | 'toggle_enabled' | 'quit';
 export interface LocalApi {
   /** IPv4 addresses of this PC (per-seat address dialog, spec 10 §7.4). */
   listAddresses(): Promise<LocalAddress[]>;
+  /** Private IPv4 addresses for the remote seat pairing dialog, recommended one first. */
+  lanAddresses(): Promise<string[]>;
   /** System file dialog: one program or shortcut (its target); `null` = cancelled. */
   pickProgram(): Promise<PickedProgram | null>;
   /** System folder dialog: every program of the folder (`[]` = cancelled / none). */
@@ -108,6 +113,10 @@ export interface Api extends LocalApi {
   downloadUpdate(): Promise<UpdateStatus>;
   /** Only after the administrator confirmed (the dialog asks). */
   installUpdate(version: string): Promise<UpdateStatus>;
+  /** Events with `seq > after` of these topics; the service waits up to `waitMs` (≤ 2000). */
+  pollEvents(after: number, waitMs: number, topics: Topic[]): Promise<EventBatch>;
+  /** Remote seat requests (protocol 3, admin only). */
+  remote: RemoteApi;
   openPanel(panel: Panel): Promise<void>;
   restartElevated(): Promise<void>;
   setTrayVisible(visible: boolean): Promise<void>;
@@ -167,7 +176,10 @@ export function createRequestApi(
     checkForUpdate: async () => expectBody(await call({ type: 'check_for_update' }), 'update_status').data,
     downloadUpdate: async () => expectBody(await call({ type: 'download_update' }), 'update_status').data,
     installUpdate: async (version) =>
-      expectBody(await call({ type: 'install_update', data: { version, confirm: true } }), 'update_status').data
+      expectBody(await call({ type: 'install_update', data: { version, confirm: true } }), 'update_status').data,
+    pollEvents: async (after, wait_ms, topics) =>
+      expectBody(await call({ type: 'poll_events', data: { after, wait_ms, topics } }), 'events').data,
+    remote: createRemoteApi(call)
   };
 }
 
@@ -188,6 +200,7 @@ export async function createTauriApi(): Promise<Api> {
     setTrayVisible: (visible) => invoke<void>('set_tray_visible', { visible }),
     quit: () => invoke<void>('quit_app'),
     listAddresses: () => invoke<LocalAddress[]>('list_ipv4_addresses'),
+    lanAddresses: () => invoke<string[]>('lan_addresses'),
     pickProgram: () => invoke<PickedProgram | null>('pick_program'),
     pickProgramFolder: () => invoke<PickedProgram[]>('pick_program_folder'),
     userPictures: (category) => invoke<UserPicture[]>('list_user_pictures', { category }),

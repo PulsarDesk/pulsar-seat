@@ -9,8 +9,8 @@
     "test": "bun run --filter '*' test",
     "build": "bun run --filter '*' build",
     "check": "bun run --filter '*' check",
-    "coverage": "bun run coverage:rust && bun run coverage:split-manager",
+    "coverage": "bun run coverage:rust && bun run coverage:manager",
     "coverage:rust": "bun scripts/coverage-rust.ts",
-    "coverage:split-manager": "bun run --filter '@pulsar-split/manager' coverage"
+    "coverage:manager": "bun run --filter '@pulsar-seat/manager' coverage"
   }
 }

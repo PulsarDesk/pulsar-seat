@@ -16,6 +16,7 @@
   import ImportDialog from './ImportDialog.svelte';
   import Modal from './Modal.svelte';
   import NetworkTab from './NetworkTab.svelte';
+  import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
   import SeatsTab from './SeatsTab.svelte';
   import StatusTab from './StatusTab.svelte';
   import Toasts from './Toasts.svelte';
@@ -62,18 +63,31 @@
     { id: 'basic', label: t.tabs.basic },
     { id: 'advanced', label: t.tabs.advanced },
     { id: 'network', label: t.tabs.network },
+    { id: 'remote', label: t.tabs.remote },
     { id: 'status', label: t.tabs.status }
   ];
   /** Seat whose IP dialog the network tab opens with (seat menu "assign an IP address"). */
   let ipSeat = $state<SeatNumber | null>(null);
   let ipOpen = $state(0);
+  /** Remote seat the remote seats tab opens with (seats tab "edit"). */
+  let remoteSeat = $state<SeatNumber | null>(null);
+  let remoteOpen = $state(0);
 
   /** Leaving a tab with unsaved changes asks save / discard / cancel (spec 10 §2.3). */
   function selectTab(id: Tab) {
     if (id === tab) return;
     guard(() => {
       ipSeat = null;
+      remoteSeat = null;
       store.setPref('tab', id);
+    });
+  }
+
+  function openRemote(n: SeatNumber) {
+    guard(() => {
+      remoteSeat = n;
+      remoteOpen++;
+      store.setPref('tab', 'remote');
     });
   }
 
@@ -259,7 +273,8 @@
           cpu: () => (dialog = { kind: 'cpu' }),
           hotkey: () => (dialog = { kind: 'hotkey' }),
           moveAssignment,
-          ipBinding: openIp
+          ipBinding: openIp,
+          openRemote
         }}
       />
     {:else if tab === 'basic'}
@@ -269,6 +284,10 @@
     {:else if tab === 'network'}
       {#key ipOpen}
         <NetworkTab {store} initialSeat={ipSeat} />
+      {/key}
+    {:else if tab === 'remote'}
+      {#key remoteOpen}
+        <RemoteTab {store} initialSeat={remoteSeat} />
       {/key}
     {:else}
       <StatusTab {store} />

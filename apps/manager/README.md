@@ -3,7 +3,8 @@
 Tauri 2 + SvelteKit + Svelte 5 (runes), `adapter-static`, Turkish UI. Runs as invoker in
 every session. It does no privileged work itself: every change is a request to the
 service over the control pipe (`docs/agents/architecture.md` §5). Behaviour target:
-`spec/local/10-manager.md`. The layout is our own and neutral; the maintainer redesigns it later.
+`spec/local/10-manager.md` (local seats) and `spec/remote/` (remote seats). Since merge step 9
+it is the one manager for both seat kinds (`docs/agents/architecture.md` §10.7). The layout is our own and neutral; the maintainer redesigns it later.
 
 ## Commands
 
@@ -37,7 +38,9 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src/lib/store.svelte.ts` | Window state: service view + unsaved draft, event handling, save flow |
 | `src/lib/api.ts` / `demo.ts` | Tauri API / in-memory demo service with the same interface |
 | `src/lib/i18n.ts`, `warning.ts` | All Turkish copy; the experimental-backend warning (version 1) |
-| `src/lib/components/` | App shell, tabs (Seats, Basic, Advanced, Status), dialogs, wizard |
+| `src/lib/components/` | App shell, tabs (Seats, Basic, Advanced, Network, Status), dialogs, wizard |
+| `src/lib/remote/` | Remote seats tab (from Pulsar Split's manager): `components/RemoteTab.svelte` + seat page, pair dialog (QR), host, logs, DXVK, settings; `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts`, `remote.css` (scoped to `.remote-ui`) |
+| `src-tauri/src/net.rs` | Static IPv4 list (address dialog) and the LAN address order of the pair dialog (`lan_addresses`) |
 
 ## Tauri surface
 
@@ -110,3 +113,10 @@ close-to-tray, `--autostart`, UAC relaunch (`--elevated=<pid>` waits up to 10 s 
 copy to exit before the single-instance check), the separate elevated WebView2 data
 folder, the same-account dialog (needs the service's notice), wizard monitor numbering
 (HYPOTHESIS above), the Windows panel shortcuts.
+
+Remote seats tab (merge step 9): every remote page against a real service with a remote
+seat (no remote seat has run on hardware yet), pairing through `poll_events` on the `stream`
+topic, the LAN address order of the pair dialog, account pictures from `get_user_picture`.
+Pulsar-backend pairing events that protocol 3 does not carry (`otp_changed`,
+`trust_changed`, `relay_auth_required`; dropped by `map_legacy_event`) no longer refresh the
+pair dialog by themselves.

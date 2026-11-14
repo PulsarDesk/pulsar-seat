@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // TypeScript mirror of the seat-proto / seat-core wire types the UI uses. Source of truth:
 // crates/seat-proto/src/{lib,messages}.rs and crates/seat-core/src/*. Keep field names in sync.
+// Remote seat payloads (`seat_proto::remote`) live in ./remote/types.ts.
+
+import type * as R from './remote/types.ts';
 
 export type SeatNumber = number; // 1..=16
 export type SeatMask = number; // u32; bit 0 = seat 1; 0xffffffff = shared; 0 = spare
@@ -196,8 +199,8 @@ export interface SeatConfig {
   startup_apps?: KioskApp[];
   /** Physical-seat part; set exactly when `kind` is `local`. */
   local?: LocalSeat;
-  /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. This
-   *  manager does not edit remote seats yet (merge step 9) and keeps the object as is. */
+  /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. Edited
+   *  on the remote seats tab, never by the local seat editors. */
   remote?: RemoteSeat;
 }
 
@@ -213,13 +216,23 @@ export interface LocalSeat {
   redirect?: SeatRedirect;
 }
 
-/** Remote seat part (`seat_core::remote::RemoteSeat`); only the fields this manager reads. */
+/** Remote seat part (`seat_core::remote::RemoteSeat`). Every field has a service default
+ *  (`serde(default)`); `id`, `rdp_client_name` and a `port` of 0 are filled by the service
+ *  when the config is applied. Edited on the remote seat page (`./remote/model.ts`). */
 export interface RemoteSeat {
   id?: string;
   display_name?: string;
   port?: number;
-  stream_backend?: 'sunshine' | 'pulsar';
-  [field: string]: unknown;
+  stop_action?: R.StopAction;
+  display?: R.DisplaySettings;
+  /** Apps started in the seat session (Split's `autostart`). */
+  apps?: R.AutostartApp[];
+  rdp_client_name?: string;
+  audio?: R.SeatAudioSettings;
+  stream?: R.SeatStreamSettings;
+  stream_backend?: R.StreamBackendKind;
+  /** Service-owned. */
+  last_mode?: { width: number; height: number; hz: number };
 }
 
 /** Direction of the clipboard bridge, seen from the seat session. */
@@ -452,8 +465,9 @@ export interface GlobalSettings {
   outputs?: OutputSettings;
   /** Added 2026-11-13 (kiosk-shell); older services omit it (default seat1_desktop = true). */
   kiosk?: KioskSettings;
-  /** Remote seat machine settings (config schema 2); kept as is by this manager. */
-  remote?: Record<string, unknown>;
+  /** Remote seat machine settings (config schema 2, `seat_core::remote::RemoteSettings`);
+   *  edited on the remote seats tab. */
+  remote?: R.GlobalSettings;
 }
 
 /** Update check opt-in (spec 90 §11 item 10). */
@@ -698,7 +712,16 @@ export interface WizardProgress {
   issues?: string[];
 }
 
-export type Topic = 'status' | 'devices' | 'activity' | 'wizard' | 'host' | 'agent';
+/** `stream` (protocol 3): remote seat pairing and stream start / end; admin only. */
+export type Topic = 'status' | 'devices' | 'activity' | 'wizard' | 'host' | 'agent' | 'stream';
+
+/** Pairing and streaming on a remote seat (protocol 3 `stream` event; payload as the stream
+ *  backend reports it). */
+export type StreamEvent =
+  | { type: 'pair_pending'; data: Record<string, unknown> | null }
+  | { type: 'pair_ended'; data: Record<string, unknown> | null }
+  | { type: 'stream_started'; data: Record<string, unknown> | null }
+  | { type: 'stream_ended'; data: Record<string, unknown> | null };
 
 export type ServiceEvent =
   | { type: 'product_state'; data: { state: ProductState } }
@@ -709,7 +732,8 @@ export type ServiceEvent =
   | { type: 'device_removed'; data: { key: DeviceKey } }
   | { type: 'device_changed'; data: { view: DeviceView } }
   | { type: 'device_activity'; data: { key: DeviceKey } }
-  | { type: 'wizard_progress'; data: WizardProgress };
+  | { type: 'wizard_progress'; data: WizardProgress }
+  | { type: 'stream'; data: { seat: SeatNumber; event: StreamEvent } };
 
 export interface EventFrame {
   seq: number;
@@ -717,8 +741,16 @@ export interface EventFrame {
   event: ServiceEvent;
 }
 
+/** Answer of `poll_events`. */
+export interface EventBatch {
+  events: EventFrame[];
+  /** Highest seq known to the service (may exceed the batch when topics filter). */
+  last_seq: number;
+}
+
 export type RequestBody =
   | { type: 'get_status' }
+  | { type: 'poll_events'; data: { after: number; wait_ms: number; topics: Topic[] } }
   | { type: 'get_backends' }
   | { type: 'preflight' }
   | { type: 'get_config' }
@@ -747,7 +779,40 @@ export type RequestBody =
   | { type: 'check_for_update' }
   | { type: 'download_update' }
   | { type: 'install_update'; data: { version: string; confirm: boolean } }
-  | { type: 'my_seat' };
+  | { type: 'my_seat' }
+  // ---- protocol 3: remote seat requests (from Pulsar Split; all admin only) ----
+  | { type: 'test_seat_credentials'; data: { seat: SeatNumber } }
+  | { type: 'enable_unlock_account'; data: { seat: SeatNumber; enable: boolean; unlock: boolean; confirm: boolean } }
+  | { type: 'get_remote_runtime'; data: { seat: SeatNumber } }
+  | { type: 'submit_pin'; data: { seat: SeatNumber; pin: string; client_name: string; request_id: number | null } }
+  | { type: 'get_pair_state'; data: { seat: SeatNumber } }
+  | { type: 'cancel_pair'; data: { seat: SeatNumber } }
+  | { type: 'list_paired_clients'; data: { seat: SeatNumber } }
+  | { type: 'unpair_client'; data: { seat: SeatNumber; uuid: string } }
+  | { type: 'unpair_all'; data: { seat: SeatNumber } }
+  | { type: 'regenerate_seat_identity'; data: { seat: SeatNumber; confirm: boolean } }
+  | { type: 'get_apps'; data: { seat: SeatNumber } }
+  | { type: 'set_apps'; data: { seat: SeatNumber; apps: R.AppEntry[] } }
+  | { type: 'answer_peer_request'; data: { seat: SeatNumber; request_id: number; allow: boolean; view_only: boolean } }
+  | { type: 'set_seat_connect_password'; data: { seat: SeatNumber; password: string } }
+  | { type: 'get_seat_otp'; data: { seat: SeatNumber } }
+  | { type: 'rotate_seat_otp'; data: { seat: SeatNumber } }
+  | { type: 'answer_relay_auth'; data: { seat: SeatNumber; password: string; totp: string | null } }
+  | { type: 'get_host_info' }
+  | { type: 'set_multi_session'; data: { enabled: boolean } }
+  | { type: 'get_termwrap_status' }
+  | { type: 'set_termwrap'; data: { enabled: boolean; wrapper_path: string | null; ack_warning_version: number } }
+  | { type: 'list_render_adapters' }
+  | { type: 'get_pad_backends' }
+  | { type: 'get_shim_status' }
+  | { type: 'set_shim_targets'; data: { targets: R.ShimTarget[] } }
+  | { type: 'set_app_masking'; data: { exe_path: string; enabled: boolean } }
+  | { type: 'set_dxvk'; data: { game_exe: string; enabled: boolean; dlls: string[] } }
+  | { type: 'get_dxvk_status' }
+  | { type: 'get_log_tail'; data: { source: string; lines: number } }
+  | { type: 'get_stream_backends' }
+  | { type: 'get_user_picture'; data: { user: string } }
+  | { type: 'cleanup_audio_endpoints'; data: { confirm: boolean } };
 
 export type ResponseBody =
   | { type: 'ack' }
@@ -763,7 +828,25 @@ export type ResponseBody =
   | { type: 'diff'; data: ConfigDiff }
   | { type: 'report'; data: { path: string } }
   | { type: 'update_status'; data: UpdateStatus }
-  | { type: 'seat'; data: { seat: SeatNumber | null; session_id: number | null } };
+  | { type: 'seat'; data: { seat: SeatNumber | null; session_id: number | null } }
+  | { type: 'events'; data: EventBatch }
+  // ---- protocol 3: remote seat answers ----
+  | { type: 'host_info'; data: R.HostInfo }
+  | { type: 'termwrap_status'; data: R.TermwrapStatus }
+  | { type: 'remote_runtime'; data: R.SeatRuntime }
+  | { type: 'render_adapters'; data: R.RenderAdapter[] }
+  | { type: 'pad_backends'; data: R.PadBackendInfo[] }
+  | { type: 'pair_state'; data: R.PairState }
+  | { type: 'paired_clients'; data: R.PairedClient[] }
+  | { type: 'apps'; data: R.AppEntry[] }
+  | { type: 'shim_status'; data: R.IsolationStatus }
+  | { type: 'credential_test'; data: R.CredentialTest }
+  | { type: 'log_lines'; data: string[] }
+  | { type: 'stream_backends'; data: R.StreamBackendInfo[] }
+  | { type: 'otp'; data: { otp: string } }
+  | { type: 'dxvk_status'; data: R.DxvkStatus }
+  | { type: 'user_picture'; data: R.UserPicture }
+  | { type: 'audio_cleanup'; data: R.AudioCleanup };
 
 export type Panel =
   | 'device_manager'

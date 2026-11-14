@@ -97,6 +97,40 @@ unsafe fn pwstr(p: *const u16) -> String {
     }
 }
 
+/// Virtual switch / VPN adapters: a client on the LAN cannot reach these addresses.
+fn is_virtual_adapter(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["vethernet", "hyper-v", "virtualbox", "vmware", "wsl", "docker", "tailscale", "zerotier", "vpn"]
+        .iter()
+        .any(|m| n.contains(m))
+}
+
+/// Private IPv4 addresses for the remote seat pairing dialog: physical adapters first (the
+/// first one is the recommended address), then by address; duplicates removed. Static or
+/// not does not matter here (from Pulsar Split's manager, merge step 9).
+pub fn order_lan(list: Vec<(String, std::net::Ipv4Addr)>) -> Vec<String> {
+    let mut v: Vec<(bool, std::net::Ipv4Addr)> =
+        list.into_iter().filter(|(_, ip)| ip.is_private()).map(|(n, ip)| (is_virtual_adapter(&n), ip)).collect();
+    v.sort();
+    let mut out: Vec<String> = Vec::new();
+    for (_, ip) in v {
+        let s = ip.to_string();
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// [`order_lan`] over the addresses [`list`] reads.
+pub fn lan_addresses() -> Result<Vec<String>, seat_proto::ProtoError> {
+    let list = list()?
+        .into_iter()
+        .filter_map(|a| a.address.parse::<std::net::Ipv4Addr>().ok().map(|ip| (a.adapter, ip)))
+        .collect();
+    Ok(order_lan(list))
+}
+
 #[cfg(not(windows))]
 pub fn list() -> Result<Vec<LocalAddress>, seat_proto::ProtoError> {
     Ok(Vec::new())
@@ -113,6 +147,19 @@ mod tests {
         assert!(!offerable([127, 0, 0, 1]));
         assert!(!offerable([169, 254, 3, 4]));
         assert!(!offerable([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn physical_adapters_come_first() {
+        let ip = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+        let got = order_lan(vec![
+            ("vEthernet (Default Switch)".into(), ip("172.20.0.1")),
+            ("Wi-Fi".into(), ip("192.168.1.20")),
+            ("Ethernet".into(), ip("10.0.0.5")),
+            ("Ethernet 2".into(), ip("8.8.8.8")),
+            ("Wi-Fi".into(), ip("192.168.1.20")),
+        ]);
+        assert_eq!(got, ["10.0.0.5", "192.168.1.20", "172.20.0.1"]);
     }
 
     #[test]

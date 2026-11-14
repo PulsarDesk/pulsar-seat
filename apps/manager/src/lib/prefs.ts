@@ -6,7 +6,7 @@
 import { ALL_SEATS_BITS } from './mask.ts';
 
 export type Theme = 'system' | 'light' | 'dark';
-export type Tab = 'seats' | 'basic' | 'advanced' | 'network' | 'status';
+export type Tab = 'seats' | 'basic' | 'advanced' | 'network' | 'remote' | 'status';
 
 export interface Prefs {
   scaleIcons: boolean;
@@ -69,7 +69,7 @@ export function parsePrefs(raw: string | null): Prefs {
   }
   out.flashSeconds = clampFlash(out.flashSeconds);
   if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
-  if (!['seats', 'basic', 'advanced', 'network', 'status'].includes(out.tab)) out.tab = 'seats';
+  if (!['seats', 'basic', 'advanced', 'network', 'remote', 'status'].includes(out.tab)) out.tab = 'seats';
   out.visibleSeats = out.visibleSeats >>> 0;
   return out;
 }

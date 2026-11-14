@@ -53,6 +53,8 @@
     moveAssignment: (from: DeviceKey, to: DeviceKey) => void;
     /** Per-seat IP address dialog (network tab). */
     ipBinding?: (seat: SeatNumber) => void;
+    /** Open a remote seat on the remote seats tab. */
+    openRemote?: (seat: SeatNumber) => void;
   }
 
   interface Props {
@@ -81,7 +83,11 @@
   const draft = $derived(store.draft);
   const canvas = $derived(store.canvas);
   const seats = $derived(draft?.seats ?? []);
-  const visibleSeats = $derived(seats.filter((s) => s.number === 1 || M.contains(store.prefs.visibleSeats, s.number)));
+  // Devices go to local seats only; remote seats are listed below the canvas.
+  const visibleSeats = $derived(
+    seats.filter((s) => (s.kind ?? 'local') === 'local' && (s.number === 1 || M.contains(store.prefs.visibleSeats, s.number)))
+  );
+  const remoteSeats = $derived(seats.filter((s) => s.kind === 'remote'));
   const small = $derived(store.prefs.scaleIcons && (globalThis.innerWidth ?? 1200) < 1100);
   const issueDevices = $derived(new Set(store.issues.concat(store.serverIssues).filter((i) => i.severity !== 'warning').map((i) => i.device)));
   const advice = $derived(draft ? seatOneFirstMonitorAdvice(draft, store.devices) : null);
@@ -323,6 +329,7 @@
         {small}
       >
         {#snippet badges()}
+          <span class="badge kind" title={t.seatKind.localHint}>{t.seatKind.local}</span>
           {#if s.account.kind !== 'logon_screen'}<span class="badge" title={t.account.autoLogon}>{s.account.user}</span>{/if}
           {#if store.view?.password_set.includes(s.number)}<span class="badge" title={t.account.passwordSet}>•••</span>{/if}
           {#if store.view?.password_failing.includes(s.number)}<span class="badge bad" title={t.account.passwordFailing}>!</span>{/if}
@@ -348,6 +355,25 @@
       </Container>
     {/each}
   </div>
+  {#if remoteSeats.length}
+    <section class="remote-list" aria-label={t.seatKind.remoteList}>
+      <h2>{t.seatKind.remoteList}</h2>
+      <p class="hint">{t.seatKind.remoteListHint}</p>
+      <ul>
+        {#each remoteSeats as s (s.number)}
+          {@const rt = runtimeOf(s.number)}
+          <li data-testid="remote-seat">
+            <span class="badge kind remote" title={t.seatKind.remoteHint}>{t.seatKind.remote}</span>
+            <strong>{s.number}. {s.name}</strong>
+            {#if rt}<span class="hint">{seatLabel(rt.state)}</span>{/if}
+            {#if commands.openRemote}
+              <button type="button" onclick={() => commands.openRemote?.(s.number)}>{t.seatKind.open}</button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
   <p class="hint">{t.advanced.gpuHint}</p>
 {:else if !store.serviceDown}
   <p class="hint">{t.loading}</p>
@@ -493,6 +519,21 @@
 {/if}
 
 <style>
+  .remote-list ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .remote-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .toolbar {
     display: flex;
     gap: 0.5rem;

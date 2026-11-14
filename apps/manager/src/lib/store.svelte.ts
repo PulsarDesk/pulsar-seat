@@ -18,6 +18,7 @@ import {
   type Canvas
 } from './model.ts';
 import { loadPrefs, savePrefs, type Prefs } from './prefs.ts';
+import { issueError, mergeRemoteInto } from './remote/model.ts';
 import type {
   AppInfo,
   BackendReport,
@@ -490,6 +491,26 @@ export class ManagerStore {
         this.draft = { ...d, revision: r.revision, settings: { ...d.settings, updates: u } };
       }
     });
+  }
+
+  /**
+   * Remote seat edit (remote seats tab, merge-plan.md step 9): validated and applied at
+   * once on top of the saved config, like the update opt-in; an unsaved draft keeps its
+   * other edits and gets the same change. Throws the error the remote pages show
+   * (`remote/model.ts` `issueError`) instead of toasting it.
+   */
+  async applyRemote(f: (c: Config) => Config): Promise<Config> {
+    if (!this.saved) throw { code: 'service_unavailable', message: 'config not loaded' };
+    const base = $state.snapshot(this.saved) as Config;
+    const next = f(clone(base));
+    const blocking = issueError(await this.api.validate(next));
+    if (blocking) throw blocking;
+    const r = await this.api.apply(next, base.revision, false);
+    this.saved = normalize({ ...next, revision: r.revision });
+    if (this.draft) this.draft = mergeRemoteInto($state.snapshot(this.draft) as Config, this.saved);
+    // The service fills ids, ports and client names: read them back.
+    await this.refreshConfig();
+    return this.saved;
   }
 
   async reset(): Promise<boolean> {

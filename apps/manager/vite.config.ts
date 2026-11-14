@@ -16,6 +16,13 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
-    setupFiles: ['src/lib/test/setup.ts']
+    setupFiles: ['src/lib/test/setup.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,svelte}'],
+      exclude: ['src/**/*.test.ts', 'src/lib/test/**'],
+      reporter: ['text-summary', 'html', 'lcov'],
+      reportsDirectory: '../../target/coverage/manager'
+    }
   }
 });

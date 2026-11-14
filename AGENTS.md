@@ -13,8 +13,8 @@ ARM64** (the remote kind's per-process shim is x64 / x86 only). No payment, no a
 no telemetry.
 
 Until the merge is done, remote-kind code keeps its own docs under `docs/split/`. Its
-`split-*` crates are merged into the `seat-*` crates (steps 4-8, done); apps and installer
-pieces follow at steps 9-10.
+`split-*` crates are merged into the `seat-*` crates (steps 4-8, done) and its manager into
+`apps/manager` (step 9, done); installer pieces follow at step 10.
 
 This file is an **index only**. Facts live in the files below. Keep it short; add a row
 here when you add a doc.
@@ -69,7 +69,7 @@ here when you add a doc.
 | Test coverage: commands, ARM64 workaround, baseline | [docs/split/agents/coverage.md](docs/split/agents/coverage.md) |
 | Open spec / design questions | [docs/split/agents/open-questions.md](docs/split/agents/open-questions.md) |
 | Split status and journal until the import (history, not updated) | [docs/split/agents/status.md](docs/split/agents/status.md), [docs/split/journal.md](docs/split/journal.md) |
-| Remote manager (temporary, merged at step 9) | `apps/split-manager/` |
+| Remote seat pages of the one manager (from Split's manager, step 9) | `apps/manager/src/lib/remote/` ([apps/manager/README.md](apps/manager/README.md)) |
 | Remote installer pieces (temporary, merged at step 10) | [installer/split/README.md](installer/split/README.md) |
 | Per-process HID shim (separate x64 / x86 workspace) | [shim/README.md](shim/README.md) |
 | Package READMEs (build, test, untested parts, notices) | `crates/*/README.md`, `drivers/*/README.md` |

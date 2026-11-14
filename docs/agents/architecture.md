@@ -60,7 +60,7 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | (removed) `crates/split-display` | lib | `DisplayBackend` (rdp_session / vdd / pulsar_idd) | step 8 (done 2026-11-14): `seat_display::remote` + `seat_display::SeatDisplayBackend` (§10.6) |
 | `crates/seat-audio` | lib | the one endpoint-discovery crate for both kinds (`cfgmgr`, endpoint-id model) + the remote kind's Remote Audio rules and stream-server keys (was `split-audio`) | step 8 (done 2026-11-14, §10.6) |
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
-| `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 into `apps/manager` |
+| (removed) `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 (done 2026-11-14): `apps/manager/src/lib/remote/` (§10.7) |
 | `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
 | `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | one own IddCx driver later ([../../drivers/README.md](../../drivers/README.md)); build at step 10 |
 | `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 into one MSI |
@@ -1154,11 +1154,10 @@ Events (topic mapping, `seat_proto::remote::map_legacy_event`):
 
 `poll_events` stays for simple clients.
 
-Transitional (removed at step 9): `seat_proto::remote::legacy` keeps Split's v2 request and
-response enums (stamped with `PROTOCOL_VERSION` 3). Since step 6 no pipe serves them: the
-remote seat worker uses them internally (`crate::remote::to_legacy` / `from_legacy`) and
-`apps/split-manager` still compiles against them (it has no service to talk to until step
-9). Split's `Controller` / `Platform` live in `crates/seat-service/src/remote/control.rs`.
+Transitional: `seat_proto::remote::legacy` keeps Split's v2 request and response enums
+(stamped with `PROTOCOL_VERSION` 3). Since step 6 no pipe serves them: only the remote seat
+worker uses them internally (`crate::remote::to_legacy` / `from_legacy`). The manager speaks
+protocol 3 since step 9 (§10.7). Split's `Controller` / `Platform` live in `crates/seat-service/src/remote/control.rs`.
 Split's `ConfigStore` for records is `seat_core::remote::store` (the service implements it
 over the config document; `MemoryStore` / `FileStore` stay for tests).
 
@@ -1360,3 +1359,42 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   `reason`). Adapters: `Local`, `Remote`, `statuses_for`. Both kinds have a `pulsar_idd`
   (`seat-idd` and `split-idd`). The direction is one own IddCx driver later, signed once
   (`drivers/README.md`). The two C++ drivers are not merged now.
+
+### 10.7 One manager (step 9, done 2026-11-14)
+
+`apps/manager` is the one manager for both kinds. Pulsar Split's manager pages moved to
+`apps/manager/src/lib/remote/` (with git history); `apps/split-manager` and its Tauri crate
+`pulsar-split-manager` are gone.
+
+- **Tabs.** The Seat shell (tray, wizard, subscription connection, save / discard bar) gains
+  the tab **Uzak koltuklar** (`remote/components/RemoteTab.svelte`, Split's old main page):
+  the remote seat list with avatars, the seat editor (`SeatPage`, GPU warnings, apps,
+  credential test), the pair dialog with QR code, host page (multi-session, experimental
+  wrapper, audio cleanup), logs, DXVK games and remote settings (isolation, process
+  patching, pad / display backend). The seats tab shows each seat's kind: local seats get a
+  `Yerel` badge on their device container, remote seats have no container (devices go to
+  local seats only) and are listed under the canvas with an `Uzak` badge and an edit button.
+- **Protocol.** Every remote request is a protocol 3 body over the one pipe
+  (`remote/api.ts`, `service_request`, `hello` with protocol 3). Split's `list_seats` /
+  `create_seat` / `update_seat` / `delete_seat` / `set_global_settings` became config edits:
+  `ManagerStore.applyRemote` validates and applies them at once on top of the saved config
+  (like the update opt-in) and merges the remote part into an unsaved draft, so local edits
+  stay unsaved. Validation errors come back as Split's error codes (`remote_seat_invalid`
+  issue `reason` + `field`, `remote/model.ts` `issueError`). Seat start / stop, passwords and
+  reboot use the Seat requests (`start_seats`, `stop_seat`, `set_seat_password`,
+  `request_reboot`).
+- **Mapping** (`remote/model.ts`, tested in `model.test.ts`): Split's record of a seat is
+  built from `SeatConfig` + `SeatConfig.remote` (`toRecord` / `applyRecord`, mirrors
+  `RemoteSeat::to_record` / `RemoteSeatRecord::to_seat`; `id`, `rdp_client_name` and
+  `last_mode` stay service-owned). The seat status of the pages comes from the protocol 3
+  runtime (inverse of `seat_service::remote::runtime_of`), and the pair dialog's long poll
+  is `poll_events` with topics `stream` + `status`, mapped back to Split's event kinds
+  (inverse of `map_legacy_event`). The pair dialog polls; the subscription thread keeps its
+  topics, because `stream` is admin only and would refuse a standard user's subscription.
+- **Gone with Split's Tauri crate:** service start / stop / restart through the SCM (the one
+  service belongs to the product; the remote settings page shows reachability only) and the
+  `tauri-plugin-dialog` file picker (the pages use Seat's `pick_program`). Kept from it: the
+  LAN address order for the pair dialog (`net::order_lan`, Tauri command `lan_addresses`).
+- **Copy.** One `i18n.ts`: Split's copy is its `rt` object plus `remoteErrorMessage`,
+  `remoteFailureText`, `remoteFieldErrorText`; the remote components import those under
+  their old names. Split's styles are `remote/remote.css`, scoped to `.remote-ui`.

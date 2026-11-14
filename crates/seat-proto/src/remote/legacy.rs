@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pulsar Split's protocol 2 request and response enums. Since merge step 6 no pipe serves
-//! them: `seat-service`'s remote seat worker uses them internally and `apps/split-manager`
-//! compiles against them until step 9.
+//! them: only `seat-service`'s remote seat worker uses them internally. The one manager
+//! speaks protocol 3 since step 9.
 //! **Transitional**: new code uses the v3 [`crate::RequestBody`] on the one Pulsar Seat
 //! pipe (architecture.md section 10.2). Frames are stamped with [`crate::PROTOCOL_VERSION`]
 //! (3), the one protocol version of the product.

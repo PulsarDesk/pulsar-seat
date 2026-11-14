@@ -6,6 +6,10 @@ Installer and uninstaller for Pulsar Split (spec `90-install.md`, contract
 scripts call lives in `crates/seat-setup` (service sub-commands `install`, `reconcile`,
 `uninstall`, `check-coexistence`; see its README).
 
+**Since merge step 9 `apps/split-manager` is gone** (its pages are in `apps/manager`). The
+Tauri bundle configs and the `bun run installer:*` scripts below still name it; step 10
+re-points them at the one MSI built from `apps/manager`. Until then they do not run.
+
 ## Files
 
 | File | What it does |

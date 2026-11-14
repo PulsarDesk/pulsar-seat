@@ -306,6 +306,27 @@ mod tests {
         assert!(matches!(read_sub_frame(&mut std::io::Cursor::new(buf)), SubFrame::Closed));
     }
 
+    /// From Pulsar Split's manager (merge step 9): the protocol 3 requests that carry a
+    /// secret go through the same fail-closed server check as every other request, and their
+    /// secret never shows in a debug print (the manager logs request errors).
+    #[test]
+    fn secret_requests_fail_closed_and_never_print_the_secret() {
+        let seat = seat_core::SeatNumber::new(2).unwrap();
+        let s = |v: &str| seat_core::Secret::new(v);
+        let bodies = [
+            RequestBody::SetSeatPassword { seat, password: Some(s("hunter2-x")) },
+            RequestBody::SubmitPin { seat, pin: s("hunter2-x"), client_name: "tv".into(), request_id: None },
+            RequestBody::SetSeatConnectPassword { seat, password: s("hunter2-x") },
+            RequestBody::AnswerRelayAuth { seat, password: s("hunter2-x"), totp: Some(s("hunter2-x")) },
+        ];
+        for b in &bodies {
+            assert!(!format!("{b:?}").contains("hunter2-x"), "{b:?}");
+        }
+        let e = untrusted("session 2");
+        assert_eq!(e.code, ErrorCode::AccessDenied);
+        assert_eq!(e.reason.as_deref(), Some("pipe_server_untrusted"));
+    }
+
     #[test]
     fn hello_identifies_the_manager() {
         let RequestBody::Hello(h) = hello_body() else { panic!() };

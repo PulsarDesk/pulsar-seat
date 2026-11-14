@@ -118,6 +118,12 @@ async fn list_ipv4_addresses() -> Result<Vec<net::LocalAddress>, ProtoError> {
     tauri::async_runtime::spawn_blocking(net::list).await.map_err(join_err)?
 }
 
+/// Private IPv4 addresses for the remote seat pairing dialog (physical adapters first).
+#[tauri::command]
+async fn lan_addresses() -> Result<Vec<String>, ProtoError> {
+    tauri::async_runtime::spawn_blocking(net::lan_addresses).await.map_err(join_err)?
+}
+
 /// User pictures of one category (spec 10 §3.1, §7.9).
 #[tauri::command]
 async fn list_user_pictures(category: String) -> Result<Vec<pictures::UserPicture>, ProtoError> {
@@ -345,6 +351,7 @@ pub fn run() {
             set_tray_visible,
             quit_app,
             list_ipv4_addresses,
+            lan_addresses,
             list_user_pictures,
             pick_program,
             pick_program_folder,

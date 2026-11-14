@@ -7,4 +7,3 @@ build/
 drivers/*/ARM64/
 drivers/*/x64/
 # Split manager NSIS sidecars (installer/split/README.md)
-apps/split-manager/src-tauri/binaries/

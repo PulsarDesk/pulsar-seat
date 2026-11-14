@@ -91,9 +91,9 @@ jobs:
         run: cargo test --locked --target ${{ matrix.target }}
       - name: Clippy
         run: cargo clippy --locked --target ${{ matrix.target }} --all-targets --features seat-core/mock -- -D warnings
-      # The managers (Tauri) are not default members: their build scripts need the built
-      # frontend (frontendDist ../build), so build those first, then test + clippy them here.
-      # apps/split-manager is the remote-seat manager until merge-plan.md step 9.
+      # The manager (Tauri) is not a default member: its build script needs the built
+      # frontend (frontendDist ../build), so build that first, then test + clippy it here.
+      # One manager for both seat kinds since merge-plan.md step 9.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -102,7 +102,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($app in "apps/manager", "apps/split-manager") {
+          foreach ($app in "apps/manager") {
             Push-Location $app
             bun run build
             $code = $LASTEXITCODE
@@ -112,8 +112,8 @@ jobs:
       - name: Manager (Rust) test + clippy
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          cargo test --locked --target ${{ matrix.target }} -p pulsar-seat-manager -p pulsar-split-manager
-          cargo clippy --locked --target ${{ matrix.target }} -p pulsar-seat-manager -p pulsar-split-manager --all-targets -- -D warnings
+          cargo test --locked --target ${{ matrix.target }} -p pulsar-seat-manager
+          cargo clippy --locked --target ${{ matrix.target }} -p pulsar-seat-manager --all-targets -- -D warnings
       # Own workspace (crates/seat-compat/apihelper): not covered by the root commands.
       - name: App API helper test + clippy (native)
         run: |
@@ -179,13 +179,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Manager check / test / build
         working-directory: apps/manager
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          bun run check
-          bun run test
-          bun run build
-      - name: Split manager check / test / build
-        working-directory: apps/split-manager
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           bun run check

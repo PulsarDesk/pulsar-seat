@@ -2,13 +2,11 @@
 # Pulsar Seat monorepo. Layout and ownership: docs/agents/architecture.md.
 [workspace]
 resolver = "3"
-# Two managers until merge-plan.md step 9: apps/manager (local seats) and
-# apps/split-manager (remote seats, from Pulsar Split). shim/, drivers/split-pad and
-# crates/seat-compat/apihelper are separate workspaces.
-members = ["crates/*", "apps/manager/src-tauri", "apps/split-manager/src-tauri"]
-# `cargo build` / `cargo test` at the root cover every crate but not the Tauri managers:
-# they need their frontend built first (`bun run build` in apps/manager and
-# apps/split-manager, or `bun tauri build`).
+# One manager for both seat kinds (apps/manager, merge-plan.md step 9). shim/,
+# drivers/split-pad and crates/seat-compat/apihelper are separate workspaces.
+members = ["crates/*", "apps/manager/src-tauri"]
+# `cargo build` / `cargo test` at the root cover every crate but not the Tauri manager: it
+# needs its frontend built first (`bun run build` in apps/manager, or `bun tauri build`).
 default-members = [
     "crates/seat-proto",
     "crates/seat-core",
