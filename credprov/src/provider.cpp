@@ -307,7 +307,9 @@ IFACEMETHODIMP Credential::GetFieldState(DWORD field, CREDENTIAL_PROVIDER_FIELD_
     } else if (kind_ == Kind::Seat && (field == kFieldPassword || field == kFieldSubmit)) {
         *state = CPFS_DISPLAY_IN_SELECTED_TILE;
         if (field == kFieldPassword) *interactive = CPFIS_FOCUSED;
-    } else if (kind_ == Kind::Switch && field >= kFieldLink0) {
+    } else if (field >= kFieldLink0) {
+        // Both kinds: Windows 11 lists only tiles of the locked / selected user, so a
+        // separate user-less switch tile was never reachable there (VM test 2026-11-15).
         if (field - kFieldLink0 < info_.switchTargets.size()) *state = CPFS_DISPLAY_IN_SELECTED_TILE;
     }
     return S_OK;
@@ -369,7 +371,7 @@ void Credential::SetTitle(const std::wstring& text) {
 }
 
 IFACEMETHODIMP Credential::CommandLinkClicked(DWORD field) {
-    if (kind_ != Kind::Switch || field < kFieldLink0 || field >= kFieldCount) return E_INVALIDARG;
+    if (field < kFieldLink0 || field >= kFieldCount) return E_INVALIDARG;
     size_t i = field - kFieldLink0;
     if (i >= info_.switchTargets.size()) return E_INVALIDARG;
     const int seat = info_.switchTargets[i];
@@ -466,7 +468,9 @@ IFACEMETHODIMP Credential::ReportResult(NTSTATUS status, NTSTATUS subStatus, LPW
 IFACEMETHODIMP Credential::GetUserSid(LPWSTR* sid) {
     if (!sid) return E_POINTER;
     *sid = nullptr;
-    if (kind_ == Kind::Seat && !info_.userSid.empty()) return DupString(info_.userSid.c_str(), sid);
+    // Both kinds belong to the seat account's user tile when LogonUI lists it (the switch
+    // tile too: a user-less tile does not show on a lock screen).
+    if (!info_.userSid.empty()) return DupString(info_.userSid.c_str(), sid);
     // Not tied to a user tile ("other user").
     return S_FALSE;
 }
@@ -562,7 +566,8 @@ void Provider::Rebuild() {
             tiles_.push_back(new Credential(Credential::Kind::Seat, cpus_, info_, notifier_));
             autoDefault_ = info_.autoSubmit;
         }
-        if (info_.reachable && info_.seat != 0 && !info_.switchTargets.empty()) {
+        // The seat tile carries the links itself; a separate switch tile only without it.
+        if (tiles_.empty() && info_.reachable && info_.seat != 0 && !info_.switchTargets.empty()) {
             tiles_.push_back(new Credential(Credential::Kind::Switch, cpus_, info_, notifier_));
         }
     } catch (...) {

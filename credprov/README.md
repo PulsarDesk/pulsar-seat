@@ -52,11 +52,13 @@ CLSIDs (also in `crates/seat-session/src/credprov.rs`): provider
   **Untested on hardware**: `CredentialsChanged` from a worker thread; whether LogonUI
   re-runs the filter then (if not, the other providers stay visible during a late
   auto-logon — harmless, the default tile auto-submits).
-- **Switch tile** (logon and lock screen of a seat session, when other seats exist):
-  "Koltuk değiştir" with one command link per seat ("Koltuk 3'e geç") →
-  `credprov_switch`. Seat 1 is not offered: under this backend seat 1 is whatever session
-  holds the console and the backend keeps no record of its earlier session to connect back
-  to; Windows' own user tiles reach its user. Still open (status.md).
+- **Switch links** (logon and lock screen of a seat session, when other seats exist): one
+  command link per seat ("Koltuk 3'e geç") → `credprov_switch`. They sit in the seat tile
+  when it exists; otherwise in a "Koltuk değiştir" tile tied to the seat user's SID when
+  LogonUI lists it (else an "other user" tile). Windows 11 shows only the tiles of the
+  locked / selected user, so a user-less switch tile was never reachable there (VM test
+  2026-11-15, Win11 26300 ARM64). Seat 1 is offered while the backend reports its own
+  session waiting off the console (`console_seat_away`).
 - **Filter**: in the logon scenario only, and only when the service says `hide_others`
   (an armed one-time logon in this session), the answer gives a seat tile (account known:
   `SeatTileWillExist`, the same predicate the provider uses) and our provider is in the

@@ -167,6 +167,37 @@ void LinkText() {
     Check(pulsar::SwitchLinkText(64) == L"Koltuk 64'e geç", "64'e");
 }
 
+// VM test 2026-11-15: the switch links must be reachable from the seat tile (Windows 11
+// lists only tiles of the locked / selected user), and the switch tile belongs to the seat
+// user's tile when the SID is known.
+void TileLinks() {
+    pulsar::SessionInfo info;
+    info.reachable = true;
+    info.seat = 2;
+    info.account = L"PC\\seat1";
+    info.userSid = L"S-1-5-21-1-2-3-1001";
+    info.switchTargets = {1, 3};
+    using K = pulsar::Credential::Kind;
+    for (K kind : {K::Seat, K::Switch}) {
+        auto* c = new pulsar::Credential(kind, CPUS_LOGON, info, nullptr);
+        CREDENTIAL_PROVIDER_FIELD_STATE st = CPFS_HIDDEN;
+        CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE is = CPFIS_NONE;
+        c->GetFieldState(pulsar::kFieldLink0, &st, &is);
+        Check(st == CPFS_DISPLAY_IN_SELECTED_TILE, kind == K::Seat ? "seat tile shows link 1" : "switch tile shows link 1");
+        c->GetFieldState(pulsar::kFieldLink0 + 2, &st, &is);
+        Check(st == CPFS_HIDDEN, "unused link hidden");
+        LPWSTR sid = nullptr;
+        Check(c->GetUserSid(&sid) == S_OK && sid && std::wstring(sid) == info.userSid, "tile tied to the seat user");
+        CoTaskMemFree(sid);
+        c->Release();
+    }
+    info.userSid.clear();
+    auto* c = new pulsar::Credential(K::Switch, CPUS_UNLOCK_WORKSTATION, info, nullptr);
+    LPWSTR sid = nullptr;
+    Check(c->GetUserSid(&sid) == S_FALSE && !sid, "no SID: other-user tile");
+    c->Release();
+}
+
 void InertOutsideLogonUI() {
     Check(!pulsar::InLogonUI(), "this process is not LogonUI");
     ICredentialProvider* p = nullptr;
@@ -211,6 +242,7 @@ int wmain() {
     FilterDecision();
     SessionDecisions();
     LinkText();
+    TileLinks();
     InertOutsideLogonUI();
     std::printf("%d failed\n", g_failed);
     return g_failed == 0 ? 0 : 1;
