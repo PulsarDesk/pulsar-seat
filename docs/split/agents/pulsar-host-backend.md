@@ -208,6 +208,33 @@ Nobody sits at a remote seat, so the operator at the manager is the one who appr
 If no manager is open, a request times out (`timeout`); paired devices and the
 password path still work (OQ pulsar-host-6).
 
+### 3.8 Microphone (additive, 2026-11-14; service side implemented, `pulsar-host` side not built)
+
+Spec/remote 70 §5.1. **Additive:** protocol stays `1`, nothing above changes, and a host
+without the capability behaves exactly as before. It still needs a pulsar-desktop change
+(§6 item 20); the request is in `docs/agents/status.md`.
+
+| Item | Value |
+| --- | --- |
+| Capability | `mic` in the `hello` answer: this `pulsar-host` can forward a Pulsar client's microphone |
+| `config.apply` key | `mic` (bool). The service sends it **only** as `true`, only to a host with `mic`, only for a seat whose microphone switch is on. Missing = off. Older hosts never see the key |
+| Pipe | `\.\pipe\PulsarSplit\seat\<seat-id>\pulsar-host-mic`. Server = the service, created **before** the launch with the same rules as §3.1 (first instance, `PIPE_REJECT_REMOTE_CLIENTS`, byte mode, one instance, `HOST_PIPE_SDDL`, client = the launched pid + creation time). Created only for seats with the mic on. A failure to create it costs the mic only, the seat starts |
+| Direction | `pulsar-host` writes, the service reads. No request / response, no JSON |
+| Framing | u32 LE length + payload (same length prefix as §3.1; payload at most 32 KiB). Payload = one kind byte + data: `0x01` start (1 byte channels, 1 or 2), `0x02` pcm (signed 16-bit LE, interleaved, **48 kHz**), `0x03` stop. Source of truth: `seat_core::remote::mic` |
+| When | `start` when a client's mic opens (one client per seat, `max_clients` 1), pcm frames of about 10–20 ms as they are decoded, `stop` when the mic closes or the client leaves. The host connects to the pipe once, after `config.apply` with `mic: true`, and keeps it open |
+| Loss | A broken mic pipe ends the mic only (the service sends `stop` to the seat). A bad frame closes the pipe. The control pipe is unaffected. The host must never block its stream on the mic pipe: drop frames if a write would block |
+| Service side | the frames go to the seat's headless hold on its stdin (after the password frame; the hold runs with `--audio-capture`, so `INFO_AUDIOCAPTURE` is set and MS-RDPEAI `AUDIO_INPUT` is open) and from there into the seat session's capture endpoint. Queue at most about 1 s; more is dropped |
+| Status | `seat_runtime.stream.mic`: `off` / `unsupported` (host without `mic`) / `waiting` / `connected` / `failed` / `closed` |
+
+Why a second pipe: the service reads the control pipe about once a second (§3.4 events
+are polled), so audio on it would arrive in 1 s bursts and could fill the pipe buffer and
+block the host's event writes.
+
+**HYPOTHESIS (untested, no host and no RDP target here):** Windows creates the seat
+session's capture endpoint when the hold sets `INFO_AUDIOCAPTURE`; the server picks one of
+the offered 48 kHz formats; apps in the seat see a microphone; latency stays low enough for
+voice chat.
+
 ## 4. Capture in a non-console RDP seat session
 
 Known (pulsar-desktop today, console or user sessions only):
@@ -329,6 +356,7 @@ creators per machine.
 | 17 | Logging to `--log` path, redacted (no OTP, passwords, keys, relay keys); no stdout console | `desk:src-tauri/src/logging.rs` |
 | 18 | Ignore dev env switches in split mode (`PULSAR_NO_ELEVATE`, `PULSAR_MMCSS`, forced capture source, test hooks) | `main.rs`, capture crate |
 | 19 | Release artefact `pulsar-host.exe` (x64 + ARM64) with SHA-256 for Pulsar Split's manifest; GPL-3 source offer as for the app | pulsar-desktop CI |
+| 20 | Microphone (§3.8, 2026-11-14): announce `mic`; on `config.apply` `mic: true` decode the client's mic stream to 48 kHz s16 PCM and write it to the mic pipe of §3.8 (start / pcm / stop frames), never blocking the stream. The Pulsar client must also send its mic (a client-side change; no new port, inside the existing session) | `pulsar-host`, pulsar-core client + host audio |
 
 The job object of `desk:src-tauri/src/job.rs` nests inside the service's seat job
 (Win8+ nested jobs), so media children still die with `pulsar-host`.

@@ -17,6 +17,7 @@
 
 use super::{os_err, wide, OwnedHandle, SecurityDescriptor};
 use crate::backend::pulsar::control::pipe_name;
+use crate::backend::pulsar::mic::mic_pipe_name;
 use crate::backend::pulsar::{HostPipe, HostPipeListener, HOST_PIPE_SDDL};
 use crate::control::PipeTransport;
 use crate::supervise::Launched;
@@ -46,28 +47,38 @@ struct WinHostPipe {
 impl HostPipeListener for WinHostPipes {
     fn create(&self, seat_id: &str) -> Result<Box<dyn HostPipe>, StreamError> {
         crate::validate_seat_id(seat_id)?;
-        let sd = SecurityDescriptor::from_sddl(HOST_PIPE_SDDL)?;
-        let sa = sd.attributes();
-        let name = wide(&pipe_name(seat_id));
-        // SAFETY: NUL-terminated name; security attributes outlive the call.
-        let h = unsafe {
-            CreateNamedPipeW(
-                name.as_ptr(),
-                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                1,
-                BUF,
-                BUF,
-                0,
-                &sa,
-            )
-        };
-        if h == INVALID_HANDLE_VALUE {
-            return Err(os_err("create pulsar-host pipe"));
-        }
-        let h = OwnedHandle::new(h).ok_or_else(|| os_err("create pulsar-host pipe"))?;
-        Ok(Box::new(WinHostPipe { h: Some(h) }))
+        create_at(&pipe_name(seat_id))
     }
+
+    fn create_mic(&self, seat_id: &str) -> Result<Box<dyn HostPipe>, StreamError> {
+        crate::validate_seat_id(seat_id)?;
+        create_at(&mic_pipe_name(seat_id))
+    }
+}
+
+/// One service-owned pipe instance at `name` (control or mic pipe, same rules).
+fn create_at(name: &str) -> Result<Box<dyn HostPipe>, StreamError> {
+    let sd = SecurityDescriptor::from_sddl(HOST_PIPE_SDDL)?;
+    let sa = sd.attributes();
+    let name = wide(name);
+    // SAFETY: NUL-terminated name; security attributes outlive the call.
+    let h = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            BUF,
+            BUF,
+            0,
+            &sa,
+        )
+    };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(os_err("create pulsar-host pipe"));
+    }
+    let h = OwnedHandle::new(h).ok_or_else(|| os_err("create pulsar-host pipe"))?;
+    Ok(Box::new(WinHostPipe { h: Some(h) }))
 }
 
 /// Creation time (FILETIME as u64) of `pid`, if it can be opened.

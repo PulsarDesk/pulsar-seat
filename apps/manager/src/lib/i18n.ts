@@ -36,6 +36,26 @@ export const t = {
   serviceDown: 'Pulsar Seat hizmetine ulaşılamıyor. Hizmetin kurulu ve çalışır durumda olduğundan emin olun; bir güvenlik yazılımı hizmeti durdurmuş olabilir.',
   adminNeeded: 'Bu işlem için yönetici olarak çalıştırmanız gerekir.',
   restartElevated: 'Yönetici olarak yeniden başlat',
+  // Service start / stop / restart (SCM, elevated manager only; restored from Split).
+  svc: {
+    label: 'Hizmet',
+    start: 'Hizmeti başlat',
+    stop: 'Hizmeti durdur',
+    restart: 'Hizmeti yeniden başlat',
+    starting: 'Hizmet başlatılıyor…',
+    stopping: 'Hizmet durduruluyor…',
+    restarting: 'Hizmet yeniden başlatılıyor…',
+    started: 'Hizmet başlatıldı.',
+    stopped: 'Hizmet durduruldu.',
+    restarted: 'Hizmet yeniden başlatıldı.',
+    needElevated: 'Hizmeti başlatmak ya da durdurmak için yöneticiyi yönetici olarak çalıştırın.',
+    pending: 'Hizmet şu an durum değiştiriyor, biraz bekleyin.',
+    notInstalled: 'Hizmet kurulu değil; Pulsar Seat’i yeniden kurun.',
+    confirmStopTitle: 'Hizmet durdurulsun mu?',
+    confirmStop: 'Çalışan bütün koltuklar (yerel ve uzak) kapanır. Koltuklardaki kaydedilmemiş işler kaybolabilir.',
+    confirmRestartTitle: 'Hizmet yeniden başlatılsın mı?',
+    confirmRestart: 'Çalışan bütün koltuklar kapanır. Hizmet açıldıktan sonra koltukları yeniden başlatmanız gerekebilir.'
+  },
   ok: 'Tamam',
   cancel: 'Vazgeç',
   close: 'Kapat',
@@ -1534,7 +1554,16 @@ export const rt = {
     streamAudio: 'Koltuğun sesini akışa ekle',
     microphone: 'Mikrofon (yalnızca Pulsar istemcisi)',
     microphoneHint:
-      'Ayar saklanır; mikrofon sesinin koltuğa aktarılması henüz yapılmadı (Uzak Masaüstü ses girişi kanalı ve Pulsar istemci akışı eksik). Moonlight mikrofon taşımaz.',
+      'Pulsar istemcisinin mikrofonu koltuktaki uygulamalara mikrofon olarak verilir. Mikrofonu destekleyen bir pulsar-host gerekir; Moonlight mikrofon taşımaz. Değişiklik koltuk yeniden başlatılınca geçerli olur.',
+    mic: 'Mikrofon',
+    micState: {
+      off: 'Kapalı',
+      unsupported: 'Bu pulsar-host sürümü mikrofonu desteklemiyor',
+      waiting: 'İstemci bağlantısı bekleniyor',
+      connected: 'Bağlı',
+      failed: 'Mikrofon kanalı açılamadı',
+      closed: 'Bağlı değil'
+    } as Record<string, string>,
     browse: 'Gözat…',
     pickAutostart: 'Başlatılacak programı seçin',
     gpuNoHardware: 'Donanım ekran kartı bulunamadı: görüntü işlemcide kodlanır, yayın yavaş olabilir.',
@@ -1712,12 +1741,13 @@ export const rt = {
     unknown: 'Bilinmiyor'
   } as Record<string, string>,
   audioLimitation: {
-    no_microphone: 'Mikrofon henüz koltuğa aktarılmıyor.',
+    no_microphone: 'Bu koltuktaki uygulamalar mikrofon göremez.',
     no_controller_audio: 'Kumanda hoparlörü / kulaklık girişi desteklenmiyor.',
     steam_remote_play_unsupported: 'Steam Remote Play koltuklarda desteklenmiyor.',
     surround_is_stereo: 'Çok kanallı ses stereo olarak aktarılır.',
     policy_blocks_audio: 'Grup ilkesi ses yönlendirmeyi engelliyor.',
-    mic_policy_blocked: 'Grup ilkesi mikrofon yönlendirmeyi engelliyor.'
+    mic_policy_blocked: 'Grup ilkesi mikrofon yönlendirmeyi engelliyor.',
+    mic_needs_pulsar: 'Mikrofon yalnızca Pulsar istemcisiyle çalışır; Moonlight mikrofon göndermez.'
   } as Record<string, string>,
   failure: {
     seat_booting: 'Bir koltuk açılıyor; bitince yeniden deneyin.',

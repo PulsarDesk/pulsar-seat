@@ -6,6 +6,14 @@
 //! `split-rdp-helper` (merge-plan.md step 7).
 
 use super::proto::{HelperArgs, HelperEvent, HelperFailure, hex20};
+use super::mic::{HOLD_CAPTURE_SPECS, HoldMic};
+use crate::audio::{CaptureHandler, CaptureSource};
+use crate::session::Patient;
+use ironrdp_dvc::DrdynvcClient;
+use ironrdp_rdpeai::client::RdpeaiClient;
+use ironrdp_svc::{SvcMessage, SvcProcessorMessages};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, channel};
 use ironrdp_connector::connection_activation::{ConnectionActivationFactory, ConnectionActivationState};
 use ironrdp_connector::sspi::generator::NetworkRequest;
 use ironrdp_connector::sspi::network_client::NetworkClient;
@@ -118,8 +126,9 @@ pub fn build_config(a: &HelperArgs, password: &str) -> Config {
         autologon: false,
         // false sets INFO_NOAUDIOPLAYBACK; spec 70 §2.6 wants the session's own endpoint.
         enable_audio_playback: true,
-        // INFO_AUDIOCAPTURE (mic, spec 70 §5.1): off, as with IronRDP 0.17 (no such field).
-        enable_audio_capture: false,
+        // INFO_AUDIOCAPTURE (mic, spec 70 §5.1): only with `--audio-capture`; the session then
+        // gets a capture endpoint fed by the service's mic frames (`super::mic`).
+        enable_audio_capture: a.audio_capture,
         performance_flags: PerformanceFlags::DISABLE_WALLPAPER
             | PerformanceFlags::DISABLE_FULLWINDOWDRAG
             | PerformanceFlags::DISABLE_MENUANIMATIONS
@@ -173,7 +182,8 @@ fn io_fail(what: &str, e: std::io::Error) -> Failure {
 
 /// Runs one connection until the server ends it. `Ok(reason)` = normal end. `emit` gets
 /// the `authenticated` and `connected` events (the caller prints them as JSON Lines).
-pub fn run(a: &HelperArgs, password: Zeroizing<String>, emit: &mut dyn FnMut(&HelperEvent)) -> Result<String, Failure> {
+/// `mic`: the `--audio-capture` feed (`None` without the flag).
+pub fn run(a: &HelperArgs, password: Zeroizing<String>, mic: Option<Arc<HoldMic>>, emit: &mut dyn FnMut(&HelperEvent)) -> Result<String, Failure> {
     let addr = SocketAddr::new(a.address, a.port);
     let tcp = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(|e| io_fail("connect", e))?;
     let _ = tcp.set_nodelay(true);
@@ -186,8 +196,23 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>, emit: &mut dyn FnMut(&He
     if a.audio_playback {
         connector.attach_static_channel(Rdpsnd::new(Box::new(DiscardAudio { formats: pcm_formats() })));
     }
-    // INFO_AUDIOCAPTURE (mic, spec 70 §5.1) stays off (`build_config`): `--audio-capture`
-    // is accepted and has no effect yet.
+    // Microphone (MS-RDPEAI over DRDYNVC): uplink data comes from the mic thread and is
+    // sent by the active loop, which then runs on a non-blocking socket.
+    let uplink = match (a.audio_capture, mic) {
+        (true, Some(mic)) => {
+            let (tx, rx) = channel::<Vec<SvcMessage>>();
+            let up = Box::new(move |_channel: u32, msgs: Vec<SvcMessage>| {
+                // The loop may be gone (connection ending): dropping the data is fine.
+                let _ = tx.send(msgs);
+                Ok(())
+            });
+            let src: Arc<dyn CaptureSource> = mic;
+            let dvc = DrdynvcClient::new().with_dynamic_channel(RdpeaiClient::new(Box::new(CaptureHandler::with_specs(src, &HOLD_CAPTURE_SPECS)), up));
+            connector.attach_static_channel(dvc);
+            Some(rx)
+        }
+        _ => None,
+    };
 
     let mut framed = Framed::new(tcp);
     let should = ironrdp_blocking::connect_begin(&mut framed, &mut connector).map_err(conn_err)?;
@@ -199,7 +224,7 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>, emit: &mut dyn FnMut(&He
         .use_sni(false)
         .build()
         .map_err(|e| (HelperFailure::Tls, e.to_string()))?;
-    let tls = tls.connect("localhost", tcp).map_err(|e| (HelperFailure::Tls, e.to_string()))?;
+    let tls = tls.connect("localhost", Patient(tcp)).map_err(|e| (HelperFailure::Tls, e.to_string()))?;
     let der = tls
         .peer_certificate()
         .map_err(|e| (HelperFailure::Tls, e.to_string()))?
@@ -238,11 +263,41 @@ pub fn run(a: &HelperArgs, password: Zeroizing<String>, emit: &mut dyn FnMut(&He
     (*emit)(&HelperEvent::Authenticated);
     // IronRDP does not surface the server's logon-info session id; the service discovers it.
     (*emit)(&HelperEvent::Connected { session_id: None });
-    let _ = framed.get_inner_mut().0.get_ref().set_read_timeout(None);
-    active(&mut framed, result)
+    let sock = &framed.get_inner_mut().0.get_ref().0;
+    let _ = sock.set_read_timeout(None);
+    if uplink.is_some() {
+        sock.set_nonblocking(true).map_err(|e| io_fail("socket", e))?;
+    }
+    active(&mut framed, result, uplink.as_ref())
 }
 
-fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::ConnectionResult) -> Result<String, Failure> {
+/// Hold: no reads complete for this long in the non-blocking reactivation = failure.
+const REACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn would_block(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
+}
+
+/// Sends the microphone data queued by the capture thread. `true` if anything was sent.
+fn drain_uplink<S: Read + Write>(framed: &mut Framed<S>, stage: &mut ActiveStage, uplink: Option<&Receiver<Vec<SvcMessage>>>) -> Result<bool, Failure> {
+    let Some(rx) = uplink else { return Ok(false) };
+    let mut sent = false;
+    while let Ok(msgs) = rx.try_recv() {
+        let frame = stage
+            .process_svc_processor_messages(SvcProcessorMessages::<DrdynvcClient>::new(msgs))
+            .map_err(|e| (HelperFailure::Protocol, e.to_string()))?;
+        framed.write_all(&frame).map_err(|e| io_fail("write", e))?;
+        sent = true;
+    }
+    Ok(sent)
+}
+
+/// `uplink` = mic data (socket non-blocking); `None` = blocking reads, nothing to send.
+fn active<S: Read + Write>(
+    framed: &mut Framed<S>,
+    result: ironrdp_connector::ConnectionResult,
+    uplink: Option<&Receiver<Vec<SvcMessage>>>,
+) -> Result<String, Failure> {
     let factory = result.activation_factory;
     let (io_ch, user_ch) = (factory.io_channel_id(), factory.user_channel_id());
     let mut size = result.desktop_size;
@@ -261,6 +316,12 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::Co
     loop {
         let (action, payload) = match framed.read_pdu() {
             Ok(x) => x,
+            Err(e) if uplink.is_some() && would_block(&e) => {
+                if !drain_uplink(framed, &mut stage, uplink)? {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                continue;
+            }
             // The server closes the socket on logoff / disconnect.
             Err(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted) => {
                 return Ok("connection closed by server".into());
@@ -275,6 +336,7 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::Co
                 ActiveStageOutput::DeactivateAll => {
                     let mut seq = factory.create();
                     let mut buf = WriteBuf::new();
+                    let deadline = std::time::Instant::now() + REACTIVATION_TIMEOUT;
                     loop {
                         let state = seq.connection_activation_state();
                         if matches!(state, ConnectionActivationState::Redirected { .. }) {
@@ -301,7 +363,16 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::Co
                         buf.clear();
                         let written = match seq.next_pdu_hint() {
                             Some(h) => {
-                                let pdu = framed.read_by_hint(h).map_err(|e| io_fail("reactivation read", e))?;
+                                // Non-blocking socket (mic on): wait for the whole PDU.
+                                let pdu = loop {
+                                    match framed.read_by_hint(h) {
+                                        Ok(p) => break p.to_vec(),
+                                        Err(e) if would_block(&e) && std::time::Instant::now() < deadline => {
+                                            std::thread::sleep(Duration::from_millis(1));
+                                        }
+                                        Err(e) => return Err(io_fail("reactivation read", e)),
+                                    }
+                                };
                                 seq.step(&pdu, framed.last_read_at(), &mut buf)
                             }
                             None => seq.step_no_input(&mut buf),
@@ -315,6 +386,8 @@ fn active<S: Read + Write>(framed: &mut Framed<S>, result: ironrdp_connector::Co
                 _ => {}
             }
         }
+        // Mic data also goes out while the server keeps the socket busy.
+        drain_uplink(framed, &mut stage, uplink)?;
     }
 }
 

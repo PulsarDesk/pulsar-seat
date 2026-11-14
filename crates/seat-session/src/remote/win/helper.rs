@@ -2,7 +2,12 @@
 //! Starts the headless session hold (`pulsar-seat-host.exe --headless-hold …`, which
 //! replaced `pulsar-split-rdp-helper.exe` at merge step 7) as a child of the service (spec 30 §5.2):
 //! argv without secrets, the password on an inherited anonymous stdin pipe (written once,
-//! then closed), JSON-Lines events read from a stdout pipe.
+//! then closed), JSON-Lines events read from a stdout pipe. With `--audio-capture` the
+//! stdin pipe stays open after the password and carries microphone frames
+//! (`seat_core::remote::mic`), written by one thread from a bounded queue.
+
+/// Mic frames queued for the hold (about 1 s of 20 ms frames); more are dropped.
+const MIC_QUEUE: usize = 50;
 
 use super::process::{SpawnSpec, creation_time, exit_code, spawn};
 use super::{owned, raw};
@@ -14,7 +19,9 @@ use seat_core::Secret;
 use std::io::BufRead;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use seat_core::remote::mic::MicFrame;
+use std::io::Write;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, channel, sync_channel};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
@@ -144,6 +151,8 @@ struct WindowsHelperChild {
     ct: u64,
     process: OwnedHandle,
     rx: Receiver<HelperEvent>,
+    /// `--audio-capture`: queue of the stdin writer thread.
+    mic: Option<SyncSender<Vec<u8>>>,
 }
 
 impl HelperChild for WindowsHelperChild {
@@ -169,6 +178,9 @@ impl HelperChild for WindowsHelperChild {
     }
     fn try_wait(&mut self) -> Option<i32> {
         exit_code(raw(&self.process))
+    }
+    fn send_mic(&mut self, frame: &MicFrame) -> bool {
+        self.mic.as_ref().is_some_and(|tx| tx.try_send(frame.to_wire()).is_ok())
     }
     fn kill(&mut self) {
         if exit_code(raw(&self.process)).is_none() {
@@ -220,12 +232,30 @@ impl HelperSpawner for WindowsHelperSpawner {
         drop(nul);
         sp.resume()?;
         let ct = creation_time(sp.process()).unwrap_or(0);
-        // Password: one frame, then close (EOF). Never argv/env/files/logs.
-        {
-            // SAFETY: we own the write end; File takes ownership and closes it.
-            let mut w = unsafe { std::fs::File::from_raw_handle(std::os::windows::io::IntoRawHandle::into_raw_handle(in_w)) };
-            write_password_frame(&mut w, password).map_err(SessionError::Io)?;
-        }
+        // Password: one frame, then close (EOF). Never argv/env/files/logs. With
+        // `--audio-capture` the pipe stays open for mic frames instead.
+        // SAFETY: we own the write end; File takes ownership and closes it.
+        let mut w = unsafe { std::fs::File::from_raw_handle(std::os::windows::io::IntoRawHandle::into_raw_handle(in_w)) };
+        write_password_frame(&mut w, password).map_err(SessionError::Io)?;
+        let mic = if args.audio_capture {
+            let (mtx, mrx) = sync_channel::<Vec<u8>>(MIC_QUEUE);
+            let pid = sp.pid;
+            std::thread::Builder::new()
+                .name(format!("rdp-helper-mic-{pid}"))
+                .spawn(move || {
+                    // Ends when the child closes stdin (exit) or the child object is dropped.
+                    for f in mrx {
+                        if w.write_all(&f).and_then(|()| w.flush()).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .map_err(SessionError::Io)?;
+            Some(mtx)
+        } else {
+            drop(w);
+            None
+        };
         let (tx, rx) = channel();
         // SAFETY: we own the read end.
         let reader = unsafe { std::fs::File::from_raw_handle(std::os::windows::io::IntoRawHandle::into_raw_handle(out_r)) };
@@ -249,6 +279,6 @@ impl HelperSpawner for WindowsHelperSpawner {
                 }
             })
             .map_err(SessionError::Io)?;
-        Ok(Box::new(WindowsHelperChild { pid, ct, process: sp.into_process(), rx }))
+        Ok(Box::new(WindowsHelperChild { pid, ct, process: sp.into_process(), rx, mic }))
     }
 }

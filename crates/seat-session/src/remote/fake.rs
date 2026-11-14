@@ -456,6 +456,10 @@ pub struct FakeChildState {
     pub pid: u32,
     pub exit: Mutex<Option<i32>>,
     pub killed: AtomicBool,
+    /// Started with `--audio-capture` (stdin kept open for mic frames).
+    pub mic_open: AtomicBool,
+    /// Mic frames written to the hold.
+    pub mic: Mutex<Vec<seat_core::remote::mic::MicFrame>>,
 }
 
 impl FakeChildState {
@@ -510,6 +514,13 @@ struct FakeChild {
 }
 
 impl HelperChild for FakeChild {
+    fn send_mic(&mut self, frame: &seat_core::remote::mic::MicFrame) -> bool {
+        if !self.st.mic_open.load(Ordering::SeqCst) || self.st.killed.load(Ordering::SeqCst) {
+            return false;
+        }
+        lock(&self.st.mic).push(frame.clone());
+        true
+    }
     fn pid(&self) -> u32 {
         self.st.pid
     }
@@ -566,6 +577,7 @@ impl HelperSpawner for FakeHelperSpawner {
         lock(&self.spawned).push((args.clone(), password.0.clone()));
         let mut children = lock(&self.children);
         let st = Arc::new(FakeChildState { pid: 4000 + children.len() as u32, ..Default::default() });
+        st.mic_open.store(args.audio_capture, Ordering::SeqCst);
         children.push(st.clone());
         Ok(Box::new(FakeChild {
             st,

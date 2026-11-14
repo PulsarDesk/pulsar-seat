@@ -62,11 +62,14 @@ integrator owns the manager's `i18n.ts`.
   `blocked_by_policy`; stream-server report (if any, not `unknown`); missing or
   non-present endpoint -> `no_device`; present endpoint without a report -> `unknown`.
 - `RdpAudioFlags.playback` is always true (never `INFO_REMOTECONSOLEAUDIO` /
-  `INFO_NOAUDIOPLAYBACK`); `capture` only when `MICROPHONE_PATH_AVAILABLE`, the mic
-  feature is on and capture is not blocked (today never: no silent capture endpoint).
-- Microphone: `MICROPHONE_PATH_AVAILABLE = false`. The end-to-end path (Pulsar client
-  extension stream + MS-RDPEAI channel in the helper, spec 70 §5.1) is not built, so
-  `no_microphone` is always listed.
+  `INFO_NOAUDIOPLAYBACK`); `capture` only when the seat's backend can deliver a mic
+  (`mic_path`, Pulsar seats only), the mic feature is on and capture is not blocked (no
+  capture endpoint that nobody can feed).
+- Microphone (2026-11-14, spec 70 §5.1): Pulsar seats only. `pulsar-host` mic pipe ->
+  service -> headless hold stdin -> MS-RDPEAI (pulsar-host-backend.md §3.8). `limitations`
+  / `seat_audio_status` take `mic_path`; a Sunshine seat with the switch on lists
+  `no_microphone` + `mic_needs_pulsar`. Untested on hardware (HYPOTHESIS: the session gets
+  a capture endpoint and apps see a microphone).
 - Stale-node removal (spec 70 §2.6) plans only non-present `SWD\MMDEVAPI\{3.0.f.<sid>}.{guid}`
   nodes whose session id came from `DEVPKEY_Device_SessionId` (never the id fallback),
   whose `guid` equals the suffix of a present, live, property-matched seat endpoint (read

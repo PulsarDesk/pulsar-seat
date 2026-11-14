@@ -16,6 +16,7 @@
 //! fails with `backend_missing`. Nothing falls back to Sunshine.
 
 pub mod control;
+pub mod mic;
 
 use self::control::{HostApp, HostConfig, HostMessage, HostSecrets, PulsarControl};
 use super::{PeerEvent, Prepared, SeatStream, SeatStreamSpec, StreamBackend};
@@ -89,6 +90,7 @@ pub fn host_config(seat: &RemoteSeatRecord) -> HostConfig {
         .into(),
         codecs: Vec::new(),
         max_clients: 1,
+        mic: false,
     }
 }
 
@@ -142,6 +144,8 @@ pub trait HostPipeListener: Send + Sync {
     /// Create the pipe (first instance only, remote clients rejected, [`HOST_PIPE_SDDL`]).
     /// Fails if the name already exists.
     fn create(&self, seat_id: &str) -> Result<Box<dyn HostPipe>, StreamError>;
+    /// The seat's mic pipe ([`mic::mic_pipe_name`]); same rules as [`Self::create`].
+    fn create_mic(&self, seat_id: &str) -> Result<Box<dyn HostPipe>, StreamError>;
 }
 
 pub trait HostPipe: Send {
@@ -252,7 +256,10 @@ impl StreamBackend for PulsarHostBackend {
             service_version: spec.service_version.to_string(),
             verify_binary: s.verify_binary,
         };
-        Ok(Prepared { stream: Box::new(PulsarSeat::new(seat_cfg, self.env.clone())), warnings })
+        let mic = spec.mic_sink.clone().map(mic::MicLink::new);
+        let mut stream = PulsarSeat::new(seat_cfg, self.env.clone());
+        stream.mic = mic;
+        Ok(Prepared { stream: Box::new(stream), warnings })
     }
 
     /// Secrets first and every step attempted: a firewall / journal error must not leave
@@ -327,6 +334,8 @@ pub struct PulsarSeat {
     relay_auth_required: bool,
     next_status_ms: u64,
     connect_deadline_ms: u64,
+    /// Microphone pipe (seat mic on) across restarts.
+    mic: Option<mic::MicLink>,
 }
 
 impl PulsarSeat {
@@ -348,11 +357,22 @@ impl PulsarSeat {
             relay_auth_required: false,
             next_status_ms: 0,
             connect_deadline_ms: 0,
+            mic: None,
         }
     }
 
     pub fn watchdog_phase(&self) -> Phase {
         self.watchdog.phase()
+    }
+
+    /// `off` (seat mic off) | `unsupported` (this pulsar-host has no `mic` capability) |
+    /// the link state (`connected` / `waiting` / `failed` / `closed`).
+    fn mic_state(&self) -> &'static str {
+        match &self.mic {
+            None => "off",
+            Some(_) if self.control.is_some() && !self.capabilities.iter().any(|c| c == mic::MIC_CAPABILITY) => "unsupported",
+            Some(m) => m.state(),
+        }
     }
 
     fn control(&mut self) -> Result<&mut Control, StreamError> {
@@ -399,6 +419,11 @@ impl PulsarSeat {
         self.control = None;
         self.pipe = None;
         let pipe = self.env.pipes.create(&self.cfg.seat_id)?;
+        if let Some(m) = self.mic.as_mut() {
+            // Also before the launch; a failure costs the mic only, not the seat.
+            let p = self.env.pipes.create_mic(&self.cfg.seat_id).map_err(|e| log::warn!("pulsar-host mic pipe not created: {e}")).ok();
+            m.rearm(p);
+        }
         let l = self.env.launcher.launch_system_in_session(&self.cfg.seat_id, session_id, &self.cfg.exe, &args, &self.cfg.cwd)?;
         log::info!("pulsar-host started (pid {})", l.pid);
         self.watchdog.on_started(now);
@@ -428,6 +453,9 @@ impl PulsarSeat {
     fn on_exited(&mut self, now: u64, code: Option<i32>, out: &mut Vec<StreamNotice>) {
         log::warn!("pulsar-host exited (code {code:?})");
         self.child = None;
+        if let Some(m) = self.mic.as_mut() {
+            m.shutdown();
+        }
         self.control = None;
         self.pipe = None;
         self.relay_auth_required = false;
@@ -465,7 +493,8 @@ impl PulsarSeat {
         let h = c.hello(&self.cfg.service_version)?;
         self.control = Some(c);
         self.send_secrets()?;
-        let host = self.cfg.host.clone();
+        let mut host = self.cfg.host.clone();
+        host.mic = self.mic.is_some() && h.capabilities.iter().any(|c| c == mic::MIC_CAPABILITY);
         let applied = self.control()?.config_apply(&host)?;
         if !applied.restart_needed.is_empty() {
             log::debug!("pulsar-host: settings needing a restart at first apply: {:?}", applied.restart_needed);
@@ -563,6 +592,9 @@ impl SeatStream for PulsarSeat {
 
     fn stop(&mut self) -> Result<(), StreamError> {
         self.watchdog.disarm();
+        if let Some(m) = self.mic.as_mut() {
+            m.shutdown();
+        }
         if let Some(t) = self.terminating.take()
             && self.env.launcher.wait_exit(&t, Duration::ZERO).is_none()
         {
@@ -620,6 +652,9 @@ impl SeatStream for PulsarSeat {
         }
         if self.child.is_some() && self.control.is_none() {
             self.try_connect(now, &mut out);
+        }
+        if let (Some(c), Some(m)) = (self.child, self.mic.as_mut()) {
+            m.poll(&c);
         }
         let mut broken: Option<StreamError> = None;
         let mut msgs = Vec::new();
@@ -679,6 +714,7 @@ impl SeatStream for PulsarSeat {
             "relay_id": self.relay_id,
             "node_port": self.cfg.host.node_port,
             "relay_auth_required": self.relay_auth_required,
+            "mic": self.mic_state(),
         })
     }
 

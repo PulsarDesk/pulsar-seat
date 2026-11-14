@@ -165,6 +165,8 @@ pub enum AudioLimitation {
     PolicyBlocksAudio,
     /// Mic feature on, but `fDisableAudioCapture` blocks it (spec 70 §5.1).
     MicPolicyBlocked,
+    /// Mic feature on, but the seat streams with Sunshine: Moonlight sends no mic.
+    MicNeedsPulsar,
 }
 
 impl AudioLimitation {
@@ -176,6 +178,7 @@ impl AudioLimitation {
             AudioLimitation::SurroundIsStereo => "surround_is_stereo",
             AudioLimitation::PolicyBlocksAudio => "policy_blocks_audio",
             AudioLimitation::MicPolicyBlocked => "mic_policy_blocked",
+            AudioLimitation::MicNeedsPulsar => "mic_needs_pulsar",
         }
     }
 
@@ -198,27 +201,30 @@ impl AudioLimitation {
             AudioLimitation::MicPolicyBlocked => {
                 "Grup ilkesi mikrofon yönlendirmesini engelliyor (fDisableAudioCapture)."
             }
+            AudioLimitation::MicNeedsPulsar => {
+                "Mikrofon yalnızca Pulsar istemcisiyle çalışır; Moonlight mikrofon göndermez."
+            }
         }
     }
 }
 
-/// Whether an end-to-end microphone path exists in this build. The Pulsar-client mic
-/// extension stream and the helper's MS-RDPEAI channel are not built yet (spec 70 §5.1),
-/// so this is `false` and `NoMicrophone` is always reported.
-pub const MICROPHONE_PATH_AVAILABLE: bool = false;
-
-/// Limitations for a seat, in a stable order.
-pub fn limitations(s: &SeatAudio, policy: &AudioPolicy) -> Vec<AudioLimitation> {
+/// Limitations for a seat, in a stable order. `mic_path`: the seat's stream backend can
+/// deliver a client microphone (only Pulsar: `pulsar-host` mic pipe -> headless hold ->
+/// MS-RDPEAI, spec 70 §5.1; Moonlight has no mic stream).
+pub fn limitations(s: &SeatAudio, policy: &AudioPolicy, mic_path: bool) -> Vec<AudioLimitation> {
     let mut v = Vec::new();
     if policy.playback_blocked() {
         v.push(AudioLimitation::PolicyBlocksAudio);
     }
-    let mic_works = MICROPHONE_PATH_AVAILABLE && s.microphone && !policy.capture_blocked();
+    let mic_works = mic_path && s.microphone && !policy.capture_blocked();
     if !mic_works {
         v.push(AudioLimitation::NoMicrophone);
     }
     if s.microphone && policy.capture_blocked() {
         v.push(AudioLimitation::MicPolicyBlocked);
+    }
+    if s.microphone && !mic_path {
+        v.push(AudioLimitation::MicNeedsPulsar);
     }
     v.push(AudioLimitation::NoControllerAudio);
     v.push(AudioLimitation::SteamRemotePlayUnsupported);
@@ -241,10 +247,11 @@ pub fn seat_audio_status(
     policy: &AudioPolicy,
     endpoint: Option<&Endpoint>,
     server_report: Option<AudioState>,
+    mic_path: bool,
 ) -> SeatAudioStatus {
     SeatAudioStatus {
         state: seat_audio_state(s, policy, endpoint, server_report),
-        limitations: limitations(s, policy),
+        limitations: limitations(s, policy, mic_path),
     }
 }
 
@@ -351,20 +358,24 @@ mod tests {
     fn limitation_sets() {
         use AudioLimitation::*;
         assert_eq!(
-            limitations(&ON, &open()),
+            limitations(&ON, &open(), true),
             vec![NoMicrophone, NoControllerAudio, SteamRemotePlayUnsupported, SurroundIsStereo]
         );
         assert_eq!(
-            limitations(&OFF, &blocked()),
+            limitations(&OFF, &blocked(), true),
             vec![PolicyBlocksAudio, NoMicrophone, NoControllerAudio, SteamRemotePlayUnsupported]
         );
         let mic = SeatAudio { stream_audio: true, microphone: true };
         let mic_blocked = resolve_policy(None, Some(1), None, None, None);
-        let l = limitations(&mic, &mic_blocked);
+        let l = limitations(&mic, &mic_blocked, true);
         assert!(l.contains(&MicPolicyBlocked) && l.contains(&NoMicrophone));
-        assert!(!limitations(&mic, &open()).contains(&MicPolicyBlocked));
-        // Path not built yet: mic still listed as missing.
-        assert!(limitations(&mic, &open()).contains(&NoMicrophone));
+        assert!(!limitations(&mic, &open(), true).contains(&MicPolicyBlocked));
+        // Pulsar seat, mic on, policy open: the mic works.
+        assert!(!limitations(&mic, &open(), true).contains(&NoMicrophone));
+        // Sunshine seat: no mic, and the reason.
+        let l = limitations(&mic, &open(), false);
+        assert!(l.contains(&NoMicrophone) && l.contains(&MicNeedsPulsar));
+        assert!(!limitations(&ON, &open(), false).contains(&MicNeedsPulsar), "mic switch off: no extra note");
     }
 
     #[test]
@@ -374,11 +385,11 @@ mod tests {
             assert!(!s.text_tr().is_empty());
         }
         use AudioLimitation::*;
-        for l in [NoMicrophone, NoControllerAudio, SteamRemotePlayUnsupported, SurroundIsStereo, PolicyBlocksAudio, MicPolicyBlocked] {
+        for l in [NoMicrophone, NoControllerAudio, SteamRemotePlayUnsupported, SurroundIsStereo, PolicyBlocksAudio, MicPolicyBlocked, MicNeedsPulsar] {
             assert_eq!(serde_json::to_string(&l).unwrap(), format!("\"{}\"", l.code()));
             assert!(!l.text_tr().is_empty());
         }
-        let st = seat_audio_status(&ON, &open(), None, None);
+        let st = seat_audio_status(&ON, &open(), None, None, false);
         let j = serde_json::to_value(&st).unwrap();
         assert_eq!(j["state"], "no_device");
         assert_eq!(j["limitations"][0], "no_microphone");

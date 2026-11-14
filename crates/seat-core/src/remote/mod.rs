@@ -9,9 +9,11 @@
 //! - [`ports`]: stream-server port blocks; only remote seats reserve ports.
 //! - [`streamconf`]: the per-seat stream-server config file.
 //! - [`watchdog`]: stream-server restart policy.
+//! - [`mic`]: microphone frames (pulsar-host mic pipe and the headless hold's stdin).
 //! - [`store`]: Split's record store trait for its controller; the service implements it
 //!   over the config document (`seat-service` `remote::DocStore`, merge step 6).
 
+pub mod mic;
 pub mod model;
 pub mod ports;
 pub mod store;

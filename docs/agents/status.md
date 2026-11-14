@@ -1137,3 +1137,45 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     remote role still needs a Remote Desktop protocol provider that names its hardware id.
   - Note: the kiosk-isolation partial work stayed parked in `git stash` during this
     package and is restored after the commit (still uncommitted).
+- 2026-11-14 (round 4 remote-gaps): (a) **Pulsar pairing events**: already carried since
+  the merge review (ddc1935): `map_legacy_event` maps `otp_changed`, `trust_changed`,
+  `relay_auth_required` to `stream` events, the `stream` topic is admin only
+  (`events::Scope`), and the pair dialog re-reads OTP / pairing state on them as Split's
+  did (Split's host page never reacted to events, so nothing to restore there). Added a
+  service test (admin sees the three on `stream`; a standard user is refused / sees none)
+  and fixed the stale "no longer refresh" note in apps/manager/README.md. (b) **Microphone
+  for remote seats** (spec/remote 70 §5.1), Pulsar seats only: `pulsar-host` mic pipe
+  `\.\pipe\PulsarSplit\seat\<id>\pulsar-host-mic` (service-owned, created before the
+  launch, same client check as the control pipe; additive contract §3.8 in
+  `docs/split/agents/pulsar-host-backend.md`: capability `mic`, `config.apply` key `mic`
+  sent only when true, binary start / pcm / stop frames, 48 kHz s16le; codec
+  `seat_core::remote::mic`) -> `seat_stream::backend::pulsar::mic::MicLink` (reader thread,
+  `seat_runtime.stream.mic` = off / unsupported / waiting / connected / failed / closed) ->
+  `SessionManager::send_mic` -> the hold's stdin after the password frame (bounded 50-frame
+  queue, drops when full) -> `seat_rdp::headless::mic::HoldMic` -> MS-RDPEAI `AUDIO_INPUT`
+  over DRDYNVC with `INFO_AUDIOCAPTURE` (48 kHz only, mono / stereo converted; active loop
+  on a non-blocking socket). Sunshine seats never set `INFO_AUDIOCAPTURE` and list the new
+  limitation `mic_needs_pulsar`; `seat_audio::MICROPHONE_PATH_AVAILABLE` is gone (functions
+  take `mic_path`). Manager: mic switch copy updated, live mic state line on the remote seat
+  page. (c) **Service start / stop / restart** restored in the manager header
+  (`ServiceControl.svelte`, Tauri `service_state` / `service_control`, `src-tauri/src/scm.rs`
+  on windows-sys, `PulsarSeat` from `seat_core::consts`): the SCM checks rights, so the
+  buttons work in the elevated manager and are disabled with the reason otherwise; stop and
+  restart ask first. Gates green: cargo 1544 passed / 6 ignored (+17), clippy aarch64 +
+  x86_64 clean, manager 192 / check / build (+8), shim 8 (host) + x64 / i686 check,
+  installer scripts 49. No test deleted.
+  - **Request for pulsar-desktop (not edited from here):** implement contract §3.8 and §6
+    item 20 of `docs/split/agents/pulsar-host-backend.md` in the `--split-seat` host:
+    announce capability `mic`; when `config.apply` has `mic: true`, connect as a client to
+    `\.\pipe\PulsarSplit\seat\<seat-id>\pulsar-host-mic` (same server check as the control
+    pipe), decode the Pulsar client's mic to 48 kHz s16le PCM and write `start {channels}`,
+    `pcm` (10-20 ms) and `stop` frames, never blocking the stream (drop on a full pipe).
+    The Pulsar client (pulsar-core) must send its microphone inside the existing session
+    (no new port). Until then every Pulsar seat reports `mic` = `unsupported`.
+  - Open (HYPOTHESIS, nothing ran on hardware): Windows creates the seat session's capture
+    endpoint when the hold sets `INFO_AUDIOCAPTURE`; the server picks one of the offered
+    48 kHz formats; apps in the seat see the microphone; the non-blocking hold loop over
+    SChannel behaves like the seat host engine's; voice latency is acceptable; the SCM
+    calls, the token elevation check and the 60 s state wait of the service buttons.
+  - Open (work): pulsar-host side (above); no silence is sent while no client mic is open
+    (apps may wait for data); mic for Moonlight clients is impossible (protocol has none).

@@ -9,6 +9,7 @@ import * as M from './mask.ts';
 import { createDemoRemoteApi } from './remote/demo.ts';
 import {
   type Config,
+  type ServiceRunState,
   type Device,
   type DeviceView,
   type EventFrame,
@@ -228,6 +229,8 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
   };
 
   const admin = opts.admin ?? true;
+  // SCM state of the demo service (start / stop / restart buttons).
+  let svcState: ServiceRunState = 'running';
   const needAdmin = () => {
     if (!admin) throw { code: opts.restricted ? 'admin_only' : 'access_denied', message: 'demo: not admin' };
   };
@@ -580,6 +583,15 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     setUiDirty: async () => {},
     hideToTray: async () => {
       calls.push('hide_to_tray');
+    },
+    serviceInfo: async () => {
+      calls.push('service_state');
+      return { state: svcState, elevated: admin };
+    },
+    serviceControl: async (action) => {
+      calls.push(`service_control:${action}`);
+      if (!admin) throw { code: 'access_denied', reason: 'access_denied', message: 'demo: not elevated' };
+      svcState = action === 'stop' ? 'stopped' : 'running';
     },
     onCloseRequested: async () => () => {},
     onWizardPageClose: async () => () => {},

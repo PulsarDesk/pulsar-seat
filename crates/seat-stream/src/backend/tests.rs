@@ -66,6 +66,7 @@ fn sunshine_seat_behaves_like_the_seat_server() {
         audio_keys: Vec::new(),
         default_apps: crate::apps::default_apps(),
         service_version: "0.1.0",
+        mic_sink: None,
     };
     let Prepared { mut stream, warnings } = b.prepare(&spec).unwrap();
     assert!(warnings.is_empty());

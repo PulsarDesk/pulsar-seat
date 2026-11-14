@@ -46,6 +46,9 @@ pub struct SeatStreamSpec<'a> {
     /// App list written when `apps.json` is missing (already launcher-wrapped).
     pub default_apps: Vec<AppEntry>,
     pub service_version: &'a str,
+    /// Pulsar seats with the microphone on (spec/remote 70 §5.1): where the client mic
+    /// frames go. `None` = no mic pipe, `config.apply` says `mic: false`.
+    pub mic_sink: Option<pulsar::mic::MicSink>,
 }
 
 /// Result of [`StreamBackend::prepare`].

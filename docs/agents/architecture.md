@@ -1390,6 +1390,15 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   is shared too: `seat_media::audio` uses it to skip other sessions' endpoints. Routing stays
   per kind. Local seats use `rdp_bridge` (`seat-media`, physical endpoints by MMDevice id).
   Remote seats use the session's Remote Audio endpoint, read by the stream server.
+- **Microphone (remote, round 4, 2026-11-14; spec/remote 70 §5.1).** Pulsar seats only:
+  `pulsar-host` mic pipe (`\\.\pipe\PulsarSplit\seat\<id>\pulsar-host-mic`, additive
+  contract §3.8 in `docs/split/agents/pulsar-host-backend.md`) -> `seat_stream::backend::
+  pulsar::mic::MicLink` (reader thread) -> `SessionManager::send_mic` -> the hold's stdin
+  (after the password frame, bounded queue) -> `seat_rdp::headless::mic::HoldMic` ->
+  MS-RDPEAI `AUDIO_INPUT` -> the session's capture endpoint. Codec
+  `seat_core::remote::mic`. Sunshine seats never set `INFO_AUDIOCAPTURE` (Moonlight has no
+  mic) and list `mic_needs_pulsar`. Status `seat_runtime.stream.mic`. Needs a pulsar-desktop
+  change (status.md request). HYPOTHESIS end to end (no host, no RDP target ran).
 - **Pads + shim.** `seat-pads` and `seat-shim-core` are the shared crates. Local seats get
   seat-owned virtual pads through `seat_input::local_pads` (cargo feature `local-pads`, on in
   `seat-service` since round 4, 2026-11-14). Per seat the switch is
@@ -1462,8 +1471,16 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   is `poll_events` with topics `stream` + `status`, mapped back to Split's event kinds
   (inverse of `map_legacy_event`). The pair dialog polls; the subscription thread keeps its
   topics, because `stream` is admin only and would refuse a standard user's subscription.
-- **Gone with Split's Tauri crate:** service start / stop / restart through the SCM (the one
-  service belongs to the product; the remote settings page shows reachability only) and the
+  Pulsar pairing events (`otp_changed`, `trust_changed`, `relay_auth_required`) are on the
+  `stream` topic too (since the merge review, ddc1935): the pair dialog re-reads the OTP and
+  the pairing state on them, as Split's did (Split's host page never reacted to events).
+- **Service buttons (restored, round 4, 2026-11-14):** start / stop / restart of the one
+  `PulsarSeat` service through the SCM, in the manager header (`ServiceControl.svelte`,
+  Tauri commands `service_state` / `service_control`, `src-tauri/src/scm.rs`, windows-sys
+  only). The SCM does the access check, so they work in the elevated manager; an
+  unelevated one shows them disabled with the reason. Stop and restart ask first (every
+  seat ends). The manager never changes the service's configuration or start type.
+- **Gone with Split's Tauri crate:** the
   `tauri-plugin-dialog` file picker (the pages use Seat's `pick_program`). Kept from it: the
   LAN address order for the pair dialog (`net::order_lan`, Tauri command `lan_addresses`).
 - **Copy.** One `i18n.ts`: Split's copy is its `rt` object plus `remoteErrorMessage`,

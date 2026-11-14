@@ -571,3 +571,28 @@ fn phase_serialises_with_reason() {
         r#"{"phase":"failed","reason":"session_timeout"}"#
     );
 }
+
+#[test]
+fn mic_frames_reach_only_an_audio_capture_hold() {
+    use seat_core::remote::mic::MicFrame;
+    let (m, h) = mgr();
+    let name = cn();
+    let start = MicFrame::Start { channels: 1 };
+    assert!(!m.send_mic(SEAT, &start), "no seat");
+    h.helper.push(HelperScript::connects(loopback_session(3, &name, "seat1")));
+    m.start_session(&req(&name, "seat1"), &pw(), &CancelToken::new()).unwrap();
+    assert!(!m.send_mic(SEAT, &start), "hold without --audio-capture");
+    m.stop_session(SEAT, StopAction::LogOff).unwrap();
+
+    h.helper.push(HelperScript::connects(loopback_session(4, &name, "seat1")));
+    let mut r = req(&name, "seat1");
+    r.audio_capture = true;
+    m.start_session(&r, &pw(), &CancelToken::new()).unwrap();
+    assert!(h.helper.spawned.lock().unwrap()[1].0.audio_capture);
+    assert!(m.send_mic(SEAT, &start));
+    assert!(m.send_mic(SEAT, &MicFrame::Pcm(vec![1, 0])));
+    assert!(!m.send_mic("other-seat", &MicFrame::Stop));
+    assert_eq!(*h.helper.child(1).mic.lock().unwrap(), vec![start, MicFrame::Pcm(vec![1, 0])]);
+    m.stop_session(SEAT, StopAction::LogOff).unwrap();
+    assert!(!m.send_mic(SEAT, &MicFrame::Stop), "stopped");
+}

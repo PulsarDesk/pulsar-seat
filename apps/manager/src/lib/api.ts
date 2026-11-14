@@ -34,7 +34,9 @@ import type {
   UserPicture,
   WizardProgress,
   EventBatch,
-  Topic
+  Topic,
+  ServiceInfo,
+  ServiceAction
 } from './types.ts';
 import { createRemoteApi, type RemoteApi } from './remote/api.ts';
 
@@ -66,6 +68,11 @@ export interface LocalApi {
   /** The window was closed while there are unsaved changes. */
   onCloseRequested(cb: () => void): Promise<Unlisten>;
   /** Alt+F4 / close on a wizard page. */
+  /** SCM state of the seat service (works while the service is down, unlike `hello`). */
+  serviceInfo(): Promise<ServiceInfo>;
+  /** Start / stop / restart the service through the SCM (elevated manager only). Resolves
+   *  once the SCM reports the target state. */
+  serviceControl(action: ServiceAction): Promise<void>;
   onWizardPageClose(cb: () => void): Promise<Unlisten>;
 }
 
@@ -210,6 +217,8 @@ export async function createTauriApi(): Promise<Api> {
     wizardLastProgress: () => invoke<WizardProgress | null>('wizard_last_progress'),
     setUiDirty: (dirty) => invoke<void>('set_ui_dirty', { dirty }),
     hideToTray: () => invoke<void>('hide_to_tray'),
+    serviceInfo: () => invoke<ServiceInfo>('service_state'),
+    serviceControl: (action) => invoke<void>('service_control', { action }),
     onCloseRequested: (cb) => listen('close-requested', () => cb()),
     onWizardPageClose: (cb) => listen('wizard-page-close', () => cb()),
     onEvent: (cb) => listen<EventFrame>('service-event', (e) => cb(e.payload)),

@@ -60,7 +60,7 @@ pub use probe::{
     remove_stale_endpoints,
 };
 pub use state::{
-    AudioLimitation, AudioState, LogScanner, MICROPHONE_PATH_AVAILABLE, SeatAudioStatus,
+    AudioLimitation, AudioState, LogScanner, SeatAudioStatus,
     limitations, scan_log_line, seat_audio_state, seat_audio_status,
 };
 

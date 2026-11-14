@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import SeatPage from './SeatPage.svelte';
 import { rt as t } from '#lib/i18n.ts';
-import type { SeatConfig, SeatStatus, StreamBackendInfo } from '#lib/remote/types.ts';
+import type { SeatConfig, SeatRuntime, SeatStatus, StreamBackendInfo } from '#lib/remote/types.ts';
 
 const seat: SeatConfig = {
   id: '0f8fad5b-d9cb-469f-a165-70867728950e',
@@ -39,7 +39,7 @@ const both = (pulsarInstalled: boolean): StreamBackendInfo[] => [
   { backend: 'pulsar', installed: pulsarInstalled, reason: pulsarInstalled ? null : 'backend_missing', version: null }
 ];
 
-function setup(s: SeatConfig, st: SeatStatus, backends: StreamBackendInfo[]) {
+function setup(s: SeatConfig, st: SeatStatus, backends: StreamBackendInfo[], runtime: SeatRuntime | null = null) {
   const onSave = vi.fn(async (_n: string, x: SeatConfig) => x);
   render(SeatPage, {
     seat: s,
@@ -53,7 +53,8 @@ function setup(s: SeatConfig, st: SeatStatus, backends: StreamBackendInfo[]) {
     onStop: vi.fn(async () => {}),
     onDelete: vi.fn(),
     onPair: vi.fn(),
-    backends
+    backends,
+    runtime
   });
   return { onSave, user: userEvent.setup() };
 }
@@ -87,5 +88,52 @@ describe('SeatPage stream backend', () => {
     setup(seat, status('running'), both(true));
     expect(screen.getByRole('combobox', { name: t.seat.streamBackend })).toBeDisabled();
     expect(screen.getByText(t.seat.backendStopFirst)).toBeInTheDocument();
+  });
+});
+
+describe('SeatPage microphone', () => {
+  const rtm = (stream: SeatRuntime['stream'], limitations: string[]): SeatRuntime => ({
+    session_id: 3,
+    client_name: 'PSS0F8FAD5B',
+    state: 'running',
+    phase: null,
+    failure: null,
+    display: null,
+    audio: { state: 'capturing', limitations },
+    pads: [],
+    stream,
+    isolation: []
+  });
+  const pulsarStream = (mic: string): SeatRuntime['stream'] => ({
+    backend: 'pulsar',
+    running: true,
+    status: null,
+    capabilities: ['mic'],
+    crash_count: 0,
+    relay_id: '123456789',
+    mic
+  });
+
+  it('saves the switch and explains what it needs', async () => {
+    const { onSave, user } = setup({ ...seat, stream_backend: 'pulsar' }, status('stopped'), both(true));
+    expect(screen.getByText(t.seat.microphoneHint)).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: t.seat.microphone }));
+    expect(onSave.mock.calls.at(-1)![1].audio.microphone).toBe(true);
+  });
+
+  it('shows the live mic state of a running Pulsar seat', () => {
+    setup({ ...seat, stream_backend: 'pulsar', audio: { stream_audio: true, microphone: true } }, status('running'), both(true), rtm(pulsarStream('connected'), []));
+    expect(screen.getByTestId('mic-state')).toHaveTextContent(`${t.seat.mic}: ${t.seat.micState.connected}`);
+  });
+
+  it('says why a Sunshine seat has no mic', () => {
+    setup(
+      { ...seat, audio: { stream_audio: true, microphone: true } },
+      status('running'),
+      both(true),
+      rtm({ backend: 'sunshine', running: true, status: null, capabilities: [], crash_count: 0 }, ['no_microphone', 'mic_needs_pulsar'])
+    );
+    expect(screen.getByText(t.audioLimitation.mic_needs_pulsar)).toBeInTheDocument();
+    expect(screen.queryByTestId('mic-state')).toBeNull();
   });
 });

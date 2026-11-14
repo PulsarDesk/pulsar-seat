@@ -285,6 +285,9 @@
             {t.seat.relayId}: <code>{runtime.stream.relay_id ?? '—'}</code>
             {#if runtime.stream.relay_state}· {t.seat.relayState(runtime.stream.relay_state)}{/if}
           </li>
+          {#if runtime.stream.mic && runtime.stream.mic !== 'off'}
+            <li data-testid="mic-state">{t.seat.mic}: {t.seat.micState[runtime.stream.mic] ?? runtime.stream.mic}</li>
+          {/if}
         {/if}
       {/if}
       {#each runtime.isolation as h, i (i)}

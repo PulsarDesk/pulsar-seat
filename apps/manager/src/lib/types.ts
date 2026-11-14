@@ -869,3 +869,15 @@ export interface AppInfo {
   autostart: boolean;
   elevated_launch: boolean;
 }
+
+/** SCM state of the seat service (`service_state`; manager backend `scm.rs`). */
+// Same states as the remote kind's settings page shows (Split's manager).
+export type ServiceRunState = R.ServiceRunState;
+
+export interface ServiceInfo {
+  state: ServiceRunState;
+  /** This manager process runs elevated: only then may it start or stop the service. */
+  elevated: boolean;
+}
+
+export type ServiceAction = 'start' | 'stop' | 'restart';

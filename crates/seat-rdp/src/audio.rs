@@ -180,6 +180,11 @@ impl CaptureHandler {
         Self { source, formats: capture_specs().into_iter().map(PcmSpec::to_format).collect(), out: Arc::new(Mutex::new(None)) }
     }
 
+    /// Offers only `specs` (the headless hold: the formats its mic feed can deliver).
+    pub fn with_specs(source: Arc<dyn CaptureSource>, specs: &[PcmSpec]) -> Self {
+        Self { source, formats: specs.iter().map(|s| s.to_format()).collect(), out: Arc::new(Mutex::new(None)) }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<(Packetizer, AudioPacketSink)>> {
         self.out.lock().unwrap_or_else(|p| p.into_inner())
     }

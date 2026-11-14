@@ -19,6 +19,7 @@ use crate::remote::wait::poll_until;
 use crate::remote::{Clock, FailureReason, SessionError, Sleeper};
 use serde::{Deserialize, Serialize};
 use seat_core::Secret;
+use seat_core::remote::mic::MicFrame;
 use seat_core::remote::model::StopAction;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -186,6 +187,10 @@ pub trait SessionManager: Send + Sync {
     /// Plans + executes the start/stop sweep.
     fn sweep(&self, seat_users: &[String]) -> Result<SweepPlan, SessionError>;
     fn launcher(&self) -> &dyn SessionLauncher;
+    /// One microphone frame for the seat's hold (started with `audio_capture`; spec/remote
+    /// 70 §5.1). Never blocks: `false` when the seat has no hold, the hold has no mic feed
+    /// or its queue is full (the frame is dropped).
+    fn send_mic(&self, seat_id: &str, frame: &MicFrame) -> bool;
 }
 
 // ---- helper process abstraction ----
@@ -200,6 +205,12 @@ pub trait HelperChild: Send {
     /// Exit code once the process has ended.
     fn try_wait(&mut self) -> Option<i32>;
     fn kill(&mut self);
+    /// Queue one mic frame for the hold's stdin (`--audio-capture` holds only). Never
+    /// blocks; `false` = no mic feed or queue full (dropped).
+    fn send_mic(&mut self, frame: &MicFrame) -> bool {
+        let _ = frame;
+        false
+    }
 }
 
 /// Starts the helper with `args` on argv and the password on its stdin pipe only.
@@ -1045,6 +1056,15 @@ impl SessionManager for Manager {
     fn launcher(&self) -> &dyn SessionLauncher {
         self.d.launcher.as_ref()
     }
+
+    fn send_mic(&self, seat_id: &str, frame: &MicFrame) -> bool {
+        // `send_mic` of a child never blocks, so the seats lock is held only briefly.
+        let mut seats = lock(&self.seats);
+        match seats.get_mut(seat_id) {
+            Some(slot) if slot.audio_capture => slot.child.as_mut().is_some_and(|c| c.send_mic(frame)),
+            _ => false,
+        }
+    }
 }
 
 fn clone_meta(s: &SeatSlot) -> SeatSlot {
@@ -1159,6 +1179,9 @@ mod win_mgr {
         }
         fn launcher(&self) -> &dyn SessionLauncher {
             self.0.launcher()
+        }
+        fn send_mic(&self, s: &str, f: &MicFrame) -> bool {
+            self.0.send_mic(s, f)
         }
     }
 }

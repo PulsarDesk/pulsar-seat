@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::endpoint::{Endpoint, Flow};
 use crate::policy::AudioPolicy;
-use crate::state::MICROPHONE_PATH_AVAILABLE;
 
 /// Seat audio settings (goes into `RemoteSeatRecord::audio`, contracts §9.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,14 +106,14 @@ impl RdpAudioFlags {
     }
 }
 
-/// RDP client flags for a seat. Capture only when the end-to-end mic path exists in this
-/// build ([`MICROPHONE_PATH_AVAILABLE`], spec 70 §5.1), the seat's mic feature is on
-/// **and** capture redirection is not blocked by policy. Otherwise `INFO_AUDIOCAPTURE`
-/// would create a capture endpoint nobody feeds (a silent mic, spec 70 §2.6).
-pub fn rdp_client_flags(s: &SeatAudio, policy: &AudioPolicy) -> RdpAudioFlags {
+/// RDP client flags for a seat. Capture only when the seat's backend can deliver a client
+/// mic (`mic_path`: Pulsar only, spec 70 §5.1), the seat's mic feature is on **and**
+/// capture redirection is not blocked by policy. Otherwise `INFO_AUDIOCAPTURE` would
+/// create a capture endpoint nobody can ever feed (a silent mic, spec 70 §2.6).
+pub fn rdp_client_flags(s: &SeatAudio, policy: &AudioPolicy, mic_path: bool) -> RdpAudioFlags {
     RdpAudioFlags {
         playback: true,
-        capture: MICROPHONE_PATH_AVAILABLE && s.microphone && !policy.capture_blocked(),
+        capture: mic_path && s.microphone && !policy.capture_blocked(),
     }
 }
 
@@ -175,27 +174,27 @@ mod tests {
     fn rdp_flags() {
         let open = resolve_policy(None, None, Some(0), Some(0), None);
         let mic_blocked = resolve_policy(None, Some(1), None, None, None);
-        let f = rdp_client_flags(&SeatAudio::default(), &open);
+        let f = rdp_client_flags(&SeatAudio::default(), &open, true);
         assert_eq!(f, RdpAudioFlags { playback: true, capture: false });
         assert_eq!(f.info_flags(), 0);
         assert_eq!(f.helper_args(), vec!["--audio-playback"]);
         let mic = SeatAudio { stream_audio: true, microphone: true };
-        let f = rdp_client_flags(&mic, &open);
-        // The mic path is not built (spec 70 §5.1): no INFO_AUDIOCAPTURE even with the
-        // seat's mic switch on, so Windows creates no silent capture endpoint.
-        assert_eq!(f.capture, MICROPHONE_PATH_AVAILABLE);
+        // Sunshine seat (no mic path): no INFO_AUDIOCAPTURE even with the mic switch on, so
+        // Windows creates no capture endpoint nobody feeds.
+        let f = rdp_client_flags(&mic, &open, false);
         assert!(!f.capture);
         assert_eq!(f.info_flags(), 0);
         assert_eq!(f.helper_args(), vec!["--audio-playback"]);
-        assert!(!rdp_client_flags(&mic, &mic_blocked).capture);
-        // Once the path exists, the flags map like this:
+        assert!(!rdp_client_flags(&mic, &mic_blocked, true).capture);
+        // Pulsar seat with the mic on:
+        assert!(rdp_client_flags(&mic, &open, true).capture);
         let cap = RdpAudioFlags { playback: true, capture: true };
         assert_eq!(cap.info_flags(), INFO_AUDIOCAPTURE);
         assert_eq!(cap.helper_args(), vec!["--audio-playback", "--audio-capture"]);
         // Even with streaming off, the session keeps "redirect to client" so apps do not
         // play on the console speakers.
         let off = SeatAudio { stream_audio: false, microphone: false };
-        assert!(rdp_client_flags(&off, &open).playback);
+        assert!(rdp_client_flags(&off, &open, true).playback);
         assert_eq!(f.info_flags() & RdpAudioFlags::forbidden_info_flags(), 0);
     }
 }

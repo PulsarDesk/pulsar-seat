@@ -266,6 +266,8 @@ export interface SeatRuntime {
     relay_id?: string | null;
     node_port?: number;
     relay_auth_required?: boolean;
+    /** Pulsar only: `off` | `unsupported` | `waiting` | `connected` | `failed` | `closed`. */
+    mic?: string;
   } | null;
   isolation: { exe: string; role: string; hooks_on: boolean; error: string | null }[];
 }

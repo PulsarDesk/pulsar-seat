@@ -20,6 +20,8 @@ import {
 import { loadPrefs, savePrefs, type Prefs } from './prefs.ts';
 import { issueError, mergeRemoteInto } from './remote/model.ts';
 import type {
+  ServiceAction,
+  ServiceInfo,
   AppInfo,
   BackendReport,
   Check,
@@ -61,6 +63,10 @@ export class ManagerStore {
 
   link = $state(false);
   serviceDown = $state(false);
+  /** SCM view of the service (`null` until asked; works while the pipe is down). */
+  service = $state<ServiceInfo | null>(null);
+  /** Start / stop / restart in progress. */
+  serviceAction = $state<ServiceAction | null>(null);
   hello = $state<HelloReply | null>(null);
   info = $state<AppInfo | null>(null);
   status = $state<ServiceStatus | null>(null);
@@ -150,11 +156,13 @@ export class ManagerStore {
     } catch {
       this.info = null;
     }
+    void this.refreshService();
     await this.refreshAll();
     void this.api.setTrayVisible(!this.prefs.hideTray).catch(() => {});
     // Fallback polling while the event subscription is down.
     this.timer = setInterval(() => {
       if (!this.link) void this.refreshStatus();
+      if (!this.serviceAction) void this.refreshService();
     }, POLL_MS);
   }
 
@@ -180,6 +188,33 @@ export class ManagerStore {
     }
     await Promise.all([this.refreshStatus(), this.refreshDevices(), this.refreshBackends()]);
     if (!this.restricted) await this.refreshConfig();
+  }
+
+  async refreshService(): Promise<void> {
+    try {
+      this.service = await this.api.serviceInfo();
+    } catch {
+      this.service = null;
+    }
+  }
+
+  /** Start / stop / restart the service (SCM); then everything is read again. */
+  async controlService(action: ServiceAction): Promise<boolean> {
+    if (this.serviceAction) return false;
+    this.serviceAction = action;
+    try {
+      await this.api.serviceControl(action);
+      this.toast('ok', action === 'start' ? t.svc.started : action === 'stop' ? t.svc.stopped : t.svc.restarted);
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    } finally {
+      this.serviceAction = null;
+      await this.refreshService();
+      if (this.service?.state === 'stopped') this.serviceDown = true;
+      else await this.refreshAll();
+    }
   }
 
   async refreshStatus(): Promise<void> {

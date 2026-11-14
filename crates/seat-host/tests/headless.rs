@@ -122,3 +122,20 @@ fn without_the_subcommand_the_hold_mode_is_not_selected() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).lines().all(|l| HelperEvent::parse_line(l).is_err()));
 }
+
+#[test]
+fn audio_capture_keeps_stdin_open_for_mic_frames() {
+    use seat_core::remote::mic::{MicFrame, write_mic_frame};
+    let mut input = frame("pw");
+    write_mic_frame(&mut input, &MicFrame::Start { channels: 1 }).unwrap();
+    write_mic_frame(&mut input, &MicFrame::Pcm(vec![0, 0])).unwrap();
+    // Without the flag, data after the password frame is refused.
+    let (ev, code) = run(&args().to_argv(), &input);
+    assert!(matches!(&ev[0], HelperEvent::Failed { code: HelperFailure::BadArgs, .. }), "{ev:?}");
+    assert_eq!(code, exit::BAD_ARGS);
+    let mut a = args();
+    a.audio_capture = true;
+    let (ev, code) = run(&a.to_argv(), &input);
+    assert_eq!(ev, vec![HelperEvent::Connecting, HelperEvent::Exited { code: 0 }]);
+    assert_eq!(code, exit::OK);
+}

@@ -98,6 +98,14 @@ dispatches the sub-command before anything else (`crates/seat-host/src/headless.
   and the reactivation factory is rebuilt without it (same IronRDP plain-`String` limit as
   below). The session id is not reported (`connected{session_id: null}`); the service
   finds the session by client name + user + loopback.
+- `headless::mic` + `--audio-capture` (2026-11-14, spec/remote 70 §5.1): the password
+  frame is not followed by EOF; stdin then carries microphone frames
+  (`seat_core::remote::mic`: u32 LE length + start / pcm / stop, 48 kHz s16le). The client
+  sets `INFO_AUDIOCAPTURE`, joins DRDYNVC with MS-RDPEAI `AUDIO_INPUT` offering only 48 kHz
+  stereo / mono (`HOLD_CAPTURE_SPECS`; mono / stereo converted, never resampled), and the
+  active loop runs on a non-blocking socket so mic packets go out between server PDUs
+  (same `Patient` writes as the session engine). Without the flag nothing changes.
+  **Untested against a real server** (HYPOTHESIS: the session gets a capture endpoint).
 - Tests: proto units (argv round trip, sub-command, password frame, events), client units
   (config, pin, audio formats, error mapping) and `crates/seat-host/tests/headless.rs`
   (runs the built seat host with `--dry-run` over the real argv / stdin / stdout).

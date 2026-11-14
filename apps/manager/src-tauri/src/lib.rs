@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Manager backend: forwards UI requests to the seat service over the control pipe. No
 //! HTTP, no local web server, no privileged work in this process (spec 00 §5.1, spec 10
-//! "Pulsar Seat approach"). Adapted from pulsar-split's manager.
+//! "Pulsar Seat approach"). Adapted from pulsar-split's manager. One exception: the
+//! service start / stop / restart buttons call the SCM directly (`scm`); the SCM checks
+//! the rights, so they work only in the elevated manager.
 //!
 //! - `service_request`: one request, one connection, `hello` first.
 //! - A subscription thread keeps one connection subscribed to `status`, `devices`,
@@ -17,6 +19,7 @@ mod net;
 mod pictures;
 mod pipe_client;
 mod programs;
+mod scm;
 mod shell;
 mod wizard_pages;
 
@@ -52,6 +55,21 @@ struct AppInfo {
     arch: &'static str,
     autostart: bool,
     elevated_launch: bool,
+}
+
+/// SCM state of the seat service and whether this process is elevated.
+#[tauri::command]
+async fn service_state() -> scm::ServiceInfo {
+    tauri::async_runtime::spawn_blocking(scm::info)
+        .await
+        .unwrap_or(scm::ServiceInfo { state: scm::RunState::Unknown, elevated: false })
+}
+
+/// `start` / `stop` / `restart` the seat service; returns once the SCM reports the target state.
+#[tauri::command]
+async fn service_control(action: String) -> Result<(), ProtoError> {
+    let action = scm::Action::parse(&action)?;
+    tauri::async_runtime::spawn_blocking(move || scm::control(action)).await.map_err(join_err)?
 }
 
 #[tauri::command]
@@ -345,6 +363,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             service_request,
             service_hello,
+            service_state,
+            service_control,
             app_info,
             open_system_panel,
             restart_elevated,

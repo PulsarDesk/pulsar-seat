@@ -83,6 +83,10 @@ pub struct HostConfig {
     /// Empty = the host's default list.
     pub codecs: Vec<String>,
     pub max_clients: u8,
+    /// Forward the client mic over the mic pipe (§3.8). Sent only when true, and only to a
+    /// host that announced the `mic` capability (older hosts never see the key).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]

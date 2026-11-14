@@ -81,6 +81,7 @@ fn prepare(w: &W) -> Box<dyn SeatStream> {
         audio_keys: Vec::new(),
         default_apps: crate::apps::default_apps(),
         service_version: "0.1.0",
+        mic_sink: None,
     };
     w.backend.prepare(&spec).unwrap().stream
 }
@@ -127,6 +128,7 @@ fn missing_binary_is_backend_missing_and_never_launches() {
         audio_keys: Vec::new(),
         default_apps: Vec::new(),
         service_version: "0.1.0",
+        mic_sink: None,
     };
     let e = w.backend.prepare(&spec).err().expect("prepare fails");
     assert_eq!(e.code(), "backend_missing");
@@ -345,4 +347,107 @@ fn malformed_secret_values_stay_out_of_errors() {
     let bad = br#"{"event":"relay.key_issued","body":{"key":918273645}}"#;
     let e = super::control::decode_event(bad, "relay.key_issued").expect_err("wrong-typed key refused");
     assert!(!e.to_string().contains("918273645"), "{e}");
+}
+
+fn prepare_mic(w: &W, sink: Option<mic::MicSink>) -> Box<dyn SeatStream> {
+    let s = seat();
+    let g = RemoteSettings::default();
+    let spec = SeatStreamSpec {
+        seat: &s,
+        global: &g,
+        data_root: Path::new(ROOT),
+        audio_keys: Vec::new(),
+        default_apps: crate::apps::default_apps(),
+        service_version: "0.1.0",
+        mic_sink: sink,
+    };
+    w.backend.prepare(&spec).unwrap().stream
+}
+
+/// The fake host, plus the `mic` capability when `mic` is set.
+fn host_with_mic(w: &W, mic: bool) {
+    let mut r = crate::fake::pulsar_responder(ID);
+    w.pipes.pipe(w.pipes.count() - 1).respond_with(move |req| {
+        let mut out = r(req);
+        if mic && req["type"] == "hello" {
+            out[0]["body"]["capabilities"].as_array_mut().unwrap().push("mic".into());
+        }
+        out
+    });
+}
+
+type Got = Arc<std::sync::Mutex<Vec<mic::MicFrame>>>;
+
+fn sink() -> (mic::MicSink, Got) {
+    let got: Got = Arc::default();
+    let g = got.clone();
+    (Arc::new(move |f: &mic::MicFrame| g.lock().unwrap().push(f.clone())), got)
+}
+
+fn wait_for(got: &Got, n: usize) {
+    for _ in 0..400 {
+        if got.lock().unwrap().len() >= n {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("only {:?}", got.lock().unwrap());
+}
+
+#[test]
+fn mic_pipe_forwards_host_frames_to_the_sink() {
+    use mic::MicFrame;
+    let w = world();
+    let (sink, got) = sink();
+    let mut s = prepare_mic(&w, Some(sink));
+    s.start(3).unwrap();
+    assert_eq!(w.pipes.created(), [control::pipe_name(ID), mic::mic_pipe_name(ID)], "both pipes exist before the launch");
+    assert_eq!(w.launcher.calls().len(), 1);
+    host_with_mic(&w, true);
+    let n = s.poll(w.clock.advance(100));
+    assert!(matches!(n.as_slice(), [StreamNotice::ControlReady { .. }]), "{n:?}");
+    assert_eq!(w.pipes.pipe(0).sent()[2]["body"]["mic"], true, "config.apply asks for the mic");
+    assert_eq!(s.runtime()["mic"], "connected");
+    let mp = w.pipes.mic_pipe(0);
+    mp.inject_raw(&MicFrame::Start { channels: 1 }.encode());
+    mp.inject_raw(&MicFrame::Pcm(vec![1, 0, 2, 0]).encode());
+    wait_for(&got, 2);
+    assert_eq!(got.lock().unwrap()[..2], [MicFrame::Start { channels: 1 }, MicFrame::Pcm(vec![1, 0, 2, 0])]);
+    // A bad frame closes the pipe; the seat's mic is then stopped.
+    mp.inject_raw(&[0x7F]);
+    wait_for(&got, 3);
+    assert_eq!(got.lock().unwrap()[2], MicFrame::Stop);
+    s.stop().unwrap();
+    assert_eq!(s.runtime()["mic"], "closed");
+}
+
+#[test]
+fn mic_is_off_without_sink_and_unsupported_without_capability() {
+    let w = world();
+    let s = running(&w);
+    assert_eq!(s.runtime()["mic"], "off");
+    assert!(w.pipes.pipe(0).sent()[2]["body"].get("mic").is_none(), "older hosts never see the key");
+    assert_eq!(w.pipes.mic_count(), 0);
+
+    let w = world();
+    let (sink, _got) = sink();
+    let mut s = prepare_mic(&w, Some(sink));
+    s.start(3).unwrap();
+    host_with_mic(&w, false);
+    s.poll(w.clock.advance(100));
+    assert!(w.pipes.pipe(0).sent()[2]["body"].get("mic").is_none());
+    assert_eq!(s.runtime()["mic"], "unsupported");
+}
+
+#[test]
+fn mic_pipe_failure_costs_only_the_mic() {
+    let w = world();
+    let (sink, _got) = sink();
+    let mut s = prepare_mic(&w, Some(sink));
+    w.pipes.fail_mic(true);
+    s.start(3).unwrap();
+    assert_eq!(w.launcher.calls().len(), 1, "the seat still starts");
+    host_with_mic(&w, true);
+    s.poll(w.clock.advance(100));
+    assert_eq!(s.runtime()["mic"], "failed");
 }

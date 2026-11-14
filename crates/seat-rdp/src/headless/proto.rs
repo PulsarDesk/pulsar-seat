@@ -225,6 +225,16 @@ pub fn write_password_frame(w: &mut impl Write, pw: &Secret) -> std::io::Result<
 }
 
 pub fn read_password_frame(r: &mut impl Read) -> Result<Zeroizing<String>, HeadlessError> {
+    read_password(r, true)
+}
+
+/// `--audio-capture`: the password frame, then stdin stays open for mic frames
+/// (`seat_core::remote::mic`), so no end-of-stream check.
+pub fn read_password_frame_open(r: &mut impl Read) -> Result<Zeroizing<String>, HeadlessError> {
+    read_password(r, false)
+}
+
+fn read_password(r: &mut impl Read, want_eof: bool) -> Result<Zeroizing<String>, HeadlessError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len).map_err(|_| bad("password frame missing"))?;
     let len = u32::from_le_bytes(len) as usize;
@@ -233,11 +243,13 @@ pub fn read_password_frame(r: &mut impl Read) -> Result<Zeroizing<String>, Headl
     }
     let mut buf = Zeroizing::new(vec![0u8; len]);
     r.read_exact(&mut buf).map_err(|_| bad("password frame truncated"))?;
-    let mut extra = [0u8; 1];
-    match r.read(&mut extra) {
-        Ok(0) => {}
-        Ok(_) => return Err(bad("data after the password frame")),
-        Err(_) => return Err(bad("stdin read failed after the password frame")),
+    if want_eof {
+        let mut extra = [0u8; 1];
+        match r.read(&mut extra) {
+            Ok(0) => {}
+            Ok(_) => return Err(bad("data after the password frame")),
+            Err(_) => return Err(bad("stdin read failed after the password frame")),
+        }
     }
     let s = std::str::from_utf8(&buf).map_err(|_| bad("password is not UTF-8"))?;
     if s.contains('\0') {
@@ -379,6 +391,17 @@ mod tests {
         trailing.push(b'x');
         assert!(read_password_frame(&mut trailing.as_slice()).is_err());
         assert!(read_password_frame(&mut [2u8, 0, 0, 0, 0xFF, 0xFE].as_slice()).is_err());
+    }
+
+    #[test]
+    fn open_password_frame_leaves_the_mic_frames() {
+        let mut buf = Vec::new();
+        write_password_frame(&mut buf, &Secret("pw".into())).unwrap();
+        seat_core::remote::mic::write_mic_frame(&mut buf, &seat_core::remote::mic::MicFrame::Stop).unwrap();
+        assert!(read_password_frame(&mut buf.as_slice()).is_err(), "closed form refuses trailing data");
+        let mut r = buf.as_slice();
+        assert_eq!(read_password_frame_open(&mut r).unwrap().as_str(), "pw");
+        assert_eq!(seat_core::remote::mic::read_mic_frame(&mut r).unwrap(), Some(seat_core::remote::mic::MicFrame::Stop));
     }
 
     #[test]

@@ -681,3 +681,55 @@ fn dxvk_marker_read_is_bounded() {
     assert!(super::read_dxvk_marker(&p).unwrap().is_err());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn pulsar_seat_mic_goes_from_the_mic_pipe_to_the_hold() {
+    use seat_core::remote::mic::MicFrame;
+    let w = world();
+    let mut s = pulsar_seat();
+    s.audio.microphone = true;
+    let seen = start_seat_ok(&w, s.clone());
+    assert!(seen.contains(&SeatEvent::Running { session_id: 3 }), "{seen:?}");
+    assert!(w.session.helper.spawned.lock().unwrap()[0].0.audio_capture, "hold started with --audio-capture");
+    assert!(w.pipes.created().iter().any(|n| n.ends_with(r"\pulsar-host-mic")), "{:?}", w.pipes.created());
+    // The host announces the mic capability; the first tick does the handshake and accepts the mic pipe.
+    let mut r = seat_stream::fake::pulsar_responder(SEAT_ID);
+    w.pipes.pipe(0).respond_with(move |req| {
+        let mut out = r(req);
+        if req["type"] == "hello" {
+            out[0]["body"]["capabilities"].as_array_mut().unwrap().push("mic".into());
+        }
+        out
+    });
+    w.engine.tick(w.clock.advance(1_000));
+    let cfg = w.pipes.pipe(0).sent().into_iter().find(|m| m["type"] == "config.apply").unwrap();
+    assert_eq!(cfg["body"]["mic"], true);
+    let mp = w.pipes.mic_pipe(0);
+    mp.inject_raw(&MicFrame::Start { channels: 2 }.encode());
+    mp.inject_raw(&MicFrame::Pcm(vec![1, 0, 1, 0]).encode());
+    let child = w.session.helper.child(0);
+    for _ in 0..400 {
+        if child.mic.lock().unwrap().len() >= 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(child.mic.lock().unwrap()[..2], [MicFrame::Start { channels: 2 }, MicFrame::Pcm(vec![1, 0, 1, 0])]);
+    let rt = w.engine.seat_runtime(&s);
+    assert_eq!(rt.stream.unwrap()["mic"], "connected");
+    let lim = rt.audio.unwrap()["limitations"].clone();
+    assert!(!lim.as_array().unwrap().iter().any(|l| l == "no_microphone"), "{lim}");
+    w.engine.stop_seat(&s).unwrap();
+}
+
+#[test]
+fn sunshine_seat_never_asks_for_a_mic() {
+    let w = world();
+    let mut s = seat();
+    s.audio.microphone = true;
+    let seen = start_seat_ok(&w, s.clone());
+    assert!(seen.contains(&SeatEvent::Running { session_id: 3 }), "{seen:?}");
+    assert!(!w.session.helper.spawned.lock().unwrap()[0].0.audio_capture, "no capture endpoint nobody feeds");
+    let lim = w.engine.seat_runtime(&s).audio.unwrap()["limitations"].clone();
+    assert!(lim.as_array().unwrap().iter().any(|l| l == "mic_needs_pulsar"), "{lim}");
+}

@@ -18,6 +18,7 @@
   import NetworkTab from './NetworkTab.svelte';
   import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
   import SeatsTab from './SeatsTab.svelte';
+  import ServiceControl from './ServiceControl.svelte';
   import StatusTab from './StatusTab.svelte';
   import Toasts from './Toasts.svelte';
   import Wizard from './Wizard.svelte';
@@ -227,6 +228,7 @@
         {#if product}· {t.product}: <strong data-testid="product-state">{productLabel(product)}</strong>{/if}
       </p>
     </div>
+    <ServiceControl {store} />
     {#if !store.link && !store.serviceDown}<span class="hint" title={t.linkDown}>○</span>{/if}
   </header>
 

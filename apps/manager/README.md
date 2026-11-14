@@ -45,7 +45,11 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 ## Tauri surface
 
 Commands: `service_request(body)`, `service_hello`, `app_info`, `open_system_panel(panel)`,
-`restart_elevated`, `set_tray_visible(visible)`, `quit_app`.
+`restart_elevated`, `set_tray_visible(visible)`, `quit_app`, `service_state` (SCM state of
+`PulsarSeat` + whether this process is elevated) and `service_control(action)` (`start` /
+`stop` / `restart`, `src-tauri/src/scm.rs`; the SCM checks the rights, so only the elevated
+manager can use it). The header shows the state and the buttons (`ServiceControl.svelte`);
+stop and restart ask first, because every seat ends.
 Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
 (`{action: show|start_seats|toggle_enabled|quit}`), `hidden-to-tray`.
 
@@ -117,6 +121,11 @@ folder, the same-account dialog (needs the service's notice), wizard monitor num
 Remote seats tab (merge step 9): every remote page against a real service with a remote
 seat (no remote seat has run on hardware yet), pairing through `poll_events` on the `stream`
 topic, the LAN address order of the pair dialog, account pictures from `get_user_picture`.
-Pulsar-backend pairing events that protocol 3 does not carry (`otp_changed`,
-`trust_changed`, `relay_auth_required`; dropped by `map_legacy_event`) no longer refresh the
-pair dialog by themselves.
+Pulsar-backend pairing events (`otp_changed`, `trust_changed`, `relay_auth_required`) are
+carried on the admin-only `stream` topic (`map_legacy_event`, since ddc1935) and refresh the
+pair dialog as in Split; untested against a real `pulsar-host`.
+
+Service buttons (round 4): `StartServiceW` / `ControlService(STOP)` against the real SCM,
+the token elevation check, and the wait for the target state (60 s) are untested on
+hardware. Mic state line on the remote seat page (`seat_runtime.stream.mic`) is untested
+against a real host (needs a `pulsar-host` with the `mic` capability).

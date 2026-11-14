@@ -4,7 +4,8 @@
 //! Replaces `pulsar-split-rdp-helper.exe` (merge-plan.md step 7).
 //!
 //! - argv: `seat_rdp::headless::proto::HelperArgs` after the subcommand (never a password).
-//! - stdin: exactly one password frame, then EOF.
+//! - stdin: exactly one password frame, then EOF. With `--audio-capture` stdin stays open
+//!   and carries microphone frames (`seat_core::remote::mic`), read on their own thread.
 //! - stdout: JSON Lines `HelperEvent`s.
 //! - exit 0 when the server ends the connection, non-zero on failure. No reconnect logic;
 //!   the service restarts the hold.
@@ -14,7 +15,8 @@
 
 use std::io::Write;
 
-use seat_rdp::headless::proto::{HelperArgs, HelperEvent, HelperFailure, exit, read_password_frame};
+use seat_rdp::headless::mic::HoldMic;
+use seat_rdp::headless::proto::{HelperArgs, HelperEvent, HelperFailure, exit, read_password_frame, read_password_frame_open};
 
 /// Writes one event line and flushes (the service reads line by line).
 fn emit(ev: &HelperEvent) {
@@ -45,7 +47,10 @@ fn run(rest: &[String]) -> i32 {
         Err(e) => return fail(HelperFailure::BadArgs, e.to_string(), exit::BAD_ARGS),
     };
     // The password arrives only on stdin; it is read once and wiped when dropped.
-    let password = match read_password_frame(&mut std::io::stdin().lock()) {
+    let mut stdin = std::io::stdin().lock();
+    let read = if args.audio_capture { read_password_frame_open(&mut stdin) } else { read_password_frame(&mut stdin) };
+    drop(stdin);
+    let password = match read {
         Ok(p) => p,
         Err(e) => return fail(HelperFailure::BadArgs, e.to_string(), exit::BAD_ARGS),
     };
@@ -54,7 +59,14 @@ fn run(rest: &[String]) -> i32 {
         drop(password);
         return finish(exit::OK);
     }
-    match seat_rdp::headless::client::run(&args, password, &mut emit) {
+    // Same `Stdin` (and its buffer) as the password read, so no mic byte is lost.
+    let mic = args.audio_capture.then(|| {
+        let mic = HoldMic::new();
+        let feed = mic.clone();
+        let _ = std::thread::Builder::new().name("hold-mic".into()).spawn(move || feed.pump(std::io::stdin()));
+        mic
+    });
+    match seat_rdp::headless::client::run(&args, password, mic, &mut emit) {
         Ok(reason) => {
             emit(&HelperEvent::Disconnected { reason });
             finish(exit::OK)

@@ -221,6 +221,19 @@ fn seat_audio(seat: &RemoteSeatRecord) -> SeatAudio {
     SeatAudio { stream_audio: seat.audio.stream_audio, microphone: seat.audio.microphone }
 }
 
+/// Whether the seat's backend can deliver a client microphone (spec/remote 70 §5.1).
+fn mic_path(seat: &RemoteSeatRecord) -> bool {
+    seat.stream_backend == StreamBackendKind::Pulsar
+}
+
+/// Client mic frames of `seat_id` (from its `pulsar-host` mic pipe) go to its hold's stdin.
+fn mic_sink(session: Arc<dyn SessionManager>, seat_id: String) -> seat_stream::backend::pulsar::mic::MicSink {
+    Arc::new(move |f: &seat_core::remote::mic::MicFrame| {
+        // Dropped when the hold is gone or its queue is full (never blocks the reader).
+        let _ = session.send_mic(&seat_id, f);
+    })
+}
+
 pub fn to_target(t: &ShimTargetDto) -> ShimTarget {
     ShimTarget { exe_name: t.exe_name.clone(), product_name: t.product_name.clone(), path: t.path.as_ref().map(PathBuf::from) }
 }
@@ -590,7 +603,9 @@ impl Engine {
         self.phase(seat, cancel, "session")?;
         let audio = seat_audio(seat);
         let policy = d.audio.policy().ok();
-        let capture = policy.as_ref().map(|p| rdp_client_flags(&audio, p).capture).unwrap_or(false);
+        // Microphone (spec/remote 70 §5.1): Pulsar seats only (pulsar-host mic pipe -> this
+        // hold's stdin -> MS-RDPEAI); Moonlight sends no mic.
+        let capture = policy.as_ref().map(|p| rdp_client_flags(&audio, p, mic_path(seat)).capture).unwrap_or(false);
         let req = SessionRequest {
             seat_id: &seat.id,
             client_name: &seat.rdp_client_name,
@@ -615,7 +630,7 @@ impl Engine {
 
         // 5. stream server.
         self.phase(seat, cancel, "stream")?;
-        res.server = Some(self.start_stream(seat, global, session_id, audio_keys)?);
+        res.server = Some(self.start_stream(seat, global, session_id, audio_keys, capture)?);
 
         // 6. pads: the seat context is registered on the first `pad.wanted`.
         self.phase(seat, cancel, "pads")?;
@@ -745,6 +760,7 @@ impl Engine {
         global: &RemoteSettings,
         session_id: u32,
         audio_keys: Vec<(String, String)>,
+        mic: bool,
     ) -> Result<Server, Failure> {
         let backend = self.backend_for(seat.stream_backend).map_err(|e| Failure::new(e.code(), &e))?;
         let mut apps = default_apps();
@@ -760,6 +776,7 @@ impl Engine {
             audio_keys,
             default_apps: apps,
             service_version: &self.d().service_version,
+            mic_sink: mic.then(|| mic_sink(self.d().session.clone(), seat.id.clone())),
         };
         let Prepared { mut stream, warnings } = backend.prepare(&spec).map_err(|e| Failure::new(e.code(), &e))?;
         for w in warnings {
@@ -1300,7 +1317,7 @@ impl Engine {
             let audio = seat_audio(seat);
             if let Ok(policy) = self.d().audio.policy() {
                 let endpoints = self.d().audio.endpoints().unwrap_or_default();
-                let st = seat_audio_status(&audio, &policy, session_endpoint(&endpoints, sid), audio_report);
+                let st = seat_audio_status(&audio, &policy, session_endpoint(&endpoints, sid), audio_report, mic_path(seat));
                 out.audio = Some(json(&st));
             }
             out.isolation =

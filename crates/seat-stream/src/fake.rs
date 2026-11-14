@@ -643,6 +643,9 @@ impl PulsarSecretStore for MemSecrets {
 struct HostPipesState {
     created: Vec<String>,
     pipes: Vec<FakePipe>,
+    /// Mic pipes (`create_mic`), in creation order.
+    mic_pipes: Vec<FakePipe>,
+    fail_mic: bool,
     /// `accept` calls that answer "nobody yet" before the client shows up.
     accept_delay: u32,
     /// Never connect (the host does not start its client).
@@ -679,6 +682,16 @@ impl FakeHostPipes {
     pub fn accepted_for(&self) -> Vec<Launched> {
         lock(&self.0).accepted_for.clone()
     }
+    /// The `n`-th mic pipe created (0-based); `inject_raw` sends host frames.
+    pub fn mic_pipe(&self, n: usize) -> FakePipe {
+        lock(&self.0).mic_pipes[n].clone()
+    }
+    pub fn mic_count(&self) -> usize {
+        lock(&self.0).mic_pipes.len()
+    }
+    pub fn fail_mic(&self, v: bool) {
+        lock(&self.0).fail_mic = v;
+    }
 }
 
 struct FakeHostPipe {
@@ -697,6 +710,17 @@ impl HostPipeListener for FakeHostPipes {
         let pipe = FakePipe::default();
         pipe.respond_with(pulsar_responder(seat_id));
         s.pipes.push(pipe.clone());
+        Ok(Box::new(FakeHostPipe { pipe, state: self.0.clone(), polls: 0 }))
+    }
+
+    fn create_mic(&self, seat_id: &str) -> Result<Box<dyn HostPipe>, StreamError> {
+        let mut s = lock(&self.0);
+        if s.fail_mic {
+            return Err(StreamError::ControlPipe("mic pipe name already exists".into()));
+        }
+        s.created.push(crate::backend::pulsar::mic::mic_pipe_name(seat_id));
+        let pipe = FakePipe::default();
+        s.mic_pipes.push(pipe.clone());
         Ok(Box::new(FakeHostPipe { pipe, state: self.0.clone(), polls: 0 }))
     }
 }

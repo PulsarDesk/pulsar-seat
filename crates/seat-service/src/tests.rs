@@ -2430,3 +2430,35 @@ fn local_pad_targets_follow_routing_session_and_the_seat_switch() {
     h.s.lock().config.seats[1].local_mut().unwrap().virtual_pads = false;
     assert!(h.s.local_pad_targets().is_empty());
 }
+#[test]
+fn pulsar_pairing_events_reach_admins_on_the_stream_topic_only() {
+    use seat_proto::{Event, StreamEvent};
+    let h = harness_with(with_remote_seat(), None);
+    h.s.boot();
+    let mut u = user(1);
+    let mut a = admin();
+    call(&h, &mut u, RequestBody::GetStatus).unwrap();
+    call(&h, &mut a, RequestBody::GetStatus).unwrap();
+    let after = h.s.events.last_seq();
+    for e in [
+        StreamEvent::OtpChanged(serde_json::json!({"backend": "pulsar"})),
+        StreamEvent::TrustChanged(serde_json::json!({"backend": "pulsar"})),
+        StreamEvent::RelayAuthRequired(serde_json::json!({"password": true, "totp": false, "backend": "pulsar"})),
+    ] {
+        h.s.events.publish(Event::Stream { seat: s(3), event: e });
+    }
+    let poll = |c: &mut Caller, topics: Vec<Topic>| {
+        let body = RequestBody::PollEvents { after, wait_ms: 0, topics };
+        call(&h, c, body)
+    };
+    let ResponseBody::Events(b) = poll(&mut a, vec![Topic::Stream]).unwrap() else { panic!() };
+    let kinds: Vec<String> =
+        b.events.iter().map(|f| serde_json::to_value(&f.event).unwrap()["data"]["event"]["type"].as_str().unwrap().to_string()).collect();
+    assert_eq!(kinds, ["otp_changed", "trust_changed", "relay_auth_required"]);
+    // No secret travels with them (the relay event says only what is asked for).
+    assert!(!serde_json::to_string(&b.events).unwrap().contains("secret"));
+    // A standard user cannot ask for the stream topic, and sees none of them otherwise.
+    assert_eq!(poll(&mut u, vec![Topic::Stream]).unwrap_err().code, ErrorCode::AccessDenied);
+    let ResponseBody::Events(b) = poll(&mut u, vec![]).unwrap() else { panic!() };
+    assert!(b.events.is_empty(), "{:?}", b.events);
+}
