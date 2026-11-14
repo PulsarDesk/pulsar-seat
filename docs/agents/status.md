@@ -1335,3 +1335,12 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   - Gates green: cargo 1602 passed / 6 ignored (+11), clippy aarch64 + x86_64 clean,
     manager 198 / check / build, shim tests (host) 10 (+2) + x64 tests + clippy + i686
     check, installer scripts 49, `ci-local.ps1` (default jobs) green. No test deleted.
+  - MSIs rebuilt from the clean tree at 087cd09 (`build-installer.ps1 -Arch arm64` /
+    `-Arch x64`, unsigned, test only, never installed; build records `dirty: false`;
+    payload + PE machine gate clean outside and inside the MSI):
+    - `PulsarSeat_0.1.0_arm64.msi` SHA-256
+      `7e4655744088ef3548101cae669817ae36573cf525016696bb4834922a1ed772` (51 613 696 bytes),
+      no shim.
+    - `PulsarSeat_0.1.0_x64.msi` SHA-256
+      `c23177ccc9e9ced7674232c44d2ed634a1079b44ff031cf2c83622edf2522118` (65 505 555 bytes),
+      `shim\x64` + `shim\x86`.
