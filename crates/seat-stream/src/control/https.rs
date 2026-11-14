@@ -108,6 +108,8 @@ impl PinnedHttps {
             .timeout_connect(Duration::from_secs(2))
             .timeout(Duration::from_secs(15))
             .redirects(0)
+            // Kept from Pulsar Split (same reason as `upstream::WEB_UI_USER`); only the
+            // seat's own stream server sees it.
             .user_agent("pulsar-split-service")
             .build();
         let mut raw = Zeroizing::new(String::with_capacity(creds.user.len() + creds.password.len() + 1));

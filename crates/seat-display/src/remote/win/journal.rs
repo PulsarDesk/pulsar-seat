@@ -2,7 +2,7 @@
 //! Write-through JSON Lines journal file.
 //!
 //! Runs as SYSTEM under `%ProgramData%`, where Users may create folders and files. So the
-//! data root (`PulsarSplit`) and the `journal` folder are created with a protected DACL
+//! data root (`Pulsar Seat`) and the `journal` folder are created with a protected DACL
 //! (SYSTEM + Administrators only) when absent, and verified (owner, DACL, no reparse
 //! point) before every read and append; the journal file itself must be a regular file
 //! with one link (see [`super::secure`]). A folder somebody else created first is refused,
@@ -21,16 +21,6 @@ pub struct FileRestoreLog {
 }
 
 impl FileRestoreLog {
-    /// `%ProgramData%\PulsarSplit\journal\display.jsonl`.
-    pub fn default_path() -> PathBuf {
-        let base = std::env::var_os("ProgramData")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
-        base.join("PulsarSplit")
-            .join("journal")
-            .join("display.jsonl")
-    }
-
     pub fn new(path: PathBuf) -> Self {
         FileRestoreLog { path }
     }
@@ -69,12 +59,6 @@ impl FileRestoreLog {
             Err(FsError::NotFound(_)) if !create => Ok(None),
             Err(e) => Err(fs(e, "journal folder")),
         }
-    }
-}
-
-impl Default for FileRestoreLog {
-    fn default() -> Self {
-        FileRestoreLog::new(Self::default_path())
     }
 }
 

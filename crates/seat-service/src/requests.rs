@@ -484,6 +484,8 @@ impl Service {
             host_seat: if host { caller.host_seat } else { None },
             agent_session: if agent { caller.agent_session } else { None },
             kiosk_seat: if host { caller.kiosk_seat } else { None },
+            // Non-admins never get remote seat status, even with empty topics (= all).
+            admin: caller.admin(),
         })
     }
 
@@ -577,6 +579,9 @@ impl Service {
         }
         // The product switch has its own request (it stops / starts things).
         cfg.settings.enabled = old.settings.enabled;
+        // Deleted remote seats: refused while active, cleaned up after the save.
+        let removed_remote = Service::removed_remote_seats(&old, &cfg);
+        self.check_remote_removal(&removed_remote)?;
         let (rev, restart, removed) = {
             let mut st = self.lock();
             if st.config.revision != base {
@@ -601,6 +606,7 @@ impl Service {
             (rev, restart, removed)
         };
         log::info(&format!("config revision {rev} applied"));
+        self.forget_remote_seats(&removed_remote);
         // A session-backend change prepares the new backend itself (restore + prepare).
         let prepared = old.settings.backends != cfg.settings.backends && self.reselect_backends();
         if old.settings.tweaks != cfg.settings.tweaks {

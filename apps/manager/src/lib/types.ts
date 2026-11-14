@@ -721,7 +721,10 @@ export type StreamEvent =
   | { type: 'pair_pending'; data: Record<string, unknown> | null }
   | { type: 'pair_ended'; data: Record<string, unknown> | null }
   | { type: 'stream_started'; data: Record<string, unknown> | null }
-  | { type: 'stream_ended'; data: Record<string, unknown> | null };
+  | { type: 'stream_ended'; data: Record<string, unknown> | null }
+  | { type: 'otp_changed'; data: Record<string, unknown> | null }
+  | { type: 'trust_changed'; data: Record<string, unknown> | null }
+  | { type: 'relay_auth_required'; data: Record<string, unknown> | null };
 
 export type ServiceEvent =
   | { type: 'product_state'; data: { state: ProductState } }

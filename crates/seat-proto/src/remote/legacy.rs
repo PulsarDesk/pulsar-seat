@@ -10,9 +10,6 @@ use super::*;
 use crate::PROTOCOL_VERSION;
 use serde::{Deserialize, Serialize};
 
-/// Name of the control pipe. Only Administrators and SYSTEM may open it (see the service).
-pub const PIPE_NAME: &str = r"\\.\pipe\PulsarSplit.Control";
-
 /// Longest `poll_events` wait the service accepts.
 pub const MAX_POLL_WAIT_MS: u32 = 2_000;
 
@@ -47,7 +44,8 @@ pub enum RequestBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stream_backend: Option<StreamBackendKind>,
     },
-    DeleteSeat { name: String },
+    // `delete_seat` is gone (merge review): remote seats are deleted with `apply_config`,
+    // which has the worker forget the seat (`Controller::forget_seat`).
     /// Write-only: the password is stored by the service and never returned.
     SetSeatPassword { name: String, password: Secret },
     /// Asynchronous since v2: answered once the start is under way; progress arrives in
@@ -244,7 +242,7 @@ mod tests {
     /// Moved from split-proto `framing::tests::message_roundtrip`.
     #[test]
     fn message_roundtrip() {
-        let req = Request::new(1, RequestBody::DeleteSeat { name: "x1".into() });
+        let req = Request::new(1, RequestBody::StopSeat { name: "x1".into() });
         let mut buf = Vec::new();
         crate::write_message(&mut buf, &req).unwrap();
         let back: Request = crate::read_message(&mut std::io::Cursor::new(buf)).unwrap().unwrap();

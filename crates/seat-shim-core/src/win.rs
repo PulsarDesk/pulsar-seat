@@ -432,7 +432,8 @@ impl ShimSystem for WinShimSystem {
             system32: sys_dir(GetSystemDirectoryW).unwrap_or_else(|| windir.join("System32")),
             syswow64: sys_dir(GetSystemWow64DirectoryW),
             data_root: PathBuf::from(std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into()))
-                .join("PulsarSplit"),
+                .join(crate::install::PRODUCT_DIR)
+                .join(crate::install::SHIM_DATA_DIR),
             windir,
         }
     }
@@ -710,7 +711,7 @@ impl Fetcher for WinHttpFetcher {
     }
 }
 
-/// `%ProgramData%\PulsarSplit\journal\shim.jsonl`
+/// `%ProgramData%\Pulsar Seat\shim\journal\shim.jsonl`
 pub fn journal_path() -> PathBuf {
     WinShimSystem.dirs().data_root.join("journal").join("shim.jsonl")
 }
@@ -725,7 +726,7 @@ pub fn open_journal() -> Result<crate::journal::JsonlFileLog, ShimError> {
     Ok(crate::journal::JsonlFileLog { path })
 }
 
-/// `%ProgramData%\PulsarSplit\dxvk`
+/// `%ProgramData%\Pulsar Seat\shim\dxvk`
 pub fn dxvk_root() -> PathBuf {
     WinShimSystem.dirs().data_root.join("dxvk")
 }

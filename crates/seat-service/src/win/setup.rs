@@ -165,6 +165,9 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         }
     };
     let mut code = setup::EXIT_OK;
+    // Remote seat ids before anything deletes the config or the seat folders: their LSA
+    // secrets (`L$PulsarSeat.Remote.<id>.*`) are deleted with the seat passwords below.
+    let remote_ids = crate::remote::uninstall_remote_seat_ids(data_dir);
     // Remote kind first (merge step 10): its package hooks (stream firewall rules, pads,
     // virtual display settings, shim, wrapper module with the TermService restart, RDS
     // rows) and the generic replay of its `<package>.jsonl` journals. Then the local kind
@@ -235,6 +238,11 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
             code = code.max(setup::EXIT_PARTIAL);
         }
     }
+    // Remote seats' stream secrets (Pulsar identity, connect password, relay key).
+    for (id, e) in crate::remote::delete_remote_secrets(&super::lsa::LsaSecretStore, &remote_ids) {
+        eprintln!("Uyarı: {id} uzak koltuğunun gizli bilgisi silinemedi ({e}).");
+        code = code.max(setup::EXIT_PARTIAL);
+    }
     // The seat hosts' account (rights, account, logon-screen entry, LSA password). Only
     // once the service is stopped (the MSI stops it first; the command line may not have):
     // a running service would start hosts whose logon no longer works.
@@ -284,11 +292,25 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         eprintln!("Uyarı: veri klasörü silinemedi: {e}");
         code = code.max(setup::EXIT_PARTIAL);
     }
+    // The shim's data folder before the merge review (`%ProgramData%\PulsarSplit`: journal,
+    // DXVK releases, database copy). Nothing reads it any more (no migration of old
+    // installs, merge-plan.md section 5); it goes with the user data.
+    if opts.remove_user_data
+        && let Some(legacy) = data_dir.parent().map(|p| p.join(LEGACY_SHIM_DATA_DIR))
+        && legacy.is_dir()
+        && let Err(e) = std::fs::remove_dir_all(&legacy)
+    {
+        eprintln!("Uyarı: eski veri klasörü ({}) silinemedi: {e}", legacy.display());
+        code = code.max(setup::EXIT_PARTIAL);
+    }
     if code == setup::EXIT_OK {
         println!("Pulsar Seat kaldırıldı.");
     }
     if opts.msi { setup::EXIT_OK } else { code }
 }
+
+/// Folder name of the shim data root before the merge review (under `%ProgramData%`).
+const LEGACY_SHIM_DATA_DIR: &str = "PulsarSplit";
 
 #[cfg(test)]
 mod gate_revert_tests {

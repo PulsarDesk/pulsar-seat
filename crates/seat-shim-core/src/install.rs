@@ -106,13 +106,18 @@ pub struct VersionInfo {
     pub file_version: Option<String>,
 }
 
+/// Folder of the one Pulsar Seat data root under `%ProgramData%` (seat-core `PRODUCT_DIR`).
+pub const PRODUCT_DIR: &str = "Pulsar Seat";
+/// The shim's own private folder below it (journal, database copy, DXVK releases).
+pub const SHIM_DATA_DIR: &str = "shim";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemDirs {
     pub windir: PathBuf,
     pub system32: PathBuf,
     /// `None` on 32-bit Windows.
     pub syswow64: Option<PathBuf>,
-    /// `%ProgramData%\PulsarSplit`
+    /// `%ProgramData%\Pulsar Seat\shim` ([`PRODUCT_DIR`], [`SHIM_DATA_DIR`]).
     pub data_root: PathBuf,
 }
 
@@ -175,7 +180,7 @@ impl AppHelpInstaller<'_> {
     }
 
     fn sdb_copy_path(&self) -> PathBuf {
-        self.sys.dirs().data_root.join("shim").join("PulsarSplitShim.sdb")
+        self.sys.dirs().data_root.join("sdb").join("PulsarSplitShim.sdb")
     }
 
     /// Spec 90 §8.1 signals 6–10. Returns the first signal seen.

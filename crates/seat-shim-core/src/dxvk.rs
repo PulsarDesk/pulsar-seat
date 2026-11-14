@@ -255,7 +255,7 @@ impl DxvkFs for StdFs {
     }
 }
 
-/// `<root>\<version>`; root = `%ProgramData%\PulsarSplit\dxvk`.
+/// `<root>\<version>`; root = `%ProgramData%\Pulsar Seat\shim\dxvk`.
 pub fn release_dir(root: &Path, version: &str) -> PathBuf {
     root.join(version)
 }
@@ -597,7 +597,7 @@ mod tests {
         let tgz = tarball("3.1.1", None);
         let fs = MemFs::default();
         let f = FakeFetcher::new(tgz.clone());
-        let root = Path::new(r"C:\ProgramData\PulsarSplit\dxvk");
+        let root = Path::new(r"C:\ProgramData\Pulsar Seat\shim\dxvk");
         let dir = download_release(&f, &fs, &release(&tgz), root).unwrap();
         assert_eq!(dir, root.join("3.1.1"));
         assert!(fs.exists(&dir.join(RELEASE_LICENSE)));

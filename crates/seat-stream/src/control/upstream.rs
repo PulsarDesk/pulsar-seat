@@ -46,7 +46,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-/// Web-UI user name written into `credentials_file`.
+/// Web-UI user name written into `credentials_file`. Kept from Pulsar Split on purpose
+/// (merge review): existing seats' stream servers hold credentials for this user, and
+/// renaming it would need them re-provisioned. Not a product name shown anywhere.
 pub const WEB_UI_USER: &str = "pulsar-split-service";
 const ALNUM: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 

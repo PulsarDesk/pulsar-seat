@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Restore records (spec 90 §9.2, contracts.md §0.3): JSON Lines in
-//! `%ProgramData%\PulsarSplit\journal\shim.jsonl`. `intent` is written (flushed,
+//! `%ProgramData%\Pulsar Seat\shim\journal\shim.jsonl`. `intent` is written (flushed,
 //! write-through) before a change, `done` after it. [`restore_plan`] replays only this
 //! package's records, newest first, and restores each target to the oldest `previous`.
 

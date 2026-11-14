@@ -17,7 +17,7 @@
 //! | [`sdb`] | database tree built from the target list (written by apphelp's own writer API) |
 //! | [`launch`] | PE bitness and Windows command-line quoting for the launcher |
 //! | [`dxvk`] | per-game DXVK D3D8/D3D9 deploy with download + SHA-256 verify, backup and undo |
-//! | [`journal`] | restore records (`%ProgramData%\PulsarSplit\journal\shim.jsonl`) |
+//! | [`journal`] | restore records (`%ProgramData%\Pulsar Seat\shim\journal\shim.jsonl`) |
 //!
 //! Real Windows implementations of the traits are in [`win`] (`#[cfg(windows)]`); in-memory
 //! fakes are in [`fake`] (tests, or the `fake` feature).

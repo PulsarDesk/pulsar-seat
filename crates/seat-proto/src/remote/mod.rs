@@ -55,6 +55,9 @@ pub fn map_legacy_event(ev: &ServiceEvent, seat: Option<SeatNumber>) -> MappedEv
         "pair_ended" => stream(StreamEvent::PairEnded(data)),
         "stream_started" => stream(StreamEvent::StreamStarted(data)),
         "stream_ended" => stream(StreamEvent::StreamEnded(data)),
+        "otp_changed" => stream(StreamEvent::OtpChanged(data)),
+        "trust_changed" => stream(StreamEvent::TrustChanged(data)),
+        "relay_auth_required" => stream(StreamEvent::RelayAuthRequired(data)),
         _ => MappedEvent::Dropped,
     }
 }
@@ -84,6 +87,9 @@ mod tests {
             ("pair_ended", "pair_ended"),
             ("stream_started", "stream_started"),
             ("stream_ended", "stream_ended"),
+            ("otp_changed", "otp_changed"),
+            ("trust_changed", "trust_changed"),
+            ("relay_auth_required", "relay_auth_required"),
         ] {
             let MappedEvent::Event(e) = map_legacy_event(&ev(kind, serde_json::json!({"client": "tv"})), Some(two)) else {
                 panic!("{kind}")

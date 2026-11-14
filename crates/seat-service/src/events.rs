@@ -6,6 +6,10 @@
 //! event's seat; `agent` topic events only the agent of the event's session. Other topics
 //! go to every subscriber that asked for them (the request itself was authorised).
 //!
+//! Remote seat status is admin only (merge-plan.md section 5): a caller whose scope is not
+//! `admin` never gets `stream` events, nor `seat_state` / `notice` events of a remote seat,
+//! whatever topics it asked for (empty topics mean "everything this caller may see").
+//!
 //! Every subscriber has a bounded queue ([`SUBSCRIBER_QUEUE`]). A subscriber that does not
 //! keep up (its client stopped reading) is dropped when its queue is full, so a client
 //! can never make the service buffer events without limit. The pipe layer then closes the
@@ -14,7 +18,8 @@
 
 use seat_core::{Clock, SeatNumber};
 use seat_proto::{EVENT_BACKLOG, Event, EventBatch, EventFrame, Topic};
-use std::collections::VecDeque;
+use seat_core::config::SeatKind;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -32,17 +37,36 @@ pub struct Scope {
     /// Verified kiosk shell of this seat: its seat's `input_packets` only (no host
     /// commands). Added 2026-11-13.
     pub kiosk_seat: Option<SeatNumber>,
+    /// Administrator (or SYSTEM): may see remote seat status and stream events.
+    pub admin: bool,
 }
 
 impl Scope {
-    /// Whether a frame may go to a client with this scope.
-    pub fn allows(&self, ev: &Event) -> bool {
+    /// Whether a frame may go to a client with this scope. `remote` holds the configured
+    /// remote seat numbers.
+    pub fn allows(&self, ev: &Event, remote: &BTreeSet<SeatNumber>) -> bool {
+        if !self.admin && is_remote_status(ev, remote) {
+            return false;
+        }
         match ev {
             Event::InputPackets { seat, .. } => self.host_seat == Some(*seat) || self.kiosk_seat == Some(*seat),
             Event::HostCommand { seat, .. } => self.host_seat == Some(*seat),
             Event::AgentTask { session_id, .. } => self.agent_session == Some(*session_id),
             _ => true,
         }
+    }
+}
+
+/// Remote seat status: `stream` events, and `seat_state` / `notice` of a remote seat (or a
+/// remote worker host warning).
+fn is_remote_status(ev: &Event, remote: &BTreeSet<SeatNumber>) -> bool {
+    match ev {
+        Event::Stream { .. } => true,
+        Event::SeatState { runtime } => runtime.kind == SeatKind::Remote || remote.contains(&runtime.seat),
+        Event::Notice { code, seat, .. } => {
+            code == seat_proto::remote::HOST_WARNING_NOTICE || seat.is_some_and(|n| remote.contains(&n))
+        }
+        _ => false,
     }
 }
 
@@ -56,6 +80,8 @@ struct Inner {
     seq: u64,
     backlog: VecDeque<EventFrame>,
     subs: Vec<Sub>,
+    /// Configured remote seats (kept current by the service on every config change).
+    remote: BTreeSet<SeatNumber>,
 }
 
 pub struct EventHub {
@@ -75,10 +101,20 @@ fn wanted(topics: &[Topic], ev: &Event) -> bool {
 impl EventHub {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
-            inner: Mutex::new(Inner { seq: 0, backlog: VecDeque::with_capacity(EVENT_BACKLOG), subs: Vec::new() }),
+            inner: Mutex::new(Inner {
+                seq: 0,
+                backlog: VecDeque::with_capacity(EVENT_BACKLOG),
+                subs: Vec::new(),
+                remote: BTreeSet::new(),
+            }),
             cv: Condvar::new(),
             clock,
         }
+    }
+
+    /// Set the configured remote seats (for the admin-only filter of [`Scope::allows`]).
+    pub fn set_remote_seats(&self, remote: BTreeSet<SeatNumber>) {
+        lock(&self.inner).remote = remote;
     }
 
     /// Publish one event; returns its `seq`.
@@ -93,8 +129,9 @@ impl EventHub {
             }
             g.backlog.push_back(frame.clone());
         }
-        g.subs.retain(|s| {
-            if !wanted(&s.topics, &frame.event) || !s.scope.allows(&frame.event) {
+        let Inner { subs, remote, .. } = &mut *g;
+        subs.retain(|s| {
+            if !wanted(&s.topics, &frame.event) || !s.scope.allows(&frame.event, remote) {
                 return true;
             }
             match s.tx.try_send(frame.clone()) {
@@ -143,7 +180,7 @@ impl EventHub {
             let events: Vec<EventFrame> = g
                 .backlog
                 .iter()
-                .filter(|f| f.seq > after && wanted(topics, &f.event) && scope.allows(&f.event))
+                .filter(|f| f.seq > after && wanted(topics, &f.event) && scope.allows(&f.event, &g.remote))
                 .cloned()
                 .collect();
             let now = Instant::now();

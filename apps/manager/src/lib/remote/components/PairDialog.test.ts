@@ -25,7 +25,7 @@ function setup(state: PairState, backend: 'sunshine' | 'pulsar') {
     onUnpairAll: vi.fn(async () => {}),
     onClose: vi.fn(),
     onAnswer: vi.fn(async () => {}),
-    onGetOtp: vi.fn(async (rotate: boolean) => (rotate ? '654321' : '123456')),
+    onGetOtp: vi.fn(async (rotate: boolean): Promise<string> => (rotate ? '654321' : '123456')),
     onSetConnectPassword: vi.fn(async () => {}),
     onRelayAuth: vi.fn(async () => {})
   };
@@ -124,5 +124,35 @@ describe('PairDialog', () => {
     await user.type(screen.getByLabelText(t.pair.relayTotp), '123456');
     await user.click(screen.getByRole('button', { name: t.pair.relayAuthSend }));
     expect(props.onRelayAuth).toHaveBeenCalledWith('relay-pw', '123456');
+  });
+
+  it('a relay_auth_required event shows the relay login without a manual refresh', async () => {
+    const event = (kind: 'relay_auth_required' | 'otp_changed', seq: number): Events => ({
+      next: seq + 1,
+      events: [{ seq, time: 0, seat: 'Salon PC', kind, data: {} }]
+    });
+    let release: (e: Events) => void = () => {};
+    const { props } = setup({ ...pulsarPending, pending: null }, 'pulsar');
+    props.pollEvents.mockImplementationOnce(() => new Promise<Events>((r) => (release = r))).mockImplementation(idle);
+    expect(await screen.findByText(t.pair.pulsarWaiting)).toBeInTheDocument();
+    expect(screen.queryByLabelText(t.pair.relayPassword)).toBeNull();
+    // The relay now wants credentials; only the event tells the dialog to look again.
+    props.loadState.mockResolvedValue({ ...pulsarPending, pending: null, relay_auth_required: true });
+    await vi.waitFor(() => expect(props.pollEvents).toHaveBeenCalled());
+    release(event('relay_auth_required', 4));
+    expect(await screen.findByLabelText(t.pair.relayPassword)).toBeInTheDocument();
+  });
+
+  it('an otp_changed event fetches the shown one-time password again', async () => {
+    let release: (e: Events) => void = () => {};
+    const { props, user } = setup({ ...pulsarPending, pending: null }, 'pulsar');
+    props.pollEvents.mockImplementationOnce(() => new Promise<Events>((r) => (release = r))).mockImplementation(idle);
+    await user.click(await screen.findByRole('button', { name: t.pair.showOtp }));
+    expect(await screen.findByText('123456')).toBeInTheDocument();
+    props.onGetOtp.mockResolvedValueOnce('777777');
+    await vi.waitFor(() => expect(props.pollEvents).toHaveBeenCalled());
+    release({ next: 6, events: [{ seq: 5, time: 0, seat: 'Salon PC', kind: 'otp_changed', data: {} }] });
+    expect(await screen.findByText('777777')).toBeInTheDocument();
+    expect(props.onGetOtp).toHaveBeenLastCalledWith(false);
   });
 });

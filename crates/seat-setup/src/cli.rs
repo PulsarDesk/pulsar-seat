@@ -2,11 +2,11 @@
 //! Argument parsing for the service sub-commands, so the integrator only forwards argv:
 //!
 //! ```text
-//! pulsar-split-service install   [--drivers <id,id>] [--consent <id,id>] [--register-service]
-//!                                [--allow-downgrade] [--msi]
-//! pulsar-split-service reconcile [same options as install]
-//! pulsar-split-service uninstall [--remove-user-data] [--unregister-service] [--msi]
-//! pulsar-split-service check-coexistence [--json]
+//! pulsar-seat-service remote-setup install   [--drivers <id,id>] [--consent <id,id>]
+//!                                            [--register-service] [--allow-downgrade] [--msi]
+//! pulsar-seat-service remote-setup reconcile [same options as install]
+//! pulsar-seat-service remote-setup uninstall [--remove-user-data] [--unregister-service] [--msi]
+//! pulsar-seat-service remote-setup check-coexistence [--json]
 //! ```
 //!
 //! `--msi`: the caller is a Windows Installer EXE custom action; only a real failure is

@@ -194,8 +194,10 @@ impl Service {
             let store = crate::remote::DocStore::new(doc.clone(), secrets.clone(), password_known.clone());
             crate::remote::glue::RemoteSlot::new((r.worker)(store), doc, r.host)
         });
+        let events = EventHub::new(d.clock.clone());
+        events.set_remote_seats(remote_seats(&config));
         Arc::new_cyclic(|weak| Service {
-            events: EventHub::new(d.clock.clone()),
+            events,
             store: d.store,
             secrets,
             run_store: d.run_store,
@@ -667,6 +669,7 @@ impl Service {
             st.seats.entry(s.number).or_insert_with(|| Slot::new(s.number));
         }
         log::set_levels(&cfg.settings.log);
+        self.events.set_remote_seats(remote_seats(&cfg));
         let old = std::mem::replace(&mut st.config, cfg);
         self.update_seat_jobs(st, &old);
         st.run.applied_revision = rev;
@@ -1228,4 +1231,9 @@ pub(crate) fn set_assignment(cfg: &mut Config, key: &DeviceKey, kind: DeviceKind
         container_id: None,
         options: Default::default(),
     });
+}
+
+/// Configured remote seat numbers (for the admin-only event filter).
+pub(crate) fn remote_seats(cfg: &Config) -> std::collections::BTreeSet<seat_core::SeatNumber> {
+    cfg.seats.iter().filter(|s| s.is_remote()).map(|s| s.number).collect()
 }

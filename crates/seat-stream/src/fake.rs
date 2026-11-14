@@ -725,7 +725,7 @@ pub fn pulsar_responder(seat_id: &str) -> impl FnMut(&serde_json::Value) -> Vec<
         let body = match req["type"].as_str() {
             Some("hello") => serde_json::json!({
                 "protocol": 1, "host_version": "test", "core_version": "test", "seat_id": seat_id,
-                "capabilities": ["approve", "connect_password", "otp", "trust_store", "apps", "app_launch_via_service", "seat_pads"]
+                "capabilities": ["approve", "connect_password", "otp", "trust_store", "apps", "app_launch_via_service", "split_pads"]
             }),
             Some("config.apply") => serde_json::json!({ "applied": ["display_name"], "restart_needed": [] }),
             Some("apps.set") => serde_json::json!({ "count": req["body"]["apps"].as_array().map_or(0, Vec::len) }),

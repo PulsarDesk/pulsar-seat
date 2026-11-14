@@ -6,4 +6,3 @@ build/
 # msbuild run without the build script's OutDir
 drivers/*/ARM64/
 drivers/*/x64/
-# Split manager NSIS sidecars (installer/split/README.md)

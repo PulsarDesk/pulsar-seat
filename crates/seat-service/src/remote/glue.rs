@@ -225,6 +225,49 @@ impl Service {
         Ok(())
     }
 
+    /// Remote seats of `old` that `new` no longer has (matched by seat id, so a seat whose
+    /// kind changed to local counts as removed).
+    pub(crate) fn removed_remote_seats(
+        old: &seat_core::config::Config,
+        new: &seat_core::config::Config,
+    ) -> Vec<(SeatNumber, seat_core::remote::RemoteSeatRecord)> {
+        let kept: Vec<String> = new.seats.iter().filter_map(|s| s.remote_record()).map(|r| r.id).collect();
+        old.seats
+            .iter()
+            .filter_map(|s| s.remote_record().map(|r| (s.number, r)))
+            .filter(|(_, r)| !kept.contains(&r.id))
+            .collect()
+    }
+
+    /// `apply_config` must not delete a remote seat that is booting, running or stopping
+    /// (Split's `delete_seat` answered `seat_running` too).
+    pub(crate) fn check_remote_removal(&self, removed: &[(SeatNumber, seat_core::remote::RemoteSeatRecord)]) -> Result<(), ProtoError> {
+        if removed.is_empty() {
+            return Ok(());
+        }
+        let busy = self.with_remote(|w| removed.iter().find(|(_, r)| w.seat_active(&r.id)).map(|(n, _)| *n)).flatten();
+        match busy {
+            Some(n) => Err(ProtoError::new(ErrorCode::SeatRunning, format!("seat {n}: stop the seat before deleting it"))
+                .with_reason("seat_running")
+                .with_field(format!("seats.{n}"))),
+            None => Ok(()),
+        }
+    }
+
+    /// After `apply_config` removed remote seats: the worker deletes their stream backend
+    /// secrets (LSA identity, connect password, relay key), seat folder, logs and firewall
+    /// rules, and drops their runtime.
+    pub(crate) fn forget_remote_seats(&self, removed: &[(SeatNumber, seat_core::remote::RemoteSeatRecord)]) {
+        for (n, record) in removed {
+            match self.with_remote(|w| w.forget_seat(record)) {
+                Some(Ok(())) => log::info(&format!("remote seat {n} deleted: files and secrets removed")),
+                Some(Err(e)) => log::error(&format!("remote seat {n} deleted, cleanup failed: {e}")),
+                None => log::warn(&format!("remote seat {n} deleted without the remote seat worker; files and secrets kept")),
+            }
+            self.lock().remote_rt.remove(n);
+        }
+    }
+
     /// `stop_seat` on a remote seat.
     pub(crate) fn stop_remote_seat(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
         let name = self.remote_name(seat).ok_or_else(|| not_configured(seat))?;

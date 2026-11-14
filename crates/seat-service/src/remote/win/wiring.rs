@@ -406,7 +406,7 @@ pub fn build(
     let fs: Arc<dyn seat_stream::seatdir::SecureFs> = Arc::new(seat_stream::win::WinSecureFs);
     let journal = seat_stream::journal::JsonlJournal::open(fs.clone(), data_root.join("journal").join("stream.jsonl"), SysClock)
         .map_err(|e| format!("stream journal: {e}"))?;
-    // Third-party remote payload: `<install>emote` (installer/scripts/fetch-deps.ts).
+    // Third-party remote payload: `<install>\remote` (installer/scripts/fetch-deps.ts).
     let dist_dir = install_dir.join(seat_setup::layout::REMOTE_PAYLOAD_DIR);
     let launcher: Arc<dyn seat_stream::supervise::ServerLauncher> = Arc::new(seat_stream::win::SessionLauncher::new());
     let firewall: Arc<dyn seat_stream::firewall::Firewall> = Arc::new(seat_stream::win::ComFirewall);

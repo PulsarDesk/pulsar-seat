@@ -21,6 +21,8 @@ pub const SETUP_KEY: &str = r"SOFTWARE\PulsarSplit\Setup";
 /// REG_MULTI_SZ under `SETUP_KEY`: driver ids chosen at install (empty = none). Reused
 /// when a repair / upgrade passes no `--drivers`.
 pub const SETUP_DRIVERS: &str = "Drivers";
+/// Legacy cleanup only: Pulsar Split's DPAPI secret key. Nothing writes it since the merge
+/// (secrets live in LSA); the `secrets` uninstall step still deletes a leftover one.
 pub const SECRETS_KEY: &str = r"SOFTWARE\PulsarSplit\Secrets";
 /// Experimental wrapper module state (enabled in the manager after its warning, never in
 /// the installer).

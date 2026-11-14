@@ -19,7 +19,7 @@ use seat_core::{Clock, DeviceKey, SeatMask, SeatNumber, Secret};
 use seat_proto::{
     AgentTaskKind, ClientKind, ErrorCode, Event, Hello, Request, RequestBody, ResponseBody, Topic,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 
 struct Inline;
@@ -2141,20 +2141,60 @@ fn remote_ready_config() -> Config {
 
 /// A service with the Split controller over the fake platform as its remote worker.
 fn remote_harness(config: Config) -> (Harness, Arc<HostRec>) {
+    let (h, rec, _) = remote_harness_removed(config);
+    (h, rec)
+}
+
+/// [`remote_harness`] plus the ids of the seats whose files the fake platform removed.
+fn remote_harness_removed(config: Config) -> (Harness, Arc<HostRec>, Arc<Mutex<Vec<String>>>) {
+    let removed: Arc<Mutex<Vec<String>>> = Arc::default();
+    let shared = removed.clone();
     let rec = Arc::new(HostRec::default());
     let host: Arc<dyn crate::remote::RemoteHost> = rec.clone();
     let remote = crate::service::RemoteDeps {
         worker: Box::new(|doc| {
             Box::new(crate::remote::control::Controller::new(
                 doc,
-                crate::remote::control::tests::FakePlatform::default(),
+                crate::remote::control::tests::FakePlatform { removed_ids: shared, ..Default::default() },
                 "t",
                 true,
             ))
         }),
         host: Some(host),
     };
-    (harness_full(config, None, Some(remote)), rec)
+    (harness_full(config, None, Some(remote)), rec, removed)
+}
+
+#[test]
+fn deleting_a_remote_seat_with_apply_config_stops_first_then_removes_files() {
+    let mut c = remote_ready_config();
+    c.seats.iter_mut().find(|x| x.number == s(3)).unwrap().autostart = false;
+    let id = c.seat(s(3)).unwrap().remote.as_ref().unwrap().id.clone();
+    let (h, _rec, removed) = remote_harness_removed(c);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(3), password: Some(Secret::new("pw3")) }).unwrap();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap();
+    assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }));
+    let delete = |a: &mut Caller| {
+        let ResponseBody::Config(view) = call(&h, a, RequestBody::GetConfig).unwrap() else { panic!() };
+        let mut cfg = view.config.clone();
+        cfg.seats.retain(|x| x.number != s(3));
+        call(&h, a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: view.config.revision, force: true })
+    };
+    // Running: refused like Split's delete_seat, nothing removed, the seat stays.
+    let e = delete(&mut a).unwrap_err();
+    assert_eq!(e.code, ErrorCode::SeatRunning);
+    assert!(removed.lock().unwrap().is_empty());
+    assert!(h.s.lock().config.seat(s(3)).is_some());
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap();
+    h.s.tick();
+    assert_eq!(state(&h, s(3)), SeatState::Off);
+    // Stopped: saved, and the worker removed its stream secrets, folder and rules.
+    assert!(delete(&mut a).is_ok());
+    assert_eq!(removed.lock().unwrap().as_slice(), [id]);
+    assert!(h.s.lock().config.seat(s(3)).is_none());
+    assert!(!h.s.lock().remote_rt.contains_key(&s(3)));
 }
 
 #[test]
@@ -2170,7 +2210,7 @@ fn mixed_local_and_remote_seats_start_and_stop_with_fakes() {
     assert_eq!(e.code, ErrorCode::MissingCredentials);
     call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(3), password: Some(Secret::new("pw3")) }).unwrap();
     call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(2), password: Some(Secret::new("pw2")) }).unwrap();
-    let rx = h.s.events.subscribe(vec![Topic::Status], Default::default());
+    let rx = h.s.events.subscribe(vec![Topic::Status], crate::events::Scope { admin: true, ..Default::default() });
     call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2), s(3)]) }).unwrap();
     assert_ne!(state(&h, s(2)), SeatState::Off);
     assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }), "{:?}", state(&h, s(3)));
@@ -2261,6 +2301,48 @@ fn remote_seat_status_is_admin_only() {
     assert!(st.seats.iter().all(|r| r.kind == SeatKind::Local) && st.seats.len() == 2);
     assert_eq!(call(&h, &mut u, RequestBody::Subscribe { topics: vec![Topic::Stream] }).unwrap_err().code, ErrorCode::AccessDenied);
     assert!(call(&h, &mut a, RequestBody::Subscribe { topics: vec![Topic::Stream] }).is_ok());
+}
+
+#[test]
+fn remote_seat_events_are_admin_only_with_empty_topics() {
+    use seat_core::config::SeatKind;
+    use seat_proto::{Event, StreamEvent};
+    let h = harness_with(with_remote_seat(), None);
+    h.s.boot();
+    let mut u = user(1);
+    let mut a = admin();
+    call(&h, &mut u, RequestBody::GetStatus).unwrap();
+    call(&h, &mut a, RequestBody::GetStatus).unwrap();
+    let sub_u = h.s.handle(&mut u, Request::new(2, RequestBody::Subscribe { topics: vec![] })).subscription.unwrap();
+    let sub_a = h.s.handle(&mut a, Request::new(2, RequestBody::Subscribe { topics: vec![] })).subscription.unwrap();
+    let after = h.s.events.last_seq();
+    let rt = |seat: SeatNumber, kind: SeatKind| {
+        let mut r = h.s.status().seats.into_iter().find(|r| r.seat == seat).unwrap();
+        r.kind = kind;
+        r
+    };
+    h.s.events.publish(Event::Stream { seat: s(3), event: StreamEvent::PairPending(serde_json::json!({"client": "tv"})) });
+    h.s.events.publish(Event::SeatState { runtime: rt(s(3), SeatKind::Remote) });
+    h.s.events.publish(Event::Notice { code: "x".into(), seat: Some(s(3)), detail: String::new() });
+    h.s.events.publish(Event::Notice { code: seat_proto::remote::HOST_WARNING_NOTICE.into(), seat: None, detail: String::new() });
+    h.s.events.publish(Event::SeatState { runtime: rt(s(2), SeatKind::Local) });
+    h.s.events.publish(Event::Notice { code: "y".into(), seat: Some(s(2)), detail: String::new() });
+    let seen_u: Vec<_> = sub_u.try_iter().map(|f| f.event).collect();
+    assert_eq!(seen_u.len(), 2, "{seen_u:?}");
+    assert!(seen_u.iter().all(|e| !matches!(e, Event::Stream { .. })));
+    assert!(matches!(&seen_u[0], Event::SeatState { runtime } if runtime.seat == s(2)));
+    assert_eq!(sub_a.try_iter().count(), 6);
+    let poll = |c: &mut Caller| {
+        let body = RequestBody::PollEvents { after, wait_ms: 0, topics: vec![] };
+        let ResponseBody::Events(b) = call(&h, c, body).unwrap() else { panic!() };
+        b.events.len()
+    };
+    assert_eq!(poll(&mut u), 2);
+    assert_eq!(poll(&mut a), 6);
+    // Explicit status topic: still no remote seat state for a standard user.
+    let body = RequestBody::PollEvents { after, wait_ms: 0, topics: vec![Topic::Status] };
+    let ResponseBody::Events(b) = call(&h, &mut u, body).unwrap() else { panic!() };
+    assert_eq!(b.events.len(), 2);
 }
 
 #[test]

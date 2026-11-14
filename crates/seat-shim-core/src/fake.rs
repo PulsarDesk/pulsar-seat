@@ -186,7 +186,7 @@ impl ShimSystem for FakeShimSystem {
             windir: PathBuf::from(r"C:\Windows"),
             system32: PathBuf::from(r"C:\Windows\System32"),
             syswow64: Some(PathBuf::from(r"C:\Windows\SysWOW64")),
-            data_root: PathBuf::from(r"C:\ProgramData\PulsarSplit"),
+            data_root: PathBuf::from(r"C:\ProgramData\Pulsar Seat\shim"),
         }
     }
     fn file_exists(&self, p: &Path) -> bool {

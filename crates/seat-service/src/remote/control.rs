@@ -340,7 +340,6 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
             RequestBody::UpdateSeat { name, seat, stream_backend } => {
                 self.update_seat(&name, seat, stream_backend).map(ResponseBody::Seat)
             }
-            RequestBody::DeleteSeat { name } => self.delete_seat(&name).map(|_| ResponseBody::Ack),
             RequestBody::SetSeatPassword { name, password } => {
                 self.set_password(&name, &password).map(|_| ResponseBody::Ack)
             }
@@ -663,11 +662,18 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         Ok(seat)
     }
 
-    fn delete_seat(&mut self, name: &str) -> Result<(), ProtoError> {
-        let seat = self.seat(name)?;
-        self.ensure_stopped(&seat)?;
-        self.store.delete_seat(&seat.name).map_err(store_err)?;
-        self.platform.remove_seat_files(&seat);
+    /// Whether the seat with this id is booting, running or stopping.
+    pub fn seat_active(&self, id: &str) -> bool {
+        self.rt(id).is_some_and(Runtime::is_active)
+    }
+
+    /// A seat deleted from the config document (`apply_config` removed it; the record is
+    /// the old one): refuse while it is active, else remove its stream backend secrets,
+    /// files and firewall rules (honouring `keep_pairing_on_delete`) and drop its runtime.
+    /// Split's `delete_seat` without the store write, which `apply_config` already did.
+    pub fn forget_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
+        self.ensure_stopped(seat)?;
+        self.platform.remove_seat_files(seat);
         self.runtime.remove(&seat.id);
         Ok(())
     }
@@ -1048,6 +1054,8 @@ pub(crate) mod tests {
         pub(crate) listening: Vec<u16>,
         pub(crate) unlocked: Vec<(String, bool, bool)>,
         pub(crate) rebooted: bool,
+        /// Ids of removed seats, shared with a test that boxed the controller.
+        pub(crate) removed_ids: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl Platform for FakePlatform {
@@ -1066,6 +1074,7 @@ pub(crate) mod tests {
         }
         fn remove_seat_files(&mut self, s: &RemoteSeatRecord) {
             self.removed.push(s.name.clone());
+            self.removed_ids.lock().unwrap().push(s.id.clone());
         }
         fn submit_pin(&mut self, _: &RemoteSeatRecord, _: &Secret, _: &str, r: Option<u32>) -> Result<(), ProtoError> {
             self.pins.push(r);
@@ -1390,11 +1399,12 @@ pub(crate) mod tests {
         assert!(st.seats[0].has_password);
         // Locked while running.
         assert_eq!(code(call(&mut c, RequestBody::UpdateSeat { name: "A".into(), seat: s.clone(), stream_backend: None })), ErrorCode::SeatRunning);
-        assert_eq!(code(call(&mut c, RequestBody::DeleteSeat { name: "A".into() })), ErrorCode::SeatRunning);
+        assert!(c.seat_active(&s.id));
+        assert_eq!(c.forget_seat(&s).unwrap_err().code, ErrorCode::SeatRunning);
         call(&mut c, RequestBody::StopSeat { name: "A".into() }).unwrap();
         assert_eq!(c.platform().stopped, ["A"]);
         assert_eq!(c.status().unwrap().seats[0].state, SeatState::Stopped);
-        call(&mut c, RequestBody::DeleteSeat { name: "A".into() }).unwrap();
+        c.forget_seat(&s).unwrap();
         assert_eq!(c.platform().removed, ["A"]);
         // The ring saw booting, session, running, stopping, stopped.
         let ev = c.events_after(0);

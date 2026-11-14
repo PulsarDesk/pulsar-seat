@@ -91,7 +91,7 @@ No system DLL redirect and no DXVK binaries in this repo or the installer. `shim
 download` (or the service) fetches the release over HTTPS (WinHTTP), checks its SHA-256
 against the manifest (default: DXVK 3.1.1,
 `40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608`), extracts only
-`x32`/`x64` `d3d8.dll` + `d3d9.dll` to `%ProgramData%\PulsarSplit\dxvk\<version>\`, writes
+`x32`/`x64` `d3d8.dll` + `d3d9.dll` to `%ProgramData%\Pulsar Seat\shim\dxvk\<version>\`, writes
 `release.json` (per-file hashes) and `LICENSE.txt`, and pins the release in HKLM
 (`Shim\Dxvk`: version, archive hash, `release.json` hash). `dxvk deploy` uses only the
 pinned release and checks it against the pin first, then copies the matching
@@ -100,8 +100,11 @@ bitness next to the game (D3D8 brings D3D9 along), backs up existing files as
 undo` restores the originals and leaves files the user replaced since. DXVK needs a
 Vulkan-capable GPU driver.
 
-Data folders (`%ProgramData%\PulsarSplit` and its `journal`, `shim`, `dxvk`) are created
-with a protected SYSTEM + Administrators DACL; an existing one that is a junction or not
+Data folders (`%ProgramData%\Pulsar Seat\shim` and its `journal`, `sdb`, `dxvk`; moved
+from `%ProgramData%\PulsarSplit` by the merge review, 2026-11-14) are created with a
+protected SYSTEM + Administrators DACL. The product root `%ProgramData%\Pulsar Seat` keeps
+the service's DACL: it is only checked (no junction, trusted owner) or created with the
+Seat DACL when missing. An existing one that is a junction or not
 owned by SYSTEM / Administrators is refused, and journal / database files are checked
 (owner, no hard link) before they are trusted. Restore replays only our module copies and
 DXVK DLLs next to games. All HKLM access uses the 64-bit view (`KEY_WOW64_64KEY`), so the
@@ -132,7 +135,7 @@ pulsar-split-shimctl status
 pulsar-split-shimctl install --x64 <x64\PulsarSplitShim.dll> --x86 <x86\PulsarSplitShim.dll> --target explorer.exe --target steam.exe=Steam
 pulsar-split-shimctl kill-switch on
 pulsar-split-shimctl uninstall          # mapped modules: renamed + deleted at next reboot
-pulsar-split-shimctl restore            # replay %ProgramData%\PulsarSplit\journal\shim.jsonl
+pulsar-split-shimctl restore            # replay %ProgramData%\Pulsar Seat\shim\journal\shim.jsonl
 ```
 
 ## Verified on the dev box (Windows 11 ARM64, no elevation, no system change)

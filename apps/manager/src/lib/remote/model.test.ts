@@ -180,6 +180,18 @@ describe('remote event mapping (inverse of map_legacy_event)', () => {
     });
   });
 
+  it('maps the pair dialog events otp_changed, trust_changed and relay_auth_required', () => {
+    for (const type of ['otp_changed', 'trust_changed', 'relay_auth_required'] as const) {
+      expect(mapFrame(frame(8, { type: 'stream', data: { seat: 3, event: { type, data: null } } }), names)).toEqual({
+        seq: 8,
+        time: 10,
+        seat: 'Salon',
+        kind: type,
+        data: {}
+      });
+    }
+  });
+
   it('drops local seats, unknown seats and other events', () => {
     expect(mapFrame(frame(1, { type: 'seat_state', data: { runtime: rt({ state: 'off' }, { kind: 'local' }) } }), names)).toBeNull();
     expect(mapFrame(frame(1, { type: 'stream', data: { seat: 9, event: { type: 'stream_started', data: null } } }), names)).toBeNull();

@@ -1149,9 +1149,23 @@ Events (topic mapping, `seat_proto::remote::map_legacy_event`):
 | --- | --- |
 | `seat_phase`, `seat_failed` | `seat_state{runtime}` (topic `status`; the caller supplies the runtime) |
 | `host_warning` | `notice{code: "host_warning", seat, detail}` (topic `status`) |
-| `pair_pending`, `pair_ended`, `stream_started`, `stream_ended` | `stream{seat, event: {type, data}}` (new topic **`stream`**) |
+| `pair_pending`, `pair_ended`, `stream_started`, `stream_ended`, `otp_changed`, `trust_changed`, `relay_auth_required` | `stream{seat, event: {type, data}}` (new topic **`stream`**) |
 
 `poll_events` stays for simple clients.
+
+Admin-only filter (merge review, 2026-11-14): a non-admin subscriber or poller never gets
+`stream` events, nor `seat_state` / `notice` events of a remote seat (or a `host_warning`),
+whatever topics it named; empty topics mean "every topic this caller may see"
+(`events::Scope::admin`, the hub keeps the configured remote seat numbers). Naming the
+`stream` topic explicitly is still refused with `access_denied`.
+
+Deleting a remote seat with `apply_config` (Split's `delete_seat`): refused with
+`seat_running` while the seat boots, runs or stops; after the save the worker's
+`forget_seat` removes its stream backend secrets (LSA identity, connect password, relay
+key), seat folder, logs and firewall rules (honouring `keep_pairing_on_delete`). Uninstall
+deletes the LSA remote secrets of every remote seat in the config and every `seats\<id>`
+folder (`remote::uninstall_remote_seat_ids`). LSA has no documented enumeration of private
+data by prefix, so a secret whose seat is in neither place is not found.
 
 Transitional: `seat_proto::remote::legacy` keeps Split's v2 request and response enums
 (stamped with `PROTOCOL_VERSION` 3). Since step 6 no pipe serves them: only the remote seat

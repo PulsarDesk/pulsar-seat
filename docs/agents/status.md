@@ -743,6 +743,32 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   `seat-media live_tree`) pass on the ARM64 dev laptop. Untested on hardware: every pad and
   display path; `local_pads` never ran against a real backend.
   **Next:** step 9 (one manager).
+- 2026-11-14: **merge review fixes** (9 findings, all confirmed). (1) Remote seat status is
+  admin only for events too: `events::Scope::admin`; non-admins never get `stream`, or
+  `seat_state` / `notice` of remote seats, also with empty topics. (2) Deleting a remote
+  seat with `apply_config` is refused (`seat_running`) while it is active; after the save
+  `Controller::forget_seat` removes its stream secrets, folder, logs and firewall rules.
+  Split's unreachable `delete_seat` handler and the legacy `PIPE_NAME` are gone. (3)
+  Uninstall deletes `L$PulsarSeat.Remote.<id>.*` for every remote seat in the config and
+  every `seats\<id>` folder (no LSA enumeration by prefix: no documented API). (4) The
+  `otp_changed` / `trust_changed` / `relay_auth_required` events are `stream` events again;
+  the pair dialog reacts to them. (5) The `pulsar-host` hello capability is `split_pads`
+  again (contract unchanged); contract note on the moved data and install roots. (6) CR
+  byte in `remote/win/wiring.rs` fixed. (7) `SECRETS_KEY` marked legacy cleanup. (8) Stale
+  names: `seat-setup` CLI docs, `.gitignore`; Sunshine UA / web UI user kept on purpose
+  (comment). (9) The shim's data root is `%ProgramData%\Pulsar Seat\shim` (database copy in
+  `sdb\`); the product root is only checked, never re-permissioned; `REMOVEUSERDATA=1` also
+  deletes the old `%ProgramData%\PulsarSplit`; `FileRestoreLog::default_path` removed.
+  Gates: cargo 1507 (was 1504, +3), clippy aarch64 + x86_64 clean, vitest 181 (+3), check,
+  build, installer scripts 49, shim 8 (host; x64 + i686 check). None deleted (2 controller
+  `DeleteSeat` assertions now call `forget_seat`; the legacy round-trip test uses
+  `StopSeat`).
+  **Open (needs a decision):** pulsar-desktop's seat host checks that the pipe server image
+  is `pulsar-split-service.exe` (`desk:src-tauri/src/seat/win.rs:18`); the merged service
+  is `pulsar-seat-service.exe`, so a real `pulsar-host` would refuse it. Fix in
+  pulsar-desktop (accept both) or decide otherwise. Several doc comments in seat-stream /
+  seat-pads / seat-display still say `%ProgramData%\PulsarSplit` where the data root is a
+  parameter (the service passes `Pulsar Seat`).
 - 2026-11-14: **merge step 10 done** (one MSI for x64 and ARM64; installer/README.md "Remote
   seat kind"). `installer/split/` is gone. Pins moved to `installer/remote/{drivers,
   stream-server}.json`, `fetch-deps.ts` to `installer/scripts/` (output
@@ -787,9 +813,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     - Built from the uncommitted step 10 tree on top of 4fc88d7 (build records say
       dirty); rebuild from the commit for anything beyond a smoke test.
   - Open: nothing installed or run elevated (remote custom actions, driver opt-in,
-    leftover-service removal, chained uninstall). The shim's own journal and DXVK cache stay
-    in `%ProgramData%\PulsarSplit` (seat-shim-core) and are not deleted by
-    `REMOVEUSERDATA=1`. Split's NSIS hooks, the `Termwrap\Offered` MSI feature and the
+    leftover-service removal, chained uninstall). (Fixed by the merge review: the shim's
+    journal and DXVK cache moved to `%ProgramData%\Pulsar Seat\shim`.) Split's NSIS hooks, the `Termwrap\Offered` MSI feature and the
     "reference seen" marker are dropped (no reader). `remote-setup --register-service` now
     registers the `PulsarSeat` service (NSIS only, not shipped).
   **Next:** step 11 (hardware tests per kind, then mixed; the maintainer runs them).
@@ -811,7 +836,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   `pipe_client::secret_requests_fail_closed_and_never_print_the_secret`; none deleted),
   clippy aarch64 + x86_64 clean, manager vitest 178 (was 115 + 45; +18 mapping and tab
   tests), installer scripts 29 (+ installer/split 15), shim 8 (host; x64 check). Untested
-  on hardware and against a real service. Open: protocol 3 drops Split's `otp_changed` /
+  on hardware and against a real service. Open (fixed by the merge review: the three
+  events are `stream` events now): protocol 3 drops Split's `otp_changed` /
   `trust_changed` / `relay_auth_required` events, so the Pulsar pair dialog no longer
   refreshes on them; installer/split bundle configs still name `apps/split-manager`
   (step 10).

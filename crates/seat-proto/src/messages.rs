@@ -1021,7 +1021,9 @@ pub enum Event {
 }
 
 /// Pairing and streaming on a remote seat (Split's `pair_pending`, `pair_ended`,
-/// `stream_started`, `stream_ended`; payloads as the stream backend reports them).
+/// `stream_started`, `stream_ended`, and the Pulsar backend's `otp_changed`,
+/// `trust_changed`, `relay_auth_required`; payloads as the stream backend reports them).
+/// Admin only, like the whole `stream` topic.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -1029,6 +1031,12 @@ pub enum StreamEvent {
     PairEnded(serde_json::Value),
     StreamStarted(serde_json::Value),
     StreamEnded(serde_json::Value),
+    /// The seat's one-time password changed (the pair dialog fetches it again).
+    OtpChanged(serde_json::Value),
+    /// The trusted client list changed.
+    TrustChanged(serde_json::Value),
+    /// The relay asks for credentials (the pair dialog shows the relay login).
+    RelayAuthRequired(serde_json::Value),
 }
 
 impl Event {

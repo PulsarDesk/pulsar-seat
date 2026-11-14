@@ -2,6 +2,8 @@
 
 > **Superseded (merge step 10, 2026-11-14).** Pulsar Split is merged into Pulsar Seat. This file is kept as history and is not updated: names such as `pulsar-split-service`, `PulsarSplit.Control`, IPC v2, `installer/split/` and `split-*` crates are gone. Current facts: [AGENTS.md](../../../AGENTS.md), `docs/agents/`, `installer/README.md` and the package READMEs. **Still binding:** the `pulsar-host` launch and pipe contract below stays unchanged (merge-plan.md §5); only names outside that contract may be out of date.
 
+> **Merge review note (2026-11-14).** Wire strings stay as written here (hello capability `split_pads`, pipe `\\.\pipe\PulsarSplit\seat\<seat-id>\pulsar-host`, mutex `Global\PulsarSplit_Seat_<seat-id>_PulsarHost`). Two facts moved: the data root is `%ProgramData%\Pulsar Seat` (seat data dir `...\Pulsar Seat\seats\<seat-id>\pulsar\`) and the binary is under `<install>\pulsar-host\`. Both reach `pulsar-host` only via argv; pulsar-desktop checks only that `--data-dir` / `--log` are absolute (`desk:src-tauri/src/headless_host.rs:97`), so no change is needed for them. **Open:** §3.1's server check compares the pipe server's image with `pulsar-split-service.exe` (`desk:src-tauri/src/seat/win.rs:18`), and the merged service is `pulsar-seat-service.exe`: a real `pulsar-host` would refuse the pipe. That needs a pulsar-desktop change (accept both names) or a maintainer decision; see docs/agents/status.md.
+
 Index: [../../AGENTS.md](../../../AGENTS.md). Status: designed 2026-11-12; **service side
 implemented 2026-11-13** (contracts §7.4, `seat_stream::backend`), untested on a real
 host. `pulsar-host` itself is **not built** yet. The changes it needs in pulsar-core /
@@ -99,7 +101,7 @@ them (the service already wipes control-pipe frames).
 3. `pulsar-host` answers `{protocol: 1, host_version, core_version, seat_id,
    capabilities}`. Capabilities (strings): `approve`, `connect_password`, `otp`,
    `trust_store`, `apps`, `app_launch_via_service`, `display_mode`, `audio_pinned`,
-   `seat_pads`, `split_idd` (only when built with the frame-source hook, §4).
+   `split_pads`, `split_idd` (only when built with the frame-source hook, §4).
    Seat-id mismatch or protocol mismatch: error `unsupported_protocol`, both close.
 4. Service sends `secrets.load`, then `config.apply`. Only after both succeed does
    `pulsar-host` bind its node, start the beacon and register with the relay.

@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Trusted folders under `%ProgramData%\PulsarSplit` (review fix, 2026-11-12).
+//! Trusted folders under the shim data root `%ProgramData%\Pulsar Seat\shim` (review fix,
+//! 2026-11-12; moved below the one Pulsar Seat data root by the merge review, 2026-11-14).
+//! The product root above it keeps its own DACL (Users read, set by the service and
+//! setup); [`ensure_private_dir`] only checks it (no reparse point, trusted owner) or
+//! creates it with [`PRODUCT_ROOT_SDDL`] when it is missing.
 //!
 //! `%ProgramData%` lets `BUILTIN\Users` create folders and files, and whoever pre-creates a
 //! folder owns it. Elevated `shimctl` and the service trust what they read below the data
@@ -201,6 +205,9 @@ pub fn ensure_dir_with(p: &Path, sddl: &str) -> Result<(), ShimError> {
 /// `dir` must be `data_root` or below it.
 pub fn ensure_private_dir(data_root: &Path, dir: &Path) -> Result<(), ShimError> {
     let rel = dir.strip_prefix(data_root).map_err(|_| untrusted(dir, "outside the data root"))?;
+    if let Some(parent) = data_root.parent() {
+        ensure_trusted_parent(parent)?;
+    }
     ensure_dir_with(data_root, PRIVATE_DIR_SDDL)?;
     let mut cur = data_root.to_path_buf();
     for c in rel.components() {
@@ -209,6 +216,31 @@ pub fn ensure_private_dir(data_root: &Path, dir: &Path) -> Result<(), ShimError>
             _ => return Err(untrusted(dir, "unexpected path component")),
         }
         ensure_dir_with(&cur, PRIVATE_DIR_SDDL)?;
+    }
+    Ok(())
+}
+
+/// The Pulsar Seat product root's DACL (seat-core `DATA_DIR_SDDL`): SYSTEM + Administrators
+/// full, Users read. Used only when the shim has to create the product root itself.
+pub const PRODUCT_ROOT_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;BU)";
+
+/// The folder holding the shim data root (the product root): created with
+/// [`PRODUCT_ROOT_SDDL`] when missing; when present, refused if it is a reparse point, not
+/// a directory or owned by someone other than SYSTEM / Administrators. Its DACL is left as
+/// the service set it.
+fn ensure_trusted_parent(p: &Path) -> Result<(), ShimError> {
+    let Some(h) = open_no_follow(p, READ_CONTROL | FILE_READ_ATTRIBUTES)? else {
+        return ensure_dir_with(p, PRODUCT_ROOT_SDDL);
+    };
+    let info = file_info(&h)?;
+    if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(untrusted(p, "reparse point (junction or symlink)"));
+    }
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(untrusted(p, "not a directory"));
+    }
+    if !owner_trusted(&h)? {
+        return Err(untrusted(p, "owner is neither SYSTEM nor Administrators"));
     }
     Ok(())
 }

@@ -96,7 +96,8 @@ the console session; else `RdpSession`.
 - Real types: `win::os::{os_version, WinConsole}`, `win::dxgi::DxgiAdapters`,
   `win::devices::WinSessionProbe`, `win::deviceio::WinDeviceIo`,
   `win::vdd::{WinVddPipe, WinVddSettingsFile::discover(), WinVddMonitors, WinModeSetter}`,
-  `win::journal::FileRestoreLog::default()` (`%ProgramData%\PulsarSplit\journal\display.jsonl`).
+  `win::journal::FileRestoreLog::new(<data root>\journal\display.jsonl)` (the service passes
+  the Pulsar Seat data root, `%ProgramData%\Pulsar Seat`).
 - **Display configuration is per session.** `WinVddMonitors` and `WinModeSetter` act on
   the calling process's session; from the service (session 0) they see nothing. For the
   VDD backend the integrator runs them in the console session (helper process) or adapts
@@ -107,7 +108,7 @@ the console session; else `RdpSession`.
 - `WinVddSettingsFile` and `FileRestoreLog` use `win::secure::TrustedDir`: the folder must
   not be a junction, must be owned by SYSTEM / Administrators / TrustedInstaller and must
   grant no write-type right to anyone else, else `rejected` (display-9). The journal
-  creates `%ProgramData%\PulsarSplit` and `journal` with `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
+  creates the data root and `journal` with `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`
   when absent. Files: no reparse point, one link; settings replaced via a `CREATE_NEW`
   random temp file + `MoveFileExW`.
 - VDD seats bind to a `(adapter LUID, target id)` on first use; if a detach removes another

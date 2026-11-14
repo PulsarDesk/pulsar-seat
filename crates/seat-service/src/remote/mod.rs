@@ -64,6 +64,11 @@ pub trait RemoteWorker: Send {
     fn test_user_credentials(&mut self, user: &str, password: Option<Secret>) -> Result<CredentialTest, ProtoError>;
     /// `enable_unlock_account` for a local seat's user.
     fn enable_unlock_user(&mut self, user: &str, enable: bool, unlock: bool) -> Result<(), ProtoError>;
+    /// Whether the remote seat with this id is booting, running or stopping.
+    fn seat_active(&self, id: &str) -> bool;
+    /// A remote seat removed by `apply_config`: delete its secrets, files and runtime
+    /// (`seat_running` while it is active).
+    fn forget_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError>;
 }
 
 impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<S, P> {
@@ -99,6 +104,12 @@ impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<
     }
     fn enable_unlock_user(&mut self, user: &str, enable: bool, unlock: bool) -> Result<(), ProtoError> {
         control::Controller::enable_unlock_user(self, user, enable, unlock)
+    }
+    fn seat_active(&self, id: &str) -> bool {
+        control::Controller::seat_active(self, id)
+    }
+    fn forget_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
+        control::Controller::forget_seat(self, seat)
     }
 }
 
@@ -411,6 +422,43 @@ pub fn redact_line(l: &str) -> String {
     engine::redact(l)
 }
 
+/// Remote seat ids whose secrets an uninstall deletes: every remote seat of the config
+/// document in `data_dir` plus every `seats\<id>` folder name that is a valid seat id (so
+/// a seat whose config entry is gone is still found). Sorted, lower case, no duplicates.
+pub fn uninstall_remote_seat_ids(data_dir: &Path) -> Vec<String> {
+    use seat_core::store::ConfigStore as _;
+    let mut ids = std::collections::BTreeSet::new();
+    let store = seat_core::store::FileStore::new(data_dir.join(seat_core::consts::CONFIG_FILE));
+    if let Ok(cfg) = store.load() {
+        ids.extend(cfg.seats.iter().filter_map(|s| s.remote_record()).map(|r| r.id.to_ascii_lowercase()));
+    }
+    if let Ok(rd) = std::fs::read_dir(data_dir.join("seats")) {
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir())
+                && let Some(name) = e.file_name().to_str()
+            {
+                ids.insert(name.to_ascii_lowercase());
+            }
+        }
+    }
+    // Only names that can be secret names (GUID characters), never a path trick.
+    ids.into_iter().filter(|id| seat_core::store::remote_secret_name(id, RemoteSecretSlot::Identity).is_ok()).collect()
+}
+
+/// Delete every remote secret slot (identity, connect password, relay key) of `ids`; a
+/// missing secret is fine. Returns `(seat id, error)` for the deletes that failed.
+pub fn delete_remote_secrets(store: &dyn SecretStore, ids: &[String]) -> Vec<(String, String)> {
+    let mut failed = Vec::new();
+    for id in ids {
+        for slot in RemoteSecretSlot::ALL {
+            if let Err(e) = store.set_remote(id, slot, None) {
+                failed.push((id.clone(), format!("{}: {e}", slot.as_str())));
+            }
+        }
+    }
+    failed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +484,38 @@ mod tests {
         let shared: SharedDoc = Arc::new(Mutex::new(DocView { config: doc(), dirty: false }));
         let secrets = Arc::new(MemorySecretStore::default());
         (DocStore::new(shared.clone(), secrets.clone(), PasswordCache::default()), shared, secrets)
+    }
+
+    #[test]
+    fn uninstall_deletes_remote_secrets_of_config_and_seat_folders() {
+        use seat_core::store::ConfigStore as _;
+        let dir = std::env::temp_dir().join(format!("seat-uninstall-remote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("seats").join("AAAA-0001")).unwrap();
+        std::fs::create_dir_all(dir.join("seats").join("not a guid")).unwrap();
+        seat_core::store::FileStore::new(dir.join(seat_core::consts::CONFIG_FILE)).save(&doc()).unwrap();
+        let ids = uninstall_remote_seat_ids(&dir);
+        assert_eq!(ids, ["0f8fad5b-d9cb-469f-a165-70867728950e", "aaaa-0001"]);
+        let secrets = MemorySecretStore::default();
+        let other = "bbbb-0002";
+        for id in ids.iter().map(String::as_str).chain([other]) {
+            for slot in RemoteSecretSlot::ALL {
+                secrets.set_remote(id, slot, Some(&Secret::new("x"))).unwrap();
+            }
+        }
+        secrets.set(n(2), Some(&Secret::new("pw"))).unwrap();
+        assert!(delete_remote_secrets(&secrets, &ids).is_empty());
+        for id in &ids {
+            for slot in RemoteSecretSlot::ALL {
+                assert!(secrets.get_remote(id, slot).unwrap().is_none(), "{id} {slot:?}");
+            }
+        }
+        // Only the listed seats: another id and the seat passwords are not touched here.
+        assert!(secrets.get_remote(other, RemoteSecretSlot::RelayKey).unwrap().is_some());
+        assert!(secrets.has(n(2)));
+        // No data folder: nothing found, nothing fails.
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(uninstall_remote_seat_ids(&dir).is_empty());
     }
 
     #[test]
