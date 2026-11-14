@@ -681,6 +681,9 @@ pub fn run_uninstall(ctx: &SetupCtx, remove_user_data: bool) -> RunReport {
     rep.result("event_source", ctx.registry.delete_tree(layout::EVENTLOG_KEY).map(|_| StepOutcome::Done));
     // Seat credentials go regardless (spec 90 §4.3).
     rep.result("secrets", ctx.registry.delete_tree(layout::SECRETS_KEY).map(|_| StepOutcome::Done));
+    // Install records (version, arch, chosen drivers) are not user data: an uninstall
+    // left `PulsarSplit\Setup` behind in the ARM64 test VM (2026-11-14).
+    rep.result("setup_info", ctx.registry.delete_tree(layout::SETUP_KEY).map(|_| StepOutcome::Done));
     if remove_user_data {
         rep.result("registry_root", ctx.registry.delete_tree(layout::ROOT_KEY).map(|_| StepOutcome::Done));
     }
@@ -1117,6 +1120,16 @@ mod tests {
         std::fs::remove_dir_all(&f.ctx.layout.data_root).unwrap();
         let rep = run_uninstall(&f.ctx, true);
         assert_eq!(rep.exit(), ExitCode::Ok, "{rep:?}");
+    }
+
+    #[test]
+    fn keep_data_uninstall_still_removes_install_records() {
+        let f = fixture(None);
+        assert_eq!(run_install(&f.ctx).exit(), ExitCode::Ok);
+        assert!(f.reg.key_exists(layout::SETUP_KEY));
+        let rep = run_uninstall(&f.ctx, false);
+        assert_eq!(rep.exit(), ExitCode::Ok, "{rep:?}");
+        assert!(!f.reg.key_exists(layout::SETUP_KEY), "install records are not user data");
     }
 
     #[test]
