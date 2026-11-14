@@ -762,6 +762,37 @@ impl PadManager {
         }
     }
 
+    /// Feeds a pad with a raw input report in its wire layout (local seats: a physical pad
+    /// of the same kind, `seat_input::local_pads`).
+    pub fn submit_report(&mut self, pad: &PadId, report: &[u8]) -> Result<(), PadError> {
+        let lp = self
+            .live
+            .values_mut()
+            .find(|lp| lp.pad_id == *pad)
+            .ok_or_else(|| PadError::DeviceLost(format!("no live pad {pad}")))?;
+        if lp.pad.driver_reads_channel() {
+            lp.channel.lock().map_err(|_| PadError::DeviceLost("channel poisoned".into()))?.write_input(report, 0)
+        } else {
+            lp.pad.submit_report(report)
+        }
+    }
+
+    /// Removes one pad now, without the `pad.detach` handshake (local seats have no stream
+    /// server to answer it). A create still running for the slot is abandoned.
+    pub fn remove_slot(&mut self, seat_id: &str, slot: u8) {
+        let key = (seat_key(seat_id), slot);
+        self.remove_now(&key, "local pad removed");
+        if let Some(p) = self.pending.remove(&key) {
+            self.abandoned.push(p);
+        }
+    }
+
+    /// Wire kind of a live pad (what [`Self::submit_report`] expects), `None` while its
+    /// create is pending or after removal.
+    pub fn wire_kind(&self, pad: &PadId) -> Option<PadKind> {
+        self.live.values().find(|lp| lp.pad_id == *pad).map(|lp| lp.wire)
+    }
+
     /// Moves new input from every input section to its backend, and (PulsarPad) driver
     /// output to the feedback sink. Returns the number of reports moved. The integrator
     /// calls this from its pad loop (wake on the channels' input events, or every 1 ms).

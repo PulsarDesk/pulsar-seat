@@ -3,7 +3,7 @@
 // Swap-chain processing thread: acquire each DWM frame (IddCx 1.10 "2" call when
 // available, FP16 surfaces for HDR / WCG), publish it to the frame channel, finish the
 // frame. Never blocks DWM on the consumer.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Built unsigned (WDK 10.0.28000), untested, never loaded.
 
 #include "Driver.h"
 
@@ -126,7 +126,7 @@ void SwapChainWorker::Run()
             if (m_adapter->SeatGuid(&seat)) {
                 HRESULT hr2 = S_OK;
                 if (!channel.IsOpenFor(seat)) {
-                    hr2 = channel.Open(seat); // first swap chain of this seat: create + squat check
+                    hr2 = channel.Open(seat, m_adapter->ReaderSid()); // first swap chain of this seat: create + squat check
                 }
                 if (SUCCEEDED(hr2) && !channel.HasDevice(m_device.Get())) {
                     LUID luid{};

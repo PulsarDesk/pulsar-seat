@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Pulsar Split indirect display driver: wire contract shared with the service
-// (crates/seat-display/src/remote/ioctl.rs and src/frame.rs). Spec: spec/remote/40-display-hdr.md §6.4, §7.
+// Remote role of the Pulsar Seat IddCx driver (drivers/seat-idd, formerly Pulsar Split's
+// split-idd): wire contract shared with the service (crates/seat-display/src/remote/ioctl.rs
+// and src/frame.rs). Spec: spec/remote/40-display-hdr.md §6.4, §7.
 //
-// UNBUILT · UNTESTED · UNSIGNED. Both sides must change together; the Rust unit tests pin
-// every offset and size below.
+// Built unsigned, untested, never loaded. Both sides must change together; the Rust unit
+// tests pin every offset and size below.
 
 #pragma once
 
@@ -68,6 +69,16 @@ typedef struct PULSAR_SEAT_CONFIG_IN {
     uint32_t ScalePercent;         // static scale 100..500
     uint32_t SuperSamplingPercent; // 100..500
 } PULSAR_SEAT_CONFIG_IN;           // 64
+
+// SET_SEAT_CONFIG input with the frame reader (2026-11-14, additive by size, buffer version
+// stays 1): the v1 fields, then the string SID that may open the seat's frame objects
+// besides SYSTEM. Empty = SYSTEM only (the stream server runs as SYSTEM). A 64-byte v1
+// buffer is still accepted and means the same as an empty SID.
+#define PULSAR_MAX_SID 96
+typedef struct PULSAR_SEAT_CONFIG_IN_V2 {
+    PULSAR_SEAT_CONFIG_IN Base;
+    uint16_t ReaderSid[PULSAR_MAX_SID]; // UTF-16, NUL-terminated, characters S 0-9 - only
+} PULSAR_SEAT_CONFIG_IN_V2;        // 256
 
 // REQUEST_MODE input (stream size, already clamped by the service)
 typedef struct PULSAR_MODE_IN {
@@ -147,7 +158,10 @@ typedef struct PULSAR_EVENT_OUT {
 #define PULSAR_FRAME_FLAG_PATH_ACTIVE     0x1u
 #define PULSAR_FRAME_FLAG_HDR             0x2u
 #define PULSAR_FRAME_FLAG_DRIVER_STOPPING 0x4u
-#define PULSAR_OBJECT_SDDL L"D:P(A;;GA;;;SY)(A;;GA;;;LS)"
+// Frame objects: SYSTEM, plus GA for the reader SID of SET_SEAT_CONFIG v2 when one is set
+// ("(A;;GA;;;<sid>)" appended). No LOCAL SERVICE grant any more (Split OQ display-7): the
+// driver keeps its creation handles, and the stream server reads as SYSTEM.
+#define PULSAR_OBJECT_SDDL L"D:P(A;;GA;;;SY)"
 
 typedef struct PULSAR_HDR_META_V1 {
     uint16_t Chromaticity[8];       // R x,y G x,y B x,y W x,y; CIE * 1024 (truncated)
@@ -189,6 +203,7 @@ typedef struct PULSAR_FRAME_HEADER_V1 {
 static_assert(sizeof(PULSAR_BUF_HEADER) == 8, "buffer header");
 static_assert(sizeof(PULSAR_INFO_OUT) == 32, "GET_INFO");
 static_assert(sizeof(PULSAR_SEAT_CONFIG_IN) == 64, "SET_SEAT_CONFIG");
+static_assert(sizeof(PULSAR_SEAT_CONFIG_IN_V2) == 256, "SET_SEAT_CONFIG v2");
 static_assert(sizeof(PULSAR_MODE_IN) == 32, "REQUEST_MODE in");
 static_assert(sizeof(PULSAR_MODE_OUT) == 48, "REQUEST_MODE out");
 static_assert(sizeof(PULSAR_STATE_OUT) == 56, "GET_STATE");

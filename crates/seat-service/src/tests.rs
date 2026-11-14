@@ -2377,3 +2377,56 @@ fn apply_config_accepts_remote_seats_and_validates_them() {
     let r = call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(bad), base_revision: view.config.revision, force: false });
     assert_eq!(r.unwrap_err().code, ErrorCode::InvalidConfig);
 }
+
+/// A DualSense on USB: HID game pad collection (usage page 1, usage 5).
+fn ds5_dev(key: &str, path: &str) -> seat_core::device::Device {
+    use seat_core::device::{DeviceDetails, InputClass, InputInfo};
+    let mut d = device(key, DeviceKind::Hid);
+    d.details = DeviceDetails::Input(InputInfo {
+        class: InputClass::Hid,
+        usage_page: 1,
+        usage: 5,
+        vendor_id: 0x054c,
+        product_id: 0x0ce6,
+        interface_path: path.into(),
+        bus: "usb".into(),
+        built_in: false,
+        last_activity_ms: 0,
+    });
+    d
+}
+
+#[test]
+fn local_pad_targets_follow_routing_session_and_the_seat_switch() {
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().virtual_pads = true;
+    let h = harness_with(c, None);
+    *h.f.input.devices.lock().unwrap() = vec![
+        input_dev("kbd;1", DeviceKind::Keyboard, KBD1),
+        ds5_dev("pad;1", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"),
+        ds5_dev("pad;2", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&2&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"),
+    ];
+    h.s.boot();
+    // Routed to seat 2 but the seat has no session yet: nothing.
+    h.s.lock().input_overrides.insert(k("pad;2"), s(2).mask());
+    assert!(h.s.local_pad_targets().is_empty());
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let t = h.s.local_pad_targets();
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert_eq!((t[0].seat, t[0].session_id), (2, 10));
+    assert!(!t[0].owner_sid.is_empty());
+    assert_eq!(t[0].pads.len(), 1, "only the pad routed to seat 2 alone");
+    assert_eq!(t[0].pads[0].unit_key, "pad;2");
+    assert_eq!((t[0].pads[0].vendor_id, t[0].pads[0].product_id), (0x054c, 0x0ce6));
+    // Routed to several seats (or back to the console seat): no virtual pad.
+    h.s.lock().input_overrides.insert(k("pad;2"), SeatMask::CONSOLE);
+    assert!(h.s.local_pad_targets().is_empty());
+    // The seat switch off: nothing even when routed.
+    h.s.lock().input_overrides.insert(k("pad;2"), s(2).mask());
+    assert_eq!(h.s.local_pad_targets().len(), 1);
+    h.s.lock().config.seats[1].local_mut().unwrap().virtual_pads = false;
+    assert!(h.s.local_pad_targets().is_empty());
+}

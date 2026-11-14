@@ -445,9 +445,252 @@ pub fn ds4_output(small: u8, large: u8, rgb: (u8, u8, u8)) -> [u8; layout::DS4_O
     r
 }
 
+// ---- physical pads (local seats, `seat_input::local_pads`) ----
+
+/// 8-bit stick value back to the signed 16-bit range ([`stick8`] inverse; 0x80 = 0).
+fn stick16(v: u8) -> i16 {
+    (((v as i32) << 8) | v as i32).wrapping_sub(32768).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+fn stick16_inv(v: u8) -> i16 {
+    stick16(255 - v)
+}
+
+fn face_buttons(r: u8) -> u32 {
+    let mut s = hat_to_buttons(r & 0x0F);
+    for (m, bit) in [(0x10, b::WEST), (0x20, b::SOUTH), (0x40, b::EAST), (0x80, b::NORTH)] {
+        if r & m != 0 {
+            s |= bit;
+        }
+    }
+    s
+}
+
+fn shoulder_buttons(r: u8) -> u32 {
+    let mut s = 0;
+    for (m, bit) in [(0x01, b::L1), (0x02, b::R1), (0x10, b::BACK), (0x20, b::START), (0x40, b::L3), (0x80, b::R3)] {
+        if r & m != 0 {
+            s |= bit;
+        }
+    }
+    s
+}
+
+fn get_i16(r: &[u8], at: usize) -> i16 {
+    i16::from_le_bytes([r[at], r[at + 1]])
+}
+
+/// Parses a DualShock 4 USB input report 0x01 (a physical pad, [`ds4_input`] layout) into a
+/// state: sticks, triggers, buttons, motion. Touch and battery are left out.
+pub fn parse_ds4_input(r: &[u8]) -> Option<PadState> {
+    if r.len() < layout::DS_INPUT_LEN || r[0] != 0x01 {
+        return None;
+    }
+    let mut buttons = face_buttons(r[5]) | shoulder_buttons(r[6]);
+    if r[7] & 0x01 != 0 {
+        buttons |= b::GUIDE;
+    }
+    if r[7] & 0x02 != 0 {
+        buttons |= b::TOUCHPAD;
+    }
+    let mut s = PadState {
+        v: crate::types::PAD_STATE_VERSION,
+        buttons,
+        lx: stick16(r[1]),
+        ly: stick16_inv(r[2]),
+        rx: stick16(r[3]),
+        ry: stick16_inv(r[4]),
+        lt: scale8(r[8]),
+        rt: scale8(r[9]),
+        ..PadState::neutral()
+    };
+    for i in 0..3 {
+        s.gyro[i] = get_i16(r, 13 + 2 * i);
+        s.accel[i] = get_i16(r, 19 + 2 * i);
+    }
+    Some(s)
+}
+
+/// Parses a DualSense / Edge USB input report 0x01 ([`ds5_input`] layout) into a state:
+/// sticks, triggers, buttons (Edge: Fn and back paddles), motion.
+pub fn parse_ds5_input(r: &[u8], edge: bool) -> Option<PadState> {
+    if r.len() < layout::DS_INPUT_LEN || r[0] != 0x01 {
+        return None;
+    }
+    let mut buttons = face_buttons(r[8]) | shoulder_buttons(r[9]);
+    for (m, bit) in [(0x01, b::GUIDE), (0x02, b::TOUCHPAD), (0x04, b::MISC)] {
+        if r[10] & m != 0 {
+            buttons |= bit;
+        }
+    }
+    if edge {
+        for (m, bit) in [(0x10, b::FN_LEFT), (0x20, b::FN_RIGHT), (0x40, b::PADDLE1), (0x80, b::PADDLE2)] {
+            if r[10] & m != 0 {
+                buttons |= bit;
+            }
+        }
+    }
+    let mut s = PadState {
+        v: crate::types::PAD_STATE_VERSION,
+        buttons,
+        lx: stick16(r[1]),
+        ly: stick16_inv(r[2]),
+        rx: stick16(r[3]),
+        ry: stick16_inv(r[4]),
+        lt: scale8(r[5]),
+        rt: scale8(r[6]),
+        ..PadState::neutral()
+    };
+    for i in 0..3 {
+        s.gyro[i] = get_i16(r, 16 + 2 * i);
+        s.accel[i] = get_i16(r, 22 + 2 * i);
+    }
+    Some(s)
+}
+
+/// Input report of a PlayStation pad in its USB layout. USB reports (id 0x01) pass as they
+/// are; Bluetooth reports are cut to the USB layout (public Linux `hid-playstation`
+/// layouts): DualSense 0x31 = id, sequence tag, then the USB report body; DualShock 4 0x11 =
+/// id, two header bytes, then the USB body. `None` for other kinds or reports.
+pub fn usb_input_from_any(kind: PadKind, r: &[u8]) -> Option<Vec<u8>> {
+    let body_at = match (kind, r.first()) {
+        (PadKind::Ds4 | PadKind::Ds5 | PadKind::Ds5Edge, Some(0x01)) => return (r.len() >= layout::DS_INPUT_LEN).then(|| r[..layout::DS_INPUT_LEN].to_vec()),
+        (PadKind::Ds5 | PadKind::Ds5Edge, Some(0x31)) => 2,
+        (PadKind::Ds4, Some(0x11)) => 3,
+        _ => return None,
+    };
+    let need = body_at + layout::DS_INPUT_LEN - 1;
+    if r.len() < need {
+        return None;
+    }
+    let mut out = Vec::with_capacity(layout::DS_INPUT_LEN);
+    out.push(0x01);
+    out.extend_from_slice(&r[body_at..need]);
+    Some(out)
+}
+
+/// Feedback state of a physical DualSense, rebuilt into its USB output report 0x02.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ds5Output {
+    /// Motors (right / weak, left / strong), 0..=255.
+    pub weak: u8,
+    pub strong: u8,
+    pub rgb: Option<(u8, u8, u8)>,
+    pub player_leds: Option<u8>,
+    /// `Feedback::AdaptiveTrigger::raw` (23 bytes).
+    pub triggers: Option<Vec<u8>>,
+}
+
+/// DualSense USB output report 0x02 (48 bytes) for [`Ds5Output`]: the inverse of the
+/// layout [`parse_output`] reads.
+pub fn ds5_output(o: &Ds5Output) -> [u8; layout::DS5_OUTPUT_LEN] {
+    let mut r = [0u8; layout::DS5_OUTPUT_LEN];
+    r[0] = 0x02;
+    let p = &mut r[1..];
+    p[0] = 0x01 | 0x02; // rumble (compatible mode)
+    p[2] = o.weak;
+    p[3] = o.strong;
+    if let Some(t) = o.triggers.as_ref().filter(|t| t.len() >= 23) {
+        if t[0] & 0x01 != 0 {
+            p[0] |= 0x04;
+            p[10..21].copy_from_slice(&t[1..12]);
+        }
+        if t[0] & 0x02 != 0 {
+            p[0] |= 0x08;
+            p[21..32].copy_from_slice(&t[12..23]);
+        }
+    }
+    if let Some(m) = o.player_leds {
+        p[1] |= 0x10;
+        p[43] = m & 0x1F;
+    }
+    if let Some((red, green, blue)) = o.rgb {
+        p[1] |= 0x04;
+        p[44] = red;
+        p[45] = green;
+        p[46] = blue;
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_reports_round_trip() {
+        let s = PadState {
+            buttons: b::SOUTH | b::NORTH | b::DPAD_UP | b::DPAD_LEFT | b::L1 | b::R3 | b::START | b::GUIDE,
+            lx: -20_000,
+            ly: 12_345,
+            rx: 32_767,
+            ry: -32_768,
+            lt: 0xFFFF,
+            rt: 0x8080,
+            gyro: [1, -2, 3],
+            accel: [100, 200, -8192],
+            ..PadState::neutral()
+        };
+        let mut c = Counters::default();
+        // Re-encoding the parsed state gives the same control bytes.
+        let r5 = ds5_input(&s, false, &mut c);
+        let p5 = parse_ds5_input(&r5, false).unwrap();
+        assert_eq!(p5.buttons, s.buttons);
+        assert_eq!((p5.gyro, p5.accel), (s.gyro, s.accel));
+        let r5b = ds5_input(&p5, false, &mut Counters::default());
+        assert_eq!(&r5[1..7], &r5b[1..7]);
+        assert_eq!(&r5[8..11], &r5b[8..11]);
+        let r4 = ds4_input(&s, &mut c);
+        let p4 = parse_ds4_input(&r4).unwrap();
+        assert_eq!(p4.buttons, s.buttons);
+        let r4b = ds4_input(&p4, &mut Counters::default());
+        assert_eq!(&r4[1..7], &r4b[1..7]);
+        assert_eq!(&r4[8..10], &r4b[8..10]);
+        // Centre stays centre.
+        assert_eq!(stick16(0x80), 128);
+        assert!(parse_ds5_input(&[0x31; 64], false).is_none());
+        assert!(parse_ds4_input(&[0x01; 10]).is_none());
+        // Edge extras only with `edge`.
+        let e = PadState { buttons: b::FN_LEFT | b::PADDLE1, ..PadState::neutral() };
+        let re = ds5_input(&e, true, &mut Counters::default());
+        assert_eq!(parse_ds5_input(&re, true).unwrap().buttons, e.buttons);
+        assert_eq!(parse_ds5_input(&re, false).unwrap().buttons, 0);
+    }
+
+    #[test]
+    fn bluetooth_reports_become_usb_layout() {
+        let mut usb = [0u8; 64];
+        usb[0] = 0x01;
+        for (i, v) in usb.iter_mut().enumerate().skip(1) {
+            *v = i as u8;
+        }
+        assert_eq!(usb_input_from_any(PadKind::Ds5, &usb).unwrap(), usb.to_vec());
+        let mut bt5 = vec![0x31, 0xAA];
+        bt5.extend_from_slice(&usb[1..]);
+        bt5.extend_from_slice(&[0; 13]); // rest of the 78-byte report (CRC etc.)
+        assert_eq!(usb_input_from_any(PadKind::Ds5Edge, &bt5).unwrap(), usb.to_vec());
+        let mut bt4 = vec![0x11, 0xC0, 0x00];
+        bt4.extend_from_slice(&usb[1..]);
+        assert_eq!(usb_input_from_any(PadKind::Ds4, &bt4).unwrap(), usb.to_vec());
+        assert!(usb_input_from_any(PadKind::Ds4, &bt5).is_none(), "0x31 is not a DS4 report");
+        assert!(usb_input_from_any(PadKind::XOne, &usb).is_none());
+        assert!(usb_input_from_any(PadKind::Ds5, &bt5[..20]).is_none());
+    }
+
+    #[test]
+    fn ds5_output_is_what_parse_output_reads() {
+        let mut trig = vec![0u8; 23];
+        trig[0] = 0x03;
+        trig[1] = 0x21; // right mode
+        trig[12] = 0x26; // left mode
+        let o = Ds5Output { weak: 10, strong: 200, rgb: Some((1, 2, 3)), player_leds: Some(0x04), triggers: Some(trig.clone()) };
+        let r = ds5_output(&o);
+        let f = parse_output(PadKind::Ds5, &r);
+        assert!(f.contains(&Feedback::Rumble { strong: scale8(200), weak: scale8(10) }));
+        assert!(f.contains(&Feedback::Led { r: 1, g: 2, b: 3 }));
+        assert!(f.contains(&Feedback::PlayerLeds { mask: 0x04 }));
+        assert!(f.contains(&Feedback::AdaptiveTrigger { raw: trig }));
+    }
 
     fn st() -> PadState {
         PadState {

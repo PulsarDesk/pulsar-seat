@@ -6,6 +6,10 @@
 //! Remote seats (merge step 6): the remote seat worker (`crate::remote::win::build`) is
 //! part of the [`Service`]; this runtime also drives its engine: a 1 s engine tick, the
 //! 4 ms pad pump, the shim health pipe and session-change forwarding.
+//!
+//! Local seats' virtual pads (round 4): a [seat_input::local_pads::LocalPadHub] on the
+//! engine's pad manager, synced with the routed pads (crate::local_pads::targets) on the
+//! 1 s engine tick and shut down first at service stop.
 
 use crate::runstate::RunStore;
 use crate::service::{Deps, Service, TICK_MS, ThreadSpawner};
@@ -117,6 +121,8 @@ pub struct Running {
     shutdown: Shutdown,
     stop: Arc<AtomicBool>,
     pipe_name: String,
+    /// Local seats' virtual pads (None without the engine's pad manager).
+    local_pads: Arc<Mutex<Option<seat_input::local_pads::LocalPadHub>>>,
 }
 
 /// Build everything; the pipe name is claimed here (fails if already owned).
@@ -214,7 +220,11 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
         None
     };
     let health_shutdown = health.as_ref().map(crate::remote::win::health::HealthServer::shutdown_handle);
+    let local_pads = engine.as_ref().and_then(|e| e.local_pad_parts()).map(|(mgr, router)| {
+        seat_input::local_pads::LocalPadHub::new(mgr, Arc::new(seat_input::win::pad_io::WinPadSource), router)
+    });
     Ok(Running {
+        local_pads: Arc::new(Mutex::new(local_pads)),
         service,
         engine,
         health: Mutex::new(health),
@@ -233,6 +243,7 @@ impl Running {
         let s = self.service.clone();
         std::thread::spawn(move || s.boot());
         let (s, stop, engine) = (self.service.clone(), self.stop.clone(), self.engine.clone());
+        let local_pads = self.local_pads.clone();
         std::thread::spawn(move || {
             let mut last_engine_tick = std::time::Instant::now();
             while !stop.load(Ordering::SeqCst) {
@@ -243,6 +254,7 @@ impl Running {
                 {
                     last_engine_tick = std::time::Instant::now();
                     e.tick(crate::remote::win::wiring::now_ms());
+                    sync_local_pads(&s, &local_pads);
                 }
                 s.tick();
             }
@@ -305,11 +317,34 @@ impl Running {
 
     /// [`Self::stop`] with a per-seat progress callback (SCM checkpoints).
     pub fn stop_with(&self, progress: &dyn Fn(usize, usize)) {
+        // Local virtual pads first (reader threads joined, pads removed), before the
+        // engine's stop shuts the pad manager down.
+        if let Some(mut hub) = self.local_pads.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            hub.shutdown();
+        }
         self.service.shutdown_with(progress);
         self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = &self.health_shutdown {
             h.trigger();
         }
         self.shutdown.trigger();
+    }
+}
+
+/// One local pad sync: the hub follows the seats' routed pads; notes go to the log.
+fn sync_local_pads(s: &Service, hub: &Mutex<Option<seat_input::local_pads::LocalPadHub>>) {
+    use seat_input::local_pads::LocalPadNote as N;
+    let mut guard = hub.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(hub) = guard.as_mut() else { return };
+    let want = s.local_pad_targets();
+    for n in hub.sync(&want) {
+        match n {
+            N::Attached { unit_key, pad_id } => log::info(&format!("local pad {unit_key}: virtual pad {pad_id} attached")),
+            N::Pending { unit_key, pad_id } => log::info(&format!("local pad {unit_key}: virtual pad {pad_id} pending")),
+            N::Removed { unit_key } => log::info(&format!("local pad {unit_key}: virtual pad removed")),
+            N::Unsupported { unit_key } => log::info(&format!("local pad {unit_key}: layout not readable (Xbox / generic HID), no virtual pad")),
+            N::Denied { unit_key, detail } => log::warn(&format!("local pad {unit_key}: no virtual pad: {detail}")),
+            N::OpenFailed { unit_key, error } => log::warn(&format!("local pad {unit_key}: physical pad not opened: {error}")),
+        }
     }
 }

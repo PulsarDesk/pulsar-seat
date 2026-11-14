@@ -1,14 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Frame channel contract v1 (spec 40 §6.4): object names, security descriptor and the
 //! 4 KiB header section layout shared by the driver (producer) and the stream server
-//! (consumer). Pure; the driver's C++ mirror is `drivers/split-idd/include/PulsarIddShared.h`.
+//! (consumer). Pure; the driver's C++ mirror is `drivers/seat-idd/public/PulsarIddShared.h`.
 
 use crate::remote::adapters::Luid;
 use crate::remote::error::DisplayError;
 use crate::remote::seat::FrameFormat;
 
-/// Protected DACL: SYSTEM and LOCAL SERVICE (the WUDF host) full access, nobody else.
-pub const OBJECT_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;LS)";
+/// Protected DACL of the frame objects: SYSTEM only (the driver keeps its creation
+/// handles; the stream server reads as SYSTEM). The driver appends `(A;;GA;;;<sid>)` for
+/// the reader SID of SET_SEAT_CONFIG v2 ([`object_sddl`]). Until 2026-11-14 it also
+/// granted LOCAL SERVICE, which let every LOCAL SERVICE process read the seat (Split OQ
+/// display-7); that grant is gone.
+pub const OBJECT_SDDL: &str = "D:P(A;;GA;;;SY)";
+
+/// The DACL the driver puts on the frame objects for a seat with this reader SID.
+pub fn object_sddl(reader_sid: Option<&str>) -> String {
+    match reader_sid.filter(|s| !s.is_empty()) {
+        Some(s) => format!("{OBJECT_SDDL}(A;;GA;;;{s})"),
+        None => OBJECT_SDDL.to_string(),
+    }
+}
 pub const HEADER_MAGIC: [u8; 4] = *b"PSDH";
 pub const HEADER_VERSION: u16 = 1;
 /// Size of the page-file section holding the header.
@@ -473,7 +485,10 @@ mod tests {
             "Global\\PulsarSplit.Display.8a1b2c3d-0000-4000-8000-00000000abcd.Fence2"
         );
         assert_eq!(object_names("a\\b").seat, "ab");
-        assert_eq!(OBJECT_SDDL, "D:P(A;;GA;;;SY)(A;;GA;;;LS)");
+        assert_eq!(OBJECT_SDDL, "D:P(A;;GA;;;SY)");
+        assert!(!OBJECT_SDDL.contains(";LS)"), "no LOCAL SERVICE grant");
+        assert_eq!(object_sddl(None), "D:P(A;;GA;;;SY)");
+        assert_eq!(object_sddl(Some("S-1-5-21-1-2-3-1001")), "D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-1-2-3-1001)");
     }
 
     #[test]

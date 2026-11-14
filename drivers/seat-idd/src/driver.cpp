@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /*
- * Pulsar Seat IddCx driver: driver / device / adapter / monitor callbacks and the control
+ * Pulsar Seat IddCx driver, local role: device / adapter / monitor callbacks and the control
  * IOCTLs. See driver.h. Built unsigned (WDK 10.0.28000), never loaded, untested on
  * hardware.
  */
@@ -13,15 +13,7 @@ static const GUID PsiddInterfaceGuid = PSIDD_INTERFACE_GUID_INIT;
  * ProcessSharingDisabled in the INF), so one global is enough. */
 static PSIDD_DEVICE_CONTEXT *g_Device;
 
-extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
-{
-    WDF_DRIVER_CONFIG config;
-    WDF_OBJECT_ATTRIBUTES attributes;
-
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    WDF_DRIVER_CONFIG_INIT(&config, PsiddDeviceAdd);
-    return WdfDriverCreate(DriverObject, RegistryPath, &attributes, &config, WDF_NO_HANDLE);
-}
+/* DriverEntry and the role choice (local / remote) are in roles.cpp. */
 
 NTSTATUS PsiddDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 {

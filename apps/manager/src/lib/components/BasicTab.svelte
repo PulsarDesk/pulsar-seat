@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -57,6 +57,7 @@
           <th>{t.basic.colAccount}</th>
           <th>{t.basic.colStart}</th>
           <th>{t.basic.colWallpaper}</th>
+          <th>{t.basic.colVirtualPads}</th>
           <th>{t.basic.colApps}</th>
           <th>{t.redirect.column}</th>
           {#if kioskMode}<th>{t.kiosk.column}</th>{/if}
@@ -98,6 +99,15 @@
               />
             </td>
             <td>
+              <input
+                type="checkbox"
+                aria-label={`${s.number}. ${t.basic.colVirtualPads}`}
+                title={t.basic.virtualPadsHint}
+                checked={localOf(s).virtual_pads ?? false}
+                onchange={(e) => store.edit((c) => setVirtualPads(c, s.number, e.currentTarget.checked))}
+              />
+            </td>
+            <td>
               <button type="button" class="link" aria-label={`${s.number}. ${t.basic.colApps}`} onclick={() => (dialog = { kind: 'apps', seat: s.number })}>
                 {s.startup_apps?.length ? t.basic.appsCount(s.startup_apps.length) : t.basic.appsNone}
               </button>
@@ -133,6 +143,7 @@
     </table>
     <button type="button" onclick={() => store.edit((c) => addSeat(c)?.config ?? c)} disabled={draft.seats.length >= 16}>{t.canvas.addSeat}</button>
     <p class="hint">{t.account.seatOneWarning}</p>
+    {#if draft.seats.some((s) => localOf(s).virtual_pads)}<p class="hint">{t.basic.virtualPadsHint}</p>{/if}
     {#if kioskMode}
       <label class="toggle">
         <input

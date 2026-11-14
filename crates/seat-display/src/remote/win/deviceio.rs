@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `DeviceIo` over CreateFileW + overlapped DeviceIoControl, with per-IOCTL timeouts.
 //!
-//! Untested on hardware: the own driver is unbuilt and unsigned (drivers/split-idd).
+//! Untested on hardware: the own driver is built but unsigned and never loaded (drivers/seat-idd, remote role).
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, HANDLE, WAIT_TIMEOUT,

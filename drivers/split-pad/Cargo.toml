@@ -38,6 +38,9 @@ wdk-build = "0.3"
 
 [profile.dev]
 panic = "abort"
+# Without a CRT there is no __chkstk; opt-level 1 keeps debug frames small enough that the
+# compiler emits no stack probes (build.rs).
+opt-level = 1
 
 [profile.release]
 panic = "abort"

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Own driver backend (`drivers/split-idd`, spec 40 §7 IOCTLs).
+//! Own driver backend (`drivers/seat-idd` (remote role), spec 40 §7 IOCTLs).
 //!
 //! Fully implemented against [`DeviceIo`]; tested only with the in-memory driver
 //! simulation in `fake`. The driver itself is **unbuilt, untested and unsigned**, and it
@@ -353,7 +353,7 @@ impl<D: DeviceIo> DisplayBackend for PulsarIdd<D> {
     }
 
     fn attach(&self, cfg: &SeatDisplay) -> Result<SeatDisplayHandle, DisplayError> {
-        let body = SeatConfigIn::from_seat(cfg)?.encode();
+        let body = SeatConfigIn::from_seat(cfg)?.encode_v2(cfg.frame_reader_sid.as_deref())?;
         let handle = self.io.open(&PULSAR_IDD_INTERFACE, cfg.session_id)?;
         let result = (|| {
             let info = self.get_info(&handle)?;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /*
- * Pulsar Seat IddCx virtual display driver (UMDF 2 + IddCx 1.4), spec 40 §6.3.
+ * Pulsar Seat IddCx virtual display driver, local role (UMDF 2; built against IddCx 1.10,
+ * uses only IddCx 1.4 calls), spec 40 §6.3. The remote role is in remote/ (roles.cpp).
  *
  * One root-enumerated adapter (hardware id Root\PulsarSeatIdd). The seat service plugs
  * one virtual monitor per seat output (IOCTL_PSIDD_ADD_MONITOR) with the physical
@@ -36,7 +37,7 @@
 
 #include "../public/seat_idd_ioctl.h"
 
-#define PSIDD_BUILD 1u
+#define PSIDD_BUILD 2u /* 2: one driver with the local and the remote role (2026-11-14) */
 #define PSIDD_SWAPCHAIN_WAIT_MS 16
 
 typedef struct _PSIDD_MONITOR {
@@ -110,8 +111,9 @@ typedef struct _PSIDD_ADAPTER_CONTEXT {
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PSIDD_ADAPTER_CONTEXT, PsiddGetAdapterContext);
 
-/* driver.cpp (DriverEntry has C linkage: the UMDF stub library calls it by that name) */
+/* roles.cpp (DriverEntry has C linkage: the UMDF stub library calls it by that name) */
 extern "C" DRIVER_INITIALIZE DriverEntry;
+/* driver.cpp: local role */
 EVT_WDF_DRIVER_DEVICE_ADD PsiddDeviceAdd;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP PsiddDeviceCleanup;
 EVT_WDF_DEVICE_D0_ENTRY PsiddD0Entry;

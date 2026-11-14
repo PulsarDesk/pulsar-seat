@@ -39,3 +39,5 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 seat-core = { workspace = true, features = ["mock"] }
+# In-memory PadManager parts for the `local_pads` hub tests.
+seat-pads = { workspace = true, features = ["fake"] }

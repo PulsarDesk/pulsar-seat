@@ -32,6 +32,7 @@ import {
   parseArgs,
   formatArgs,
   setStartupApps,
+  setVirtualPads,
   setClassDefaultClasses
 } from './model.ts';
 import { EXPERIMENTAL_WARNING_VERSION, SHARED_MASK, type Config, type Device, type DeviceView } from './types.ts';
@@ -302,5 +303,15 @@ describe('startup apps and class defaults', () => {
     expect(c.settings.devices.class_default_classes).toEqual(['cdrom', 'volume']);
     c = setClassDefaultClasses(c, []);
     expect(c.settings.devices.class_default_classes).toBeUndefined();
+  });
+});
+
+describe('virtual pads', () => {
+  it('turns seat-owned virtual pads on and removes the field when off', () => {
+    const on = setVirtualPads(demoConfig(), 2, true);
+    expect(on.seats.find((s) => s.number === 2)!.local?.virtual_pads).toBe(true);
+    const off = setVirtualPads(on, 2, false);
+    expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('virtual_pads');
+    expect(demoConfig().seats.find((s) => s.number === 2)!.local?.virtual_pads).toBeUndefined();
   });
 });

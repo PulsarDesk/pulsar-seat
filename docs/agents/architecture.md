@@ -37,7 +37,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `crates/seat-proto` | lib | contracts | pipe messages, framing, authorisation table |
 | `crates/seat-session` | lib | session | `SessionBackend` impls (RDS loopback, experimental termsrv wrapper, fast user switch, desktops), WTS, accounts, launch-into-session, edition probe |
 | `crates/seat-display` | lib | display | `DisplayBinding` impls (CCD topology, monitor keys, window presenter, Display Core, IddCx client), `FrameSink` presenters, identify overlays, DDC/CI; `remote` = the remote kind's `DisplayBackend` (was `split-display`); `kinds::SeatDisplayBackend` = one display trait over both kinds (§10.6) |
-| `crates/seat-input` | lib | input | `InputRouter` impls (raw input host, KMDF filter client), unit enumeration + keys, hot-plug, activity, hotkey; `raw` reader for the seat host; `local_pads` (feature `local-pads`, off) = seat-owned virtual pads from `seat-pads` (§10.6) |
+| `crates/seat-input` | lib | input | `InputRouter` impls (raw input host, KMDF filter client), unit enumeration + keys, hot-plug, activity, hotkey; `raw` reader for the seat host; `local_pads` (feature `local-pads`, on in seat-service; per seat `virtual_pads`, default off) = seat-owned virtual pads from `seat-pads` (§10.6) |
 | `crates/seat-media` | lib | media | `AudioRouter` (RDP audio bridge; endpoint discovery from `seat-audio`), `DeviceGate`s (device security, session drive letters, camera consent, minifilter client), **`pnp::WinPnpTree`**, `bridge::AudioBridge` for the host |
 | `crates/seat-compat` | lib | compat | preflight + coexistence checks, CPU sets + job launcher, reversible tweaks + journal, reference-config importer, app seat API helpers |
 | `crates/seat-service` | bin `pulsar-seat-service` | service | SCM service, pipe server, controller / state machine, boot sequence, LSA secret store, events, logs, diagnostics, sub-commands; `src/remote/` = the remote seat worker (Split's controller + engine, §10.5) |
@@ -62,7 +62,7 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
 | (removed) `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 (done 2026-11-14): `apps/manager/src/lib/remote/` (§10.7) |
 | `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
-| `drivers/split-idd`, `drivers/split-pad` | unbuilt drivers | own IddCx display, own HID pad | one own IddCx driver later ([../../drivers/README.md](../../drivers/README.md)); not built or shipped (nothing is signed; the MSI ships no own driver) |
+| `drivers/split-idd`, `drivers/split-pad` | drivers | own IddCx display, own HID pad | round 4 (2026-11-14): `split-idd` merged into `drivers/seat-idd` (remote role); `split-pad` kept; both built by `build-drivers.ps1` for ARM64 + x64, unsigned, never loaded ([../../drivers/README.md](../../drivers/README.md)); the MSI ships no own driver |
 | (removed) `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 (done 2026-11-14): one MSI; pins in `installer/remote/`, `installer/scripts/fetch-deps.ts`, licences in `installer/licenses/` ([../../installer/README.md](../../installer/README.md) "Remote seat kind") |
 | `spec/remote/` | analyst spec | remote kind ([../../spec/README.md](../../spec/README.md)); the local kind is `spec/local/` | — |
 
@@ -1391,13 +1391,29 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   per kind. Local seats use `rdp_bridge` (`seat-media`, physical endpoints by MMDevice id).
   Remote seats use the session's Remote Audio endpoint, read by the stream server.
 - **Pads + shim.** `seat-pads` and `seat-shim-core` are the shared crates. Local seats get
-  seat-owned virtual pads through `seat_input::local_pads` (cargo feature `local-pads`, off by
-  default, not wired into the service). The flow: a physical pad routed to the seat gets
-  `mirror_kind`, then the `seat_pads::mapping::resolve` backend choice, then
-  `LocalPads::attach` (session id + user SID), then `forward_state` / `forward_report`.
-  Limits: ViGEm only if already installed; DualSense via usbip-win2; the own pad driver is
-  unsigned and only used on explicit preference. The physical pad stays visible to every
-  session without the (unsigned) HID filter. Details: `crates/seat-pads/README.md`. The
+  seat-owned virtual pads through `seat_input::local_pads` (cargo feature `local-pads`, on in
+  `seat-service` since round 4, 2026-11-14). Per seat the switch is
+  `LocalSeat::virtual_pads` (config + manager "Sanal oyun kolu"), **default off**: every
+  usable backend needs a driver install (ViGEmBus or usbip-win2) that Pulsar Seat never
+  does, so the feature cannot be default-on. Service wiring: `crate::local_pads::targets`
+  (seats with the switch on, a session and a signed-in user; HID pads whose effective mask
+  or pending hotkey move names exactly that seat) feeds `LocalPadHub::sync` on the 1 s
+  runtime tick. The hub runs on the remote engine's one `PadManager`
+  (`Engine::local_pad_parts`), so both kinds share the ownership registry, the orphan
+  cleanup at service start / stop and the securing pass (device SDDL with the seat user's
+  SID + `DEVPKEY_Device_SessionId`); local seats use fixed pad seat ids
+  `5053454c-4f43-4100-8000-<seat>`. One reader thread per physical pad
+  (`win::pad_io::WinPadSource`, shared HID open from session 0) forwards reports
+  (`forward_physical`: raw when the wire kind equals the physical kind, else parsed into a
+  state). Feedback: `LocalFeedbackRouter` is the `PadManager`'s sink; same kind = the
+  game's output report unchanged (adaptive triggers included), other kind = rumble +
+  lightbar rebuilt into the physical pad's report; Bluetooth pads get no feedback yet
+  (CRC). Only PlayStation pads are read; Xbox / generic HID pads are reported
+  `Unsupported`. The hub shuts down first in `stop_with`. Limits: ViGEm only if already
+  installed; DualSense via usbip-win2; the own pad driver is unsigned and only used on
+  explicit preference. The physical pad stays visible to every session without the
+  (unsigned) HID filter. HYPOTHESIS: every Windows path behind the hub (nothing ran on
+  hardware). Details: `crates/seat-pads/README.md`. The
   per-process shim (`shim/`, x64 / x86) stays remote-only. Its registry key
   `HKLM\SOFTWARE\PulsarSplit\Shim` and its health pipe keep their names, because `shim/`
   depends on them.
@@ -1407,8 +1423,13 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   `DisplayBackendId` serialised as `{"kind", "backend"}` (per-kind wire names unchanged),
   and `backend_status()`, a `DisplayBackendStatus` (`available`, `signed`, `hdr`,
   `reason`). Adapters: `Local`, `Remote`, `statuses_for`. Both kinds have a `pulsar_idd`
-  (`seat-idd` and `split-idd`). The direction is one own IddCx driver later, signed once
-  (`drivers/README.md`). The two C++ drivers are not merged now.
+  (both now served by the one driver `drivers/seat-idd`). Round 4 (2026-11-14) merged the
+  two C++ IddCx drivers into `drivers/seat-idd` with two roles, picked per devnode from
+  the hardware id (`Root\PulsarSeatIdd` = local, `PulsarSplit_IndirectDisplay` = remote;
+  `src/roles.cpp`), so it is signed once. Both control interfaces and both Rust clients
+  stay as they were (`idd_proto` / `remote::ioctl`); the remote `SET_SEAT_CONFIG` gained
+  an additive v2 buffer with the frame reader SID (`SeatDisplay::frame_reader_sid`, `None`
+  = SYSTEM only, the stream server runs as SYSTEM). Details: `drivers/README.md`.
 
 ### 10.7 One manager (step 9, done 2026-11-14)
 

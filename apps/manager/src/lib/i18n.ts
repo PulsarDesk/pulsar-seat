@@ -347,6 +347,9 @@ export const t = {
     colAccount: 'Oturum hesabı',
     colStart: 'Kendiliğinden başlat',
     colWallpaper: 'Koltuk duvar kağıdı',
+    colVirtualPads: 'Sanal oyun kolu',
+    virtualPadsHint:
+      'Sanal oyun kolu: bu koltuğa atanan PlayStation kolu için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kol oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). Gerçek kol öteki koltuklarda da görünmeye devam eder; oyunu sanal kola yönlendirin. Xbox kolları henüz desteklenmez.',
     colState: 'Şu anki durum',
     logonScreen: 'Oturum açma ekranı',
     seatOneAlways: '1. koltuk her zaman çalışır.',

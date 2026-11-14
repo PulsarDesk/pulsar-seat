@@ -6,7 +6,7 @@
 // the LOCAL SERVICE grant is open question display-7). No object is ever used if its name
 // already existed (squatting): the section and FrameReady fail the seat, a texture / fence
 // name collision moves on to the next generation's names.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Built unsigned (WDK 10.0.28000), untested, never loaded.
 
 #include "Driver.h"
 
@@ -30,10 +30,19 @@ std::wstring FrameChannel::Name(const wchar_t* suffix) const
     return L"Global\\PulsarSplit.Display." + m_seat + L"." + suffix;
 }
 
-HRESULT FrameChannel::CreateSecurity()
+HRESULT FrameChannel::CreateSecurity(const std::wstring& readerSid)
 {
-    if (m_sd) return S_OK;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(PULSAR_OBJECT_SDDL, SDDL_REVISION_1, &m_sd, nullptr)) {
+    if (m_sd) {
+        LocalFree(m_sd);
+        m_sd = nullptr;
+    }
+    // SYSTEM only, plus the seat's frame reader when the service named one (SET_SEAT_CONFIG
+    // v2; the SID characters were checked there).
+    std::wstring sddl = PULSAR_OBJECT_SDDL;
+    if (!readerSid.empty()) {
+        sddl += L"(A;;GA;;;" + readerSid + L")";
+    }
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &m_sd, nullptr)) {
         return HRESULT_FROM_WIN32(GetLastError());
     }
     m_sa.nLength = sizeof(m_sa);
@@ -48,10 +57,10 @@ bool FrameChannel::IsOpenFor(const GUID& seat) const
 }
 
 // Once per seat (first swap chain after SET_SEAT_CONFIG); kept until SHUTDOWN_SEAT.
-HRESULT FrameChannel::Open(const GUID& seat)
+HRESULT FrameChannel::Open(const GUID& seat, const std::wstring& readerSid)
 {
     Close();
-    HRESULT hr = CreateSecurity();
+    HRESULT hr = CreateSecurity(readerSid);
     if (FAILED(hr)) return hr;
     m_seatGuid = seat;
     m_seat = GuidText(seat);

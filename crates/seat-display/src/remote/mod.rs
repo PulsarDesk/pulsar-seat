@@ -8,7 +8,7 @@
 //! * [`backend`] holds the [`DisplayBackend`] trait and its three implementations:
 //!   [`RdpSessionDisplay`] (stock RDP display of the seat session, SDR, default for remote
 //!   seats), [`VddBackend`] (signed third-party Virtual-Display-Driver, console seat only)
-//!   and [`PulsarIdd`] (own IddCx driver in `drivers/split-idd`, unsigned, never default).
+//!   and [`PulsarIdd`] (own IddCx driver in `drivers/seat-idd` (remote role), unsigned, never default).
 //! * Every system access sits behind a trait. Real implementations live in `win`
 //!   (`#[cfg(windows)]`), in-memory fakes in [`fake`] (feature `fake` or tests).
 
@@ -37,7 +37,7 @@ pub use backend::vdd::{
 };
 pub use backend::{BackendInfo, BackendKind, DisplayBackend, SeatDisplayHandle, choose_backend};
 pub use error::DisplayError;
-pub use frame::{FrameHeaderV1, FrameObjectNames, OBJECT_SDDL, object_names, parse_header};
+pub use frame::{FrameHeaderV1, FrameObjectNames, OBJECT_SDDL, object_names, object_sddl, parse_header};
 pub use hdr::{HdrCaps, HdrUnavailable, hdr_availability, iddcx_for_build};
 pub use ioctl::Guid;
 pub use modes::{

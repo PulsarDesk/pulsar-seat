@@ -33,6 +33,7 @@ pub mod descriptors;
 pub mod features;
 
 mod channel;
+mod crt;
 mod hid;
 mod props;
 
@@ -42,7 +43,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use wdk_sys::{
     call_unsafe_wdf_function_binding, NTSTATUS, PCUNICODE_STRING, PDRIVER_OBJECT, PWDFDEVICE_INIT, STATUS_SUCCESS,
     STATUS_DEVICE_CONFIGURATION_ERROR, STATUS_INSUFFICIENT_RESOURCES, ULONG, WDFDEVICE, WDFDRIVER, WDFOBJECT,
-    WDFQUEUE, WDF_DRIVER_CONFIG, WDF_IO_QUEUE_CONFIG, WDF_OBJECT_ATTRIBUTES, WDF_OBJECT_CONTEXT_TYPE_INFO,
+    WDFQUEUE, WDF_DRIVER_CONFIG, WDF_IO_QUEUE_CONFIG, WDF_OBJECT_ATTRIBUTES, WDF_OBJECT_CONTEXT_TYPE_INFO, PFN_WDF_OBJECT_CONTEXT_CLEANUP,
     WDF_PNPPOWER_EVENT_CALLBACKS, WDF_POWER_DEVICE_STATE, _WDF_EXECUTION_LEVEL, _WDF_IO_QUEUE_DISPATCH_TYPE,
     _WDF_SYNCHRONIZATION_SCOPE, _WDF_TRI_STATE,
 };
@@ -95,25 +96,60 @@ impl DeviceContext {
     }
 }
 
+// Own mirrors of WDF_OBJECT_CONTEXT_TYPE_INFO and WDF_OBJECT_ATTRIBUTES (field order and
+// types from the public wdfobject.h documentation). wdk-sys 0.3 emits both as opaque
+// one-byte types with the WDK 10.0.28000 UMDF headers (bindgen layout failure seen on the
+// first build, 2026-11-14), so the driver builds its own and hands WDF a pointer cast. The
+// sizes are pinned below for 64-bit targets (the only ones this driver is built for).
+#[repr(C)]
+struct ContextTypeInfo {
+    size: ULONG,
+    context_name: *const u8,
+    context_size: usize,
+    unique_type: *const ContextTypeInfo,
+    evt_driver_get_unique_context_type: Option<unsafe extern "C" fn() -> *const ContextTypeInfo>,
+}
+
+#[repr(C)]
+struct ObjectAttributes {
+    size: ULONG,
+    evt_cleanup_callback: PFN_WDF_OBJECT_CONTEXT_CLEANUP,
+    evt_destroy_callback: PFN_WDF_OBJECT_CONTEXT_CLEANUP,
+    execution_level: i32,
+    synchronization_scope: i32,
+    parent_object: WDFOBJECT,
+    context_size_override: usize,
+    context_type_info: *const ContextTypeInfo,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<ContextTypeInfo>() == 40);
+    assert!(core::mem::size_of::<ObjectAttributes>() == 56);
+};
+
 #[repr(transparent)]
-struct TypeInfo(WDF_OBJECT_CONTEXT_TYPE_INFO);
+struct TypeInfo(ContextTypeInfo);
 // SAFETY: immutable after initialisation, only read by WDF.
 unsafe impl Sync for TypeInfo {}
 
 static CONTEXT_NAME: &[u8] = b"PulsarPadDeviceContext\0";
-static DEVICE_CONTEXT_TYPE: TypeInfo = TypeInfo(WDF_OBJECT_CONTEXT_TYPE_INFO {
-    Size: core::mem::size_of::<WDF_OBJECT_CONTEXT_TYPE_INFO>() as ULONG,
-    ContextName: CONTEXT_NAME.as_ptr() as *const _,
-    ContextSize: core::mem::size_of::<DeviceContext>(),
-    UniqueType: &DEVICE_CONTEXT_TYPE.0 as *const _,
-    EvtDriverGetUniqueContextType: None,
+static DEVICE_CONTEXT_TYPE: TypeInfo = TypeInfo(ContextTypeInfo {
+    size: core::mem::size_of::<ContextTypeInfo>() as ULONG,
+    context_name: CONTEXT_NAME.as_ptr(),
+    context_size: core::mem::size_of::<DeviceContext>(),
+    unique_type: &DEVICE_CONTEXT_TYPE.0 as *const _,
+    evt_driver_get_unique_context_type: None,
 });
+
+fn type_info() -> *const WDF_OBJECT_CONTEXT_TYPE_INFO {
+    (&DEVICE_CONTEXT_TYPE.0 as *const ContextTypeInfo).cast()
+}
 
 /// Context of a WDF device object.
 pub unsafe fn context(device: WDFDEVICE) -> *mut DeviceContext {
     // SAFETY: the device was created with DEVICE_CONTEXT_TYPE.
     unsafe {
-        call_unsafe_wdf_function_binding!(WdfObjectGetTypedContextWorker, device as WDFOBJECT, &DEVICE_CONTEXT_TYPE.0)
+        call_unsafe_wdf_function_binding!(WdfObjectGetTypedContextWorker, device as WDFOBJECT, type_info())
             as *mut DeviceContext
     }
 }
@@ -145,14 +181,16 @@ pub unsafe extern "system" fn driver_entry(driver: PDRIVER_OBJECT, registry_path
     }
 }
 
-fn object_attributes(cleanup: bool) -> WDF_OBJECT_ATTRIBUTES {
-    WDF_OBJECT_ATTRIBUTES {
-        Size: core::mem::size_of::<WDF_OBJECT_ATTRIBUTES>() as ULONG,
-        ExecutionLevel: _WDF_EXECUTION_LEVEL::WdfExecutionLevelInheritFromParent,
-        SynchronizationScope: _WDF_SYNCHRONIZATION_SCOPE::WdfSynchronizationScopeInheritFromParent,
-        ContextTypeInfo: &DEVICE_CONTEXT_TYPE.0,
-        EvtCleanupCallback: if cleanup { Some(evt_device_cleanup) } else { None },
-        ..Default::default()
+fn object_attributes(cleanup: bool) -> ObjectAttributes {
+    ObjectAttributes {
+        size: core::mem::size_of::<ObjectAttributes>() as ULONG,
+        evt_cleanup_callback: if cleanup { Some(evt_device_cleanup) } else { None },
+        evt_destroy_callback: None,
+        execution_level: _WDF_EXECUTION_LEVEL::WdfExecutionLevelInheritFromParent,
+        synchronization_scope: _WDF_SYNCHRONIZATION_SCOPE::WdfSynchronizationScopeInheritFromParent,
+        parent_object: core::ptr::null_mut(),
+        context_size_override: 0,
+        context_type_info: &DEVICE_CONTEXT_TYPE.0,
     }
 }
 
@@ -175,7 +213,15 @@ unsafe extern "C" fn evt_device_add(_driver: WDFDRIVER, mut init: PWDFDEVICE_INI
     // Properties first: fail the start when any is missing or the protocol is unknown.
     // SAFETY: init valid.
     let p = match unsafe { props::read(init) } {
-        Some(p) if p.protocol == layout::PROTOCOL && layout::ids_for_kind(p.kind).is_some() => p,
+        // A pad belongs to one seat slot (spec 60: at most 16 per seat) of a real seat GUID.
+        Some(p)
+            if p.protocol == layout::PROTOCOL
+                && layout::ids_for_kind(p.kind).is_some()
+                && p.slot < 16
+                && p.seat.iter().any(|&b| b != 0) =>
+        {
+            p
+        }
         _ => return STATUS_DEVICE_CONFIGURATION_ERROR,
     };
     let Some(ch) = channel::Channel::open(&p.channel, p.kind) else {
@@ -185,7 +231,12 @@ unsafe extern "C" fn evt_device_add(_driver: WDFDRIVER, mut init: PWDFDEVICE_INI
     let mut attrs = object_attributes(true);
     let mut device: WDFDEVICE = core::ptr::null_mut();
     // SAFETY: documented arguments.
-    let st = unsafe { call_unsafe_wdf_function_binding!(WdfDeviceCreate, &mut init, &mut attrs, &mut device) };
+    let st = unsafe { call_unsafe_wdf_function_binding!(
+            WdfDeviceCreate,
+            &mut init,
+            (&mut attrs as *mut ObjectAttributes).cast::<WDF_OBJECT_ATTRIBUTES>(),
+            &mut device
+        ) };
     if st < 0 {
         return st;
     }

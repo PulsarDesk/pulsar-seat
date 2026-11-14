@@ -2,7 +2,7 @@
 //
 // Mode rules on the driver side (mirror of crates/seat-display/src/remote/modes.rs for what the
 // driver applies: super-sampling, scale) and the remote display-config update.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Built unsigned (WDK 10.0.28000), untested, never loaded.
 
 #include "Driver.h"
 
@@ -120,7 +120,7 @@ NTSTATUS AdapterContext::ApplyMode(const ModeState& m)
         path.Mode.RefreshRate.Numerator = m.hz;
         path.Mode.RefreshRate.Denominator = 1;
         path.Mode.VSyncFreqDivider = 1;
-        path.Mode.MonitorColorMode = m.hdr ? IDDCX_DISPLAYCONFIG_MONITOR_COLORMODE_HDR10   // VERIFY names against iddcx.h
+        path.Mode.MonitorColorMode = m.hdr ? IDDCX_DISPLAYCONFIG_MONITOR_COLORMODE_HDR10   // checked against iddcx.h 1.10
                                            : IDDCX_DISPLAYCONFIG_MONITOR_COLORMODE_SDR;
         path.MonitorScaleFactor = m.scalePercent;
         if (m.hdr) {
@@ -129,10 +129,10 @@ NTSTATUS AdapterContext::ApplyMode(const ModeState& m)
                                                                      IDDCX_DISPLAYCONFIGPATH2_FLAGS_MONITOR_SDRWHITELEVEL_VALID);
             auto& c = path.MonitorColorimetry;
             // 10-bit CIE values (x * 1024), Rec. 2020 primaries, D65 white.
-            c.RedPoint = {static_cast<LONG>(Cie10(7080)), static_cast<LONG>(Cie10(2920))};
-            c.GreenPoint = {static_cast<LONG>(Cie10(1700)), static_cast<LONG>(Cie10(7970))};
-            c.BluePoint = {static_cast<LONG>(Cie10(1310)), static_cast<LONG>(Cie10(460))};
-            c.WhitePoint = {static_cast<LONG>(Cie10(3127)), static_cast<LONG>(Cie10(3290))};
+            c.RedPoint = {static_cast<UINT32>(Cie10(7080)), static_cast<UINT32>(Cie10(2920))};
+            c.GreenPoint = {static_cast<UINT32>(Cie10(1700)), static_cast<UINT32>(Cie10(7970))};
+            c.BluePoint = {static_cast<UINT32>(Cie10(1310)), static_cast<UINT32>(Cie10(460))};
+            c.WhitePoint = {static_cast<UINT32>(Cie10(3127)), static_cast<UINT32>(Cie10(3290))};
             c.MinLuminance = seat.minLuminanceX10000;
             c.MaxLuminance = seat.maxLuminanceNits * 10000;
             c.MaxFullFrameLuminance = seat.maxFullFrameNits * 10000;
@@ -142,8 +142,8 @@ NTSTATUS AdapterContext::ApplyMode(const ModeState& m)
             path.MonitorSdrWhiteLevel = seat.sdrWhiteNits;
         }
         IDARG_IN_ADAPTERDISPLAYCONFIGUPDATE2 up{};
-        up.VideoPathCount = 1;
-        up.pVideoPaths = &path;
+        up.PathCount = 1;
+        up.pPaths = &path;
         return IddCxAdapterDisplayConfigUpdate2(m_adapter, &up);
     }
 
@@ -169,8 +169,8 @@ NTSTATUS AdapterContext::ApplyMode(const ModeState& m)
     path.VSyncFreqDivider = 1;
     path.MonitorScaleFactor = m.scalePercent;
     IDARG_IN_ADAPTERDISPLAYCONFIGUPDATE up{};
-    up.VideoPathCount = 1;
-    up.pVideoPaths = &path;
+    up.PathCount = 1;
+    up.pPaths = &path;
     return IddCxAdapterDisplayConfigUpdate(m_adapter, &up);
 }
 

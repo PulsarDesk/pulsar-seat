@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Control channel (spec 40 §7): versioned buffered IOCTLs from the service.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Built unsigned (WDK 10.0.28000), untested, never loaded.
 //
 // Locking (see Driver.h): m_control -> m_lifecycle -> m_lock. WDF request calls that can
 // run a cancel routine synchronously (WdfRequestMarkCancelableEx) or complete a request
@@ -139,6 +139,29 @@ static VOID EvtModeRequestCancel(WDFREQUEST request)
     GetDeviceWrapper(dev)->ctx->CancelPendingMode(request);
 }
 
+// Reader SID of a v2 SET_SEAT_CONFIG: NUL-terminated inside the array, only S, digits and
+// '-', starting with "S-". *out stays empty for a v1 buffer or an empty SID.
+static bool ReaderSidOk(const void* inBuf, size_t inLen, std::wstring* out)
+{
+    out->clear();
+    auto* base = static_cast<const PULSAR_SEAT_CONFIG_IN*>(inBuf);
+    if (base->Header.Size < sizeof(PULSAR_SEAT_CONFIG_IN_V2) || inLen < sizeof(PULSAR_SEAT_CONFIG_IN_V2)) {
+        return true; // v1 buffer: no reader
+    }
+    auto* v2 = static_cast<const PULSAR_SEAT_CONFIG_IN_V2*>(inBuf);
+    size_t n = 0;
+    while (n < PULSAR_MAX_SID && v2->ReaderSid[n] != 0) {
+        uint16_t c = v2->ReaderSid[n];
+        if (!(c == L'S' || c == L'-' || (c >= L'0' && c <= L'9'))) return false;
+        ++n;
+    }
+    if (n == PULSAR_MAX_SID) return false; // not terminated
+    if (n == 0) return true;
+    if (n < 4 || v2->ReaderSid[0] != L'S' || v2->ReaderSid[1] != L'-') return false;
+    out->assign(reinterpret_cast<const wchar_t*>(v2->ReaderSid), n);
+    return true;
+}
+
 static bool SeatValuesOk(const PULSAR_SEAT_CONFIG_IN* in)
 {
     auto pct = [](uint32_t v) { return v >= 100 && v <= 500; };
@@ -177,7 +200,8 @@ void AdapterContext::DeviceIoControl(WDFREQUEST request, size_t outLen, size_t i
     }
     case IOCTL_PULSAR_SET_SEAT_CONFIG: {
         auto* in = static_cast<const PULSAR_SEAT_CONFIG_IN*>(inBuf);
-        if (!InputOk(in, inLen) || !SeatValuesOk(in)) break;
+        std::wstring reader;
+        if (!InputOk(in, inLen) || !SeatValuesOk(in) || !ReaderSidOk(inBuf, inLen, &reader)) break;
         std::lock_guard<std::mutex> control(m_control);
         bool adapterChanged = false;
         bool adapterReady = false;
@@ -197,6 +221,7 @@ void AdapterContext::DeviceIoControl(WDFREQUEST request, size_t outLen, size_t i
             s.scaleStatic = in->ScaleStatic != 0;
             s.scalePercent = in->ScalePercent;
             s.superSamplingPercent = in->SuperSamplingPercent;
+            s.readerSid = reader;
             adapterChanged = s.adapterPinned &&
                              (!m_seat.adapterPinned || s.adapter.LowPart != m_seat.adapter.LowPart || s.adapter.HighPart != m_seat.adapter.HighPart);
             m_seat = s;

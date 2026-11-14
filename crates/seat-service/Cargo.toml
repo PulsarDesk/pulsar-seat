@@ -26,7 +26,11 @@ seat-core.workspace = true
 seat-proto.workspace = true
 seat-session = { workspace = true }
 seat-display.workspace = true
-seat-input.workspace = true
+# Seat-owned virtual pads for local seats (`seat_input::local_pads`, round 4 2026-11-14) are
+# always compiled in: they need no driver install by us (ViGEmBus / usbip-win2 only when
+# the user already installed them; the own unsigned pad driver only on explicit preference).
+# At run time they stay off per seat (`LocalSeat::virtual_pads`, default false).
+seat-input = { workspace = true, features = ["local-pads"] }
 seat-media.workspace = true
 seat-compat.workspace = true
 serde.workspace = true
@@ -96,9 +100,6 @@ seat-display = { workspace = true, features = ["fake"] }
 seat-audio = { workspace = true, features = ["fake"] }
 seat-stream = { workspace = true, features = ["fake"] }
 seat-pads = { workspace = true, features = ["fake"] }
-# Only so `cargo test --workspace` also builds and runs `seat_input::local_pads` (feature
-# off by default; the service does not use it yet, merge step 8).
-seat-input = { workspace = true, features = ["local-pads"] }
 seat-shim-core = { workspace = true, features = ["fake"] }
 seat-release = { path = "../seat-release" }
 tempfile = "3.27.0"

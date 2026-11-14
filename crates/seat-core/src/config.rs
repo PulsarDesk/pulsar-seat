@@ -218,6 +218,14 @@ pub struct LocalSeat {
     /// precedence over [`LocalSeat::kiosk`]. Added 2026-11-13 (additive).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kiosk_shell: Option<KioskShell>,
+    /// Seat-owned virtual pads for the PlayStation pads routed to this seat
+    /// (`seat_input::local_pads`, round 4 2026-11-14, additive): the service mirrors each
+    /// physical pad into a virtual one that only this seat's session and user can open
+    /// (ViGEmBus or usbip-win2 when installed; nothing is installed by us). Off by
+    /// default: without the HID visibility filter the physical pad stays visible to every
+    /// session, so a game in this seat may see both pads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub virtual_pads: bool,
 }
 
 impl LocalSeat {
@@ -857,6 +865,19 @@ mod tests {
         assert!(r.clipboard.direction.to_seat() && r.clipboard.direction.from_seat());
         assert!(r.clipboard.text && r.clipboard.html && r.clipboard.images && !r.clipboard.files);
         assert_eq!(r.drives, DriveRedirect::ReadOnly);
+    }
+
+    #[test]
+    fn virtual_pads_are_additive_and_off_by_default() {
+        let mut s = SeatConfig::new(SeatNumber::new(2).unwrap());
+        let j = serde_json::to_value(&s).unwrap();
+        assert!(j["local"].get("virtual_pads").is_none(), "default is not written");
+        assert!(!s.local_settings().virtual_pads);
+        s.local_mut().unwrap().virtual_pads = true;
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["local"]["virtual_pads"], true);
+        let back: SeatConfig = serde_json::from_value(j).unwrap();
+        assert!(back.local_settings().virtual_pads);
     }
 
     #[test]

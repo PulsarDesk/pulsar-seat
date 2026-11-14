@@ -405,3 +405,20 @@ fn pad_hidden_from_seat_map_until_secured() {
     assert_eq!(r.tree.session_of(&inst), Some(3));
     assert!(r.m.seat_instance_prefixes(SEAT).contains(&inst.to_ascii_uppercase()));
 }
+
+#[test]
+fn local_seat_report_and_remove_slot() {
+    // Local seats (seat_input::local_pads): raw reports go straight to the pad, and a pad
+    // is removed at once (no stream server answers pad.detach).
+    let mut r = rig();
+    r.m.wanted(&ctx(), &wanted(0, PadKind::Ds5, 1)).unwrap().unwrap();
+    let id = PadId::new(SEAT, 0).unwrap();
+    assert_eq!(r.m.wire_kind(&id), Some(PadKind::Ds5));
+    r.m.submit_report(&id, &[0x01, 0x80, 0x80]).unwrap();
+    assert!(r.usbip.calls().contains(&FakePadCall::Report(id.clone(), vec![0x01, 0x80, 0x80])));
+    r.m.remove_slot(SEAT, 0);
+    assert!(r.usbip.calls().contains(&FakePadCall::Removed(id.clone())));
+    assert_eq!(r.m.wire_kind(&id), None);
+    assert!(r.m.take_outgoing().is_empty(), "no pad.detach for a local removal");
+    assert!(matches!(r.m.submit_report(&id, &[0x01]), Err(crate::error::PadError::DeviceLost(_))));
+}

@@ -204,6 +204,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
             Arc::new(seat_pads::journal::VecRestoreLog::default()),
             Arc::new(seat_pads::fake::FakeClock::default()),
         )))),
+        local_pad_feedback: None,
         isolation: isolation.clone(),
         seatmap: seatmap.clone(),
         termwrap: Arc::new(termwrap.termwrap(seat_session::termwrap::TermwrapPolicy::default())),

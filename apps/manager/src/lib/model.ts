@@ -218,6 +218,16 @@ export function setWallpaper(c: Config, n: SeatNumber, on: boolean): Config {
   return editSeat(c, n, (s) => (s.wallpaper = on));
 }
 
+/** Seat-owned virtual pads of a local seat (off = field removed, as the service writes it). */
+export function setVirtualPads(c: Config, n: SeatNumber, on: boolean): Config {
+  return editSeat(c, n, (s) => {
+    const l = localMut(s);
+    if (!l) return;
+    if (on) l.virtual_pads = true;
+    else delete l.virtual_pads;
+  });
+}
+
 export function setCpuSets(c: Config, n: SeatNumber, ids: number[], hard: boolean): Config {
   return editSeat(c, n, (s) => {
     s.cpu_sets = [...ids].sort((a, b) => a - b);

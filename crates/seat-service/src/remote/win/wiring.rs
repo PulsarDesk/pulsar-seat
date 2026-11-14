@@ -297,7 +297,14 @@ pub fn bluetooth(data_root: &Path) -> seat_pads::bluetooth::BtController {
     )
 }
 
-fn pads(data_root: &Path, global: &RemoteSettings) -> Arc<Mutex<seat_pads::PadManager>> {
+/// The one pad manager of both seat kinds. eedback routes local seats' virtual pads'
+/// feedback (rumble, lightbar, triggers) back to their physical pads; remote seats' pads
+/// have no target there and keep the null behaviour.
+fn pads(
+    data_root: &Path,
+    global: &RemoteSettings,
+    feedback: Arc<seat_input::local_pads::LocalFeedbackRouter>,
+) -> Arc<Mutex<seat_pads::PadManager>> {
     use seat_pads::win::{devtree::CmDeviceTree, process::WinProcessProbe, swdevice::WinSwDevice, usbip::*, vigem::WinVigemDriver};
     use seat_pads::{PadBackend, PadManagerConfig};
     let tree: Arc<dyn seat_pads::DeviceTree> = Arc::new(CmDeviceTree);
@@ -328,7 +335,7 @@ fn pads(data_root: &Path, global: &RemoteSettings) -> Arc<Mutex<seat_pads::PadMa
         Arc::new(WinProcessProbe),
         Arc::new(SysClock),
         Arc::new(seat_pads::win::channel::WinChannelFactory),
-        Arc::new(seat_pads::NullSink),
+        feedback,
         cfg,
     );
     // Device arrivals trigger an immediate securing pass of new pad nodes (pads-9).
@@ -458,14 +465,16 @@ pub fn build(
         CoexistOutcome { passive: r.is_passive(), report: serde_json::to_value(&r).ok() }
     });
 
+    let local_feedback = Arc::new(seat_input::local_pads::LocalFeedbackRouter::new());
     Ok(Deps {
         session: Arc::new(session),
         displays,
         adapters: Arc::new(DxgiAdapters),
         audio: Arc::new(seat_audio::system_probe()),
         stream,
-        pads: Some(pads(data_root, global)),
+        pads: Some(pads(data_root, global, local_feedback.clone())),
         bluetooth: Some(Arc::new(Mutex::new(bluetooth(data_root)))),
+        local_pad_feedback: Some(local_feedback),
         isolation: Arc::new(WinIsolation { install_dir: install_dir.to_path_buf() }),
         seatmap: Arc::new(seat_shim_core::win::RegSeatMap),
         termwrap: Arc::new(seat_session::termwrap::WindowsTermwrap::system(

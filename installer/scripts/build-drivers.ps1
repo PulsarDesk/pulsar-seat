@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Builds the three Pulsar Seat drivers (drivers/*/*.vcxproj) for ARM64 and x64, checks
-# that the build is warning-free, runs infverif on each INF, runs ApiValidator (the SDK's
+# Builds the Pulsar Seat drivers for ARM64 and x64: the three MSBuild drivers
+# (drivers/<name>/<name>.vcxproj; seat-idd carries both IddCx roles, local and remote) and
+# the Rust UMDF pad driver drivers/split-pad (cargo + stampinf + inf2cat, own workspace).
+# Checks that the build is warning-free, runs infverif on each INF, runs ApiValidator (the SDK's
 # Universal DDI list) on every .sys / .dll and checks the PE machine of every .sys / .dll. Output: target/drivers/<Platform>/<Configuration>/<project>/ (package:
 # inf + sys/dll [+ cat]), intermediate files in .../obj/, one log per build in .../logs/.
 #
@@ -16,7 +18,7 @@
 param(
     [string[]] $Platforms = @("ARM64", "x64"),
     [string[]] $Configurations = @("Release", "Debug"),
-    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter"),
+    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "split-pad"),
     [string] $Sdk = "10.0.28000.0",
     [string] $OutRoot = "",
     # Also run the WDK code analysis (/analyze with the driver rule sets).
@@ -80,6 +82,55 @@ if (-not (Test-Path $apivalidator)) { $apivalidator = Join-Path $kits "bin\$Sdk\
 Write-Host "MSBuild:  $msbuild"
 Write-Host "SDK/WDK:  $Sdk"
 
+# Rust UMDF driver (drivers/split-pad): cargo build into the shared target dir, then the
+# package dir like the MSBuild projects (stamped INF + DLL + catalog). Needs LLVM (libclang
+# for wdk-sys' bindgen); LIBCLANG_PATH defaults to the LLVM install folder. Returns the
+# package dir, or $null after adding a failure.
+function Build-CargoDriver([string] $name, [string] $platform, [string] $config, [string] $base, [string] $logs) {
+    $triple = if ($platform -eq "ARM64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+    $dir = Join-Path $repo "drivers\$name"
+    $crate = $name.Replace("-", "_")
+    if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $repo "target\wf" }
+    if (-not $env:LIBCLANG_PATH -and (Test-Path "$env:ProgramFiles\LLVM\bin\libclang.dll")) { $env:LIBCLANG_PATH = "$env:ProgramFiles\LLVM\bin" }
+    $log = Join-Path $logs "$name.log"
+    $cargoArgs = @("build", "--manifest-path", (Join-Path $dir "Cargo.toml"), "--target", $triple)
+    if ($config -eq "Release") { $cargoArgs += "--release" }
+    Write-Host "== $name $platform $config"
+    # cargo writes progress to stderr: capture everything into the log.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & cargo @cargoArgs *> $log
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    $text = Get-Content $log -Raw
+    $warn = @([regex]::Matches($text, "(?m)^warning: .*$") | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    foreach ($l in $warn) { Write-Host "  $l" -ForegroundColor Yellow }
+    if ($code -ne 0) { $failures.Add("$name $platform $config : cargo exit $code (log $log)"); return $null }
+    if ($warn.Count -gt 0) { $failures.Add("$name $platform $config : $($warn.Count) warning(s) (log $log)") }
+    $profileDir = if ($config -eq "Release") { "release" } else { "debug" }
+    $dll = Join-Path $env:CARGO_TARGET_DIR "$triple\$profileDir\$crate.dll"
+    $pkg = Join-Path $base "$name\$name"
+    if (Test-Path $pkg) { Get-ChildItem $pkg -File | ForEach-Object { [System.IO.File]::Delete($_.FullName) } }
+    New-Item -ItemType Directory -Force $pkg | Out-Null
+    Copy-Item $dll $pkg
+    $inf = Join-Path $pkg "$crate.inf"
+    Copy-Item (Join-Path $dir "$crate.inx") $inf
+    $tools = Join-Path $kits "bin\$Sdk\x86"
+    $arch = if ($platform -eq "ARM64") { "ARM64" } else { "amd64" }
+    $umdf = (Select-String -Path (Join-Path $dir "Cargo.toml") -Pattern 'target-umdf-version-minor\s*=\s*(\d+)').Matches[0].Groups[1].Value
+    & (Join-Path $tools "stampinf.exe") -a $arch -v "0.1.0.0" -u "2.$umdf.0" -x -f $inf *> (Join-Path $logs "$name.stampinf.log")
+    if ($LASTEXITCODE -ne 0) { $failures.Add("$name $platform $config : stampinf exit $LASTEXITCODE"); return $null }
+    $os = if ($platform -eq "ARM64") { "10_VB_ARM64" } else { "10_VB_X64" }
+    $catLog = Join-Path $logs "$name.inf2cat.log"
+    & (Join-Path $tools "inf2cat.exe") "/os:$os" "/driver:$pkg" *> $catLog
+    if ($LASTEXITCODE -ne 0) {
+        Get-Content $catLog | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        $failures.Add("$name $platform $config : inf2cat exit $LASTEXITCODE (log $catLog)")
+        return $null
+    }
+    return $pkg
+}
+
 $failures = New-Object System.Collections.Generic.List[string]
 $results = New-Object System.Collections.Generic.List[object]
 
@@ -87,13 +138,16 @@ foreach ($platform in $Platforms) {
     $wantMachine = if ($platform -eq "ARM64") { 0xAA64 } else { 0x8664 }
     foreach ($config in $Configurations) {
         foreach ($name in $Projects) {
-            $proj = Join-Path $repo "drivers\$name\$name.vcxproj"
-            if (-not (Test-Path $proj)) { $failures.Add("$name : project missing"); continue }
             $base = Join-Path $OutRoot "$platform\$config"
             $out = Join-Path $base "$name\"
             $obj = Join-Path $base "obj\$name\"
             $logs = Join-Path $base "logs"
             New-Item -ItemType Directory -Force $out, $obj, $logs | Out-Null
+            if (Test-Path (Join-Path $repo "drivers\$name\Cargo.toml")) {
+                if (-not (Build-CargoDriver $name $platform $config $base $logs)) { continue }
+            } else {
+            $proj = Join-Path $repo "drivers\$name\$name.vcxproj"
+            if (-not (Test-Path $proj)) { $failures.Add("$name : project missing"); continue }
             $log = Join-Path $logs "$name.log"
             $mbArgs = @(
                 $proj, "/t:Rebuild", "/m", "/nologo", "/v:m",
@@ -118,6 +172,7 @@ foreach ($platform in $Platforms) {
             $summary = [regex]::Match($text, "(?m)^\s*(\d+) Warning\(s\)")
             if ($summary.Success -and [int]$summary.Groups[1].Value -gt 0 -and @($warn).Count -eq 0) { $warn = @("$($summary.Groups[1].Value) warning(s), see the log") }
             if (@($warn).Count -gt 0) { $failures.Add("$name $platform $config : $(@($warn).Count) warning(s) (log $log)") }
+            }
 
             # Package dir: the WDK copies the stamped inf + the binary (FilesToPackage) to
             # <OutDir><ProjectName>\; inf2cat already ran on it inside msbuild.
@@ -150,8 +205,8 @@ foreach ($platform in $Platforms) {
                 $infs = Get-ChildItem $pkg -Recurse -Filter *.inf
                 foreach ($inf in $infs) {
                     # /w: Windows Driver rules (declarative + isolated) for every package;
-                    # /u: universal rules in addition for the UMDF (IddCx) package.
-                    $modes = if ($name -eq "seat-idd") { @("/w", "/u") } else { @("/w") }
+                    # /u: universal rules in addition for the UMDF packages (IddCx, pad).
+                    $modes = if ($name -in @("seat-idd", "split-pad")) { @("/w", "/u") } else { @("/w") }
                     foreach ($mode in $modes) {
                         $ivLog = Join-Path $logs ("$name.infverif" + $mode.TrimStart("/") + ".log")
                         & $infverif $mode /v $inf.FullName *> $ivLog

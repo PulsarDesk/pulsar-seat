@@ -1091,3 +1091,49 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     Recheck on each new Windows feature update.
   - Note: the unfinished kiosk-isolation work was parked in `git stash` during this
     package and restored afterwards (still uncommitted).
+- 2026-11-14: **round 4 pads-drivers done** (architecture.md 10.6 "Pads + shim" and
+  "Display"; drivers/README.md; drivers/seat-idd/README.md "Remote role";
+  crates/seat-pads/README.md). (a) **Local pads wired into seat-service**: `seat-input`
+  feature `local-pads` is now a normal dependency of the service; per seat
+  `LocalSeat::virtual_pads` (config, manager "Sanal oyun kolu" in the seats table, Turkish
+  hint), **default off**, because every usable backend (ViGEmBus, usbip-win2) is a driver
+  install that Pulsar Seat never does. `crate::local_pads::targets` (seat with the switch,
+  a session and a signed-in user; HID pads routed to exactly that seat, hotkey moves
+  included) feeds `seat_input::local_pads::LocalPadHub::sync` on the 1 s runtime tick; the
+  hub runs on the remote engine's one `PadManager` (`Engine::local_pad_parts`): one
+  ownership registry, orphan cleanup at start / stop, device securing (SDDL with the seat
+  user's SID + `DEVPKEY_Device_SessionId`); fixed local pad seat ids
+  `5053454c-4f43-4100-8000-<seat>`. Physical pads: `win::pad_io::WinPadSource` (shared HID
+  open, overlapped reads), `forward_physical` (raw report when kinds match, else parsed
+  state). Feedback `LocalFeedbackRouter` (the manager's sink): same kind = output report
+  unchanged (rumble, lightbar, LEDs, adaptive triggers), other kind = rumble + lightbar
+  rebuilt; `seat_pads::reports` gained the DS4 / DualSense input parsers, the Bluetooth-to-USB report cut and
+  the DualSense output builder. Hub stops first in `stop_with`. (b) **Drivers built** with
+  `build-drivers.ps1` (VS 18 BuildTools + WDK 10.0.28000): seat-input-filter, seat-idd
+  (both roles), seat-storage-filter and the Rust `split-pad` (cargo + stampinf + inf2cat,
+  own `src/crt.rs`), ARM64 + x64, Release + Debug, zero warnings, infverif, ApiValidator,
+  PE machine 0xAA64 / 0x8664; unsigned, never loaded. (c) **One IddCx driver**:
+  `drivers/split-idd` merged into `drivers/seat-idd` (`src/remote/`,
+  `public/PulsarIddShared.h`); `src/roles.cpp` has DriverEntry and picks the role per
+  devnode from the hardware id (`Root\PulsarSeatIdd` local, `PulsarSplit_IndirectDisplay`
+  remote, Windows 11 model sections only; unknown id refused); both control interfaces
+  and both Rust clients unchanged; `DisplayBackendId::driver` = `drivers/seat-idd` for
+  both. (d) **Frame reader SID end to end**: local path unchanged
+  (`SeatDisplayPrefs.frame_reader_sid`, round 3); remote path new: `SeatDisplay::
+  frame_reader_sid` -> `SET_SEAT_CONFIG` v2 (256 bytes, additive by size, `encode_v2`,
+  SID charset checked on both sides) -> remote role frame objects DACL SYSTEM + reader;
+  the fixed LOCAL SERVICE grant is gone. The service passes `None` (SYSTEM only), since
+  the stream server runs as SYSTEM. Gates green: cargo 1527 passed / 6 ignored (+12),
+  clippy aarch64 + x86_64 clean, manager 184 / check / build, shim 8 (host) + x64 / i686
+  check, installer scripts 49. No test deleted (seat-display `kinds::ids_per_kind` now
+  expects one driver for both kinds).
+  - Open (HYPOTHESIS, nothing ran on hardware): the shared HID open from session 0 does
+    not disturb the seat's readers; USB output report writes reach DS4 / DualSense; the
+    securing pass on ViGEm / usbip-win2 devices; which pad games pick (physical pad still
+    visible to every session without the unsigned HID filter); both IddCx roles loading
+    from one package; IddCx 1.10 detection and FP16 frames; the reader SID DACL.
+  - Open (work): Bluetooth feedback (output report CRC); Xbox / generic HID pads are not
+    read (`Unsupported`); hub notes are only logged, the manager does not show them yet;
+    remote role still needs a Remote Desktop protocol provider that names its hardware id.
+  - Note: the kiosk-isolation partial work stayed parked in `git stash` during this
+    package and is restored after the commit (still uncommitted).

@@ -214,6 +214,9 @@ export interface LocalSeat {
   /** Clipboard / drive / smart-card redirection of the seat session (IronRDP backend,
    *  spec 70). Absent = all off. Added 2026-11-13. */
   redirect?: SeatRedirect;
+  /** Seat-owned virtual pads for the PlayStation pads routed to this seat alone
+   *  (`seat_input::local_pads`). Absent = off. Added 2026-11-14. */
+  virtual_pads?: boolean;
 }
 
 /** Remote seat part (`seat_core::remote::RemoteSeat`). Every field has a service default

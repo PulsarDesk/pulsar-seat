@@ -1,6 +1,13 @@
 # drivers/seat-idd: Pulsar Seat IddCx virtual display
 
-UMDF 2 + IddCx 1.4 driver that gives a seat a virtual monitor of its own (spec 40 §6.3,
+One UMDF 2 IddCx driver with two roles (round 4, 2026-11-14: Pulsar Split's
+`drivers/split-idd` merged in, so the driver is signed once). The role is picked per devnode
+from its hardware id (`src/roles.cpp`): `Root\PulsarSeatIdd` = **local role** (this section
+and "Behaviour" below), `PulsarSplit_IndirectDisplay` = **remote role** (section "Remote
+role" at the end). Every devnode runs in its own WUDFHost (`ProcessSharingDisabled` in both
+INF install sections), so the roles never share a host process.
+
+Local role: IddCx 1.4 calls that give a seat a virtual monitor of its own (spec 40 §6.3,
 backend `pulsar_idd`, `DriverId::Idd`). Used only by session backends without a session
 display of their own (spec 00 §5.2: backend D / future local sessions). RDP-loopback seats
 (the default) render into their RDP display and do **not** use it (spec 00 T1).
@@ -19,8 +26,10 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
 | --- | --- |
 | `public/seat_idd_ioctl.h` | control IOCTLs + frame-section layout; mirror of `crates/seat-display/src/idd_proto.rs` (layout pinned by Rust tests and `_Static_assert`s; checked with clang against the SDK headers for ARM64 and x64) |
 | `src/driver.h`, `src/driver.cpp` | DriverEntry, device add, adapter init (`IddCxAdapterInitAsync`), monitor create / arrival / departure, mode callbacks, `EvtIddCxDeviceIoControl` |
+| `src/roles.h`, `src/roles.cpp` | DriverEntry; device add picks the role from the devnode's hardware ids (unknown id = `STATUS_NOT_SUPPORTED`) |
+| `src/remote/`, `public/PulsarIddShared.h` | remote role (section "Remote role") |
 | `src/swapchain.cpp` | frame section + event (named, ACL), swap-chain thread (D3D11 on the render LUID, `IddCxSwapChainReleaseAndAcquireBuffer`, staging copy, sequence lock), hardware cursor (`IddCxMonitorSetupHardwareCursor` / `QueryHardwareCursor`) |
-| `seat-idd.inf` | root-enumerated `Root\PulsarSeatIdd`, Display class, `IndirectKmd` upper filter, `UmdfExtensions = IddCx0102`, device Security `D:P(A;;GA;;;SY)`, NTamd64 + NTarm64 |
+| `seat-idd.inf` | both roles (remote only in the 22000+ model sections); local: root-enumerated `Root\PulsarSeatIdd`, Display class, `IndirectKmd` upper filter, `UmdfExtensions = IddCx0102`, device Security `D:P(A;;GA;;;SY)`, NTamd64 + NTarm64 |
 | `seat-idd.vcxproj` | ARM64 + x64, `WindowsUserModeDriver10.0`, UMDF 2.31, C++17 (iddcx.h is C++ only; the code is C style, COM via C++ method calls), `/INTEGRITYCHECK`, CFG, CET (x64) |
 
 ## Behaviour
@@ -135,3 +144,26 @@ use (2026-11-12 web search, not yet checked against the repo itself):
   need its own small `IddControl` implementation and gives no per-seat frame section; the
   presenter would have to acquire its monitors through Display Core instead.
 - Other names seen (Parsec VDD, usbmmidd): closed source, not options.
+
+## Remote role (from Pulsar Split, merged 2026-11-14)
+
+Per-session indirect display of a remote seat, HDR (FP16) when IddCx 1.10 is present, SDR
+down-level (spec/remote/40-display-hdr.md). Sources `src/remote/` (namespace `pulsar`),
+wire contract `public/PulsarIddShared.h`, mirrored and byte-tested in
+`crates/seat-display/src/remote/ioctl.rs`; Rust backend `seat_display::remote` `PulsarIdd`.
+The INF lists the hardware id only in the Windows 11 (22000+) model sections.
+
+| Area | Implementation |
+| --- | --- |
+| Device | Created by a Remote Desktop protocol stack that names `PulsarSplit_IndirectDisplay` in the seat session; installing the INF alone makes no device appear. That provider does not exist yet (spec 40 §2.3). |
+| Adapter | `REMOTE_SESSION_DRIVER` + `USE_SMALLEST_MODE`; with 1.10 also `CAN_PROCESS_FP16` + `ALL_TARGET_MODES_MONITOR_COMPATIBLE`. One monitor, no EDID. No device group. 1.10 callbacks / functions are checked at run time (`IDD_IS_FIELD_AVAILABLE` / `IDD_IS_FUNCTION_AVAILABLE`); without them SDR and the legacy calls. |
+| Control | Interface `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, buffered IOCTLs `0x0022E000`..`0x0022E014`, device security `D:P(A;;GA;;;SY)(A;;GR;;;BA)`. |
+| Seat binding | `SET_SEAT_CONFIG` v1 (64 bytes) or **v2** (256 bytes, 2026-11-14, additive by size): v1 plus the frame reader SID (`ReaderSid[96]`, UTF-16, only `S`, digits and `-`; checked by `ReaderSidOk`). |
+| Frames | Section `Global\PulsarSplit.Display.<seat>.Header`, `FrameReady` event, ring of 3 shared textures and a shared fence, with DACL `D:P(A;;GA;;;SY)` plus `(A;;GA;;;<reader SID>)` when the service named one. The old fixed LOCAL SERVICE grant is gone (Split open question display-7). The service sends `None` (SYSTEM only): the stream server runs as SYSTEM in the seat session. |
+| Modes, readiness, shutdown | `REQUEST_MODE` (pended, completed from commit-modes), `GET_STATE` / `WAIT_EVENT`, `SHUTDOWN_SEAT`; lock order `m_control` -> `m_lifecycle` -> `m_lock` (`src/remote/Driver.h`, `Adapter.cpp`). |
+
+Built with the local role (one `seat-idd.dll`, ARM64 + x64, zero warnings). Source lines
+marked `VERIFY` are behaviour to check on hardware, not build questions. HYPOTHESIS
+(nothing ran): the remote role loads next to the local role from one package; IddCx 1.10
+detection, FP16 frames and the reader SID DACL behave as written. Windows Server needs
+WHQL, not attestation.

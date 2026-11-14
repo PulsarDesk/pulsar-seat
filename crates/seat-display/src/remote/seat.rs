@@ -84,6 +84,12 @@ pub struct SeatDisplay {
     /// it, contract §3.3); 60 until then.
     #[serde(default = "default_refresh")]
     pub refresh_hz: u32,
+    /// Frame reader besides SYSTEM for the own driver's frame objects (SET_SEAT_CONFIG v2,
+    /// `PULSAR_SEAT_CONFIG_IN_V2`). `None` = SYSTEM only: the stream server runs as
+    /// SYSTEM in the seat session (seat-stream `win::launch`). Added 2026-11-14 with the
+    /// one-driver merge; it replaces the old LOCAL SERVICE grant (Split OQ display-7).
+    #[serde(default)]
+    pub frame_reader_sid: Option<String>,
 }
 
 fn default_refresh() -> u32 {
@@ -116,6 +122,7 @@ impl SeatDisplay {
             super_sampling_percent: clamp_percent(d.super_sampling_percent),
             last_mode: None,
             refresh_hz: default_refresh(),
+            frame_reader_sid: None,
         }
     }
 

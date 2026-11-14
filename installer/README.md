@@ -35,7 +35,7 @@ installer/scripts` covers the scripts.
 | `scripts/lint-ci.ts` | Structural lint of `.github/workflows/ci.yml` (Bun YAML parser: keys, `needs`, matrix / env references, `uses` pins, pwsh steps that would ignore a failing native command). |
 | `scripts/ci-local.ps1` | The CI gates on this machine in CI order (lint, build / test / clippy per target, manager, API helper, bun tests; `-Payload`, `-Drivers`, `-Installers`, `-Release` for the rest). Installs nothing. |
 | `scripts/build-credprov.ps1` | Credential provider: msbuild `credprov.vcxproj` + `credprov-selftest.vcxproj` for ARM64 / x64 (v145, SDK 10.0.28000), PE machine check, self-test run (x64 emulated on an ARM64 host), `-OutDir` copies the DLL into a payload. Called by `build-installer.ps1` (not with `-SkipCargo`: then the DLL must already be in the payload). Registers nothing. |
-| `scripts/build-drivers.ps1` | Drivers package: msbuild ARM64 + x64 with WDK 10.0.28000, zero warnings, infverif, PE machine (CI drivers job). |
+| `scripts/build-drivers.ps1` | Drivers package: msbuild ARM64 + x64 with WDK 10.0.28000 (seat-input-filter, seat-idd with both IddCx roles, seat-storage-filter) plus cargo + stampinf + inf2cat for the Rust `split-pad`; zero warnings, infverif, ApiValidator, PE machine (CI drivers job). Never signs or loads. |
 | `scripts/*.test.ts` | `bun test` (synthetic PE headers, temp folders only). |
 | `licenses/` | `SOURCE-OFFER.txt` (GPL-3 §6), `NOTICES.md`, `about.toml` + `about.hbs` (cargo-about); the generated `THIRD-PARTY-NOTICES-*.md` (not tracked). |
 | `remote/drivers.json` | Remote kind: third-party driver manifest (`DriverPackage[]`): URL, pinned SHA-256, licence, install kind, detection, minimum build. Defaults from `docs/split/agents/third-party.md`. |

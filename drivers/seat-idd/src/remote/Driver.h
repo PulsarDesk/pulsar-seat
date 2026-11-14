@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Pulsar Split remote-session indirect display driver (UMDF 2 + IddCx 1.10).
-// UNBUILT · UNTESTED · UNSIGNED — do not install. See ../README.md.
+// Remote role of the Pulsar Seat IddCx driver (UMDF 2 + IddCx 1.10, formerly the separate
+// Pulsar Split driver drivers/split-idd). Built unsigned, untested, never loaded. See
+// ../../README.md.
 //
 // Written from Microsoft Learn's IddCx documentation (no sample code copied, see OQ 26).
 // Behaviour: spec/remote/40-display-hdr.md §2.3, §3.3, §4.4, §5, §6.4, §7, §8.4.
@@ -23,15 +24,19 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
-#include "PulsarIddShared.h"
+#include "../../public/PulsarIddShared.h"
 
 namespace pulsar {
 
 using Microsoft::WRL::ComPtr;
 
-constexpr uint16_t kDriverVersion[4] = {0, 1, 0, 0};
+constexpr uint16_t kDriverVersion[4] = {0, 2, 0, 0}; // 0.2: merged into the one seat-idd driver
+
+// Remote role device add (Driver.cpp); the driver's DriverEntry is in ../roles.cpp.
+NTSTATUS RemoteDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit);
 constexpr UINT kMaxMonitors = 1;               // one monitor per seat session
 constexpr UINT kMinHz = 15, kMaxHz = 500;
 constexpr UINT kDefaultWidth = 1920, kDefaultHeight = 1080, kDefaultHz = 60;
@@ -52,6 +57,9 @@ struct SeatConfig {
     bool scaleStatic = false;
     UINT scalePercent = 100;
     UINT superSamplingPercent = 100;
+    // Frame reader besides SYSTEM (SET_SEAT_CONFIG v2); empty = SYSTEM only. Validated
+    // string SID (S, digits, '-'), so it cannot inject SDDL.
+    std::wstring readerSid;
 };
 
 struct ModeState {
@@ -76,7 +84,9 @@ class FrameChannel {
 public:
     ~FrameChannel();
     bool IsOpenFor(const GUID& seat) const;
-    HRESULT Open(const GUID& seat);                   // section + FrameReady; refuses existing names
+    // Section + FrameReady; refuses existing names. readerSid (may be empty) gets GA on every
+    // frame object besides SYSTEM; it is fixed until Close (the next SHUTDOWN_SEAT).
+    HRESULT Open(const GUID& seat, const std::wstring& readerSid);
     HRESULT AttachDevice(ID3D11Device5* device, LUID adapter); // drops ring + fence of the old device
     bool HasDevice(const ID3D11Device5* device) const { return m_device.Get() == device; }
     HRESULT EnsureRing(UINT width, UINT height, DXGI_FORMAT format); // bumps the generation on change
@@ -88,7 +98,7 @@ public:
     void Close();
 
 private:
-    HRESULT CreateSecurity();
+    HRESULT CreateSecurity(const std::wstring& readerSid);
     HRESULT CreateRing(UINT width, UINT height, DXGI_FORMAT format);
     void ReleaseRing();
     std::wstring Name(const wchar_t* suffix) const;
@@ -162,6 +172,7 @@ public:
     // Used by the swap-chain worker
     LUID RenderAdapter() const;
     bool SeatGuid(GUID* out) const;
+    std::wstring ReaderSid() const;
     bool Has110() const { return m_has110; }
     FrameChannel& Channel() { return m_channel; }
     PULSAR_HDR_META_V1 HdrMeta() const;
@@ -229,18 +240,20 @@ private:
 
 };
 
-struct DeviceContextWrapper {
-    AdapterContext* ctx;
-};
-struct AdapterObjectWrapper {
-    AdapterContext* ctx;
-};
-struct MonitorObjectWrapper {
-    AdapterContext* ctx;
-};
-
 } // namespace pulsar
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(pulsar::DeviceContextWrapper, GetDeviceWrapper);
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(pulsar::AdapterObjectWrapper, GetAdapterWrapper);
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(pulsar::MonitorObjectWrapper, GetMonitorWrapper);
+// WDF context types are declared at global scope: the WDF macros paste the type name into
+// identifiers, so a qualified name (pulsar::X) cannot be used.
+struct DeviceContextWrapper {
+    pulsar::AdapterContext* ctx;
+};
+struct AdapterObjectWrapper {
+    pulsar::AdapterContext* ctx;
+};
+struct MonitorObjectWrapper {
+    pulsar::AdapterContext* ctx;
+};
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContextWrapper, GetDeviceWrapper);
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(AdapterObjectWrapper, GetAdapterWrapper);
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(MonitorObjectWrapper, GetMonitorWrapper);

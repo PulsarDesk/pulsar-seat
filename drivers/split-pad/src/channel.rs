@@ -66,7 +66,7 @@ impl Section {
     }
 
     fn u32_at(&self, off: usize) -> &AtomicU32 {
-        debug_assert!(off % 4 == 0 && off + 4 <= SECTION_SIZE);
+        debug_assert!(off.is_multiple_of(4) && off + 4 <= SECTION_SIZE);
         // SAFETY: page-aligned mapping of SECTION_SIZE bytes; aligned offset.
         unsafe { AtomicU32::from_ptr(self.ptr().add(off) as *mut u32) }
     }

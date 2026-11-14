@@ -7,6 +7,8 @@
 //! seat host), never in session 0.
 
 pub mod hid;
+#[cfg(feature = "local-pads")]
+pub mod pad_io;
 pub mod raw;
 
 pub use hid::WinHidSource;

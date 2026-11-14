@@ -334,7 +334,7 @@ impl Default for IoState {
     }
 }
 
-/// Simulated `drivers/split-idd` device(s), one per session.
+/// Simulated `drivers/seat-idd` (remote role) device(s), one per session.
 #[derive(Debug, Clone, Default)]
 pub struct FakeDeviceIo(Arc<Mutex<IoState>>);
 

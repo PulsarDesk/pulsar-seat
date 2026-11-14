@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Adapter + monitor lifetime, commit handling, readiness events.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Built unsigned (WDK 10.0.28000), untested, never loaded.
 
 #include "Driver.h"
 
@@ -44,7 +44,7 @@ NTSTATUS AdapterContext::InitAdapter()
     caps.Flags = static_cast<IDDCX_ADAPTER_FLAGS>(IDDCX_ADAPTER_FLAGS_REMOTE_SESSION_DRIVER | IDDCX_ADAPTER_FLAGS_USE_SMALLEST_MODE);
     if (m_has110) {
         caps.Flags = static_cast<IDDCX_ADAPTER_FLAGS>(caps.Flags | IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16 |
-                                                      IDDCX_ADAPTER_FLAGS_ALL_TARGET_MODES_MONITOR_COMPATIBLE);
+                                                      IDDCX_ADAPTER_FLAGS_REMOTE_ALL_TARGET_MODES_MONITOR_COMPATIBLE);
     }
     caps.MaxMonitorsSupported = kMaxMonitors;
     caps.MaxDisplayPipelineRate = kMaxPipelineRate;
@@ -212,6 +212,12 @@ bool AdapterContext::SeatGuid(GUID* out) const
     if (!m_seat.configured) return false;
     *out = m_seat.seat;
     return true;
+}
+
+std::wstring AdapterContext::ReaderSid() const
+{
+    std::lock_guard<std::mutex> g(m_lock);
+    return m_seat.readerSid;
 }
 
 bool AdapterContext::HdrActive() const

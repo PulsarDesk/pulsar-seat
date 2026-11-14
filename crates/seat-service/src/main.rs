@@ -32,6 +32,7 @@ mod host_account;
 mod images;
 mod inventory;
 mod listener;
+mod local_pads;
 mod log;
 mod loopback_plan;
 mod platform;

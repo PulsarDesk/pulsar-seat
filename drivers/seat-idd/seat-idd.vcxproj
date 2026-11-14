@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Pulsar Seat IddCx driver (UMDF 2 + IddCx 1.4). Needs Visual Studio / Build Tools with
+<!-- Pulsar Seat IddCx driver, one binary with the local and the remote role (UMDF 2; built
+     against IddCx 1.10, minimum 1.4, 1.10 calls of the remote role guarded at run time). Needs Visual Studio / Build Tools with
      the matching WDK. Built with WDK 10.0.28000 (unsigned). See README.md. -->
 <Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
@@ -40,7 +41,7 @@
     <UMDF_VERSION_MINOR>31</UMDF_VERSION_MINOR>
     <IndirectDisplayDriver>true</IndirectDisplayDriver>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
-    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <IDDCX_VERSION_MINOR>10</IDDCX_VERSION_MINOR>
     <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
@@ -54,7 +55,9 @@
       <!-- iddcx.h is C++ only. -->
       <CompileAs>CompileAsCpp</CompileAs>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <PreprocessorDefinitions>IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=4;IDDCX_MINIMUM_VERSION_REQUIRED=4;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The remote role uses std::thread / std::mutex. -->
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=4;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
@@ -76,10 +79,22 @@
   <ItemGroup>
     <ClCompile Include="src\driver.cpp" />
     <ClCompile Include="src\swapchain.cpp" />
+    <ClCompile Include="src\roles.cpp" />
+    <!-- remote/Driver.cpp and remote/SwapChain.cpp share names with the local role files:
+         own object folder. -->
+    <ClCompile Include="src\remote\Driver.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
+    <ClCompile Include="src\remote\Adapter.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
+    <ClCompile Include="src\remote\Control.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
+    <ClCompile Include="src\remote\Modes.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
+    <ClCompile Include="src\remote\FrameChannel.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
+    <ClCompile Include="src\remote\SwapChain.cpp"><ObjectFileName>$(IntDir)remote\</ObjectFileName></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\driver.h" />
     <ClInclude Include="public\seat_idd_ioctl.h" />
+    <ClInclude Include="src\roles.h" />
+    <ClInclude Include="src\remote\Driver.h" />
+    <ClInclude Include="public\PulsarIddShared.h" />
   </ItemGroup>
   <ItemGroup>
     <!-- The driver binary goes into the package dir next to the INF (inf2cat, infverif). -->

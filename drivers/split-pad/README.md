@@ -1,9 +1,10 @@
-# split-pad — UNBUILT · UNTESTED · UNSIGNED
+# split-pad — BUILT · UNTESTED · UNSIGNED
 
 The PulsarPad UMDF 2 HID minidriver: per-seat virtual gamepads for Pulsar Split
 (spec 60 §2, §3.7, §4.5, §6.4; contracts.md §5.2). Licence GPL-3.0-only.
 
-> This driver has never been compiled, loaded or signed. The plan (2026-11-12) is to
+> Built (2026-11-14, ARM64 + x64, Release + Debug, zero warnings, infverif, ApiValidator;
+> `installer/scripts/build-drivers.ps1`), never loaded, never signed. The plan (2026-11-12) is to
 > write our own drivers now and load them only after signing. The service never selects
 > this backend by default. `seat_pads::PulsarPadBackend` is used only when the operator
 > sets `pad_backend = pulsar_pad` **and** the package is staged.
@@ -66,23 +67,25 @@ The PulsarPad UMDF 2 HID minidriver: per-seat virtual gamepads for Pulsar Split
 | `src/channel.rs` | §4.5 objects: open, seqlock read, ring write |
 | `src/hid.rs` | HID IOCTL dispatch, read completion, native-rate counters |
 
-## Build (when a WDK is available; not done yet)
+## Build
 
-1. Install Visual Studio 2022 with the WDK (matching SDK), LLVM (`clang` for bindgen),
-   and `cargo install cargo-make --no-default-features --features tls-native`.
-2. From a "Developer PowerShell for VS", run in this directory:
-   `cargo make` (debug) or `cargo make --profile production`. The flow builds the DLL,
-   runs `stampinf` on `split_pad.inx` and `inf2cat` for the catalog.
-3. Targets: `x86_64-pc-windows-msvc`. On ARM64 hosts, build with
-   `--target aarch64-pc-windows-msvc`; the ARM64 driver signing ladder is the same.
-4. Pin the `wdk*` crate versions to the release that builds, and commit `Cargo.lock`
-   then (it is ignored until the first real build).
+`installer/scripts/build-drivers.ps1 -Projects split-pad` (VS 18 Build Tools + WDK
+10.0.28000 + LLVM for wdk-sys' bindgen; `LIBCLANG_PATH` defaults to the LLVM folder). It runs
+`cargo build --target aarch64-pc-windows-msvc | x86_64-pc-windows-msvc` into the shared
+`target\wf`, then `stampinf` on `split_pad.inx` and `inf2cat`, and checks warnings, infverif
+(`/w`, `/u`), ApiValidator and the PE machine. `cargo-make` is not needed. `Cargo.lock` is
+committed (wdk 0.3.0, wdk-sys 0.3.0, wdk-build 0.3.0, wdk-panic 0.3.1).
 
-Done so far on the dev box (no WDK): the `core`-only parts were type-checked in a
-scratch `no_std` crate together with `windows-sys` 0.61. Those parts are `layout.rs`,
-`descriptors.rs`, `features.rs` and `src/channel.rs`. The WDF parts (`lib.rs`,
-`props.rs`, `hid.rs`) were **not** type-checked, because wdk-sys needs the WDK headers.
+Notes from the first build (2026-11-14):
 
+- No C runtime (`build.rs`: `/NODEFAULTLIB` for every CRT library, `/NOENTRY`). With libcmt
+  the x64 link pulled libvcruntime's `__CxxFrameHandler3`, which wdk-sys also defines
+  (LNK2005); without it the CRT libraries need CRT internals. The four mem functions the
+  compiler calls are in `src/crt.rs`.
+- Without a CRT there is no `__chkstk`: the dev profile uses `opt-level = 1` so debug frames
+  stay small enough to need no stack probes.
+- A wdk-sys `types.rs` left half-written by a PC crash fails as "cannot parse string into
+  token stream"; delete that `wdk-sys-*` build-script output dir and rebuild.
 ## Signing ladder (spec 60 §11)
 
 1. **Release:** Microsoft attestation signing through the Hardware Dev Center. It needs
@@ -93,7 +96,7 @@ scratch `no_std` crate together with `windows-sys` 0.61. Those parts are `layout
 
 The INF must be installed once at product install and removed only by the uninstaller.
 
-## VERIFY on the first real build
+## VERIFY on hardware (the first load)
 
 - UMDF HID transfer buffers with `UmdfMethodNeitherAction=Copy`: is the report id in the
   input buffer and the report in the output buffer, for get and set requests alike

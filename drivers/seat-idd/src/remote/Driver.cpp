@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// Driver entry, device creation and the IddCx callback table.
-// UNBUILT · UNTESTED · UNSIGNED.
+// Remote role of the Pulsar Seat IddCx driver: device creation and the IddCx callback
+// table for a remote-session device (hardware id PulsarSplit_IndirectDisplay). DriverEntry
+// and the role choice are in ../roles.cpp. Built unsigned (WDK 10.0.28000), untested.
 
 #include "Driver.h"
 
 using namespace pulsar;
 
-extern "C" DRIVER_INITIALIZE DriverEntry;
-
-static EVT_WDF_DRIVER_DEVICE_ADD EvtDeviceAdd;
 static EVT_WDF_DEVICE_D0_ENTRY EvtDeviceD0Entry;
 static EVT_WDF_OBJECT_CONTEXT_CLEANUP EvtDeviceCleanup;
 
@@ -32,16 +30,8 @@ static AdapterContext* FromDevice(WDFDEVICE d) { return GetDeviceWrapper(d)->ctx
 static AdapterContext* FromAdapter(IDDCX_ADAPTER a) { return GetAdapterWrapper(a)->ctx; }
 static AdapterContext* FromMonitor(IDDCX_MONITOR m) { return GetMonitorWrapper(m)->ctx; }
 
-extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING registryPath)
-{
-    WDF_DRIVER_CONFIG config;
-    WDF_DRIVER_CONFIG_INIT(&config, EvtDeviceAdd);
-    WDF_OBJECT_ATTRIBUTES attributes;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    return WdfDriverCreate(driverObject, registryPath, &attributes, &config, WDF_NO_HANDLE);
-}
-
-static NTSTATUS EvtDeviceAdd(WDFDRIVER, PWDFDEVICE_INIT deviceInit)
+// Device add for the remote role (called by PsiddRoleDeviceAdd in ../roles.cpp).
+NTSTATUS pulsar::RemoteDeviceAdd(WDFDRIVER, PWDFDEVICE_INIT deviceInit)
 {
     WDF_PNPPOWER_EVENT_CALLBACKS pnp;
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnp);
@@ -163,7 +153,7 @@ static NTSTATUS EvtAdapterCommitModes2(IDDCX_ADAPTER adapter, const IDARG_IN_COM
             tm.targetVideoSignalInfo = p.TargetVideoSignalInfo;
             haveMode = true;
             // FP16 / BT.2020 path => HDR or WCG active (IddCx 1.10).
-            hdr = p.ColorimetryMode == IDDCX_COLORIMETRY_MODE_BT2100_RGB; // VERIFY name against iddcx.h
+            hdr = p.WireFormatInfo.ColorSpace == IDDCX_COLOR_SPACE_G2084_P2020; // HDR10 wire colour space
         }
     }
     FromAdapter(adapter)->OnCommitModes(active, haveMode ? &tm : nullptr, hdr, true);

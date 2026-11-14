@@ -228,11 +228,11 @@ pub unsafe extern "C" fn evt_io_device_control(
                     Ok(id) => {
                         let mut s = [0u16; 40];
                         match strings(kind, id, &ctx.mac, &mut s) {
-                            Some(n) => out_buffer(request, n * 2).and_then(|b| {
+                            Some(n) => out_buffer(request, n * 2).map(|b| {
                                 for (i, c) in s[..n].iter().enumerate() {
                                     b[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
                                 }
-                                Ok(n * 2)
+                                n * 2
                             }),
                             None => Err(STATUS_INVALID_PARAMETER),
                         }

@@ -27,7 +27,7 @@ pub enum BackendKind {
     RdpSession,
     /// Signed third-party Virtual-Display-Driver (console seat only).
     Vdd,
-    /// Own IddCx driver in `drivers/split-idd` (unsigned; never chosen automatically
+    /// Own IddCx driver in `drivers/seat-idd` (remote role) (unsigned; never chosen automatically
     /// unless it reports installed + signed + remote capable).
     PulsarIdd,
 }

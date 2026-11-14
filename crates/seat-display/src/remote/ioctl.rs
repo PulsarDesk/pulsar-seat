@@ -2,7 +2,7 @@
 //! Control channel of the own driver (spec 40 §7): IOCTL codes, the device interface
 //! GUID and the versioned buffers. Pure encode / decode, little-endian, packed.
 //!
-//! The C++ mirror is `drivers/split-idd/include/PulsarIddShared.h`; both sides must change
+//! The C++ mirror is `drivers/seat-idd/public/PulsarIddShared.h`; both sides must change
 //! together. Every buffer starts with `size: u32`, `version: u16 (= 1)`, `reserved: u16`.
 
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,12 @@ pub const COMMON_HEADER_SIZE: usize = 8;
 // Buffer sizes (v1).
 pub const GET_INFO_OUT_SIZE: usize = 32;
 pub const SET_SEAT_CONFIG_IN_SIZE: usize = 64;
+/// `SET_SEAT_CONFIG` with the frame reader (`PULSAR_SEAT_CONFIG_IN_V2`, 2026-11-14,
+/// additive by size): the 64 v1 bytes, then `READER_SID_CHARS` UTF-16 units of the reader
+/// SID (NUL-terminated; all zero = SYSTEM only). The driver still takes a v1 buffer.
+pub const SET_SEAT_CONFIG_IN_V2_SIZE: usize = 256;
+/// UTF-16 units of the reader SID field (`PULSAR_MAX_SID`).
+pub const READER_SID_CHARS: usize = 96;
 pub const REQUEST_MODE_IN_SIZE: usize = 32;
 pub const REQUEST_MODE_OUT_SIZE: usize = 48;
 pub const GET_STATE_OUT_SIZE: usize = 56;
@@ -164,6 +170,11 @@ pub fn error_from_win32(code: u32, ctx: &str) -> DisplayError {
         }
         other => DisplayError::Io(format!("{ctx}: win32 error {other}")),
     }
+}
+
+/// Same rule as the driver (`ReaderSidOk`): `S-`, then only digits and `-`.
+pub fn valid_reader_sid(s: &str) -> bool {
+    s.len() >= 4 && s.starts_with("S-") && s.bytes().all(|c| c == b'S' || c == b'-' || c.is_ascii_digit())
 }
 
 // ---- little-endian writer / reader ----
@@ -366,6 +377,46 @@ impl SeatConfigIn {
         w.u32(self.scale_percent);
         w.u32(self.super_sampling_percent);
         w.done(SET_SEAT_CONFIG_IN_SIZE)
+    }
+
+    /// The v2 buffer: [`Self::encode`] plus the frame reader SID. `None` = SYSTEM only
+    /// (the stream server runs as SYSTEM). A SID with other characters than `S`, digits
+    /// and `-`, or one that does not fit, is refused here (the driver checks it too).
+    pub fn encode_v2(&self, reader_sid: Option<&str>) -> Result<Vec<u8>, DisplayError> {
+        let mut b = self.encode();
+        b[0..4].copy_from_slice(&(SET_SEAT_CONFIG_IN_V2_SIZE as u32).to_le_bytes());
+        let mut sid = [0u16; READER_SID_CHARS];
+        if let Some(s) = reader_sid.filter(|s| !s.is_empty()) {
+            if !valid_reader_sid(s) || s.len() >= READER_SID_CHARS {
+                return Err(DisplayError::Protocol(format!("SET_SEAT_CONFIG: reader SID {s:?} invalid")));
+            }
+            for (i, c) in s.bytes().enumerate() {
+                sid[i] = u16::from(c);
+            }
+        }
+        for c in sid {
+            b.extend_from_slice(&c.to_le_bytes());
+        }
+        debug_assert_eq!(b.len(), SET_SEAT_CONFIG_IN_V2_SIZE);
+        Ok(b)
+    }
+
+    /// Reader SID of a v2 buffer (`None` for v1, an empty field or a bad one).
+    pub fn decode_reader_sid(b: &[u8]) -> Option<String> {
+        if b.len() < SET_SEAT_CONFIG_IN_V2_SIZE {
+            return None;
+        }
+        let size = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+        if size < SET_SEAT_CONFIG_IN_V2_SIZE {
+            return None;
+        }
+        let units: Vec<u16> = b[SET_SEAT_CONFIG_IN_SIZE..SET_SEAT_CONFIG_IN_V2_SIZE]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|&u| u != 0)
+            .collect();
+        let s = String::from_utf16(&units).ok()?;
+        (!s.is_empty() && valid_reader_sid(&s)).then_some(s)
     }
 
     pub fn decode(b: &[u8]) -> Result<Self, DisplayError> {
@@ -717,6 +768,29 @@ mod tests {
         );
         bad.seat_id = "x".into();
         assert!(SeatConfigIn::from_seat(&bad).is_err());
+    }
+
+    #[test]
+    fn seat_config_v2_carries_the_reader_sid() {
+        let seat = RemoteSeatRecord { id: "8a1b2c3d-0000-4000-8000-00000000abcd".into(), ..Default::default() };
+        let c = SeatConfigIn::from_seat(&SeatDisplay::from_seat(&seat, 2, AdapterChoice::Default { warning: None })).unwrap();
+        let b = c.encode_v2(Some("S-1-5-21-1-2-3-1001")).unwrap();
+        assert_eq!(b.len(), SET_SEAT_CONFIG_IN_V2_SIZE);
+        assert_eq!(&b[0..4], &256u32.to_le_bytes());
+        assert_eq!(&b[64..66], &u16::from(b'S').to_le_bytes());
+        // v1 fields decode unchanged from a v2 buffer; the SID round-trips.
+        assert_eq!(SeatConfigIn::decode(&b).unwrap(), c);
+        assert_eq!(SeatConfigIn::decode_reader_sid(&b).as_deref(), Some("S-1-5-21-1-2-3-1001"));
+        // None / empty: SYSTEM only (all-zero field); v1 buffers have no reader.
+        let none = c.encode_v2(None).unwrap();
+        assert!(none[64..].iter().all(|&x| x == 0));
+        assert_eq!(SeatConfigIn::decode_reader_sid(&none), None);
+        assert_eq!(SeatConfigIn::decode_reader_sid(&c.encode()), None);
+        // No SDDL injection, no overflow.
+        assert!(c.encode_v2(Some("S-1-5;(A;;GA;;;WD)")).is_err());
+        assert!(c.encode_v2(Some("WD")).is_err());
+        assert!(c.encode_v2(Some(&format!("S-1-{}", "1".repeat(100)))).is_err());
+        assert!(valid_reader_sid("S-1-5-18") && !valid_reader_sid("S-1"));
     }
 
     #[test]

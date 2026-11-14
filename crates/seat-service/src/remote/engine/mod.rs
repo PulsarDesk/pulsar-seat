@@ -107,6 +107,9 @@ pub struct Deps {
     pub pads: Option<Arc<Mutex<PadManager>>>,
     /// Bluetooth per-user service handling (spec 60 §10.4, global `bluetooth_console_only`).
     pub bluetooth: Option<Arc<Mutex<seat_pads::bluetooth::BtController>>>,
+    /// The pad manager's feedback sink when it routes local seats' virtual pads back to
+    /// their physical pads (seat_input::local_pads, round 4). None: no local pads.
+    pub local_pad_feedback: Option<Arc<seat_input::local_pads::LocalFeedbackRouter>>,
     pub isolation: Arc<dyn IsolationPort>,
     pub seatmap: Arc<dyn SeatMapWriter>,
     pub termwrap: Arc<dyn Termwrap>,
@@ -1175,6 +1178,12 @@ impl Engine {
 
     pub fn has_pads(&self) -> bool {
         self.d().pads.is_some()
+    }
+
+    /// The shared pad manager and its feedback router, for the local seats' pad hub
+    /// (seat_input::local_pads::LocalPadHub). None without pads.
+    pub fn local_pad_parts(&self) -> Option<(Arc<Mutex<PadManager>>, Arc<seat_input::local_pads::LocalFeedbackRouter>)> {
+        Some((self.d().pads.clone()?, self.d().local_pad_feedback.clone()?))
     }
 
     pub fn on_session_change(&self, ev: SessionChange) {

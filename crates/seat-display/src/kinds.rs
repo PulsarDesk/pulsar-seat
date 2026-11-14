@@ -3,19 +3,20 @@
 //!
 //! Each kind keeps its own operation trait because the work differs:
 //! - **local**: [`seat_core::backend::display::DisplayBinding`] (CCD topology, physical
-//!   monitors, window / Display Core presenters, `drivers/seat-idd`);
+//!   monitors, window / Display Core presenters, `drivers/seat-idd` local role);
 //! - **remote**: [`crate::remote::DisplayBackend`] (`rdp_session`, `vdd`,
-//!   `drivers/split-idd` as `pulsar_idd`).
+//!   `drivers/seat-idd` remote role as `pulsar_idd`).
 //!
 //! [`SeatDisplayBackend`] is the one trait the service, the manager's backend page and the
 //! status code use for **both**: which backend it is ([`DisplayBackendId`], with its seat
 //! kind and driver) and whether it can be used now ([`DisplayBackendStatus`]). [`Local`]
 //! and [`Remote`] adapt the two per-kind traits to it.
 //!
-//! Driver direction: both kinds carry an own IddCx driver today (`seat-idd`, `split-idd`,
-//! both unsigned and never loaded). The plan is **one own IddCx driver later** for both
-//! kinds, so it is signed once (drivers/README.md). [`DisplayBackendId::own_iddcx`] marks
-//! the two backends that will move onto it.
+//! Driver: since 2026-11-14 both kinds use **one own IddCx driver** (`drivers/seat-idd`,
+//! unsigned and never loaded), so it is signed once (drivers/README.md). The driver picks
+//! its role per devnode: `Root\PulsarSeatIdd` = local, `PulsarSplit_IndirectDisplay` =
+//! remote; each role keeps its own control interface, so both clients are unchanged.
+//! [`DisplayBackendId::own_iddcx`] marks the two backends on it.
 
 use std::sync::Arc;
 
@@ -85,7 +86,7 @@ impl DisplayBackendId {
     pub fn driver(self) -> Option<&'static str> {
         match self {
             DisplayBackendId::Local(DisplayBackendKind::PulsarIdd) => Some("drivers/seat-idd"),
-            DisplayBackendId::Remote(remote::BackendKind::PulsarIdd) => Some("drivers/split-idd"),
+            DisplayBackendId::Remote(remote::BackendKind::PulsarIdd) => Some("drivers/seat-idd"),
             DisplayBackendId::Remote(remote::BackendKind::Vdd) => Some("Virtual-Display-Driver (third party)"),
             _ => None,
         }
@@ -211,11 +212,13 @@ mod tests {
         assert_eq!(remote.len(), 3);
         assert!(local.iter().all(|i| i.seat_kind() == SeatKind::Local));
         assert!(remote.iter().all(|i| i.seat_kind() == SeatKind::Remote));
-        // Both kinds have a `pulsar_idd`, for different drivers.
+        // Both kinds have a `pulsar_idd`, on the one own IddCx driver (two roles, 2026-11-14).
         let own: Vec<_> = local.iter().chain(&remote).filter(|i| i.own_iddcx()).collect();
         assert_eq!(own.len(), 2);
         assert_eq!(own[0].wire_name(), own[1].wire_name());
-        assert_ne!(own[0].driver(), own[1].driver());
+        assert_ne!(own[0].seat_kind(), own[1].seat_kind());
+        assert_eq!(own[0].driver(), Some("drivers/seat-idd"));
+        assert_eq!(own[0].driver(), own[1].driver());
         assert_eq!(DisplayBackendId::Remote(remote::BackendKind::RdpSession).driver(), None);
     }
 

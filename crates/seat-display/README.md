@@ -5,7 +5,7 @@ Display backends for both seat kinds. GPL-3.0-only.
 | Seat kind | Where | Operation trait | Backends | Contract / behaviour |
 | --- | --- | --- | --- | --- |
 | `local` | `src/` (crate root) | `seat_core::backend::display::DisplayBinding` (service) + `FrameSink` (seat host) | `window_presenter`, `display_core`, `pulsar_idd` (`drivers/seat-idd`), `console_only` | `docs/agents/architecture.md` §4.2, `spec/local/40-display.md` |
-| `remote` | `src/remote/` (was the `split-display` crate until merge step 8) | `seat_display::remote::DisplayBackend` | `rdp_session`, `vdd`, `pulsar_idd` (`drivers/split-idd`) | `docs/split/agents/contracts.md` §3, `spec/remote/40-display-hdr.md` |
+| `remote` | `src/remote/` (was the `split-display` crate until merge step 8) | `seat_display::remote::DisplayBackend` | `rdp_session`, `vdd`, `pulsar_idd` (`drivers/seat-idd`, remote role) | `docs/split/agents/contracts.md` §3, `spec/remote/40-display-hdr.md` |
 
 **One display trait over both kinds:** `seat_display::SeatDisplayBackend` (`src/kinds.rs`)
 gives every backend of either kind a `DisplayBackendId` (`{"kind": "local" | "remote",
@@ -15,12 +15,15 @@ gives every backend of either kind a `DisplayBackendId` (`{"kind": "local" | "re
 lists one kind's backends. The operation traits stay per kind because the work differs
 (physical CCD targets vs. a session display).
 
-Driver direction: both kinds have an own IddCx driver today (`drivers/seat-idd`,
-`drivers/split-idd`), both unsigned and never loaded. The plan is **one own IddCx driver
-later** for both kinds, signed once (`drivers/README.md`). `DisplayBackendId::own_iddcx`
-marks the two backends that move onto it. The two C++ drivers are not merged now.
+Driver: since 2026-11-14 both kinds use **one own IddCx driver**, `drivers/seat-idd`
+(built, unsigned, never loaded), so it is signed once (`drivers/README.md`). It picks its
+role per devnode (`Root\PulsarSeatIdd` = local, `PulsarSplit_IndirectDisplay` = remote) and
+keeps one control interface per role, so `idd_proto` and `remote::ioctl` are unchanged
+except for the remote `SET_SEAT_CONFIG` v2 (256 bytes, frame reader SID; the remote frame
+objects grant SYSTEM plus that SID only, no LOCAL SERVICE any more).
+`DisplayBackendId::own_iddcx` marks the two backends on it.
 
-Both kinds' `pulsar_idd` share a wire name but not a driver. They never meet in one config
+Both kinds' `pulsar_idd` share a wire name and the driver binary, not the control interface. They never meet in one config
 field: local seats read `settings.backends.display`, remote seats
 `settings.remote.display_backend`.
 
@@ -63,7 +66,7 @@ Module paths below are relative to `seat_display::remote` (`src/remote/`).
 | --- | --- | --- | --- |
 | `rdp_session` | `RdpSessionDisplay<P: SessionDisplayProbe>` | default for remote seats (Phase 2). The stock RDP display of the seat session; never changed. `attach` binds, `wait_ready` waits for a Display-class device with `DEVPKEY_Device_SessionId` = session; mode requests → `unsupported` | never (`rdp_display`) |
 | `vdd` | `VddBackend<P: VddPipe, F: VddSettingsFile>` | Virtual-Display-Driver (third-party.md default), **console seat only** (`session_attach_unsupported` otherwise). Owns `monitors/count`, `gpu/friendlyname`, `resolutions`, `colour` in `vdd_settings.xml` (journaled; original restored when the last seat detaches), drives `\\.\pipe\MTTVirtualDisplayPipe` (`PING`, `SETDISPLAYCOUNT n`, `RELOAD_DRIVER`, `IDDCXVERSION`). Count is global: one monitor per seat, seat ↔ monitor by slot order. `state()` repairs drift caused through the Everyone-writable pipe (OQ 19). Mode / HDR via the documented display-config APIs (`ModeSetter`) | IddCx 1.10 of VDD + advanced colour |
-| `pulsar_idd` | `PulsarIdd<D: DeviceIo>` | own driver (`drivers/split-idd`), spec 40 §7 IOCTLs. Never chosen automatically while `OWN_DRIVER_SIGNED = false` | IddCx 1.10 FP16 |
+| `pulsar_idd` | `PulsarIdd<D: DeviceIo>` | own driver (`drivers/seat-idd`, remote role), spec 40 §7 IOCTLs. Never chosen automatically while `OWN_DRIVER_SIGNED = false` | IddCx 1.10 FP16 |
 
 `choose_backend(pref, infos, session_is_console)`: preference wins; else `PulsarIdd` if
 installed + signed + (remote capable or console); else `Vdd` if installed and the seat is
@@ -134,7 +137,7 @@ own driver interfaces, VDD settings path); it changes nothing.
 - Whether VDD keeps target ids stable per monitor index across reloads (`HYPOTHESIS`,
   slot mapping depends on it), and that its monitors report `MTT1337` in the device path
   on every version.
-- The whole own-driver path end to end (see `drivers/split-idd/README.md`).
+- The whole own-driver path end to end (see `drivers/seat-idd/README.md`, remote role).
 - Remote-session capture with the RDP display (spec 40 §6.5) — stream package / test VM.
 
 Third-party: interoperates with Virtual-Display-Driver (MIT) through its documented pipe
