@@ -18,13 +18,14 @@ function Get-SeatSummary {
     $j.data.seats | ForEach-Object { "seat {0}: {1} session={2} user={3} {4}" -f $_.seat, $_.state.state, $_.session_id, $_.state.user, ($_.degraded -join ',') }
 }
 
-# Runs $Edit (a script block over the config object $cfg) inside the VM and applies it.
-function Update-VmConfig([scriptblock] $Edit) {
+# Runs $Edit (a script block over the config object $cfg, plus $Arg) inside the VM and
+# applies the result.
+function Update-VmConfig([scriptblock] $Edit, $Arg = $null) {
     Invoke-Seatctl config @{ Out = 'C:\pstest\cfg-cur.json' } | Out-Null
-    Invoke-Vm -ArgumentList $Edit.ToString() {
-        param($edit)
+    Invoke-Vm -ArgumentList $Edit.ToString(), $Arg {
+        param($edit, $arg)
         $cfg = Get-Content -Raw C:\pstest\cfg-cur.json | ConvertFrom-Json
-        & ([scriptblock]::Create($edit)) $cfg
+        & ([scriptblock]::Create($edit)) $cfg $arg
         $cfg | ConvertTo-Json -Depth 64 | Set-Content -Encoding utf8 C:\pstest\cfg-new.json
     }
     Invoke-Seatctl apply @{ File = 'C:\pstest\cfg-new.json' }
@@ -74,7 +75,7 @@ function Set-U3Config {
     }
     # Keyboard and mouse to seat 2 (mask 2); the monitor stays on seat 1.
     $devs = (Invoke-Seatctl devices | ConvertFrom-Json).data | Where-Object { $_.device.kind -in 'keyboard', 'mouse' }
-    $list = @($devs | ForEach-Object { [pscustomobject]@{ key = $_.device.key; kind = $_.device.kind; mask = 2; name = $_.device.name } })
-    Update-VmConfig ([scriptblock]::Create("param(`$cfg) `$cfg.devices = @(ConvertFrom-Json '$((ConvertTo-Json -InputObject $list -Compress -Depth 8) -replace "'", "''")')"))
+    $list = @($devs | ForEach-Object { @{ key = $_.device.key; kind = $_.device.kind; mask = 2; name = $_.device.name } })
+    Update-VmConfig { param($cfg, $arg) $cfg.devices = @($arg | ForEach-Object { [pscustomobject]$_ }) } $list
     Invoke-Seatctl enable
 }
