@@ -14,6 +14,7 @@
 #   seatctl.ps1 enable | disable                  set_enabled
 #   seatctl.ps1 start [-Seats 2,3]                start_seats (async; watch `status`)
 #   seatctl.ps1 stop -Seat 2                      stop_seat
+#   seatctl.ps1 switch -Seat 2                    switch_seat (fast_user_switch: console to that seat)
 #   seatctl.ps1 password -Seat 2 -Credential $cred   set_seat_password (never printed)
 #   seatctl.ps1 clear-password -Seat 2            set_seat_password with no password
 #   seatctl.ps1 poll [-After 0] [-WaitMs 0] [-Topics status,devices]
@@ -131,6 +132,7 @@ try {
             Emit (Invoke-Body $s ('{"type":"start_seats","data":' + $d + '}'))
         }
         'stop'      { Emit (Invoke-Body $s (Body 'stop_seat' @{ seat = $Seat })) }
+        'switch'    { Emit (Invoke-Body $s (Body 'switch_seat' @{ seat = $Seat })) }
         'password' {
             if (-not $Credential) { throw "-Credential required" }
             # In memory only; never printed or logged.
