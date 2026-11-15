@@ -181,3 +181,11 @@ otherwise:
   shell logs the hook's latency for it. If a console window in the foreground still makes
   the first Windows-key press miss, stop and report; the Explorer-less kiosk console is
   still not built without asking.
+- **Hotkey guard in a helper process** (2026-11-15, after the bisect showed that an LL hook
+  in the process that owns the foreground window and a raw-input registration is not
+  called): the kiosk shell starts `pulsar-seat-host --hotkey-guard --seat N` as the kiosk
+  console user (same session, desktop and integrity, no extra rights), which installs the
+  `WH_KEYBOARD_LL` guard with `seat_input::hotkey_guard` and registers no raw input. The
+  shell watches it, restarts it with back-off and stops it on exit; a minimal channel from
+  the shell (an anonymous pipe, no key text) carries re-install and warm-up requests. No
+  re-install loop; the hook thread does no blocking I/O.
