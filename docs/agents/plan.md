@@ -168,3 +168,9 @@ otherwise:
   ACE only, removed when the listener stops and journaled for uninstall. Accepted risk:
   that account could log the console user off. The `ERROR_PIPE_BUSY` behind it is to be
   found and fixed.
+- **Kiosk console apps in classic conhost** (VM round 3): console apps of kiosk seats open
+  in conhost, not Windows Terminal, through the per-user default-terminal setting
+  (`HKCU\Console\%%Startup` `DelegationConsole` / `DelegationTerminal`), only for kiosk
+  seat users (never seat 1's desktop user, never the machine default), applied when the
+  kiosk shell starts and restored on stop / uninstall, journaled.
+- **`wizard_start` in the kiosk configuration**: find and fix the hang (VM round 3).
