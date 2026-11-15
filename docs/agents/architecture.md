@@ -114,7 +114,22 @@ Console session (seat 1, or a dedicated host session)
       `WINSTA_ACCESSCLIPBOARD` only when the seat's policy redirects the clipboard at
       launch; desktop = read objects, create window / menu, enumerate, write objects,
       `READ_CONTROL`, `SYNCHRONIZE` (no hooks, journal, switch-desktop, screen read,
-      exit-windows). Revoked (`--desktop-acl revoke`) once the host is gone: platform
+      exit-windows). **Console listener exception (maintainer decision 2026-11-15):** its
+      window-station ACE also gets `WINSTA_EXITWINDOWS` (`--exit-windows`,
+      `HostRequest.exit_windows`, `LaunchSpec.host_exit_windows`). Why: USER32
+      initialisation of a process under the host account fails with
+      `STATUS_DLL_INIT_FAILED` without it (bisected in the ARM64 VM: the clipboard,
+      create-desktop and read-screen rights do not help, exit-windows does), so the
+      listener always fell back to SYSTEM at Low integrity. Scope: only the listener's own
+      logon-SID ACE, journaled like every grant and revoked when the listener is gone and at
+      uninstall. **Accepted risk:** a process holding that ACE could log the console user
+      off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown / restart still need
+      `SeShutdownPrivilege`, which the hardened token does not have. Seat hosts do not get
+      it. The service also passes its PID in `PULSAR_SEAT_SERVICE_PID` to every process
+      it launches: the pipe server check of a contained host / listener used the SCM,
+      which refuses a Low-integrity batch token (`OpenSCManagerW` access denied), and host
+      clients retry `ERROR_PIPE_BUSY` with `WaitNamedPipeW` (the listener starts together
+      with the kiosk shell and met a busy pipe). Revoked (`--desktop-acl revoke`) once the host is gone: platform
       exit / reap (also on every service tick), a sweep at service start, uninstall (after
       the service is stopped). Revokes never run under the containment lock. A NULL DACL
       is never edited. The pipe gets one ACE for the account (`pipe_ace`). Process /
