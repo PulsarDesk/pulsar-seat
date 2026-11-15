@@ -1584,3 +1584,50 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     4-41 us, 0 re-installs. Helper killed -> "exited", started again 1 s later (restarts 1);
     disable -> "stopped (quit)", no helper left. The Explorer-less kiosk console is not
     needed for the guard. Untested on hardware.
+  - **Driver round in the test VM 2026-11-15/16 (user's go relayed by the coordinator; VM
+    only: Secure Boot off, testsigning on, test certificate trusted; Memory Integrity /
+    HVCI / VBS untouched - VBS was not running in this VM before or after, so HVCI could not
+    be exercised here).** Packages test-signed with `tools/vm/testsign.ps1` (TEST ONLY
+    certificate under the user profile; `check-payload` rule `test_signed`), installed with
+    `pnputil`; the MSI ships no driver. Checkpoint `testsigning-clean` (testsigning + cert in
+    Root and TrustedPublisher). Last MSI tested: ba917a9 (ARM64, clean tree).
+    - **Input filter: PASS.** `oem2.inf`, `PulsarSeatInput` running; stacks `kbdclass >
+      PulsarSeatInput > hyperkbd` (TEST ONLY model line for the VMBus keyboard in the staged
+      INF only, 2997c66) and `mouclass > PulsarSeatInput > mouhid`. Service: driver
+      `loaded` 1.1 (keyboard / mouse and HID roles). Routing: keyboard assigned to seat 2
+      -> keys never reached seat 1's Notepad; after disable they did.
+    - **Storage minifilter: loaded, gating NOT testable here.** TEST ONLY altitude 409990
+      (staged INF only), `fltmc` instances on every volume including a hot-added VHD;
+      service: `loaded` 1.0. The inventory lists USB / SD / removable-bus disks only (spec
+      70 3.4) and Hyper-V passes no USB storage, so no disk could be assigned to a seat.
+    - **IddCx: device starts after a fix, monitors OPEN.** First start failed
+      (CM_PROB_FAILED_START, 0xC000009E): `IddCxAdapterInitAsync` refused
+      `MaxMonitorsSupported` 64 (17..64 refused, 16 accepted) - fixed e340421 (adapter
+      reports 16, connector indexes shared). `ADD_MONITOR`: `IddCxMonitorCreate` refused
+      `INDIRECT_VIRTUAL` - fixed efa0090 (`INDIRECT_WIRED`); `IddCxMonitorArrival` still
+      returns STATUS_INVALID_PARAMETER with every variant tried (EDID / none, random
+      container id, HDMI type, WIRED_OTHER transmission, ORIGIN_DRIVER modes, a display
+      pipeline rate); the mode callbacks run and succeed, IddCx and DxgKrnl traces name no
+      reason. Service: driver `loaded` 1.2. Tool: example `idd_monitor` (6ea5c61, run as
+      SYSTEM). Also by design `pulsar_idd` mirrors a seat's physical monitors, so a
+      one-monitor VM cannot give seats 2 / 3 their own display (U3 stays blocked here).
+    - **split-pad:** in the driver store only (devnodes are made on demand by seat-pads).
+    - **Found and fixed (ba917a9):** after a reboot the service starts before the console
+      auto-logon, `desktops` reports needs_setup (console_sign_in), the service falls back
+      to `fast_user_switch` and kept it for good: a later enable never activated
+      `desktops` / `kmdf_filter`. Backends are now re-selected after a fallback on enable
+      and on a console logon. VM after a real reboot: "backends re-selected after a
+      fallback ... -> []", isolation held.
+    - **Driver Verifier (standard flags) on seatinput.sys + pulsarseatstoragegate.sys:**
+      reboot, routing test, 500 file writes / reads on the VHD, minifilter unload / reload:
+      no violation, no bugcheck, no dump; Verifier reset afterwards. seat-idd (UMDF) was
+      not under the kernel Verifier.
+    - **Uninstall:** `msiexec /x` removes service, pipe, PulsarSeatHost account and the
+      install folder (ProgramData logs / config stay). Drivers: `fltmc unload`,
+      `pnputil /remove-device` (IDD root devnode), `pnputil /delete-driver ... /uninstall`
+      for all four: store empty, stacks back to `kbdclass > hyperkbd` / `mouclass > mouhid`,
+      no filter, service keys DeleteFlag=1 (gone at the next boot). No CodeIntegrity block
+      events during the round.
+    - **Open:** IddCx monitor arrival (driver bug, next: a UMDF / IddCx debugger session or
+      the WDK IddCx sample behaviour as documentation); HVCI not exercised (VBS off in the
+      VM); storage gating needs a USB disk (hardware or another hypervisor).

@@ -94,6 +94,15 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
 
 ## Known gaps (to resolve with a signed build)
 
+- **Monitor arrival fails (test VM 2026-11-16, open).** `IddCxMonitorArrival` returns
+  STATUS_INVALID_PARAMETER for every `ADD_MONITOR` (EDID or none, random container id,
+  HDMI / INDIRECT_WIRED type, WIRED_OTHER transmission, ORIGIN_DRIVER modes, a display
+  pipeline rate); ParseMonitorDescription runs and succeeds. Fixed on the way: the adapter
+  refuses `MaxMonitorsSupported` above 16 (now `PSIDD_ADAPTER_MAX_MONITORS`, connector
+  indexes shared by the 64 seat / connector slots) and local monitors created as
+  `INDIRECT_VIRTUAL` (now `INDIRECT_WIRED`). Test tool: `seat-display` example
+  `idd_monitor` (run as SYSTEM).
+
 - Whether a local non-console session can own an IddCx monitor at all (spec 40 q1); the
   monitor is plugged for the whole PC today, so every session's DWM may see it.
 - **One adapter, one render GPU.** Spec 40 §6.3.4 / §6.4 wants one IddCx adapter per

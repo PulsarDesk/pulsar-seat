@@ -44,7 +44,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `crates/seat-host` | bins `pulsar-seat-host`, `pulsar-seat-agent` | host | per-seat host (RDP client + presenter + input + audio bridge) and per-session agent |
 | `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5, `adapter-static` | manager | all screens of spec 10 (Turkish), tray, wizard UI; `src-tauri` = pipe client |
 | `credprov/` | C++20 COM DLL (v145, SDK 10.0.28000), unsigned | credprov | credential provider + filter for `fast_user_switch` (auto-logon, switch link); registered only by the service — see [credprov/README.md](../../credprov/README.md) |
-| `drivers/` | C (KMDF / FltMgr) + C++17 (IddCx), built unsigned with WDK 10.0.28000, never loaded | drivers | `seat-input-filter` (keyboard / mouse + HID roles), `seat-idd`, `seat-storage-filter` — see [drivers/README.md](../../drivers/README.md) |
+| `drivers/` | C (KMDF / FltMgr) + C++17 (IddCx), built unsigned with WDK 10.0.28000; loaded only test-signed in the test VM (2026-11-16) | drivers | `seat-input-filter` (keyboard / mouse + HID roles), `seat-idd`, `seat-storage-filter` — see [drivers/README.md](../../drivers/README.md) |
 | `installer/` | packaging | installer | see [installer/README.md](../../installer/README.md) |
 | `.cargo/config.toml` | cargo config | contracts | `+crt-static` for x64 / x86 / ARM64 (from Pulsar Split, merge step 2-3) |
 
@@ -398,7 +398,11 @@ ARM64X: CredUI is refused) gives this backend auto-logon and a "switch seat" lin
 
 Selection at boot: the service probes the configured kind; if it is not `available` it
 falls back to `fast_user_switch`, keeps the config unchanged and reports the reason in
-`ServiceStatus.fallback_notes`. Experimental kinds are never chosen as a fallback.
+`ServiceStatus.fallback_notes`. Experimental kinds are never chosen as a fallback. A fallback
+is reconsidered on enable and on a console logon (`Service::reselect_after_fallback`,
+2026-11-16): the service starts before a console auto-logon, so `desktops` (needs a
+signed-in console) fell back at boot and stayed there; it re-selects only when a fresh
+selection differs in a backend kind.
 
 Methods: `kind`, `caps -> SessionCaps`, `probe -> HostProbe`, `prepare_host(&GlobalSettings)`,
 `restore_host`, `start(&SeatStartRequest) -> StartStep` (`LaunchHost(HostLaunch)` |

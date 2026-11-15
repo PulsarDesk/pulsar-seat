@@ -5,7 +5,10 @@ Our own drivers. They sit behind the same backend traits as the user-mode defaul
 Microsoft-signed build exists. **None of them is loaded or tested until signed** (plan.md:
 no money for signing now; no test-signing on the dev laptop or the test PC).
 
-**State (2026-11-14): built, unsigned, never loaded.** All four drivers (the IddCx one with two roles, plus the Rust pad driver) build with zero
+**State (2026-11-16): built unsigned; loaded test-signed in the Hyper-V test VM only**
+(plan.md "Driver round in the test VM", results in docs/agents/status.md: input filter and
+minifilter load and work, IddCx starts but monitor arrival fails, Verifier clean).
+Before that: **(2026-11-14) built, unsigned, never loaded.** All four drivers (the IddCx one with two roles, plus the Rust pad driver) build with zero
 warnings for ARM64 and x64, Release and Debug, with Visual Studio 2026 Build Tools (18) and
 WDK / SDK 10.0.28000; infverif and the WDK code analysis pass (see Build below). Nothing is
 signed, test-signed, installed or loaded. Every driver is written against the public WDK
