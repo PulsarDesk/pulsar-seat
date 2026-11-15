@@ -518,7 +518,18 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode. HYPOTHESIS:
   untested on hardware. VM test 2026-11-15: the router no longer posts the keys the guard names (it
   posted VK_LWIN to the focused app); the hook still misses some Windows-key presses in the
-  kiosk console (open, status.md).
+  kiosk console (open, status.md). Round 4: with the shell in the foreground no press was
+  missed; with a console window in the foreground the first press after the shell starts
+  can still reach Start (hook called late, HYPOTHESIS: hook timeout).
+- **Kiosk console apps in conhost (round 4, `seat_service::kiosk_console`):** while
+  enabled with `desktops`, `seat1_desktop = false` and a kiosk-shell seat, the service sets
+  the console user's `HKU\<SID>\Console\%%Startup` `DelegationConsole` and
+  `DelegationTerminal` to the conhost CLSID `{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}`, so
+  console apps stay inside the shell's job (bar button, placement) instead of handing off to
+  Windows Terminal. The old values (absent or not) go to `journal\kiosk-console.json`
+  first and are restored on disable, shutdown, a config change that no longer wants it,
+  and uninstall. The service only writes loaded hives (`HKEY_USERS\<SID>`), never loads
+  one. Never for seat 1's desktop user (`seat1_desktop = true`) or the machine default.
 - **Per-process isolation (round 4 kiosk-isolation, 2026-11-14):** all kiosk seats share
   one session, so Windows hands every HID device and every raw-input record to any app of
   any seat. Kiosk apps can now load the remote kind's per-process module
@@ -1201,6 +1212,10 @@ step 2-3 Split's locked registry entries were unioned in.
   the state: on errors the wizard keeps running and a progress with step `invalid` and
   `issues` (issue codes; `store_failed` for a write error) is published. The activity trace
   log never contains scan codes.
+  The display helper (`--display-helper exec Identify`) spawns its overlay child with
+  non-inheritable std handles, and the service's console runner waits at most 3 s for
+  EOF after the reply (`helper_output_open`): a detached child holding the reply pipe
+  hung `wizard_start` before (2c1e9ef).
 - **Manager pages**: `src-tauri/src/wizard_pages.rs` opens one borderless top-most WebView
   window per monitor (`wizard-page-<generation>-<n>`, new generation per open; same
   WebView2 data folder as the main window; built from async commands only, a sync command

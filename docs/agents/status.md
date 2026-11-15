@@ -1472,3 +1472,29 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       the first key routed to a newly foreground Windows Terminal window. Misses are now
       detected (raw input) and logged with a hook re-install. Next option per the decision:
       an Explorer-less kiosk console, **not built without asking**.
+  - **Round 4 2026-11-15 (maintainer decisions in plan.md; MSI 1f1c065, clean tree).**
+    - **Kiosk console apps in conhost - DONE, VM PASS** (1f1c065). With `desktops`,
+      `seat1_desktop = false` and a kiosk-shell seat, the service sets the console user's
+      `HKU\<SID>\Console\%%Startup` `DelegationConsole` / `DelegationTerminal` to the conhost
+      CLSID and restores the old values from `journal\kiosk-console.json` on disable,
+      shutdown, config change and uninstall. VM: both values set for pstest; `cmd.exe` and
+      charmap are children of the shell, `conhost.exe` a child of cmd, no Windows Terminal;
+      cmd has its bar button and is placed below the bar. Limit: with `seat1_desktop = true`
+      the console user is seat 1's desktop user and is left alone.
+    - **wizard_start hang - FIXED, VM PASS** (2c1e9ef). Root cause: the display helper's
+      detached identify overlay child inherited the helper's stdout, which is the service's
+      reply pipe, so the console runner waited for EOF forever. The helper now clears handle
+      inheritance on its std handles before spawning the overlay, and the runner waits at
+      most 3 s for EOF after the reply (`helper_output_open`). VM: `wizard_start` answers
+      `ack`; F1 and 1 counted as key presses, the keyboard was assigned to seat 1 and the
+      wizard moved to the mouse step; `wizard_stop` acked.
+    - **Kiosk hotkey guard - improved, still one miss with a console foreground.** Shell
+      in the foreground (apps not autostarted, shell restarted): 66 presses, 132 blocked,
+      **0 missed**, no Run dialog, no Explorer window. cmd in conhost in the foreground:
+      130 blocked, **1 missed**: again the first Windows-key press after the shell
+      started opened Start; the hook logged its key-down and key-up in the same
+      millisecond, i.e. it was called late. No Run dialog or Explorer window opened.
+      HYPOTHESIS: the first low-level hook call after a console window takes the
+      foreground exceeds the hook timeout, so Windows passes the key on (seen with both
+      Windows Terminal and conhost). Next option (Explorer-less kiosk console) still needs
+      the maintainer's go.
