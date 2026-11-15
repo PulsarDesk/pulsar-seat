@@ -35,6 +35,11 @@ pub const IOCTL_PSIDD_SET_RENDER_ADAPTER: u32 = ctl_code(0x903);
 pub const PSIDD_MAX_EDID: usize = 512;
 pub const PSIDD_MAX_MODES: usize = 16;
 pub const PSIDD_MAX_SID: usize = 96;
+/// Monitors at the same time on the driver's one IddCx adapter: IddCx refuses an adapter
+/// with more than 16 (`MaxMonitorsSupported` above 16 fails `IddCxAdapterInitAsync` with
+/// `STATUS_INVALID_PARAMETER`; VM 2026-11-15). A 17th `ADD_MONITOR` fails with
+/// `STATUS_INSUFFICIENT_RESOURCES`.
+pub const PSIDD_ADAPTER_MAX_MONITORS: usize = 16;
 /// Largest width / height the driver accepts.
 pub const PSIDD_MAX_MODE_DIM: u32 = 16384;
 /// Largest refresh rate the driver accepts (mHz).
@@ -234,6 +239,20 @@ pub fn section_size(w: u32, h: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// The constants mirrored here match `drivers/seat-idd/public/seat_idd_ioctl.h`.
+    #[test]
+    fn constants_match_the_driver_header() {
+        let h = include_str!("../../../drivers/seat-idd/public/seat_idd_ioctl.h");
+        let define = |name: &str| -> usize {
+            let line = h.lines().find(|l| l.split_whitespace().nth(1) == Some(name)).unwrap_or_else(|| panic!("{name} missing"));
+            line.split_whitespace().nth(2).unwrap().trim_end_matches('u').parse().unwrap()
+        };
+        assert_eq!(define("PSIDD_ADAPTER_MAX_MONITORS"), PSIDD_ADAPTER_MAX_MONITORS);
+        assert_eq!(define("PSIDD_MAX_EDID"), PSIDD_MAX_EDID);
+        assert_eq!(define("PSIDD_MAX_MODES"), PSIDD_MAX_MODES);
+        assert_eq!(define("PSIDD_MAX_SID"), PSIDD_MAX_SID);
+    }
     use super::*;
     use std::mem::{offset_of, size_of};
 

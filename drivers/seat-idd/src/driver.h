@@ -49,6 +49,7 @@ typedef struct _PSIDD_MONITOR {
     uint32_t Flags; /* PSIDD_ADD_FLAG_* */
     uint32_t Seat;
     uint32_t Connector;
+    UINT ConnectorIndex; /* IddCx connector index, < PSIDD_ADAPTER_MAX_MONITORS */
     IDDCX_MONITOR Object;
     uint8_t Edid[PSIDD_MAX_EDID];
     uint32_t EdidLength;

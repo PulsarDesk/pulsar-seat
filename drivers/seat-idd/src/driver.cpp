@@ -99,7 +99,7 @@ NTSTATUS PsiddD0Entry(WDFDEVICE Device, WDF_POWER_DEVICE_STATE PreviousState)
 
     RtlZeroMemory(&caps, sizeof(caps));
     caps.Size = sizeof(caps);
-    caps.MaxMonitorsSupported = PSIDD_MAX_MONITORS;
+    caps.MaxMonitorsSupported = PSIDD_ADAPTER_MAX_MONITORS; /* IddCx limit, see the header */
     caps.EndPointDiagnostics.Size = sizeof(caps.EndPointDiagnostics);
     caps.EndPointDiagnostics.GammaSupport = IDDCX_FEATURE_IMPLEMENTATION_NONE;
     caps.EndPointDiagnostics.TransmissionType = IDDCX_TRANSMISSION_TYPE_OTHER;
@@ -422,6 +422,30 @@ static uint32_t SlotOf(uint32_t seat, uint32_t connector)
     return (seat - 1) * PSIDD_MAX_CONNECTORS_PER_SEAT + connector;
 }
 
+/* IddCx connector index for a new monitor: unique on the adapter, below
+ * PSIDD_ADAPTER_MAX_MONITORS, and the same for the same output across restarts where
+ * possible: a seat's first output takes seat - 1, further outputs the highest free index.
+ * Caller holds ctx->Lock exclusive. Returns PSIDD_ADAPTER_MAX_MONITORS when all are used. */
+static UINT PickConnectorIndex(const PSIDD_DEVICE_CONTEXT *ctx, uint32_t seat, uint32_t connector)
+{
+    BOOL used[PSIDD_ADAPTER_MAX_MONITORS];
+    RtlZeroMemory(used, sizeof(used));
+    for (UINT k = 0; k < PSIDD_MAX_MONITORS; k++) {
+        if (ctx->Monitors[k].InUse && ctx->Monitors[k].ConnectorIndex < PSIDD_ADAPTER_MAX_MONITORS) {
+            used[ctx->Monitors[k].ConnectorIndex] = TRUE;
+        }
+    }
+    if (connector == 0 && seat >= 1 && seat - 1 < PSIDD_ADAPTER_MAX_MONITORS && !used[seat - 1]) {
+        return seat - 1;
+    }
+    for (UINT i = PSIDD_ADAPTER_MAX_MONITORS; i-- > 0;) {
+        if (!used[i]) {
+            return i;
+        }
+    }
+    return PSIDD_ADAPTER_MAX_MONITORS;
+}
+
 static NTSTATUS AddMonitor(PSIDD_DEVICE_CONTEXT *ctx, const PSIDD_ADD_MONITOR *req)
 {
     IDDCX_MONITOR_INFO info;
@@ -431,6 +455,7 @@ static NTSTATUS AddMonitor(PSIDD_DEVICE_CONTEXT *ctx, const PSIDD_ADD_MONITOR *r
     WDF_OBJECT_ATTRIBUTES attr;
     PSIDD_MONITOR *m;
     uint32_t slot;
+    UINT connectorIndex;
     NTSTATUS status;
 
     if (req->Size != sizeof(*req) || req->Seat < 1 || req->Seat > PSIDD_MAX_SEATS ||
@@ -451,8 +476,14 @@ static NTSTATUS AddMonitor(PSIDD_DEVICE_CONTEXT *ctx, const PSIDD_ADD_MONITOR *r
         ReleaseSRWLockExclusive(&ctx->Lock);
         return STATUS_OBJECT_NAME_COLLISION;
     }
+    connectorIndex = PickConnectorIndex(ctx, req->Seat, req->Connector);
+    if (connectorIndex >= PSIDD_ADAPTER_MAX_MONITORS) {
+        ReleaseSRWLockExclusive(&ctx->Lock);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlZeroMemory(m, sizeof(*m));
     m->InUse = TRUE;
+    m->ConnectorIndex = connectorIndex;
     m->Seat = req->Seat;
     m->Connector = req->Connector;
     m->Flags = req->Flags;
@@ -484,7 +515,7 @@ static NTSTATUS AddMonitor(PSIDD_DEVICE_CONTEXT *ctx, const PSIDD_ADD_MONITOR *r
     RtlZeroMemory(&info, sizeof(info));
     info.Size = sizeof(info);
     info.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL;
-    info.ConnectorIndex = slot;
+    info.ConnectorIndex = m->ConnectorIndex;
     info.MonitorDescription.Size = sizeof(info.MonitorDescription);
     info.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
     info.MonitorDescription.DataSize = m->EdidLength;

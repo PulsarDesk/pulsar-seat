@@ -39,6 +39,12 @@
 #define PSIDD_MAX_SEATS 16
 #define PSIDD_MAX_CONNECTORS_PER_SEAT 4
 #define PSIDD_MAX_MONITORS (PSIDD_MAX_SEATS * PSIDD_MAX_CONNECTORS_PER_SEAT)
+/* Monitors at the same time on the one IddCx adapter. IddCx refuses an adapter with
+ * MaxMonitorsSupported above 16 (IddCxAdapterInitAsync -> STATUS_INVALID_PARAMETER: 17, 20,
+ * 24, 32 and 64 fail, 16 works; Windows 11 build 26300 ARM64 VM, 2026-11-15), so the 64
+ * seat / connector slots share 16 IddCx connector indexes; a 17th monitor is refused with
+ * STATUS_INSUFFICIENT_RESOURCES. */
+#define PSIDD_ADAPTER_MAX_MONITORS 16
 
 /* Mode limits the driver accepts (larger values are rejected with
  * STATUS_INVALID_PARAMETER; they would size multi-GB sections). */
