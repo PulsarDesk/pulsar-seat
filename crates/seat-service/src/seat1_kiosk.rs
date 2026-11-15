@@ -92,6 +92,8 @@ impl Service {
             let Some(cfg) = st.config.seat(SeatNumber::CONSOLE).cloned() else { return };
             (cfg, st.config.settings.clone())
         };
+        // Console apps of the kiosk console user open in conhost (crate::kiosk_console).
+        self.sync_kiosk_console();
         let req = SeatStartRequest {
             seat: SeatNumber::CONSOLE,
             config: &cfg,

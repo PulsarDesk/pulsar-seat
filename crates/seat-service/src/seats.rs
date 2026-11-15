@@ -610,6 +610,10 @@ impl Service {
         // fast_user_switch: LogonUI of the fresh session enumerates before the grant is
         // armed; it keeps asking while this hand-over is noted (spec 35 §5.4).
         self.note_credprov_handover(seat);
+        if b.session.kind() == seat_core::backend::SessionBackendKind::Desktops {
+            // Before the shell starts its console apps (crate::kiosk_console).
+            self.sync_kiosk_console();
+        }
         let step = b.session.start(&req);
         drop(req);
         let info: SessionInfo = match step {

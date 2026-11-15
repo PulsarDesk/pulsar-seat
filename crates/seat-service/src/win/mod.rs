@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Windows-only parts of the service.
 
+pub mod console_delegation;
 pub mod console_runner;
 pub mod containment;
 pub mod eventlog;

@@ -211,6 +211,18 @@ pub trait Platform: Send + Sync {
         let _ = want;
         Ok(false)
     }
+    /// The user's default-terminal setting (`DelegationConsole`, `DelegationTerminal`;
+    /// `None` = absent) in their loaded hive (`crate::kiosk_console`). Err when the hive is
+    /// not loaded. Default: unsupported.
+    fn console_delegation(&self, sid: &str) -> Result<(Option<String>, Option<String>), String> {
+        let _ = sid;
+        Err("unsupported".into())
+    }
+    /// Write both values (`None` deletes it). Default: unsupported.
+    fn set_console_delegation(&self, sid: &str, console: Option<&str>, terminal: Option<&str>) -> Result<(), String> {
+        let _ = (sid, console, terminal);
+        Err("unsupported".into())
+    }
 }
 
 /// Driver status of an installed driver from its version probe (`(major, minor, build)`
@@ -266,6 +278,9 @@ pub mod mock {
     }
 
     /// Scriptable platform: sessions with users, processes that live until killed.
+    /// `(DelegationConsole, DelegationTerminal)` of one user.
+    pub type Delegation = (Option<String>, Option<String>);
+
     #[derive(Default)]
     pub struct MockPlatform {
         pub console: Mutex<Option<u32>>,
@@ -299,6 +314,8 @@ pub mod mock {
         pub credprov_fail: AtomicBool,
         /// `account_sid` calls.
         pub account_lookups: AtomicU32,
+        /// Loaded user hives: SID -> (DelegationConsole, DelegationTerminal).
+        pub delegation: Mutex<BTreeMap<String, Delegation>>,
         next_pid: AtomicU32,
     }
 
@@ -435,6 +452,15 @@ pub mod mock {
         fn account_sid(&self, _domain: &str, user: &str) -> Option<String> {
             self.account_lookups.fetch_add(1, Ordering::SeqCst);
             Some(format!("S-1-5-21-9-{user}"))
+        }
+        fn console_delegation(&self, sid: &str) -> Result<(Option<String>, Option<String>), String> {
+            lock(&self.delegation).get(sid).cloned().ok_or_else(|| format!("hive of {sid} not loaded"))
+        }
+        fn set_console_delegation(&self, sid: &str, console: Option<&str>, terminal: Option<&str>) -> Result<(), String> {
+            let mut d = lock(&self.delegation);
+            let e = d.get_mut(sid).ok_or_else(|| format!("hive of {sid} not loaded"))?;
+            *e = (console.map(str::to_string), terminal.map(str::to_string));
+            Ok(())
         }
         fn sync_credential_provider(&self, want: bool) -> Result<bool, String> {
             if self.credprov_fail.load(Ordering::SeqCst) {

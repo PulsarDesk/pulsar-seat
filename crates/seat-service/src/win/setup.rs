@@ -225,6 +225,14 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
             }
         }
     }
+    // Kiosk console user's default terminal (crate::kiosk_console): back to what it was.
+    let kc = crate::kiosk_console::journal_path(data_dir);
+    if let Some(saved) = crate::kiosk_console::load(&kc)
+        && let Err(e) = crate::kiosk_console::restore(&kc, &saved, super::console_delegation::set)
+    {
+        eprintln!("Uyarı: kiosk kullanıcısının varsayılan terminal ayarı geri alınamadı ({e}); kullanıcı oturum açtığında Ayarlar > Sistem > Geliştiriciler için > Terminal'den değiştirilebilir.");
+        code = code.max(setup::EXIT_PARTIAL);
+    }
     // Credential provider + filter (registered only while enabled under fast user
     // switching): our four keys go, nothing else.
     if let Err(e) = seat_session::credprov::unregister(&seat_session::win::registry::WinRegistry) {

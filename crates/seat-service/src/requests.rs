@@ -785,6 +785,7 @@ impl Service {
                     s.stop_seat_now(seat, true);
                 }
                 s.sync_seat1_kiosk();
+                s.sync_kiosk_console();
                 s.release_ownership();
                 let mut st = s.lock();
                 s.set_seat_state(&mut st, SeatNumber::CONSOLE, SeatState::Off);

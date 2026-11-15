@@ -2654,3 +2654,61 @@ fn seat1_kiosk_shell_gives_up_after_the_crash_limit() {
     assert_eq!(seat1_starts(&h), n, "given up");
     assert!(h.s.lock().seat1_kiosk.gave_up);
 }
+
+// ---- kiosk console apps in conhost (maintainer decision 2026-11-15) ---------------------
+
+fn kiosk_user(h: &Harness) -> String {
+    let sid = "S-1-5-21-9-1000".to_string();
+    let u = crate::platform::SessionUser { domain: "PC".into(), name: "kiosk".into(), sid: sid.clone(), logon_sid: "S-1-5-5-0-7".into() };
+    h.p.users.lock().unwrap().insert(1, u);
+    sid
+}
+
+/// Kiosk-only console (seat1_desktop = false): the console user's default terminal is
+/// conhost while the product runs, journaled first, and exactly restored on disable.
+#[test]
+fn kiosk_console_user_gets_conhost_and_it_is_restored() {
+    let h = harness_with(seat1_kiosk_config(false), None);
+    let sid = kiosk_user(&h);
+    let wt = (Some("{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}".to_string()), Some("{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}".to_string()));
+    h.p.delegation.lock().unwrap().insert(sid.clone(), wt.clone());
+    h.s.boot();
+    let conhost = Some(crate::kiosk_console::CONHOST.to_string());
+    assert_eq!(h.p.delegation.lock().unwrap()[&sid], (conhost.clone(), conhost.clone()));
+    let path = crate::kiosk_console::journal_path(&h.s.data_dir);
+    assert_eq!(crate::kiosk_console::load(&path).unwrap().console, wt.0, "journaled before the change");
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    assert_eq!(h.p.delegation.lock().unwrap()[&sid], wt, "restored");
+    assert!(crate::kiosk_console::load(&path).is_none());
+}
+
+/// Seat 1 is the console user's normal desktop: that user's setting is never touched.
+#[test]
+fn kiosk_console_left_alone_when_seat1_is_the_desktop() {
+    let h = harness_with(seat1_kiosk_config(true), None);
+    let sid = kiosk_user(&h);
+    h.p.delegation.lock().unwrap().insert(sid.clone(), (None, None));
+    h.s.boot();
+    h.s.tick();
+    assert_eq!(h.p.delegation.lock().unwrap()[&sid], (None, None));
+}
+
+/// After a crash the journal holds the original values: a new run must not replace them
+/// with the conhost values it finds, and absent values come back as absent.
+#[test]
+fn kiosk_console_journal_survives_a_crash() {
+    let h = harness_with(seat1_kiosk_config(false), None);
+    let sid = kiosk_user(&h);
+    let conhost = Some(crate::kiosk_console::CONHOST.to_string());
+    // State after a crash: setting changed, journal says "both absent before".
+    h.p.delegation.lock().unwrap().insert(sid.clone(), (conhost.clone(), conhost.clone()));
+    let path = crate::kiosk_console::journal_path(&h.s.data_dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!(r#"{{"sid":"{sid}","console":null,"terminal":null}}"#)).unwrap();
+    h.s.boot();
+    assert_eq!(crate::kiosk_console::load(&path).unwrap().console, None, "original kept");
+    h.s.shutdown();
+    assert_eq!(h.p.delegation.lock().unwrap()[&sid], (None, None));
+    assert!(crate::kiosk_console::load(&path).is_none());
+}

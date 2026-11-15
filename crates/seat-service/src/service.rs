@@ -1033,6 +1033,7 @@ impl Service {
             self.reconfigure_hosts();
         }
         self.watchdog(now);
+        self.sync_kiosk_console();
         self.sync_seat1_kiosk();
         self.remote_tick();
         self.platform.reap_exited();
@@ -1201,8 +1202,10 @@ impl Service {
             self.stop_seat_now(seat, true);
             progress(i + 1, total);
         }
-        // Seat 1's kiosk shell (is_stopping is set: no longer wanted).
+        // Seat 1's kiosk shell (is_stopping is set: no longer wanted), then the kiosk
+        // console user's default terminal goes back.
         self.sync_seat1_kiosk();
+        self.sync_kiosk_console();
         // Remote seats: stop, wait (bounded), final sweep.
         self.remote_shutdown();
         // Release the keep-awake power request (is_stopping is set).

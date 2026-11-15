@@ -765,6 +765,14 @@ impl Platform for WinPlatform {
         String::from_utf16_lossy(&buf[..n])
     }
 
+    fn console_delegation(&self, sid: &str) -> Result<(Option<String>, Option<String>), String> {
+        crate::win::console_delegation::get(sid)
+    }
+
+    fn set_console_delegation(&self, sid: &str, console: Option<&str>, terminal: Option<&str>) -> Result<(), String> {
+        crate::win::console_delegation::set(sid, console, terminal)
+    }
+
     fn sync_credential_provider(&self, want: bool) -> Result<bool, String> {
         use seat_session::credprov::{self, Registration};
         use seat_session::win::registry::WinRegistry;
