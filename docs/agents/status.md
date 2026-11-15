@@ -1631,3 +1631,16 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     - **Open:** IddCx monitor arrival (driver bug, next: a UMDF / IddCx debugger session or
       the WDK IddCx sample behaviour as documentation); HVCI not exercised (VBS off in the
       VM); storage gating needs a USB disk (hardware or another hypervisor).
+  - **IddCx monitor arrival - FIXED, VM PASS (2026-11-16, 8350e44).** Root cause: the local
+    role filled monitor modes and target modes with the same signal info,
+    `vSyncFreqDivider` 1; monitor modes take 0 (`DISPLAYCONFIG_VIDEO_SIGNAL_INFO`; found by
+    reading Microsoft's IndirectDisplay sample as documentation - MS-PL, nothing copied, not
+    built). VM (`testsigning-clean`, driver test-signed): `ADD_MONITOR` ok, the monitor is
+    display 2 in Settings > Display ("Extend these displays"), `REMOVE_MONITOR` ok; fill test:
+    16 monitors ok, the 17th refused with STATUS_INSUFFICIENT_RESOURCES (e340421 limit). The
+    product with `desktops` + `pulsar_idd` runs `display=pulsar_idd` without fallback,
+    driver `loaded` 1.2; its monitor list shows only the physical monitor while ours is
+    plugged (own IddCx monitors are never seat targets, by design). The console screen went
+    dark after the first plug and came back on a key press (display asleep, not a hang).
+    Still not tested: frames through the seat host presenter (needs a seat with a physical
+    target, i.e. a second monitor), the remote role.
