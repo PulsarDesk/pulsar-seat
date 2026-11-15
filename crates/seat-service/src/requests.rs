@@ -764,6 +764,7 @@ impl Service {
                 s.refresh_inventory();
                 s.refresh_console_seat();
                 s.apply_ownership();
+                s.sync_seat1_kiosk();
                 match settings.start_mode {
                     seat_core::config::StartMode::Manual => {}
                     seat_core::config::StartMode::AtBoot => s.start_autostart_seats(),
@@ -782,6 +783,7 @@ impl Service {
                 for seat in seats {
                     s.stop_seat_now(seat, true);
                 }
+                s.sync_seat1_kiosk();
                 s.release_ownership();
                 let mut st = s.lock();
                 s.set_seat_state(&mut st, SeatNumber::CONSOLE, SeatState::Off);

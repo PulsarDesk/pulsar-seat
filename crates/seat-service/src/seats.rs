@@ -153,7 +153,7 @@ pub fn failure_reason(e: &BackendError) -> FailureReason {
     }
 }
 
-fn backoff_ms(crashes: usize) -> u64 {
+pub(crate) fn backoff_ms(crashes: usize) -> u64 {
     (1_000u64 << crashes.min(6)).min(MAX_BACKOFF_MS)
 }
 

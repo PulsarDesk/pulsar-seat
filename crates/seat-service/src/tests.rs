@@ -2519,3 +2519,96 @@ fn pulsar_pairing_events_reach_admins_on_the_stream_topic_only() {
     let ResponseBody::Events(b) = poll(&mut u, vec![]).unwrap() else { panic!() };
     assert!(b.events.is_empty(), "{:?}", b.events);
 }
+
+// ---- seat 1 kiosk shell (maintainer decision 2026-11-15, option a) ----------------------
+
+/// `desktops` with `seat1_desktop = false` and a kiosk shell on seat 1.
+fn seat1_kiosk_config(seat1_desktop: bool) -> Config {
+    let mut c = two_seat_config();
+    c.settings.backends.session = seat_core::backend::SessionBackendKind::Desktops;
+    c.settings.kiosk.seat1_desktop = seat1_desktop;
+    let app = seat_core::config::KioskShellApp {
+        title: "Komut".into(),
+        command: r"C:\Windows\System32\cmd.exe".into(),
+        args: Vec::new(),
+        autostart: true,
+        monitor: 0,
+    };
+    c.seats[0].local = Some(seat_core::config::LocalSeat {
+        kiosk_shell: Some(seat_core::config::KioskShell { apps: vec![app], idle_reset_minutes: 0 }),
+        ..Default::default()
+    });
+    c
+}
+
+fn seat1_starts(h: &Harness) -> usize {
+    h.f.desktops.rec.calls().iter().filter(|c| *c == "start 1").count()
+}
+
+fn seat1_stops(h: &Harness) -> usize {
+    h.f.desktops.rec.calls().iter().filter(|c| *c == "log_off 1").count()
+}
+
+/// Started at boot, left alone while alive, restarted after a crash (after the back-off),
+/// stopped on disable, started again on enable, stopped at service shutdown.
+#[test]
+fn seat1_kiosk_shell_follows_the_product() {
+    let h = harness_with(seat1_kiosk_config(false), None);
+    h.s.boot();
+    assert_eq!(h.s.status().active.session, seat_core::backend::SessionBackendKind::Desktops);
+    assert_eq!(seat1_starts(&h), 1, "{:?}", h.f.desktops.rec.calls());
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 1, "alive: not started again");
+    // Crash: restarted after the back-off, not before.
+    h.f.desktops.end_session(s(1));
+    h.s.tick();
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 1);
+    h.clock.advance(70_000);
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 2, "restarted after the back-off");
+    // Disable stops it, enable starts it again.
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    assert_eq!(seat1_stops(&h), 1);
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 2, "not while disabled");
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: true }).unwrap();
+    assert_eq!(seat1_starts(&h), 3);
+    h.s.shutdown();
+    assert_eq!(seat1_stops(&h), 2, "service stop cleans up");
+}
+
+/// Seat 1 kept as the desktop, or another session backend: no shell for seat 1.
+#[test]
+fn seat1_kiosk_shell_only_when_seat1_is_not_the_desktop() {
+    let h = harness_with(seat1_kiosk_config(true), None);
+    h.s.boot();
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 0);
+    let mut c = seat1_kiosk_config(false);
+    c.settings.backends.session = seat_core::backend::SessionBackendKind::RdsLoopback;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), 0);
+    assert!(h.f.session.rec.calls().iter().all(|c| c != "start 1"));
+}
+
+/// A shell that keeps dying is given up after the crash limit inside the window.
+#[test]
+fn seat1_kiosk_shell_gives_up_after_the_crash_limit() {
+    let h = harness_with(seat1_kiosk_config(false), None);
+    h.s.boot();
+    for _ in 0..crate::seats::CRASH_LIMIT {
+        h.f.desktops.end_session(s(1));
+        h.s.tick();
+        h.clock.advance(70_000);
+        h.s.tick();
+    }
+    let n = seat1_starts(&h);
+    h.clock.advance(70_000);
+    h.s.tick();
+    assert_eq!(seat1_starts(&h), n, "given up");
+    assert!(h.s.lock().seat1_kiosk.gave_up);
+}

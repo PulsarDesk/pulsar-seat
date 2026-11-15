@@ -405,6 +405,15 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   under the seat table. `command` must be an absolute, trimmed Windows path
   (`seat_core::validate::is_absolute_windows_path`, same rule as the manager);
   `kiosk::plan_for` also trims and drops relative commands (fix-kiosk-shell).
+- **Seat 1's shell** (maintainer decision 2026-11-15, `seat-service/src/seat1_kiosk.rs`):
+  seat 1 is never started through `start_sequence` under `seat_one_console`, so the service
+  runs its shell itself while the product is enabled, `desktops` is active and
+  `seat1_desktop` is off: started on enable, at boot and on every tick when missing (a
+  backend `NotReady`, e.g. no console user yet, retries after 5 s), restarted after a crash
+  with the seat-host back-off and crash limit (`CRASH_LIMIT` in `CRASH_WINDOW_MS`, then
+  given up until it is unwanted and wanted again), stopped with `log_off` on disable, when
+  the config no longer wants it and at service shutdown. Seat 1's status still mirrors the
+  console session.
 - **Launch:** `desktops::start` for a seat with `kiosk_shell` (seat 1 only when
   `seat1_desktop` is off) launches `pulsar-seat-host --kiosk-shell --seat N --plan <hex>`
   into the console session with the console user's token, in the seat's job

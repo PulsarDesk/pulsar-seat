@@ -631,6 +631,7 @@ pub mod testing {
     pub struct MockFactory {
         pub session: Arc<MockSessionBackend>,
         pub fus: Arc<MockSessionBackend>,
+        pub desktops: Arc<MockSessionBackend>,
         pub display: Arc<MockDisplay>,
         pub input: Arc<MockInput>,
         pub audio: Arc<MockAudio>,
@@ -644,6 +645,7 @@ pub mod testing {
             Self {
                 session: Arc::new(MockSessionBackend::new(SessionBackendKind::RdsLoopback)),
                 fus: Arc::new(MockSessionBackend::new(SessionBackendKind::FastUserSwitch)),
+                desktops: Arc::new(MockSessionBackend::new(SessionBackendKind::Desktops)),
                 display: Arc::new(MockDisplay::default()),
                 input: Arc::new(MockInput::default()),
                 audio: Arc::new(MockAudio::default()),
@@ -658,6 +660,7 @@ pub mod testing {
             match kind {
                 SessionBackendKind::RdsLoopback => Some(self.session.clone()),
                 SessionBackendKind::FastUserSwitch => Some(self.fus.clone()),
+                SessionBackendKind::Desktops => Some(self.desktops.clone()),
                 _ => None,
             }
         }

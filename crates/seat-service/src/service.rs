@@ -123,6 +123,8 @@ pub(crate) struct State {
     pub credprov: crate::credprov::CredprovState,
     /// Remote seats' runtimes from the remote seat worker (`crate::remote::glue`).
     pub remote_rt: BTreeMap<SeatNumber, SeatRuntime>,
+    /// Seat 1's kiosk shell under `seat1_desktop = false` (`crate::seat1_kiosk`).
+    pub seat1_kiosk: crate::seat1_kiosk::Seat1Kiosk,
 }
 
 pub struct Service {
@@ -236,6 +238,7 @@ impl Service {
                 app_launches: BTreeMap::new(),
                 credprov: Default::default(),
                 remote_rt: BTreeMap::new(),
+                seat1_kiosk: Default::default(),
             }),
 
             password_known,
@@ -396,6 +399,9 @@ impl Service {
                 Err(e) => log::error_id(eventid::BACKEND_FAILED, &format!("prepare_host: {e}")),
             }
             self.apply_ownership();
+            if decision.safe_mode.is_none() {
+                self.sync_seat1_kiosk();
+            }
         }
         // Remote seats: the engine prepares the host (coexistence, termwrap, RDS, sweeps)
         // before any remote seat starts (contracts §9.4).
@@ -1027,6 +1033,7 @@ impl Service {
             self.reconfigure_hosts();
         }
         self.watchdog(now);
+        self.sync_seat1_kiosk();
         self.remote_tick();
         self.platform.reap_exited();
         self.enforce_deny_logoffs(now);
@@ -1194,6 +1201,8 @@ impl Service {
             self.stop_seat_now(seat, true);
             progress(i + 1, total);
         }
+        // Seat 1's kiosk shell (is_stopping is set: no longer wanted).
+        self.sync_seat1_kiosk();
         // Remote seats: stop, wait (bounded), final sweep.
         self.remote_shutdown();
         // Release the keep-awake power request (is_stopping is set).

@@ -151,6 +151,12 @@ impl MockSessionBackend {
             console_seat_away: Mutex::new(None),
         }
     }
+    /// The seat's session ended (a crashed kiosk shell): `query` answers `Gone`.
+    pub fn end_session(&self, seat: SeatNumber) {
+        if let Some(i) = lock(&self.sessions).get_mut(&seat) {
+            i.state = SessionState::Gone;
+        }
+    }
     fn new_session(&self, seat: SeatNumber, client: &str) -> SessionInfo {
         let info = SessionInfo {
             session_id: self.next_id.fetch_add(1, Ordering::SeqCst) as u32,

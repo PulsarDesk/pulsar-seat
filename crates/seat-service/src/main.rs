@@ -41,6 +41,7 @@ mod requests;
 mod runstate;
 #[cfg(windows)]
 mod runtime;
+mod seat1_kiosk;
 mod seats;
 mod service;
 #[cfg(test)]
