@@ -117,6 +117,20 @@ fn main() {
         kiosk::win::release_console_cursor();
         std::process::exit(0);
     }
+    // `--hotkey-guard --seat N`: the kiosk shell's hotkey guard helper (no raw input).
+    if let Some(parsed) = kiosk::guard::parse_guard_args(&args) {
+        let code = match parsed {
+            #[cfg(windows)]
+            Ok(seat) => kiosk::guard_win::run(seat),
+            #[cfg(not(windows))]
+            Ok(_) => 1,
+            Err(e) => {
+                eprintln!("pulsar-seat-host: --hotkey-guard: {e}");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
     if let Some(parsed) = kiosk::parse_args(&args) {
         let code = match parsed {
             #[cfg(windows)]

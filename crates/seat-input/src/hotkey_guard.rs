@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Kiosk hotkey guard (round 4, kiosk-isolation): which keys a low-level keyboard hook
-//! (`WH_KEYBOARD_LL`, installed by the kiosk shell, `seat-host/src/kiosk/win.rs`) swallows
+//! (`WH_KEYBOARD_LL`, installed by the kiosk shell's helper, `seat-host/src/kiosk/guard_win.rs`) swallows
 //! so that kiosk seats cannot reach the console user's desktop with Windows' own hotkeys.
 //!
 //! Only used when seat 1 is **not** kept as the normal desktop (`seat1_desktop = false`):

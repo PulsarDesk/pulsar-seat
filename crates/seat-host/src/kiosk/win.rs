@@ -33,7 +33,7 @@ macro_rules! klog {
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ`.
-fn utc_now() -> String {
+pub(super) fn utc_now() -> String {
     let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs();
     let (days, rem) = (secs / 86_400, secs % 86_400);
@@ -50,60 +50,14 @@ fn utc_now() -> String {
     format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem % 3600 / 60, rem % 60, d.subsec_millis())
 }
 
-/// Hotkey guard counters (hook thread writes, UI thread logs them every 10 s).
-static HOOK_EVENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static HOOK_BLOCKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Packets of the seat's devices routed by the shell (to compare with the hook's events).
-static HOOK_DETAIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Detail lines of the hook (vk, flags, message, blocked), filled without blocking from the
-/// hook procedure (`try_lock`) and written by the UI tick: no I/O inside the hook.
-static HOOK_LOG: std::sync::Mutex<Vec<(u32, u32, usize, bool)>> = std::sync::Mutex::new(Vec::new());
-/// Guarded keys that reached the raw reader, i.e. the hook was not called for them.
+
+/// Guarded keys that reached the raw reader, i.e. the helper's hook was not called for them.
 static HOOK_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Thread id of the hotkey guard (0 = off): the UI thread asks it to re-install the hook.
-static GUARD_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// Thread message to the guard thread: unhook and hook again.
-const WM_APP_REHOOK: u32 = 0x8000 + 0x31;
+/// Packets of the seat's devices routed by the shell.
 static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Thread message to the guard thread: inject the warm-up key (a new foreground window).
-const WM_APP_WARMUP: u32 = 0x8000 + 0x32;
-/// Warm-up keys injected (down + up = one) and seen by the hook (key-down only).
-static WARMUP_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static WARMUP_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Time of the last injection and the hook's latency for it (µs on [`guard_clock_us`]).
-static WARMUP_AT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static WARMUP_LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static WARMUP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Injections `SendInput` refused (e.g. UIPI: a higher-integrity foreground window).
-static WARMUP_FAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Monotonic µs since the first call (the guard's warm-up latency clock).
-fn guard_clock_us() -> u64 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
-}
-
-/// Injects the guard's warm-up key (`seat_input::hotkey_guard::WARMUP_VK` down + up, tagged
-/// `WARMUP_TAG`), which the hook swallows: the hook's first real call is then not a
-/// Windows-key press. Called on the guard thread only.
-fn send_warmup() {
-    use seat_input::hotkey_guard::{WARMUP_TAG, WARMUP_VK};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput};
-    let key = |flags| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: WARMUP_VK as u16, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: WARMUP_TAG } },
-    };
-    let inputs = [key(0), key(KEYEVENTF_KEYUP)];
-    WARMUP_AT_US.store(guard_clock_us(), std::sync::atomic::Ordering::Relaxed);
-    // SAFETY: two valid INPUT records of the stated size.
-    let n = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
-    if n as usize == inputs.len() {
-        WARMUP_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    } else {
-        WARMUP_FAILED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
+use super::guard::{GuardCmd, Supervisor, SupervisorStep, guard_args};
+use seat_core::SeatNumber;
 use super::{
     AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SHIM_LAUNCHER, SeatDevices, ShellArgs, ShellCommand,
     attach_action, drag_rect, filter_active, audio_notice, focus_policy, idle_text, kiosk_env_value, notices, place,
@@ -437,10 +391,10 @@ struct Shell {
     modified_threads: HashSet<u32>,
     /// Caption / border drag in progress: `(top, hit-test code, rect at the press)`.
     drag: Option<(u64, i32, Rect)>,
-    /// Last logged (hook events, hook blocked, seat packets).
-    diag_last: (u64, u64, u64),
-    /// Last logged warm-up (sent, seen, failed).
-    warm_last: (u64, u64, u64),
+    /// Last logged (missed guarded keys, seat packets).
+    diag_last: (u64, u64),
+    /// Hotkey guard helper (`None` = no guard: seat 1 is the console user's desktop).
+    guard: Option<GuardHelper>,
     /// Foreground window at the last tick and the windows that already had a warm-up.
     fg_last: isize,
     fg_warmed: HashSet<isize>,
@@ -912,13 +866,13 @@ impl Shell {
         let me = unsafe { GetCurrentProcessId() };
         let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, me };
         SEAT_PACKETS.fetch_add(packets.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        let guard = GUARD_TID.load(std::sync::atomic::Ordering::Relaxed);
-        if guard != 0 && packets.iter().any(|p| matches!(p, InputPacket::Key { sc: 0x5B | 0x5C, f } if f & seat_core::backend::input::key_flags::E0 != 0 && f & seat_core::backend::input::key_flags::UP == 0)) {
-            // A Windows key the hook swallows never reaches raw input: the hook was not
-            // called for this one. Install it again (it may have been dropped).
+        if self.guard.as_ref().is_some_and(GuardHelper::is_up) && packets.iter().any(|p| matches!(p, InputPacket::Key { sc: 0x5B | 0x5C, f } if f & seat_core::backend::input::key_flags::E0 != 0 && f & seat_core::backend::input::key_flags::UP == 0)) {
+            // A Windows key the helper's hook swallows never reaches raw input: the hook was
+            // not called for this one. One re-install per detected miss (never a loop).
             HOOK_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // SAFETY: plain thread message to our guard thread.
-            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard, WM_APP_REHOOK, 0, 0) };
+            if let Some(g) = self.guard.as_mut() {
+                g.send(GuardCmd::Reinstall);
+            }
         }
         let acts = self.router.on_packets(&packets, &q, &mut self.keys, now);
         self.run_actions(acts);
@@ -927,11 +881,10 @@ impl Shell {
     /// 250 ms housekeeping.
     fn on_tick(&mut self) {
         self.tick += 1;
-        let lines = HOOK_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
-        for (vk, flags, msg, block) in lines {
-            klog!("hook: vk 0x{vk:02x} flags 0x{flags:x} msg 0x{msg:x} block {block}");
-        }
         let now = self.now();
+        if let Some(g) = self.guard.as_mut() {
+            g.tick(now);
+        }
         if self.policy == FocusPolicy::SinkLeader {
             self.keep_focus();
         }
@@ -954,29 +907,25 @@ impl Shell {
         }
         if self.tick % 40 == 0 {
             use std::sync::atomic::Ordering::Relaxed;
-            let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), SEAT_PACKETS.load(Relaxed));
+            let now = (HOOK_MISSES.load(Relaxed), SEAT_PACKETS.load(Relaxed));
             if now != self.diag_last {
                 self.diag_last = now;
                 klog!(
-                    "counters: hook events {} blocked {} missed {}, seat packets {}, leader {}, clipped {}",
+                    "counters: missed {}, seat packets {}, leader {}, clipped {}, guard helper restarts {}",
                     now.0,
                     now.1,
-                    HOOK_MISSES.load(Relaxed),
-                    now.2,
                     self.leader,
-                    self.clipped
+                    self.clipped,
+                    self.guard.as_ref().map_or(0, |g| g.sup.restarts)
                 );
             }
         }
     }
 
     /// Hotkey guard warm-up: a window that takes the foreground for the first time gets one
-    /// warm-up key (VM 2026-11-15: the first Windows-key press under a new console window
-    /// reached the hook late and Start opened). Logs warm-up counters when they change.
+    /// warm-up key from the helper (the helper logs the results).
     fn warm_up_guard(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let guard = GUARD_TID.load(Relaxed);
-        if guard == 0 {
+        if !self.guard.as_ref().is_some_and(GuardHelper::is_up) {
             return;
         }
         // SAFETY: no arguments.
@@ -986,22 +935,12 @@ impl Shell {
             if self.fg_warmed.len() > 256 {
                 self.fg_warmed.clear();
             }
-            if fg != 0 && self.fg_warmed.insert(fg) {
-                // SAFETY: plain thread message to our guard thread.
-                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard, WM_APP_WARMUP, 0, 0) };
+            if fg != 0
+                && self.fg_warmed.insert(fg)
+                && let Some(g) = self.guard.as_mut()
+            {
+                g.send(GuardCmd::WarmUp);
             }
-        }
-        let now = (WARMUP_SENT.load(Relaxed), WARMUP_SEEN.load(Relaxed), WARMUP_FAILED.load(Relaxed));
-        if now != self.warm_last {
-            self.warm_last = now;
-            klog!(
-                "warm-up: sent {} seen {} failed {}, hook latency last {} us max {} us",
-                now.0,
-                now.1,
-                now.2,
-                WARMUP_LAST_US.load(Relaxed),
-                WARMUP_MAX_US.load(Relaxed)
-            );
         }
     }
 
@@ -1110,6 +1049,9 @@ impl Shell {
             self.leader = false;
         }
         self.audio.clear_all();
+        if let Some(g) = self.guard.as_mut() {
+            g.stop();
+        }
         if !self.job.is_null() {
             // SAFETY: our job; ends every app process.
             unsafe {
@@ -1397,50 +1339,9 @@ fn shim_launcher() -> Option<std::path::PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// `WH_KEYBOARD_LL` procedure of the hotkey guard (`seat_input::hotkey_guard`).
-unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    use seat_input::hotkey_guard::{Mods, blocks};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_ALTDOWN};
-    if code == HC_ACTION as i32 && lparam != 0 {
-        // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
-        let k = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        // Our own warm-up key: swallowed, never counted as a key event.
-        if seat_input::hotkey_guard::is_warmup(k.vkCode, k.dwExtraInfo) {
-            if wparam == 0x100 || wparam == 0x104 {
-                use std::sync::atomic::Ordering::Relaxed;
-                let lat = guard_clock_us().saturating_sub(WARMUP_AT_US.load(Relaxed));
-                WARMUP_LAST_US.store(lat, Relaxed);
-                WARMUP_MAX_US.fetch_max(lat, Relaxed);
-                WARMUP_SEEN.fetch_add(1, Relaxed);
-            }
-            return 1;
-        }
-        // SAFETY: plain state queries.
-        let (ctrl, shift) = unsafe { (GetAsyncKeyState(VK_CONTROL as i32) < 0, GetAsyncKeyState(VK_SHIFT as i32) < 0) };
-        let n = HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let block = blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift });
-        // Detail only for the guarded / modifier keys (never letters, digits or other
-        // keys that could be typed text, e.g. a password into a kiosk app).
-        let system_key = matches!(k.vkCode, 0x09 | 0x10..=0x12 | 0x1B | 0x5B | 0x5C | 0xA0..=0xA5);
-        if (block || system_key)
-            && n < 4096
-            && HOOK_DETAIL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64
-            && let Ok(mut l) = HOOK_LOG.try_lock()
-        {
-            l.push((k.vkCode, k.flags, wparam, block));
-        }
-        if block {
-            HOOK_BLOCKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return 1;
-        }
-    }
-    // SAFETY: pass on to the next hook.
-    unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
-}
 
 /// Mandatory integrity RID of this process (0x2000 medium, 0x3000 high, ...).
-fn integrity_rid() -> Option<u32> {
+pub(super) fn integrity_rid() -> Option<u32> {
     use windows_sys::Win32::Security::{GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     let mut tok = std::ptr::null_mut();
@@ -1473,7 +1374,6 @@ pub fn run(args: ShellArgs) -> i32 {
     unsafe { std::env::set_var(seat_shim_core::KIOSK_SEAT_ENV, kiosk_env_value(args.seat)) };
     // Hotkey guard (round 4): only when seat 1 is not the console user's desktop.
     let wanted = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop);
-    let guard = wanted.then(start_hotkey_guard).flatten();
     let mut session = 0u32;
     // SAFETY: out pointer valid.
     unsafe { windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId(GetCurrentProcessId(), &mut session) };
@@ -1485,82 +1385,105 @@ pub fn run(args: ShellArgs) -> i32 {
         integrity_rid().unwrap_or(0),
         args.plan.seat1_desktop,
         args.plan.apps.len(),
-        match (wanted, guard) {
-            (false, _) => "off".to_string(),
-            (true, Some(t)) => format!("on (thread {t})"),
-            (true, None) => "FAILED".to_string(),
-        }
+        if wanted { "helper" } else { "off" }
     );
-    let code = run_shell(args);
-    if let Some(tid) = guard {
-        // SAFETY: plain call; the guard thread unhooks and ends on WM_QUIT.
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(tid, windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT, 0, 0) };
-    }
-    code
+    run_shell(args)
 }
 
-/// Runs the `WH_KEYBOARD_LL` hotkey guard on its own thread with its own message loop: a
-/// low-level hook is called on the installing thread, and the shell's UI thread blocks
-/// while the shim launcher attaches (`launch_with`), which would stall every key press of
-/// the PC. Returns the thread id (post `WM_QUIT` to stop it).
-fn start_hotkey_guard() -> Option<u32> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, MSG, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("hotkey-guard".into())
-        .spawn(move || {
-            // Time-critical: Windows waits for a low-level hook only LowLevelHooksTimeout and
-            // then passes the key on; while the shell starts its apps a normal-priority
-            // thread missed the first Windows key (VM test 2026-11-15).
-            // SAFETY: own thread.
-            unsafe {
-                windows_sys::Win32::System::Threading::SetThreadPriority(
-                    windows_sys::Win32::System::Threading::GetCurrentThread(),
-                    windows_sys::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL,
-                )
-            };
-            // SAFETY: low-level hook served by this thread's message loop; module handle of
-            // our image.
-            let mut h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0) };
-            if h.is_null() {
-                klog!("hotkey guard not installed: {}", std::io::Error::last_os_error());
-                let _ = tx.send(None);
-                return;
-            }
-            // SAFETY: plain call.
-            // SAFETY: plain call.
-            let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
-            GUARD_TID.store(tid, std::sync::atomic::Ordering::Relaxed);
-            let _ = tx.send(Some(tid));
-            send_warmup();
-            // SAFETY: standard message loop of this thread; ends on WM_QUIT or an error.
-            unsafe {
-                let mut msg: MSG = std::mem::zeroed();
-                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                    if msg.hwnd.is_null() && msg.message == WM_APP_REHOOK {
-                        UnhookWindowsHookEx(h);
-                        h = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0);
-                        if h.is_null() {
-                            klog!("hotkey guard not re-installed: {}", std::io::Error::last_os_error());
-                            return;
-                        }
-                        send_warmup();
-                        continue;
-                    }
-                    if msg.hwnd.is_null() && msg.message == WM_APP_WARMUP {
-                        send_warmup();
-                        continue;
-                    }
-                    DispatchMessageW(&msg);
-                }
-                UnhookWindowsHookEx(h);
-            }
-        })
-        .ok()?;
-    rx.recv().ok().flatten()
+/// The hotkey guard helper process seen from the shell (`super::guard`): started on the
+/// first tick, watched every tick, started again with a back-off, stopped with the shell.
+/// It is a plain child (same user, session, desktop, integrity) and inherits the seat's
+/// job, so the service's stop ends it too; the pipe closing ends it as well.
+struct GuardHelper {
+    seat: SeatNumber,
+    child: Option<std::process::Child>,
+    stdin: Option<std::process::ChildStdin>,
+    sup: Supervisor,
 }
+
+impl GuardHelper {
+    fn new(seat: SeatNumber) -> Self {
+        Self { seat, child: None, stdin: None, sup: Supervisor::default() }
+    }
+
+    fn is_up(&self) -> bool {
+        self.child.is_some()
+    }
+
+    /// One-byte command; a broken pipe is noticed by the next tick (the helper ended).
+    fn send(&mut self, c: GuardCmd) {
+        use std::io::Write;
+        if let Some(p) = self.stdin.as_mut()
+            && p.write_all(&[c.byte()]).and_then(|_| p.flush()).is_err()
+        {
+            self.stdin = None;
+        }
+    }
+
+    fn running(&mut self) -> bool {
+        let Some(c) = self.child.as_mut() else { return false };
+        match c.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                klog!("hotkey guard helper exited ({status})");
+                self.child = None;
+                self.stdin = None;
+                false
+            }
+            Err(e) => {
+                klog!("hotkey guard helper: {e}");
+                self.child = None;
+                self.stdin = None;
+                false
+            }
+        }
+    }
+
+    fn tick(&mut self, now: u64) {
+        let running = self.running();
+        if self.sup.step(now, running) != SupervisorStep::Spawn {
+            return;
+        }
+        let exe = std::env::current_exe();
+        let spawned = exe.and_then(|exe| {
+            std::process::Command::new(exe)
+                .args(guard_args(self.seat))
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::inherit())
+                .spawn()
+        });
+        match spawned {
+            Ok(mut c) => {
+                klog!("hotkey guard helper started (pid {}, restarts {})", c.id(), self.sup.restarts);
+                self.stdin = c.stdin.take();
+                self.child = Some(c);
+                self.sup.spawned(now, true);
+            }
+            Err(e) => {
+                self.sup.spawned(now, false);
+                klog!("hotkey guard helper not started: {e}; next try in {} ms", self.sup.backoff_ms());
+            }
+        }
+    }
+
+    /// Asks the helper to end, closes the pipe, waits up to 1 s, then kills it.
+    fn stop(&mut self) {
+        self.send(GuardCmd::Quit);
+        self.stdin = None;
+        if let Some(mut c) = self.child.take() {
+            for _ in 0..20 {
+                if matches!(c.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 
 fn run_shell(args: ShellArgs) -> i32 {
     // SAFETY: process-wide DPI mode before any window exists (physical pixels match the
@@ -1625,6 +1548,8 @@ fn run_shell(args: ShellArgs) -> i32 {
     let seat = args.seat;
     // SAFETY: our thread's layout.
     let hkl = unsafe { GetKeyboardLayout(0) };
+    // Hotkey guard helper (round 4): only when seat 1 is not the console user's desktop.
+    let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop).then(|| GuardHelper::new(args.seat));
     let shell = Shell {
         router: KioskRouter::new(SeatArea::new(monitors.clone())),
         args,
@@ -1661,8 +1586,8 @@ fn run_shell(args: ShellArgs) -> i32 {
         audio: KioskAudio::new(seat_media::create_app_endpoint_policy()),
         modified_threads: HashSet::new(),
         drag: None,
-        diag_last: (0, 0, 0),
-        warm_last: (0, 0, 0),
+        diag_last: (0, 0),
+        guard,
         fg_last: 0,
         fg_warmed: HashSet::new(),
     };

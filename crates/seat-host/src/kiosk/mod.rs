@@ -72,6 +72,9 @@
 
 #[cfg(windows)]
 pub mod win;
+#[cfg(windows)]
+pub mod guard_win;
+pub mod guard;
 
 use seat_core::SeatNumber;
 use seat_core::device::{DeviceDetails, Rect};
