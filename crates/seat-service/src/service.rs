@@ -160,6 +160,9 @@ pub struct Service {
     /// Serialises wizard start / stop across their backend calls (capture on / off), so
     /// a stop cannot slip in between "wizard stored" and "capture on".
     pub(crate) wizard_op: Mutex<()>,
+    /// Serialises `sync_seat1_kiosk` (enable thread, tick, boot, shutdown): one owner of
+    /// seat 1's kiosk shell at a time (VM 2026-11-15: disable + enable started two).
+    pub(crate) seat1_kiosk_op: Mutex<()>,
 }
 
 /// One piece of wizard work queued by an input event.
@@ -246,6 +249,7 @@ impl Service {
             remote_stop_wait_ms: std::sync::atomic::AtomicU64::new(crate::remote::glue::REMOTE_STOP_WAIT_MS),
             wizard_jobs: Mutex::new(WizardQueue::default()),
             wizard_op: Mutex::new(()),
+            seat1_kiosk_op: Mutex::new(()),
             backends: Mutex::new(backends),
             stopping: AtomicBool::new(false),
             host_grace_ms: std::sync::atomic::AtomicU64::new(crate::seats::HOST_EXIT_GRACE_MS),

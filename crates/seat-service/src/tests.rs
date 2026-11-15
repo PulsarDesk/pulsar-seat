@@ -2621,6 +2621,39 @@ fn seat1_kiosk_shell_follows_the_product() {
     assert_eq!(seat1_stops(&h), 2, "service stop cleans up");
 }
 
+/// The enable thread and the tick race on seat 1's shell: one start only (VM 2026-11-15:
+/// disable + enable started two shells).
+#[test]
+fn seat1_kiosk_shell_concurrent_syncs_start_one_shell() {
+    let h = harness_with(seat1_kiosk_config(false), None);
+    h.s.boot();
+    assert_eq!(seat1_starts(&h), 1);
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    assert_eq!(seat1_stops(&h), 1);
+    h.f.desktops.start_delay_ms.store(100, std::sync::atomic::Ordering::SeqCst);
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: true }).unwrap();
+    let before = seat1_starts(&h);
+    std::thread::scope(|sc| {
+        for _ in 0..3 {
+            sc.spawn(|| h.s.sync_seat1_kiosk());
+        }
+        sc.spawn(|| h.s.tick());
+    });
+    assert_eq!(seat1_starts(&h), before, "running already: no second shell {:?}", h.f.desktops.rec.calls());
+    assert_eq!(before, 2);
+    // Not running yet when the racers arrive: still exactly one start.
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    let stopped = seat1_starts(&h);
+    std::thread::scope(|sc| {
+        sc.spawn(|| call(&h, &mut admin(), RequestBody::SetEnabled { enabled: true }).unwrap());
+        for _ in 0..3 {
+            sc.spawn(|| h.s.sync_seat1_kiosk());
+        }
+    });
+    assert_eq!(seat1_starts(&h), stopped + 1, "{:?}", h.f.desktops.rec.calls());
+}
+
 /// Seat 1 kept as the desktop, or another session backend: no shell for seat 1.
 #[test]
 fn seat1_kiosk_shell_only_when_seat1_is_not_the_desktop() {

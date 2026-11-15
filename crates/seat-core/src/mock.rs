@@ -136,6 +136,8 @@ pub struct MockSessionBackend {
     pub start_passwords: Mutex<Vec<(SeatNumber, bool)>>,
     /// What `console_seat_away` reports (tests set it).
     pub console_seat_away: Mutex<Option<u32>>,
+    /// `start` takes this long (ms; race tests).
+    pub start_delay_ms: AtomicU64,
 }
 
 impl MockSessionBackend {
@@ -149,6 +151,7 @@ impl MockSessionBackend {
             kiosk_shells: Mutex::new(Vec::new()),
             start_passwords: Mutex::new(Vec::new()),
             console_seat_away: Mutex::new(None),
+            start_delay_ms: AtomicU64::new(0),
         }
     }
     /// The seat's session ended (a crashed kiosk shell): `query` answers `Gone`.
@@ -209,6 +212,10 @@ impl SessionBackend for MockSessionBackend {
     fn start(&self, req: &SeatStartRequest<'_>) -> BackendResult<StartStep> {
         self.rec.hit(format!("start {}", req.seat))?;
         lock(&self.start_passwords).push((req.seat, req.credentials.as_ref().is_some_and(|c| c.password.is_some())));
+        let delay = self.start_delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
         if self.kind.uses_rdp() {
             Ok(StartStep::LaunchHost(HostLaunch {
                 seat: req.seat,

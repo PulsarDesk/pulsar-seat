@@ -156,11 +156,18 @@ pub struct DesktopsBackend {
     d: SessionDeps,
     opts: DesktopsOptions,
     running: Mutex<HashMap<SeatNumber, Running>>,
+    /// Held across "is it running? launch, record" and across a stop: a second start
+    /// never launches a second copy, and no start runs while a stop is still pending.
+    seat_op: Mutex<()>,
 }
 
 impl DesktopsBackend {
     pub fn new(d: SessionDeps, opts: DesktopsOptions) -> Self {
-        Self { d, opts, running: Mutex::new(HashMap::new()) }
+        Self { d, opts, running: Mutex::new(HashMap::new()), seat_op: Mutex::new(()) }
+    }
+
+    fn seat_op(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.seat_op.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn running(&self) -> std::sync::MutexGuard<'_, HashMap<SeatNumber, Running>> {
@@ -281,6 +288,7 @@ impl SessionBackend for DesktopsBackend {
         if req.seat.is_console() && !shell {
             return Ok(StartStep::Started(console));
         }
+        let _op = self.seat_op();
         if shell {
             if self.alive(req.seat).is_some() {
                 return Ok(StartStep::Started(console));
@@ -345,6 +353,7 @@ impl SessionBackend for DesktopsBackend {
     /// `stop_timeout` either way. When a focus-sink shell had to be killed and no other
     /// sink shell runs, the one-shot release helper frees the console cursor.
     fn log_off(&self, seat: SeatNumber, _session_id: u32) -> BackendResult<()> {
+        let _op = self.seat_op();
         let entry = self.running().get(&seat).copied();
         if seat.is_console() && entry.is_none() {
             return Err(err(ErrorKind::Policy, reason::CONSOLE_SEAT, "seat 1 is the console session"));

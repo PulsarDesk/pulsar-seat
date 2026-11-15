@@ -620,6 +620,31 @@ fn desktops_kiosk_shell_seats() {
     assert!(!b.probe().unwrap().notes.contains(&"kiosk_audio_shared".to_string()));
 }
 
+/// Two concurrent starts of the same kiosk shell seat launch one shell (VM 2026-11-15:
+/// disable + enable started two seat-1 shells).
+#[test]
+fn desktops_concurrent_starts_launch_one_shell() {
+    use seat_core::config::{KioskShell, KioskShellApp};
+    let w = FakeWorld::client();
+    w.launcher.delay_ms.store(100, std::sync::atomic::Ordering::SeqCst);
+    let opts = DesktopsOptions { install_dir: r"C:\P".into(), ..DesktopsOptions::default() };
+    let b = create_backend_with(SessionBackendKind::Desktops, w.deps(), opts);
+    let mut settings = GlobalSettings::default();
+    settings.kiosk.seat1_desktop = false;
+    let mut s1 = seat_cfg(1, None);
+    s1.local_mut().unwrap().kiosk_shell = Some(KioskShell {
+        apps: vec![KioskShellApp { title: "Not".into(), command: r"C:\Windows\notepad.exe".into(), args: vec![], autostart: true, monitor: 0 }],
+        idle_reset_minutes: 0,
+    });
+    std::thread::scope(|sc| {
+        for _ in 0..2 {
+            sc.spawn(|| b.start(&req(&s1, &settings, None)).unwrap());
+        }
+    });
+    assert_eq!(w.launcher.launched.lock().unwrap().len(), 1);
+    assert_eq!(w.launcher.alive_pids().len(), 1);
+}
+
 #[test]
 fn desktops_kiosk_shell_stop_watch_and_release() {
     use crate::backends::desktops::ShellStopper;

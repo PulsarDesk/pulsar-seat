@@ -46,7 +46,12 @@ impl Service {
     }
 
     /// Start, watch, restart or stop seat 1's kiosk shell (enable, boot, tick, disable).
+    ///
+    /// Serialised by `seat1_kiosk_op`: the enable thread and the tick both call this, and
+    /// the backend start takes a while, so two unserialised calls both saw no running
+    /// shell and both started one (VM 2026-11-15).
     pub(crate) fn sync_seat1_kiosk(&self) {
+        let _op = self.seat1_kiosk_op.lock().unwrap_or_else(|p| p.into_inner());
         let now = self.now();
         let b = self.backends();
         let (wanted, k) = {

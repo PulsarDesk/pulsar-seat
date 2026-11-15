@@ -196,6 +196,8 @@ pub struct FakeLauncher {
     alive: Mutex<Vec<(SeatNumber, u32)>>,
     next: AtomicU32,
     pub fail: AtomicBool,
+    /// `launch` takes this long (ms; race tests).
+    pub delay_ms: AtomicU32,
 }
 
 impl FakeLauncher {
@@ -213,6 +215,10 @@ impl SessionLauncher for FakeLauncher {
     fn launch(&self, seat: SeatNumber, spec: &LaunchSpec) -> Result<Launched, SysError> {
         if self.fail.load(Ordering::SeqCst) {
             return Err(SysError::Win32 { api: "CreateProcessAsUserW", code: 1314 });
+        }
+        let delay = self.delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(delay)));
         }
         let pid = 1000 + self.next.fetch_add(1, Ordering::SeqCst);
         lock(&self.launched).push((seat, spec.clone()));
