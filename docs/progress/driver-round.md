@@ -28,7 +28,16 @@ testsigning + cert; clean-logged-on unchanged. End: restore testsigning-clean.
 - seat-idd: root devnode ROOT\DISPLAY\0000 (hwid Root\PulsarSeatIdd, scratchpad
   vm\mkroot.ps1); first start failed: IddCxAdapterInitAsync STATUS_INVALID_PARAMETER
   (MaxMonitorsSupported 64; >16 refused) -> fixed e340421, device OK after the fix.
-- next: minifilter, split-pad store, MSI e340421, product backends, uninstall, Verifier
+- minifilter: oem4.inf, fltmc load ok, instances on C:, a letterless volume, G: (TEST ONLY altitude 409990)
+- split-pad: oem5.inf in the store (no devnode: seat-pads creates them on demand)
+- IDD monitors: ADD_MONITOR -> IddCxMonitorCreate INVALID_PARAMETER with INDIRECT_VIRTUAL
+  (fixed efa0090: INDIRECT_WIRED), then IddCxMonitorArrival INVALID_PARAMETER with every
+  variant tried (EDID / none, random container GUID, HDMI type, WIRED_OTHER transmission,
+  ORIGIN_DRIVER, MaxDisplayPipelineRate): OPEN. Tool: example idd_monitor (6ea5c61), run as
+  SYSTEM via scheduled task PsIddTest in the VM.
+- storage test disk: scratchpad psgate.vhdx (1 GB) on SCSI 1, G: NTFS with hello.txt
+- next: MSI 6ea5c61, product backends (input kmdf_filter, storage_minifilter), uninstall,
+  Verifier, docs, restore testsigning-clean, detach/delete psgate.vhdx
 
 ## (resolved) BLOCKED (2026-11-15)
 - VM step (Stop-VM, Set-VMFirmware -EnableSecureBoot Off, bcdedit testsigning on, cert
