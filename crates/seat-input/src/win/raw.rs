@@ -11,11 +11,6 @@
 //!   legacy key / mouse messages at all (its presenter windows must not act on console
 //!   input). Under `HostTopology::DedicatedHost` this completes user-mode isolation; under
 //!   `SeatOneConsole` the console's own windows still get every key (`input_not_isolated`).
-//! - `keyboard_legacy` keeps legacy keyboard messages despite `no_legacy` (kiosk shell):
-//!   while a window of a process with a keyboard `RIDEV_NOLEGACY` registration is in the
-//!   foreground, Windows does not call `WH_KEYBOARD_LL` hooks at all (VM 2026-11-15: the
-//!   kiosk shell's hotkey guard saw no key while its focus sink held the foreground; without
-//!   the raw reader, or with the sink not in front, every key reached it).
 //! - Only one window per process may own a usage registration; the presenter must not
 //!   register raw input itself.
 //! - Injected input (`hDevice == NULL`) is ignored.
@@ -66,8 +61,6 @@ pub struct RawReaderConfig {
     pub keyboard_mouse: bool,
     pub hid_usages: Vec<(u16, u16)>,
     pub no_legacy: bool,
-    /// With `no_legacy`: still keep legacy keyboard messages (mice stay suppressed).
-    pub keyboard_legacy: bool,
 }
 
 impl RawReaderConfig {
@@ -78,25 +71,11 @@ impl RawReaderConfig {
             keyboard_mouse: true,
             hid_usages: FORWARDED_HID_USAGES.to_vec(),
             no_legacy: true,
-            keyboard_legacy: false,
         }
-    }
-    /// Kiosk shell: every device of the session (units set later), legacy mouse messages
-    /// off, legacy keyboard messages kept so the shell's own hotkey guard hook keeps being
-    /// called while the shell's focus sink is in the foreground.
-    pub fn kiosk_shell() -> Self {
-        Self { keyboard_legacy: true, ..Self::seat(&[]) }
-    }
-    /// `dwFlags` of the (keyboard, mouse) registrations.
-    pub fn keyboard_mouse_flags(&self) -> (u32, u32) {
-        let base = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
-        let mouse = if self.no_legacy { base | RIDEV_NOLEGACY } else { base };
-        let keyboard = if self.no_legacy && !self.keyboard_legacy { base | RIDEV_NOLEGACY } else { base };
-        (keyboard, mouse)
     }
     /// Activity listener: every device, nothing suppressed.
     pub fn listener() -> Self {
-        Self { units: None, keyboard_mouse: true, hid_usages: FORWARDED_HID_USAGES.to_vec(), no_legacy: false, keyboard_legacy: false }
+        Self { units: None, keyboard_mouse: true, hid_usages: FORWARDED_HID_USAGES.to_vec(), no_legacy: false }
     }
 }
 
@@ -203,9 +182,9 @@ fn run(cfg: RawReaderConfig, filter: UnitFilter, cb: RawCallback, tx: mpsc::Send
     let mut regs = Vec::new();
     let base = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
     if cfg.keyboard_mouse {
-        let (kb, mouse) = cfg.keyboard_mouse_flags();
-        regs.push(RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: kb, hwndTarget: hwnd });
-        regs.push(RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: mouse, hwndTarget: hwnd });
+        let km = if cfg.no_legacy { base | RIDEV_NOLEGACY } else { base };
+        regs.push(RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x06, dwFlags: km, hwndTarget: hwnd });
+        regs.push(RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: km, hwndTarget: hwnd });
     }
     for (page, usage) in &cfg.hid_usages {
         regs.push(RAWINPUTDEVICE { usUsagePage: *page, usUsage: *usage, dwFlags: base, hwndTarget: hwnd });
@@ -438,15 +417,6 @@ mod tests {
         let c = RawReaderConfig::seat(&["\\??\\HID#X#{Y}".into()]);
         assert!(c.units.unwrap().contains("\\\\?\\hid#x#{y}"));
         assert!(RawReaderConfig::listener().units.is_none());
-    }
-
-    #[test]
-    fn kiosk_shell_keeps_legacy_keyboard_only() {
-        let sink = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
-        assert_eq!(RawReaderConfig::seat(&[]).keyboard_mouse_flags(), (sink | RIDEV_NOLEGACY, sink | RIDEV_NOLEGACY));
-        assert_eq!(RawReaderConfig::kiosk_shell().keyboard_mouse_flags(), (sink, sink | RIDEV_NOLEGACY));
-        assert_eq!(RawReaderConfig::listener().keyboard_mouse_flags(), (sink, sink));
-        assert!(RawReaderConfig::kiosk_shell().units.is_some_and(|u| u.is_empty()));
     }
 
     /// Starts and stops a real reader (no input needed): window, registration, teardown.
