@@ -92,6 +92,7 @@ class Credential final : public ICredentialProviderCredential2 {
 public:
     enum class Kind { Seat, Switch };
     Credential(Kind kind, CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, const SessionInfo& info, Notifier* notifier);
+    bool IsSeat() const { return kind_ == Kind::Seat; }
 
     // IUnknown
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override;

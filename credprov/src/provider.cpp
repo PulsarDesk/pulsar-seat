@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "provider.h"
 
+#include "log.h"
 #include "pack.h"
 
 #include <new>
@@ -285,6 +286,7 @@ IFACEMETHODIMP Credential::UnAdvise() {
 IFACEMETHODIMP Credential::SetSelected(BOOL* autoLogon) {
     if (!autoLogon) return E_POINTER;
     *autoLogon = autoPending_ ? TRUE : FALSE;
+    Log(L"SetSelected %s tile: auto %d", kind_ == Kind::Seat ? L"seat" : L"switch", autoPending_);
     return S_OK;
 }
 
@@ -375,6 +377,7 @@ IFACEMETHODIMP Credential::CommandLinkClicked(DWORD field) {
     size_t i = field - kFieldLink0;
     if (i >= info_.switchTargets.size()) return E_INVALIDARG;
     const int seat = info_.switchTargets[i];
+    Log(L"CommandLinkClicked: switch to seat %d", seat);
     if (ServiceClient::Switch(seat)) {
         SetTitle(L"Koltuk " + std::to_wstring(seat) + L" açılıyor…");
     } else {
@@ -445,6 +448,8 @@ IFACEMETHODIMP Credential::ReportResult(NTSTATUS status, NTSTATUS subStatus, LPW
                                         CREDENTIAL_PROVIDER_STATUS_ICON* statusIcon) {
     if (statusText) *statusText = nullptr;
     if (statusIcon) *statusIcon = CPSI_NONE;
+    Log(L"ReportResult: status 0x%08lx sub 0x%08lx auto %d", static_cast<unsigned long>(status), static_cast<unsigned long>(subStatus),
+        submittedAuto_);
     if (submittedAuto_) {
         submittedAuto_ = false;
         ServiceClient::Report(status, subStatus);
@@ -468,6 +473,7 @@ IFACEMETHODIMP Credential::ReportResult(NTSTATUS status, NTSTATUS subStatus, LPW
 IFACEMETHODIMP Credential::GetUserSid(LPWSTR* sid) {
     if (!sid) return E_POINTER;
     *sid = nullptr;
+    Log(L"GetUserSid %s tile: sid %d", kind_ == Kind::Seat ? L"seat" : L"switch", !info_.userSid.empty());
     // Both kinds belong to the seat account's user tile when LogonUI lists it (the switch
     // tile too: a user-less tile does not show on a lock screen).
     if (!info_.userSid.empty()) return DupString(info_.userSid.c_str(), sid);
@@ -522,6 +528,9 @@ IFACEMETHODIMP Provider::SetUsageScenario(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpu
     if (!InLogonUI() || !IsWanted(cpus)) return E_NOTIMPL;
     cpus_ = cpus;
     info_ = CachedQuery(ScenarioOf(), false);
+    Log(L"SetUsageScenario %d: reachable %d seat %d account %d sid %d targets %zu pending %d auto %d", static_cast<int>(cpus),
+        info_.reachable, info_.seat, !info_.account.empty(), !info_.userSid.empty(), info_.switchTargets.size(), info_.pending,
+        info_.autoSubmit);
     if (!info_.reachable) return E_NOTIMPL;
     // A hand-over is under way: take part with no tiles yet, so LogonUI advises us and the
     // poll can bring the seat tile in with CredentialsChanged.
@@ -545,7 +554,10 @@ void Provider::Rebuild() {
         for (const auto& s : userSids_) {
             if (CompareStringOrdinal(s.c_str(), -1, now.userSid.c_str(), -1, TRUE) == CSTR_EQUAL) listed = true;
         }
-        if (!usersKnown_ || !listed) now.userSid.clear();
+        if (!usersKnown_ || !listed) {
+            Log(L"Rebuild: seat SID dropped (user array known %d, listed %d, %zu users)", usersKnown_, listed, userSids_.size());
+            now.userSid.clear();
+        }
     }
     // Same tiles (only the filter flags changed, or the grant went away): keep them, so a
     // status text LogonUI shows on the seat tile stays. A grant that appears late needs
@@ -621,6 +633,10 @@ IFACEMETHODIMP Provider::GetCredentialCount(DWORD* count, DWORD* defaultIndex, B
     *count = static_cast<DWORD>(tiles_.size());
     *defaultIndex = autoDefault_ ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
     *autoLogonWithDefault = autoDefault_ ? TRUE : FALSE;
+    std::wstring kinds;
+    for (auto* t : tiles_) kinds += t->IsSeat() ? L"seat " : L"switch ";
+    Log(L"GetCredentialCount scenario %d: %lu tiles [%s] default %d sid %d", static_cast<int>(cpus_), *count, kinds.c_str(),
+        autoDefault_, !info_.userSid.empty());
     return S_OK;
 }
 
@@ -638,6 +654,7 @@ IFACEMETHODIMP Provider::SetUserArray(ICredentialProviderUserArray* users) {
     if (!users) return S_OK;
     DWORD n = 0;
     if (FAILED(users->GetCount(&n))) return S_OK;
+    Log(L"SetUserArray: %lu users", n);
     try {
         for (DWORD i = 0; i < n && i < 1024; ++i) {
             ICredentialProviderUser* u = nullptr;
@@ -688,6 +705,7 @@ IFACEMETHODIMP ProviderFilter::Filter(CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, D
     // must not stall every LogonUI callback with a fresh round trip.
     const SessionInfo info = CachedQueryMaxAge(Scenario::Logon, kFilterMaxAgeMs);
     // Same predicate as the provider's seat tile: never hide when it will not show one.
+    Log(L"Filter: %lu providers, hide others %d", count, FilterHides(info));
     ApplyFilter(FilterHides(info), kProviderClsid, providers, allow, count);
     return S_OK;
 }
