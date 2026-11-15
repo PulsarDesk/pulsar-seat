@@ -428,7 +428,9 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   with the seat-host back-off and crash limit (`CRASH_LIMIT` in `CRASH_WINDOW_MS`, then
   given up until it is unwanted and wanted again), stopped with `log_off` on disable, when
   the config no longer wants it and at service shutdown. Seat 1's status still mirrors the
-  console session.
+  console session. `sync_seat1_kiosk` is serialised (`Service::seat1_kiosk_op`; the enable thread and
+  the tick both call it) and the desktops backend holds one lock across "running? launch,
+  record" and across a stop, so a seat never gets two shells (VM 2026-11-15, d203e07).
 - **Launch:** `desktops::start` for a seat with `kiosk_shell` (seat 1 only when
   `seat1_desktop` is off) launches `pulsar-seat-host --kiosk-shell --seat N --plan <hex>`
   into the console session with the console user's token, in the seat's job
@@ -526,8 +528,10 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   bisect showed the cause: while the shell's focus sink holds the foreground and the shell
   has its raw-input registration, the shell's own `WH_KEYBOARD_LL` hook is not called at
   all (re-installs do not help); without the raw reader or without the sink every key
-  reaches it. Keeping legacy keyboard messages did not change it (tried and reverted;
-  open, status.md).
+  reaches it. No registration flag combination changes it (NOLEGACY, INPUTSINK, HID
+  usages, keyboard with no flags, only DEVNOTIFY: VM bisect 2026-11-15); only having no raw
+  reader in the process does. Open: raw reader in another process or the foreground held
+  by another process's window (maintainer decision, status.md).
 - **Kiosk console apps in conhost (round 4, `seat_service::kiosk_console`):** while
   enabled with `desktops`, `seat1_desktop = false` and a kiosk-shell seat, the service sets
   the console user's `HKU\<SID>\Console\%%Startup` `DelegationConsole` and

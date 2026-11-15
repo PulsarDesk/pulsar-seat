@@ -1547,3 +1547,27 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       either, no `RIDEV_INPUTSINK`, without the HID usages; or move the raw reader into a
       separate process so the hook's process never owns the foreground registration; or
       hold the foreground with a window of another process.
+  - **Round 2026-11-15: seat-1 shell double start + raw flag bisect (maintainer order).**
+    - **Two seat-1 kiosk shells after disable + enable - FIXED, VM PASS** (d203e07). Race:
+      the enable thread and the tick both ran `sync_seat1_kiosk`; the backend start takes a
+      while and `running` was recorded only afterwards, so both saw no shell and both
+      started one; the desktops backend's own "already running?" check had the same gap.
+      Now `sync_seat1_kiosk` is serialised (`Service::seat1_kiosk_op`) and the desktops
+      backend holds one lock (`seat_op`) across "running? launch, record" and across a
+      stop (no start while a stop is pending). Tests with a delayed mock start / fake
+      launcher (the service test fails without the lock). VM (MSI d203e07, clean tree):
+      exactly one seat-1 shell after setup, after each of 3 disable / enable cycles, after
+      a service restart and 10 s later.
+    - **Raw-input flag bisect - FAIL, stopped as instructed** (temporary debug host with a
+      flags file, never committed; detection-only probe every 500 ms, no re-install).
+      Every case keeps the hook deaf while the focus sink holds the foreground: the first
+      Win press reached Start (`hook events 0 ... missed 1`), warm-ups unseen until the
+      sink lost the foreground (`sent 64 seen 34` in each run). Cases (keyboard / mouse
+      `dwFlags`): baseline 0x2130 / 0x2130; mice without NOLEGACY 0x2130 / 0x2100; no
+      INPUTSINK 0x2030 / 0x2030; keyboard without NOLEGACY 0x2100 / 0x2130; no HID usages;
+      keyboard with no flags (0, focus-following target) / 0x2130; neither NOLEGACY
+      0x2100 / 0x2100; only DEVNOTIFY, no HID 0x2000 / 0x2000. Earlier: no raw reader at
+      all passes. So the flags do not matter: an LL hook in the same process as the raw
+      reader's registration is not called while that process's window is in the
+      foreground (HYPOTHESIS, VM only). **Maintainer decision:** raw reader in a separate
+      process, or the foreground held by another process's window.
