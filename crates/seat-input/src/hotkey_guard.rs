@@ -10,8 +10,10 @@
 //! Swallowed: both Windows keys (so every Win+X hotkey that the hook can see is gone),
 //! Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc. Not swallowable from user mode: Ctrl+Alt+Del
 //! (secure attention sequence) and Win+L (handled before low-level hooks). HYPOTHESIS:
-//! never run on hardware; whether a swallowed key also disappears from the shell's raw
-//! input is unverified (the router never posts these keys anyway).
+//! Seen in the ARM64 test VM (2026-11-15): the hook is called for the seat keyboard and
+//! swallows the Windows key, and the key still reaches the shell's raw input. The kiosk
+//! router used to post it to the focused app, where DefWindowProc opened Start; since then
+//! the router drops every key [`blocks`] names.
 
 /// Virtual-key codes (winuser.h).
 pub mod vk {

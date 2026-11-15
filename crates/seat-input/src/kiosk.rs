@@ -146,6 +146,8 @@ pub mod vk {
     pub const CAPITAL: u16 = 0x14;
     pub const ESCAPE: u16 = 0x1B;
     pub const HOME: u16 = 0x24;
+    pub const LWIN: u16 = 0x5B;
+    pub const RWIN: u16 = 0x5C;
     pub const F10: u16 = 0x79;
     pub const NUMLOCK: u16 = 0x90;
     pub const SCROLL: u16 = 0x91;
@@ -785,6 +787,15 @@ impl KioskRouter {
             out.push(KioskAction::Home);
             return;
         }
+        // Windows' own hotkeys (both Windows keys, Alt+Tab, Alt+Esc, Ctrl+Esc,
+        // Ctrl+Shift+Esc) never reach a seat app: a posted lone `VK_LWIN` key-up makes
+        // DefWindowProc open Start on the console desktop (SC_TASKLIST), which the
+        // low-level hotkey guard cannot stop (VM test 2026-11-15). Their ups are not posted
+        // either (no down was recorded).
+        let mods = crate::hotkey_guard::Mods { alt: self.down(vk::MENU), ctrl: self.down(vk::CONTROL), shift: self.down(vk::SHIFT) };
+        if crate::hotkey_guard::blocks(u32::from(v), mods) {
+            return;
+        }
         let target = match self.focus {
             Some(Focus::App(top)) if q.alive(top) => Some(q.key_target(top)),
             Some(Focus::App(_)) => {
@@ -936,6 +947,8 @@ impl KeyTranslator for UsLayout {
             (0x3A, false) => vk::CAPITAL,
             (0x44, false) => vk::F10,
             (0x47, true) => vk::HOME,
+            (0x5B, true) => vk::LWIN,
+            (0x5C, true) => vk::RWIN,
             (0x4B, true) => 0x25,
             (0x4D, true) => 0x27,
             _ => 0,
@@ -1022,6 +1035,25 @@ mod tests {
     }
     fn key(sc: u16, up: bool) -> InputPacket {
         InputPacket::Key { sc, f: if up { key_flags::UP } else { 0 } }
+    }
+
+    /// The seat's Windows key and Alt+Tab never reach the app (DefWindowProc would open
+    /// Start / switch windows on the console desktop); plain keys still do.
+    #[test]
+    fn windows_hotkeys_are_never_posted_to_the_app() {
+        let mut r = KioskRouter::new(area());
+        route(&mut r, &[InputPacket::Abs { x: 0, y: 0, o: 0 }, InputPacket::Move { dx: 110, dy: 130 }], 1);
+        route(&mut r, &[InputPacket::Buttons { down: buttons::LEFT, up: 0 }, InputPacket::Buttons { down: 0, up: buttons::LEFT }], 2);
+        assert_eq!(r.focused_app(), Some(APP));
+        let win_down = InputPacket::Key { sc: 0x5B, f: key_flags::E0 };
+        let win_up = InputPacket::Key { sc: 0x5B, f: key_flags::E0 | key_flags::UP };
+        assert!(posts(&route(&mut r, &[win_down, win_up], 3)).is_empty(), "Windows key");
+        // Alt+Tab: the Alt is the app's (posted), the Tab is not.
+        let a = route(&mut r, &[key(0x38, false), key(0x0F, false), key(0x0F, true), key(0x38, true)], 4);
+        assert!(posts(&a).iter().all(|p| p.2 != usize::from(vk::TAB)), "{:?}", posts(&a));
+        // A letter still arrives.
+        let a = route(&mut r, &[key(0x1E, false), key(0x1E, true)], 5);
+        assert!(!posts(&a).is_empty());
     }
 
     #[test]
