@@ -174,3 +174,10 @@ otherwise:
   seat users (never seat 1's desktop user, never the machine default), applied when the
   kiosk shell starts and restored on stop / uninstall, journaled.
 - **`wizard_start` in the kiosk configuration**: find and fix the hang (VM round 3).
+- **Hotkey guard warm-up** (2026-11-15, before deciding on an Explorer-less kiosk console):
+  after the kiosk shell installs or re-installs its `WH_KEYBOARD_LL` hook, and when a new
+  window first takes the foreground, it injects one harmless key (`VK_F24` down + up,
+  tagged in `dwExtraInfo`) with `SendInput`; the hook swallows it so no app sees it and the
+  shell logs the hook's latency for it. If a console window in the foreground still makes
+  the first Windows-key press miss, stop and report; the Explorer-less kiosk console is
+  still not built without asking.
