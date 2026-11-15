@@ -7,7 +7,8 @@ no money for signing now; no test-signing on the dev laptop or the test PC).
 
 **State (2026-11-16): built unsigned; loaded test-signed in the Hyper-V test VM only**
 (plan.md "Driver round in the test VM", results in docs/agents/status.md: input filter and
-minifilter load and work, IddCx creates monitors after three fixes, Verifier clean).
+minifilter load and work, IddCx creates monitors after three fixes, Verifier clean; all
+four load under HVCI / Memory Integrity with no CodeIntegrity complaint, 2026-11-16).
 Before that: **(2026-11-14) built, unsigned, never loaded.** All four drivers (the IddCx one with two roles, plus the Rust pad driver) build with zero
 warnings for ARM64 and x64, Release and Debug, with Visual Studio 2026 Build Tools (18) and
 WDK / SDK 10.0.28000; infverif and the WDK code analysis pass (see Build below). Nothing is

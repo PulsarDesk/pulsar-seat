@@ -171,6 +171,12 @@ The INF lists the hardware id only in the Windows 11 (22000+) model sections.
 | Frames | Section `Global\PulsarSplit.Display.<seat>.Header`, `FrameReady` event, ring of 3 shared textures and a shared fence, with DACL `D:P(A;;GA;;;SY)` plus `(A;;GA;;;<reader SID>)` when the service named one. The old fixed LOCAL SERVICE grant is gone (Split open question display-7). The service sends `None` (SYSTEM only): the stream server runs as SYSTEM in the seat session. |
 | Modes, readiness, shutdown | `REQUEST_MODE` (pended, completed from commit-modes), `GET_STATE` / `WAIT_EVENT`, `SHUTDOWN_SEAT`; lock order `m_control` -> `m_lifecycle` -> `m_lock` (`src/remote/Driver.h`, `Adapter.cpp`). |
 
+Test VM 2026-11-16: on a root-enumerated `PulsarSplit_IndirectDisplay` devnode the role
+loads and `IddCxAdapterInitAsync` succeeds, but IddCx never finishes the
+`REMOTE_SESSION_DRIVER` adapter (no `EvtIddCxAdapterInitFinished`) and fails the device
+after about 9 s: the role really needs its device from a Remote Desktop protocol stack.
+Test tool for then: `seat-display` example `idd_remote`.
+
 Built with the local role (one `seat-idd.dll`, ARM64 + x64, zero warnings). Source lines
 marked `VERIFY` are behaviour to check on hardware, not build questions. HYPOTHESIS
 (nothing ran): the remote role loads next to the local role from one package; IddCx 1.10

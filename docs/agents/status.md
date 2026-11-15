@@ -1644,3 +1644,26 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     dark after the first plug and came back on a key press (display asleep, not a hang).
     Still not tested: frames through the seat host presenter (needs a seat with a physical
     target, i.e. a second monitor), the remote role.
+  - **Remote IDD role + HVCI in the test VM (2026-11-16, plan.md; user's go relayed).**
+    - **Remote role: NOT TESTABLE here (environment / design).** A root-enumerated
+      `PulsarSplit_IndirectDisplay` devnode starts the role: `IddCxAdapterInitAsync`
+      succeeds (IddCx version 0x1B01, the 1.10 functions present), but IddCx never calls
+      `EvtIddCxAdapterInitFinished` for the `REMOTE_SESSION_DRIVER` adapter and fails the
+      device about 9 s later (`CM_PROB_FAILED_POST_START`); IddCx traces show only the
+      init call. The role needs its device from a Remote Desktop protocol stack in the
+      seat session (README "Remote role"); that provider does not exist yet. No monitor,
+      mode list, HDR or frame channel could be reached. Tool for later: example
+      `idd_remote` (a9c1a05).
+    - **HVCI: PASS.** This Hyper-V ARM64 guest can run VBS without nested virtualization
+      (DeviceGuard AvailableSecurityProperties 1,3,5,7; the VM's
+      `ExposeVirtualizationExtensions` stays False, `VirtualizationBasedSecurityOptOut`
+      False, vTPM on). Memory Integrity turned on with the toggle's documented key
+      (`Scenarios\HypervisorEnforcedCodeIntegrity` `Enabled` = 1, no Secure Boot
+      requirement set; Secure Boot stays off for test-signing). After two reboots:
+      Kernel-Boot 153 "VBS Enabled, VSM Required, Hvci", Secure Kernel started with
+      "HvciEnabled, HvciStrictMode", `SecurityServicesRunning` 2, testsigning on.
+      Checkpoint `testsigning-hvci` (no drivers). With HVCI running all four test-signed
+      drivers install and load: `PulsarSeatInput` in the keyboard / mouse stacks,
+      minifilter attached, IddCx device OK and a virtual monitor added / removed, split-pad
+      in the store; CodeIntegrity shows no block / warning (no 3033 / 3087 / 3089, only
+      3116 / 3099 / 3085 information). No driver change needed.
