@@ -59,6 +59,11 @@ CLSIDs (also in `crates/seat-session/src/credprov.rs`): provider
   locked / selected user, so a user-less switch tile was never reachable there (VM test
   2026-11-15, Win11 26300 ARM64). Seat 1 is offered while the backend reports its own
   session waiting off the console (`console_seat_away`).
+  A seat without an account (seat 1) answers with its session user's account and SID, so
+  that user's lock screen gets a seat tile with the links (the switch tile alone was built
+  but never shown there, credprov.log). After a password-less switch the target seat's tile
+  is the default one on the logon screen it opened (`preselect`, no auto-logon). Tiles carry
+  an image drawn at run time (seat number). Diagnostics: `%ProgramData%\Pulsar Seat\logs\credprov.log`.
 - **Filter**: in the logon scenario only, and only when the service says `hide_others`
   (an armed one-time logon in this session), the answer gives a seat tile (account known:
   `SeatTileWillExist`, the same predicate the provider uses) and our provider is in the

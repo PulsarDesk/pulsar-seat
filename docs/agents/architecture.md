@@ -501,7 +501,9 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   keys, Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. Not with
   `seat1_desktop = true` (the hook cannot tell keyboards apart and would take these keys
   from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode. HYPOTHESIS:
-  untested on hardware.
+  untested on hardware. VM test 2026-11-15: the router no longer posts the keys the guard names (it
+  posted VK_LWIN to the focused app); the hook still misses some Windows-key presses in the
+  kiosk console (open, status.md).
 - **Per-process isolation (round 4 kiosk-isolation, 2026-11-14):** all kiosk seats share
   one session, so Windows hands every HID device and every raw-input record to any app of
   any seat. Kiosk apps can now load the remote kind's per-process module
@@ -1053,7 +1055,9 @@ monitor's same-container hub keeps a seat the monitor is not on.
   base_revision, force}`, `reset_config`, `import_reference`, `set_seat_password` write-only,
   `list_local_users`, `list_cpu_sets`), devices (`list_devices`, `compare_saved`,
   `identify_device`, `move_assignment`), seats (`set_enabled`, `start_seats{seats?}`
-  async, `stop_seat`, `relogon_seat`, `request_reboot`, `resolve_input_move{accept}`:
+  async, `stop_seat`, `relogon_seat`, `switch_seat{seat}` (2026-11-15, protocol 3, admin,
+  `fast_user_switch` only: console to a running seat or to seat 1's own session; no stored
+  password, the logon screen it opens preselects the seat's tile), `request_reboot`, `resolve_input_move{accept}`:
   save or drop the hotkey moves the service applied as runtime route overrides), wizard (`wizard_start{variant}`,
   `wizard_command`, `wizard_stop{save}`; 2026-11-13 additive: commands `set_main_devices{keys}`
   and `target_hit{seat}`, `wizard_progress` gains `monitors`, `confirmed`, `keys_seen`,

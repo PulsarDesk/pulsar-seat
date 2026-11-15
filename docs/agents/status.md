@@ -1408,3 +1408,39 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     opens in Windows Terminal (default terminal), which lives outside the shell's job, so
     it gets no bar button and no placement (apps that hand off to another process are a
     known limit). Per-seat audio not testable (no audio endpoint in the VM).
+  - **Fix round 2026-11-15 (maintainer: fix the open issues, verify in the VM; MSI c2409b9).**
+    Diagnostics first: babc3a7 kiosk shell log `logs\kiosk-shell-NN.log` (start facts,
+    integrity, hotkey guard counters; only guarded / modifier keys by code), 55bc4a7
+    `logs\credprov.log` (scenario, answer flags, tiles, SID, selection; no secrets),
+    fa586e3 seat host / console listener stdout + stderr to their log files.
+    - **Seat 1 lock screen links - FIXED, VM PASS (1cfb5e3).** credprov.log: the lock screen
+      runs the logon scenario and our user-less switch tile was built and tied to the SID
+      but never shown. An account-less seat now gets its session user's seat tile, which
+      carries the links ("Koltuk 2'ye geç", "Koltuk 3'e geç" on pstest's lock screen).
+    - **Switch gaps - FIXED, VM PASS (1cfb5e3, c2409b9).** `switch_seat{seat}` (protocol 3,
+      admin; seatctl `switch`); a password-less switch preselects the target's tile on the
+      logon screen it opens (seen for seat 1 via the link and seat 2 via the pipe; signing
+      pstest in on that tile reconnected session 2); a seat off the console shows
+      `signed_in`; tiles have a run-time image (seat number, seen under Sign-in options).
+    - **Hotkey guard - PARTLY FIXED, VM FAIL.** d65314d: the kiosk router posted the seat's
+      VK_LWIN to the focused app (DefWindowProc opens Start on a lone Windows key-up,
+      HYPOTHESIS from the documented SC_TASKLIST behaviour); it now drops every guarded key.
+      Start still opens on some presses: the shell's `WH_KEYBOARD_LL` hook was **not called**
+      for those events (log: hook events 0 while the raw reader counted the key), later
+      presses were caught and blocked. A standalone LL hook (no Pulsar code) blocks the
+      Windows key on the same VM, also with a raw `NOLEGACY|INPUTSINK` registration;
+      disabling the focus-sink loop did not help. HYPOTHESIS: the hook is skipped while
+      certain windows (Windows Terminal, Start) are in the foreground. Documented
+      alternative tested: per-user `NoWinKeys` policy needs an Explorer restart and then
+      blocks Win+R but not the lone Windows key. **Maintainer decision:** NoWinKeys +
+      Explorer restart for kiosk consoles, an Explorer-less kiosk console, or more hook
+      diagnostics.
+    - **Console listener 0xc0000142 - NOT FIXED, stopped (needs more rights).** VM
+      experiments (temporary switches, reverted): USER32 init of a process under the host
+      account needs `WINSTA_EXITWINDOWS` (0x40) on WinSta0 (0x4, 0x8, 0x200 alone fail; 0x40
+      passes); Medium integrity or granting the logon SID on its own process object did not
+      help. That right lets the process log the console user off, which the containment
+      design withholds. With it, the listener then fails to open the control pipe
+      (`ERROR_PIPE_BUSY`, HYPOTHESIS: pipe instance / Low-integrity client admission). The
+      SYSTEM-Low fallback keeps working. **Maintainer decision** on granting
+      WINSTA_EXITWINDOWS before the pipe part is investigated.
