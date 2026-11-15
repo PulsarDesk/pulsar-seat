@@ -36,18 +36,15 @@ testsigning + cert; clean-logged-on unchanged. End: restore testsigning-clean.
   ORIGIN_DRIVER, MaxDisplayPipelineRate): OPEN. Tool: example idd_monitor (6ea5c61), run as
   SYSTEM via scheduled task PsIddTest in the VM.
 - storage test disk: scratchpad psgate.vhdx (1 GB) on SCSI 1, G: NTFS with hello.txt
-- next: MSI 6ea5c61, product backends (input kmdf_filter, storage_minifilter), uninstall,
-  Verifier, docs, restore testsigning-clean, detach/delete psgate.vhdx
-
-## (resolved) BLOCKED (2026-11-15)
-- VM step (Stop-VM, Set-VMFirmware -EnableSecureBoot Off, bcdedit testsigning on, cert
-  into Root + TrustedPublisher, reboot) was denied by the Claude Code permission system
-  (auto mode classifier, "Undermining Oversight"). Not worked around. Needs the user to
-  allow it (permission rule) or run the script themselves:
-  scratchpad vm\vmprep.ps1 (copy kept in the report). VM untouched (clean-logged-on).
-
-## Next (after the go)
-1. vmprep (state before/after incl. VBS/HVCI), checkpoint testsigning-clean
-2. pnputil /add-driver <pkg>\*.inf /install per package; fltmc; driverquery; CodeIntegrity log
-3. product backends (kmdf_filter, pulsar_idd, storage_minifilter), U3 seats 2+3
-4. uninstall; Verifier; docs; restore testsigning-clean
+- MSI 97ff828 (clean) installed: get_backends drivers kbd_mou_filter / hid_filter 1.1,
+  idd 1.2, storage_minifilter 1.0 all "loaded"; kmdf_filter / pulsar_idd /
+  storage_minifilter "available"
+- input kmdf_filter: PASS (keyboard -> seat 2: "abc" never reached seat 1's Notepad;
+  after disable "xyz" did; shots in-typed-*.png)
+- storage gating: NOT TESTABLE in Hyper-V (inventory lists USB / SD / removable-bus
+  disks only, spec 70 3.4; Hyper-V has no USB storage passthrough); minifilter
+  loaded + attached + handshake only
+- IN PROGRESS: Driver Verifier /standard on seatinput.sys + pulsarseatstoragegate.sys
+  (VM may bugcheck: restore testsigning-clean, reinstall drivers from C:\pstest\drv)
+- then: uninstall (msiexec /x, pnputil /delete-driver /uninstall, root devnode removal),
+  docs, restore testsigning-clean, detach/delete psgate.vhdx
