@@ -55,6 +55,15 @@ static HOOK_EVENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 static HOOK_BLOCKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Packets of the seat's devices routed by the shell (to compare with the hook's events).
 static HOOK_DETAIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Detail lines of the hook (vk, flags, message, blocked), filled without blocking from the
+/// hook procedure (`try_lock`) and written by the UI tick: no I/O inside the hook.
+static HOOK_LOG: std::sync::Mutex<Vec<(u32, u32, usize, bool)>> = std::sync::Mutex::new(Vec::new());
+/// Guarded keys that reached the raw reader, i.e. the hook was not called for them.
+static HOOK_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Thread id of the hotkey guard (0 = off): the UI thread asks it to re-install the hook.
+static GUARD_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Thread message to the guard thread: unhook and hook again.
+const WM_APP_REHOOK: u32 = 0x8000 + 0x31;
 static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 use super::{
@@ -860,6 +869,14 @@ impl Shell {
         let me = unsafe { GetCurrentProcessId() };
         let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, me };
         SEAT_PACKETS.fetch_add(packets.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        let guard = GUARD_TID.load(std::sync::atomic::Ordering::Relaxed);
+        if guard != 0 && packets.iter().any(|p| matches!(p, InputPacket::Key { sc: 0x5B | 0x5C, f } if f & seat_core::backend::input::key_flags::E0 != 0 && f & seat_core::backend::input::key_flags::UP == 0)) {
+            // A Windows key the hook swallows never reaches raw input: the hook was not
+            // called for this one. Install it again (it may have been dropped).
+            HOOK_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // SAFETY: plain thread message to our guard thread.
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard, WM_APP_REHOOK, 0, 0) };
+        }
         let acts = self.router.on_packets(&packets, &q, &mut self.keys, now);
         self.run_actions(acts);
     }
@@ -867,6 +884,10 @@ impl Shell {
     /// 250 ms housekeeping.
     fn on_tick(&mut self) {
         self.tick += 1;
+        let lines = HOOK_LOG.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
+        for (vk, flags, msg, block) in lines {
+            klog!("hook: vk 0x{vk:02x} flags 0x{flags:x} msg 0x{msg:x} block {block}");
+        }
         let now = self.now();
         if self.policy == FocusPolicy::SinkLeader {
             self.keep_focus();
@@ -892,7 +913,15 @@ impl Shell {
             let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), SEAT_PACKETS.load(Relaxed));
             if now != self.diag_last {
                 self.diag_last = now;
-                klog!("counters: hook events {} blocked {}, seat packets {}, leader {}, clipped {}", now.0, now.1, now.2, self.leader, self.clipped);
+                klog!(
+                    "counters: hook events {} blocked {} missed {}, seat packets {}, leader {}, clipped {}",
+                    now.0,
+                    now.1,
+                    HOOK_MISSES.load(Relaxed),
+                    now.2,
+                    self.leader,
+                    self.clipped
+                );
             }
         }
     }
@@ -1304,8 +1333,12 @@ unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: L
         // Detail only for the guarded / modifier keys (never letters, digits or other
         // keys that could be typed text, e.g. a password into a kiosk app).
         let system_key = matches!(k.vkCode, 0x09 | 0x10..=0x12 | 0x1B | 0x5B | 0x5C | 0xA0..=0xA5);
-        if (block || system_key) && n < 4096 && HOOK_DETAIL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64 {
-            klog!("hook: vk 0x{:02x} scan 0x{:02x} flags 0x{:x} msg 0x{:x} block {block}", k.vkCode, k.scanCode, k.flags, wparam);
+        if (block || system_key)
+            && n < 4096
+            && HOOK_DETAIL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64
+            && let Ok(mut l) = HOOK_LOG.try_lock()
+        {
+            l.push((k.vkCode, k.flags, wparam, block));
         }
         if block {
             HOOK_BLOCKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1388,20 +1421,42 @@ fn start_hotkey_guard() -> Option<u32> {
     std::thread::Builder::new()
         .name("hotkey-guard".into())
         .spawn(move || {
+            // Time-critical: Windows waits for a low-level hook only LowLevelHooksTimeout and
+            // then passes the key on; while the shell starts its apps a normal-priority
+            // thread missed the first Windows key (VM test 2026-11-15).
+            // SAFETY: own thread.
+            unsafe {
+                windows_sys::Win32::System::Threading::SetThreadPriority(
+                    windows_sys::Win32::System::Threading::GetCurrentThread(),
+                    windows_sys::Win32::System::Threading::THREAD_PRIORITY_TIME_CRITICAL,
+                )
+            };
             // SAFETY: low-level hook served by this thread's message loop; module handle of
             // our image.
-            let h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0) };
+            let mut h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0) };
             if h.is_null() {
                 klog!("hotkey guard not installed: {}", std::io::Error::last_os_error());
                 let _ = tx.send(None);
                 return;
             }
             // SAFETY: plain call.
-            let _ = tx.send(Some(unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() }));
+            // SAFETY: plain call.
+            let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+            GUARD_TID.store(tid, std::sync::atomic::Ordering::Relaxed);
+            let _ = tx.send(Some(tid));
             // SAFETY: standard message loop of this thread; ends on WM_QUIT or an error.
             unsafe {
                 let mut msg: MSG = std::mem::zeroed();
                 while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    if msg.hwnd.is_null() && msg.message == WM_APP_REHOOK {
+                        UnhookWindowsHookEx(h);
+                        h = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0);
+                        if h.is_null() {
+                            klog!("hotkey guard not re-installed: {}", std::io::Error::last_os_error());
+                            return;
+                        }
+                        continue;
+                    }
                     DispatchMessageW(&msg);
                 }
                 UnhookWindowsHookEx(h);
