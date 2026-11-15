@@ -65,9 +65,7 @@ static GUARD_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::n
 /// Thread message to the guard thread: unhook and hook again.
 const WM_APP_REHOOK: u32 = 0x8000 + 0x31;
 static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Thread message to the guard thread: inject the warm-up key (a new foreground window).
-const WM_APP_WARMUP: u32 = 0x8000 + 0x32;
-/// Warm-up keys injected (down + up = one) and seen by the hook (key-down only).
+/// Warm-up (probe) keys injected (down + up = one) and seen by the hook (key-down only).
 static WARMUP_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WARMUP_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Time of the last injection and the hook's latency for it (µs on [`guard_clock_us`]).
@@ -76,6 +74,8 @@ static WARMUP_LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static WARMUP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Injections `SendInput` refused (e.g. UIPI: a higher-integrity foreground window).
 static WARMUP_FAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Hook re-installs the probe asked for (the hook missed a probe key).
+static PROBE_REINSTALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Monotonic µs since the first call (the guard's warm-up latency clock).
 fn guard_clock_us() -> u64 {
@@ -84,9 +84,9 @@ fn guard_clock_us() -> u64 {
 }
 
 /// Injects the guard's warm-up key (`seat_input::hotkey_guard::WARMUP_VK` down + up, tagged
-/// `WARMUP_TAG`), which the hook swallows: the hook's first real call is then not a
-/// Windows-key press. Called on the guard thread only.
-fn send_warmup() {
+/// `WARMUP_TAG`), which the hook swallows. Called on the probe thread only. Returns whether
+/// `SendInput` took both events.
+fn send_warmup() -> bool {
     use seat_input::hotkey_guard::{WARMUP_TAG, WARMUP_VK};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput};
     let key = |flags| INPUT {
@@ -99,8 +99,48 @@ fn send_warmup() {
     let n = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
     if n as usize == inputs.len() {
         WARMUP_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
     } else {
         WARMUP_FAILED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        false
+    }
+}
+
+/// Probe poll interval: foreground changes and probe timeouts are seen within this.
+const PROBE_POLL_MS: u64 = 50;
+
+/// Self-healing probe of the hotkey guard (`seat_input::hotkey_guard::Probe`): a warm-up
+/// key every 2 s and after each foreground change; a probe key the hook does not see within
+/// 100 ms gets the hook re-installed. Ends when the guard thread ends.
+fn run_probe(guard_tid: u32) {
+    use seat_input::hotkey_guard::{PROBE_TIMEOUT_MS, Probe, ProbeStep};
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut probe = Probe::default();
+    let mut fg_last = 0isize;
+    while GUARD_TID.load(Relaxed) == guard_tid {
+        std::thread::sleep(std::time::Duration::from_millis(PROBE_POLL_MS));
+        let now = guard_clock_us() / 1000;
+        // SAFETY: no arguments.
+        let fg = unsafe { GetForegroundWindow() } as isize;
+        let fg_changed = fg != fg_last;
+        fg_last = fg;
+        match probe.step(now, WARMUP_SEEN.load(Relaxed), fg_changed) {
+            ProbeStep::Wait => {}
+            ProbeStep::Send => {
+                let seen = WARMUP_SEEN.load(Relaxed);
+                if send_warmup() {
+                    probe.sent(now, seen);
+                } else {
+                    probe.send_failed(now);
+                }
+            }
+            ProbeStep::Reinstall => {
+                let n = PROBE_REINSTALLS.fetch_add(1, Relaxed) + 1;
+                klog!("probe: the hook did not see the warm-up key within {PROBE_TIMEOUT_MS} ms, re-installing it (#{n})");
+                // SAFETY: plain thread message to our guard thread.
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard_tid, WM_APP_REHOOK, 0, 0) };
+            }
+        }
     }
 }
 
@@ -437,13 +477,8 @@ struct Shell {
     modified_threads: HashSet<u32>,
     /// Caption / border drag in progress: `(top, hit-test code, rect at the press)`.
     drag: Option<(u64, i32, Rect)>,
-    /// Last logged (hook events, hook blocked, seat packets).
-    diag_last: (u64, u64, u64),
-    /// Last logged warm-up (sent, seen, failed).
-    warm_last: (u64, u64, u64),
-    /// Foreground window at the last tick and the windows that already had a warm-up.
-    fg_last: isize,
-    fg_warmed: HashSet<isize>,
+    /// Last logged (hook events, hook blocked, seat packets, probe re-installs).
+    diag_last: (u64, u64, u64, u64),
 }
 
 thread_local! {
@@ -935,7 +970,6 @@ impl Shell {
         if self.policy == FocusPolicy::SinkLeader {
             self.keep_focus();
         }
-        self.warm_up_guard();
         if let Some(p) = job_pids(self.job) {
             self.pids = p;
         }
@@ -954,54 +988,25 @@ impl Shell {
         }
         if self.tick % 40 == 0 {
             use std::sync::atomic::Ordering::Relaxed;
-            let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), SEAT_PACKETS.load(Relaxed));
+            // Probe keys alone (every 2 s) do not make a line; re-installs do.
+            let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), SEAT_PACKETS.load(Relaxed), PROBE_REINSTALLS.load(Relaxed));
             if now != self.diag_last {
                 self.diag_last = now;
                 klog!(
-                    "counters: hook events {} blocked {} missed {}, seat packets {}, leader {}, clipped {}",
+                    "counters: hook events {} blocked {} missed {}, seat packets {}, leader {}, clipped {}, probe sent {} seen {} failed {} re-installs {} latency max {} us",
                     now.0,
                     now.1,
                     HOOK_MISSES.load(Relaxed),
                     now.2,
                     self.leader,
-                    self.clipped
+                    self.clipped,
+                    WARMUP_SENT.load(Relaxed),
+                    WARMUP_SEEN.load(Relaxed),
+                    WARMUP_FAILED.load(Relaxed),
+                    now.3,
+                    WARMUP_MAX_US.load(Relaxed)
                 );
             }
-        }
-    }
-
-    /// Hotkey guard warm-up: a window that takes the foreground for the first time gets one
-    /// warm-up key (VM 2026-11-15: the first Windows-key press under a new console window
-    /// reached the hook late and Start opened). Logs warm-up counters when they change.
-    fn warm_up_guard(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let guard = GUARD_TID.load(Relaxed);
-        if guard == 0 {
-            return;
-        }
-        // SAFETY: no arguments.
-        let fg = unsafe { GetForegroundWindow() } as isize;
-        if fg != self.fg_last {
-            self.fg_last = fg;
-            if self.fg_warmed.len() > 256 {
-                self.fg_warmed.clear();
-            }
-            if fg != 0 && self.fg_warmed.insert(fg) {
-                // SAFETY: plain thread message to our guard thread.
-                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard, WM_APP_WARMUP, 0, 0) };
-            }
-        }
-        let now = (WARMUP_SENT.load(Relaxed), WARMUP_SEEN.load(Relaxed), WARMUP_FAILED.load(Relaxed));
-        if now != self.warm_last {
-            self.warm_last = now;
-            klog!(
-                "warm-up: sent {} seen {} failed {}, hook latency last {} us max {} us",
-                now.0,
-                now.1,
-                now.2,
-                WARMUP_LAST_US.load(Relaxed),
-                WARMUP_MAX_US.load(Relaxed)
-            );
         }
     }
 
@@ -1534,7 +1539,6 @@ fn start_hotkey_guard() -> Option<u32> {
             let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
             GUARD_TID.store(tid, std::sync::atomic::Ordering::Relaxed);
             let _ = tx.send(Some(tid));
-            send_warmup();
             // SAFETY: standard message loop of this thread; ends on WM_QUIT or an error.
             unsafe {
                 let mut msg: MSG = std::mem::zeroed();
@@ -1544,22 +1548,21 @@ fn start_hotkey_guard() -> Option<u32> {
                         h = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0);
                         if h.is_null() {
                             klog!("hotkey guard not re-installed: {}", std::io::Error::last_os_error());
+                            GUARD_TID.store(0, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
-                        send_warmup();
-                        continue;
-                    }
-                    if msg.hwnd.is_null() && msg.message == WM_APP_WARMUP {
-                        send_warmup();
                         continue;
                     }
                     DispatchMessageW(&msg);
                 }
                 UnhookWindowsHookEx(h);
             }
+            GUARD_TID.store(0, std::sync::atomic::Ordering::Relaxed);
         })
         .ok()?;
-    rx.recv().ok().flatten()
+    let tid = rx.recv().ok().flatten()?;
+    std::thread::Builder::new().name("hotkey-probe".into()).spawn(move || run_probe(tid)).ok();
+    Some(tid)
 }
 
 fn run_shell(args: ShellArgs) -> i32 {
@@ -1661,10 +1664,7 @@ fn run_shell(args: ShellArgs) -> i32 {
         audio: KioskAudio::new(seat_media::create_app_endpoint_policy()),
         modified_threads: HashSet::new(),
         drag: None,
-        diag_last: (0, 0, 0),
-        warm_last: (0, 0, 0),
-        fg_last: 0,
-        fg_warmed: HashSet::new(),
+        diag_last: (0, 0, 0, 0),
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {

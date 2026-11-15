@@ -40,6 +40,66 @@ pub fn is_warmup(vk_code: u32, extra_info: usize) -> bool {
     vk_code == WARMUP_VK && extra_info == WARMUP_TAG
 }
 
+/// Probe period: one warm-up key every 2 s while the guard runs.
+pub const PROBE_PERIOD_MS: u64 = 2_000;
+/// The hook must see a probe key-down within this time, else it is re-installed.
+pub const PROBE_TIMEOUT_MS: u64 = 100;
+
+/// What the probe thread does now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeStep {
+    /// Nothing due (or a probe key is still on its way).
+    Wait,
+    /// Inject a warm-up key, then call [`Probe::sent`] (or [`Probe::send_failed`]).
+    Send,
+    /// The hook missed the last probe key: re-install it. The next step sends at once.
+    Reinstall,
+}
+
+/// Self-healing hook probe (VM 2026-11-15: the hook stopped being called shortly after the
+/// shell started and only a re-install revived it). Pure state machine; the caller passes
+/// a millisecond clock and the number of warm-up key-downs the hook has seen so far.
+#[derive(Debug, Default)]
+pub struct Probe {
+    /// (sent at, seen count that proves the hook got it).
+    pending: Option<(u64, u64)>,
+    last_sent: Option<u64>,
+    /// A foreground change asked for a probe that could not be sent yet.
+    fg_due: bool,
+}
+
+impl Probe {
+    pub fn step(&mut self, now_ms: u64, seen: u64, fg_changed: bool) -> ProbeStep {
+        self.fg_due |= fg_changed;
+        if let Some((at, want)) = self.pending {
+            if seen >= want {
+                self.pending = None;
+            } else if now_ms.saturating_sub(at) >= PROBE_TIMEOUT_MS {
+                self.pending = None;
+                self.last_sent = None;
+                return ProbeStep::Reinstall;
+            } else {
+                return ProbeStep::Wait;
+            }
+        }
+        let due = self.fg_due || self.last_sent.is_none_or(|t| now_ms.saturating_sub(t) >= PROBE_PERIOD_MS);
+        if due { ProbeStep::Send } else { ProbeStep::Wait }
+    }
+
+    /// A probe key was injected; `seen` is the hook's count just before the injection.
+    pub fn sent(&mut self, now_ms: u64, seen: u64) {
+        self.pending = Some((now_ms, seen + 1));
+        self.last_sent = Some(now_ms);
+        self.fg_due = false;
+    }
+
+    /// The injection was refused (e.g. UIPI): try again one period later, not in a loop.
+    pub fn send_failed(&mut self, now_ms: u64) {
+        self.last_sent = Some(now_ms);
+        self.fg_due = false;
+    }
+}
+
 /// Modifier state at the time of the key (from the hook's flags and `GetAsyncKeyState`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Mods {
@@ -89,5 +149,46 @@ mod tests {
         assert!(!is_warmup(vk::LWIN, WARMUP_TAG), "the tag alone is not enough");
         assert!(!is_warmup(0x41, WARMUP_TAG));
         assert!(!blocks(WARMUP_VK, Mods::default()), "F24 is not a guarded hotkey");
+    }
+
+    #[test]
+    fn probe_sends_periodically_and_on_foreground_changes() {
+        let mut p = Probe::default();
+        assert_eq!(p.step(0, 0, false), ProbeStep::Send, "first probe at once");
+        p.sent(0, 0);
+        assert_eq!(p.step(10, 0, false), ProbeStep::Wait, "still on its way");
+        assert_eq!(p.step(20, 1, false), ProbeStep::Wait, "seen, not due yet");
+        assert_eq!(p.step(1_999, 1, false), ProbeStep::Wait);
+        assert_eq!(p.step(2_000, 1, false), ProbeStep::Send, "period");
+        p.sent(2_000, 1);
+        assert_eq!(p.step(2_030, 2, false), ProbeStep::Wait);
+        assert_eq!(p.step(2_100, 2, true), ProbeStep::Send, "foreground change");
+        p.sent(2_100, 2);
+        // A foreground change while a probe is pending is kept for later.
+        assert_eq!(p.step(2_110, 2, true), ProbeStep::Wait);
+        assert_eq!(p.step(2_120, 3, false), ProbeStep::Send);
+    }
+
+    #[test]
+    fn probe_reinstalls_when_the_hook_misses_the_key() {
+        let mut p = Probe::default();
+        assert_eq!(p.step(0, 5, false), ProbeStep::Send);
+        p.sent(0, 5);
+        assert_eq!(p.step(99, 5, false), ProbeStep::Wait);
+        assert_eq!(p.step(100, 5, false), ProbeStep::Reinstall, "not seen within 100 ms");
+        assert_eq!(p.step(101, 5, false), ProbeStep::Send, "re-install is verified at once");
+        p.sent(101, 5);
+        assert_eq!(p.step(150, 6, false), ProbeStep::Wait, "seen after the re-install");
+        assert_eq!(p.step(2_100, 6, false), ProbeStep::Wait);
+        assert_eq!(p.step(2_101, 6, false), ProbeStep::Send);
+    }
+
+    #[test]
+    fn probe_does_not_spin_when_injection_fails() {
+        let mut p = Probe::default();
+        assert_eq!(p.step(0, 0, true), ProbeStep::Send);
+        p.send_failed(0);
+        assert_eq!(p.step(50, 0, false), ProbeStep::Wait);
+        assert_eq!(p.step(2_000, 0, false), ProbeStep::Send);
     }
 }
