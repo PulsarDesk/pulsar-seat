@@ -518,9 +518,13 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode. HYPOTHESIS:
   untested on hardware. VM test 2026-11-15: the router no longer posts the keys the guard names (it
   posted VK_LWIN to the focused app); the hook still misses some Windows-key presses in the
-  kiosk console (open, status.md). Round 4: with the shell in the foreground no press was
-  missed; with a console window in the foreground the first press after the shell starts
-  can still reach Start (hook called late, HYPOTHESIS: hook timeout).
+  kiosk console (open, status.md). Warm-up (9f488be): after installing / re-installing the
+  hook and when a window first takes the foreground, the shell injects `VK_F24` down + up
+  with `dwExtraInfo = hotkey_guard::WARMUP_TAG`; the hook swallows exactly that key and
+  the shell logs `warm-up: sent / seen / failed` and the hook latency. VM 2026-11-15: the
+  first press after the shell starts still reaches Start with any foreground window; the
+  warm-up counters show the hook stops being called ~100 ms after the start (when the
+  focus sink takes the foreground) until it is re-installed (open, status.md).
 - **Kiosk console apps in conhost (round 4, `seat_service::kiosk_console`):** while
   enabled with `desktops`, `seat1_desktop = false` and a kiosk-shell seat, the service sets
   the console user's `HKU\<SID>\Console\%%Startup` `DelegationConsole` and

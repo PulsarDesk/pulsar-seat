@@ -1488,13 +1488,30 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       most 3 s for EOF after the reply (`helper_output_open`). VM: `wizard_start` answers
       `ack`; F1 and 1 counted as key presses, the keyboard was assigned to seat 1 and the
       wizard moved to the mouse step; `wizard_stop` acked.
-    - **Kiosk hotkey guard - improved, still one miss with a console foreground.** Shell
-      in the foreground (apps not autostarted, shell restarted): 66 presses, 132 blocked,
-      **0 missed**, no Run dialog, no Explorer window. cmd in conhost in the foreground:
-      130 blocked, **1 missed**: again the first Windows-key press after the shell
-      started opened Start; the hook logged its key-down and key-up in the same
-      millisecond, i.e. it was called late. No Run dialog or Explorer window opened.
-      HYPOTHESIS: the first low-level hook call after a console window takes the
-      foreground exceeds the hook timeout, so Windows passes the key on (seen with both
-      Windows Terminal and conhost). Next option (Explorer-less kiosk console) still needs
-      the maintainer's go.
+    - **Kiosk hotkey guard - still one miss (corrected by the warm-up round below).** cmd
+      in conhost in the foreground: 130 blocked, **1 missed** (the first Windows-key press
+      after the shell started). The "shell in the foreground, 0 missed" run of this round
+      is **invalid**: Start was still open from the checkpoint / the run before, so the
+      presses went to Start. The same-millisecond timestamps of key-down and key-up do not
+      mean a late hook call: hook detail lines carry the time the UI tick wrote them.
+  - **Warm-up round 2026-11-15 (maintainer: try a hook warm-up first; MSI 9f488be, clean
+    tree).** 9f488be: after installing / re-installing the hook and when a window first
+    takes the foreground, the shell injects `VK_F24` down + up tagged `WARMUP_TAG` in
+    `dwExtraInfo`; the hook swallows exactly that key (`hotkey_guard::is_warmup`, unit
+    test) and the shell logs `warm-up: sent / seen / failed, hook latency`.
+    **VM: FAIL, stopped as instructed.** With Start closed before each part (checked by
+    screenshot): cmd (conhost) in the foreground: 130 blocked, **1 missed**, Start opened;
+    shell in the foreground (apps not autostarted, shell restarted): 130 blocked, **1
+    missed**. No Run dialog or Explorer window in either. Log evidence (same in both
+    shells): warm-up 1 right after the install was seen (latency 24-30 us); ~100 ms later
+    the focus sink took the foreground ("seat 1 holds the focus sink"), warm-up 2 sent for
+    that foreground change was **never seen** (`sent 2 seen 1`); the Esc presses and the
+    first Windows key after it were not seen either (`hook events 0 ... missed 1, seat
+    packets 4`); after the miss-triggered re-install (warm-up 3, seen in 14-26 us) every
+    key reached the hook. So the hook is not slow on its first call: it stops being
+    called shortly after the shell starts and stays deaf until it is re-installed.
+    HYPOTHESIS: something around the focus sink taking the foreground at start (or the
+    shell's start-up, e.g. the raw-input registration) makes Windows drop the hook
+    silently. A cheap follow-up (not built, needs a go): re-install the hook once after
+    the start-up settles, and/or on a timer, and check with the warm-up counters.
+    Earlier "0 missed" runs with Start already open are not evidence either way.
