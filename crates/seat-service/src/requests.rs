@@ -758,9 +758,13 @@ impl Service {
             log::info("product enabled");
             self.spawn(|s| {
                 let settings = s.lock().config.settings.clone();
-                s.sync_listener_plan();
-                if let Err(e) = s.backends().session.prepare_host(&settings) {
-                    log::error_id(crate::eventid::BACKEND_FAILED, &format!("prepare_host: {e}"));
+                // A fallback chosen earlier (at boot before the console user signed in) may
+                // be gone now; re-selecting prepares the new session backend itself.
+                if !s.reselect_after_fallback() {
+                    s.sync_listener_plan();
+                    if let Err(e) = s.backends().session.prepare_host(&settings) {
+                        log::error_id(crate::eventid::BACKEND_FAILED, &format!("prepare_host: {e}"));
+                    }
                 }
                 s.refresh_inventory();
                 s.refresh_console_seat();

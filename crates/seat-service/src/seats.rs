@@ -916,6 +916,13 @@ impl Service {
         if seat1_away && change == SessionChange::ConsoleConnect && !dedicated {
             self.refresh_console_seat();
         }
+        if console_event && change == SessionChange::Logon && self.lock().config.settings.enabled {
+            // `desktops` needs a signed-in console: a fallback chosen before this logon
+            // (boot with auto-logon) is reconsidered now.
+            self.spawn(|s| {
+                s.reselect_after_fallback();
+            });
+        }
         if console_event && change == SessionChange::Logon && self.take_seat_one_wait() {
             // `after_seat_one_logon`: somebody signed in at the console (the host account
             // under `dedicated_host`).

@@ -2654,6 +2654,40 @@ fn seat1_kiosk_shell_concurrent_syncs_start_one_shell() {
     assert_eq!(seat1_starts(&h), stopped + 1, "{:?}", h.f.desktops.rec.calls());
 }
 
+/// A session-backend fallback chosen while the console had no user (boot before the
+/// auto-logon) is reconsidered on enable and on a console logon (VM 2026-11-15).
+#[test]
+fn a_console_sign_in_fallback_is_reconsidered_on_enable_and_logon() {
+    use seat_core::backend::{Availability, SessionBackendKind};
+    let mut c = seat1_kiosk_config(true);
+    c.settings.enabled = false;
+    let h = harness_with(c, None);
+    let not_ready = || Availability::NeedsSetup { what: "console_sign_in".into() };
+    *h.f.desktops.availability.lock().unwrap() = not_ready();
+    h.s.reselect_backends();
+    h.s.boot();
+    assert_eq!(h.s.status().active.session, SessionBackendKind::FastUserSwitch, "fallback while nobody is signed in");
+    *h.f.desktops.availability.lock().unwrap() = Availability::Available;
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: true }).unwrap();
+    assert_eq!(h.s.status().active.session, SessionBackendKind::Desktops, "enable re-selects");
+    assert!(!h.s.status().fallback_notes.iter().any(|n| n.starts_with("session:")), "{:?}", h.s.status().fallback_notes);
+
+    // Enabled, fallback again (console signed out), then the console user signs in.
+    *h.f.desktops.availability.lock().unwrap() = not_ready();
+    h.s.reselect_backends();
+    assert_eq!(h.s.status().active.session, SessionBackendKind::FastUserSwitch);
+    *h.f.desktops.availability.lock().unwrap() = Availability::Available;
+    h.s.on_session_change(crate::seats::SessionChange::Logon, 1);
+    assert_eq!(h.s.status().active.session, SessionBackendKind::Desktops, "console logon re-selects");
+
+    // A fallback that is still there (the mock's unbuilt drive-letter gate): the same
+    // kinds would come back, so the working backends are not rebuilt.
+    let before = h.s.backends();
+    h.s.on_session_change(crate::seats::SessionChange::Logon, 1);
+    assert!(Arc::ptr_eq(&before.session, &h.s.backends().session));
+}
+
 /// Seat 1 kept as the desktop, or another session backend: no shell for seat 1.
 #[test]
 fn seat1_kiosk_shell_only_when_seat1_is_not_the_desktop() {

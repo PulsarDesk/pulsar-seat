@@ -942,6 +942,26 @@ impl Service {
         self.lock().inventory.set_isolation(HashMap::new());
     }
 
+    /// Backends chosen with a fallback are chosen again once its reason may be gone: on
+    /// enable and on a console logon (VM 2026-11-15: the service starts before the console
+    /// user's auto-logon, `desktops` then needs a signed-in console and the service fell
+    /// back to `fast_user_switch` for good, so a later enable never got `desktops` and its
+    /// input / display backends). Re-selects only when a fresh selection differs in a
+    /// backend kind, so working backends are not rebuilt. Returns whether `prepare_host` ran.
+    pub(crate) fn reselect_after_fallback(&self) -> bool {
+        let old = self.backends();
+        if old.fallback_notes.is_empty() {
+            return false;
+        }
+        let settings = self.lock().config.settings.clone();
+        let fresh = backends::select(self.factory.as_ref(), &settings);
+        if backends::same_kinds(&old, &fresh) {
+            return false;
+        }
+        log::info(&format!("backends re-selected after a fallback: {:?} -> {:?}", old.fallback_notes, fresh.fallback_notes));
+        self.reselect_backends()
+    }
+
     /// Re-select backends after a backend setting changed.
     /// A gate that leaves the active set (unticked, or no longer available) is reverted
     /// first (spec 70 §5.2(2) "restored on disable", §5.2(5)): nothing would restore its

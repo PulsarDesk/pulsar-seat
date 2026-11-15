@@ -197,6 +197,16 @@ pub fn select(f: &dyn BackendFactory, settings: &GlobalSettings) -> Backends {
     Backends { session, display, input, audio, gates, fallback_notes: notes }
 }
 
+/// Same backend kinds in every role (session, display, input, audio, gates).
+pub fn same_kinds(a: &Backends, b: &Backends) -> bool {
+    let gates = |x: &Backends| x.gates.iter().map(|g| g.kind()).collect::<Vec<_>>();
+    a.session.kind() == b.session.kind()
+        && a.display.kind() == b.display.kind()
+        && a.input.kind() == b.input.kind()
+        && a.audio.kind() == b.audio.kind()
+        && gates(a) == gates(b)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pick<K: Copy + PartialEq + Serialize, T: ?Sized>(
     wanted: K,
