@@ -154,3 +154,8 @@ otherwise:
 - **Remote seat microphone** (pulsar-host contract §3.8, `mic` capability): accepted. The
   matching change in pulsar-desktop is still to be made; until then Pulsar seats report
   `mic = unsupported`.
+- **Seat 1 kiosk shell lifecycle** (VM test 2026-11-15, open issue 2): option (a). When the
+  product is enabled and `settings.kiosk.seat1_desktop = false` and seat 1 has a
+  `kiosk_shell`, the service itself starts seat 1's kiosk shell under the same rules as the
+  other kiosk seats: start on enable and at boot, stop on disable, restart after a crash,
+  clean up on stop. Seat 1 stays the console seat in every other respect.
