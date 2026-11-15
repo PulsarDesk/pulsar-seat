@@ -132,4 +132,4 @@ NTSTATUS PsiddCreateSection(PSIDD_MONITOR *m, const uint16_t *readerSid);
 void PsiddCloseSection(PSIDD_MONITOR *m);
 NTSTATUS PsiddStartSwapChain(PSIDD_MONITOR *m, IDDCX_MONITOR monitor, const IDARG_IN_SETSWAPCHAIN *args);
 void PsiddStopSwapChain(PSIDD_MONITOR *m);
-DISPLAYCONFIG_VIDEO_SIGNAL_INFO PsiddSignalInfo(const PSIDD_MODE *mode);
+DISPLAYCONFIG_VIDEO_SIGNAL_INFO PsiddSignalInfo(const PSIDD_MODE *mode, BOOL monitorMode);

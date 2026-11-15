@@ -157,7 +157,11 @@ NTSTATUS PsiddCommitModes(IDDCX_ADAPTER Adapter, const IDARG_IN_COMMITMODES *pIn
 
 /* ---- modes ------------------------------------------------------------------------- */
 
-DISPLAYCONFIG_VIDEO_SIGNAL_INFO PsiddSignalInfo(const PSIDD_MODE *mode)
+/* monitorMode: a monitor mode (ParseMonitorDescription / default modes) has
+ * vSyncFreqDivider 0, a target mode 1. With 1 in the monitor modes IddCxMonitorArrival
+ * failed with STATUS_INVALID_PARAMETER (test VM 2026-11-16); the WDK IndirectDisplay
+ * sample, read as documentation, sets the same values. */
+DISPLAYCONFIG_VIDEO_SIGNAL_INFO PsiddSignalInfo(const PSIDD_MODE *mode, BOOL monitorMode)
 {
     DISPLAYCONFIG_VIDEO_SIGNAL_INFO s;
     uint32_t mhz = mode->RefreshMilliHz ? mode->RefreshMilliHz : 60000;
@@ -173,7 +177,7 @@ DISPLAYCONFIG_VIDEO_SIGNAL_INFO PsiddSignalInfo(const PSIDD_MODE *mode)
     RtlZeroMemory(&s, sizeof(s));
     s.totalSize.cx = s.activeSize.cx = mode->Width;
     s.totalSize.cy = s.activeSize.cy = mode->Height;
-    s.AdditionalSignalInfo.vSyncFreqDivider = 1;
+    s.AdditionalSignalInfo.vSyncFreqDivider = monitorMode ? 0 : 1;
     s.AdditionalSignalInfo.videoStandard = 255;
     s.vSyncFreq.Numerator = mhz;
     s.vSyncFreq.Denominator = 1000;
@@ -318,7 +322,7 @@ static NTSTATUS FillMonitorModes(const PSIDD_MODE *list, uint32_t listCount, UIN
     for (i = 0; i < n; i++) {
         out[i].Size = sizeof(IDDCX_MONITOR_MODE);
         out[i].Origin = IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR;
-        out[i].MonitorVideoSignalInfo = PsiddSignalInfo(&modes[i]);
+        out[i].MonitorVideoSignalInfo = PsiddSignalInfo(&modes[i], TRUE);
     }
     return STATUS_SUCCESS;
 }
@@ -371,7 +375,7 @@ NTSTATUS PsiddQueryTargetModes(IDDCX_MONITOR Monitor, const IDARG_IN_QUERYTARGET
         IDDCX_TARGET_MODE *t = &pInArgs->pTargetModes[i];
         RtlZeroMemory(t, sizeof(*t));
         t->Size = sizeof(*t);
-        t->TargetVideoSignalInfo.targetVideoSignalInfo = PsiddSignalInfo(&modes[i]);
+        t->TargetVideoSignalInfo.targetVideoSignalInfo = PsiddSignalInfo(&modes[i], FALSE);
     }
     return STATUS_SUCCESS;
 }
