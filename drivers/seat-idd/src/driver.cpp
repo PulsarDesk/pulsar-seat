@@ -514,7 +514,9 @@ static NTSTATUS AddMonitor(PSIDD_DEVICE_CONTEXT *ctx, const PSIDD_ADD_MONITOR *r
 
     RtlZeroMemory(&info, sizeof(info));
     info.Size = sizeof(info);
-    info.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL;
+    /* INDIRECT_VIRTUAL makes IddCxMonitorCreate fail with STATUS_INVALID_PARAMETER on this
+     * (non remote-session) adapter; INDIRECT_WIRED is accepted (VM 2026-11-15). */
+    info.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED;
     info.ConnectorIndex = m->ConnectorIndex;
     info.MonitorDescription.Size = sizeof(info.MonitorDescription);
     info.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
