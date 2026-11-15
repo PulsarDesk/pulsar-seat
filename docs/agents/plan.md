@@ -159,3 +159,12 @@ otherwise:
   `kiosk_shell`, the service itself starts seat 1's kiosk shell under the same rules as the
   other kiosk seats: start on enable and at boot, stop on disable, restart after a crash,
   clean up on stop. Seat 1 stays the console seat in every other respect.
+- **Kiosk hotkey guard** (VM fix round, open issue): debug the kiosk shell's own
+  `WH_KEYBOARD_LL` hook first (a standalone hook blocks the Windows key in the same VM).
+  An Explorer-less kiosk console is the next option only after asking; it is not built
+  without a new decision.
+- **Console listener account rights** (VM fix round, open issue): the contained console
+  listener's account gets `WINSTA_EXITWINDOWS` on the console window station, as its own
+  ACE only, removed when the listener stops and journaled for uninstall. Accepted risk:
+  that account could log the console user off. The `ERROR_PIPE_BUSY` behind it is to be
+  found and fixed.
