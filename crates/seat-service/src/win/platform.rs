@@ -532,13 +532,29 @@ impl Platform for WinPlatform {
             vars.extend(spec.env.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("PULSAR_SEAT_LOG")).cloned());
             let env = env_block(std::os::windows::io::AsHandle::as_handle(&primary), &vars)?;
             let stdin = stdin_pipe.as_ref().map(|(r, _, _)| r.as_raw_handle() as HANDLE);
+            // The child's stdout + stderr go to its log file (opened here by the service, so
+            // a contained host needs no write access to the logs folder); before this its
+            // diagnostics were lost (VM test 2026-11-15). Rotated at 1 MiB, one old file.
+            seat_session::kiosk::rotate_log(&log, seat_session::kiosk::MAX_SHELL_LOG_BYTES);
+            let out = match seat_session::win::files::open_trusted_append(&log) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    crate::log::warn(&format!("{}: log file not opened: {e}", spec.log_name));
+                    None
+                }
+            };
+            let out_h = out.as_ref().map_or(ptr::null_mut(), |f| f.as_raw_handle() as HANDLE);
+            let stdio = match (stdin, out.is_some()) {
+                (None, false) => None,
+                (i, _) => Some([i.unwrap_or(ptr::null_mut()), out_h, out_h]),
+            };
             let spawned = spawn(&SpawnSpec {
                 token: Some(primary.as_raw_handle() as HANDLE),
                 command_line: &cmd,
                 cwd: None,
                 env: Some(&env),
                 desktop: Some(r"winsta0\default"),
-                stdio: stdin.map(|i| [i, ptr::null_mut(), ptr::null_mut()]),
+                stdio,
                 extra_flags: CREATE_NEW_PROCESS_GROUP,
                 placement: None,
                 // Seat hosts: SYSTEM-only process and thread DACL; as the shared host account
