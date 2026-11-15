@@ -94,14 +94,48 @@ pub fn open() -> Result<Conn<std::fs::File>, PipeError> {
     use std::os::windows::fs::OpenOptionsExt;
     // std adds SECURITY_SQOS_PRESENT when QoS flags are set.
     const SECURITY_IDENTIFICATION: u32 = 0x0001_0000;
-    let f = std::fs::OpenOptions::new()
-        // No GENERIC_WRITE: the pipe DACL denies FILE_CREATE_PIPE_INSTANCE to users.
-        .access_mode(seat_proto::PIPE_CLIENT_ACCESS)
-        .security_qos_flags(SECURITY_IDENTIFICATION)
-        .open(seat_proto::PIPE_NAME)
-        .map_err(PipeError::Connect)?;
+    let open = || {
+        std::fs::OpenOptions::new()
+            // No GENERIC_WRITE: the pipe DACL denies FILE_CREATE_PIPE_INSTANCE to users.
+            .access_mode(seat_proto::PIPE_CLIENT_ACCESS)
+            .security_qos_flags(SECURITY_IDENTIFICATION)
+            .open(seat_proto::PIPE_NAME)
+    };
+    let mut tries = 0;
+    let f = loop {
+        match open() {
+            Ok(f) => break f,
+            // The service listens on one free instance at a time and creates the next right
+            // after a connect: a client arriving in between gets ERROR_PIPE_BUSY. Documented
+            // client handling: WaitNamedPipe, then open again (VM test 2026-11-15: the
+            // console listener, started together with the kiosk shell, failed on it).
+            Err(e) if is_pipe_busy(&e) && tries < PIPE_BUSY_RETRIES => {
+                tries += 1;
+                let name: Vec<u16> = seat_proto::PIPE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+                // SAFETY: NUL-terminated name; waits at most PIPE_BUSY_WAIT_MS.
+                unsafe { windows_sys::Win32::System::Pipes::WaitNamedPipeW(name.as_ptr(), PIPE_BUSY_WAIT_MS) };
+            }
+            Err(e) => return Err(PipeError::Connect(e)),
+        }
+    };
     verify_server(&f)?;
     Ok(Conn::over(f))
+}
+
+/// Opens tried again after `ERROR_PIPE_BUSY`, each after a `WaitNamedPipeW`.
+pub const PIPE_BUSY_RETRIES: u32 = 10;
+/// Longest `WaitNamedPipeW` per retry.
+pub const PIPE_BUSY_WAIT_MS: u32 = 1_000;
+
+/// The service PID from [`seat_core::consts::SERVICE_PID_ENV`] (`None`: absent or not a
+/// non-zero number, then the SCM is asked).
+pub fn expected_service_pid(v: Option<&str>) -> Option<u32> {
+    v.and_then(|s| s.trim().parse::<u32>().ok()).filter(|p| *p != 0)
+}
+
+/// `ERROR_PIPE_BUSY` (231): every instance of the pipe is connected right now.
+pub fn is_pipe_busy(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(231)
 }
 
 #[cfg(windows)]
@@ -113,7 +147,11 @@ fn verify_server(f: &std::fs::File) -> Result<(), PipeError> {
     if unsafe { GetNamedPipeServerProcessId(f.as_raw_handle() as _, &mut server) } == 0 {
         return Err(PipeError::NotService(format!("GetNamedPipeServerProcessId: {}", std::io::Error::last_os_error())));
     }
-    let service = service_pid(seat_core::consts::SERVICE_NAME).map_err(PipeError::NotService)?;
+    // Launched by the service: it gave its PID (the SCM may be closed to a contained host).
+    let service = match expected_service_pid(std::env::var(seat_core::consts::SERVICE_PID_ENV).ok().as_deref()) {
+        Some(pid) => pid,
+        None => service_pid(seat_core::consts::SERVICE_NAME).map_err(PipeError::NotService)?,
+    };
     if server != service {
         return Err(PipeError::NotService(format!("server pid {server}, service pid {service}")));
     }
@@ -212,6 +250,22 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn service_pid_from_the_environment() {
+        assert_eq!(super::expected_service_pid(Some("4242")), Some(4242));
+        assert_eq!(super::expected_service_pid(Some(" 7 ")), Some(7));
+        assert_eq!(super::expected_service_pid(Some("0")), None);
+        assert_eq!(super::expected_service_pid(Some("x")), None);
+        assert_eq!(super::expected_service_pid(None), None);
+    }
+
+    #[test]
+    fn pipe_busy_is_retried_and_nothing_else() {
+        assert!(super::is_pipe_busy(&std::io::Error::from_raw_os_error(231)));
+        assert!(!super::is_pipe_busy(&std::io::Error::from_raw_os_error(5)));
+        assert!(!super::is_pipe_busy(&std::io::Error::from_raw_os_error(2)));
+    }
+
     use super::testing::Duplex;
     use super::*;
     use seat_proto::Response;

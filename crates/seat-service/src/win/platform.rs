@@ -515,6 +515,7 @@ impl Platform for WinPlatform {
             let t = self.containment.host_token(&crate::win::containment::HostRequest {
                 session_id: spec.session_id,
                 clipboard: spec.host_clipboard,
+                exit_windows: spec.host_exit_windows,
                 seat: spec.host_seat,
                 profile: spec.host_profile,
             })?;
@@ -528,7 +529,13 @@ impl Platform for WinPlatform {
         let release_sid = grant_sid.clone();
         let run = move || -> BackendResult<u32> {
             let log = self.logs_dir.join(&spec.log_name);
-            let mut vars = vec![("PULSAR_SEAT_LOG".to_string(), log.display().to_string())];
+            let mut vars = vec![
+                ("PULSAR_SEAT_LOG".to_string(), log.display().to_string()),
+                // The child checks the pipe server against this PID: a contained host or
+                // listener (host account, Low integrity) may not open the SCM to look it up
+                // (VM test 2026-11-15: OpenSCManagerW access denied).
+                (seat_core::consts::SERVICE_PID_ENV.to_string(), std::process::id().to_string()),
+            ];
             vars.extend(spec.env.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("PULSAR_SEAT_LOG")).cloned());
             let env = env_block(std::os::windows::io::AsHandle::as_handle(&primary), &vars)?;
             let stdin = stdin_pipe.as_ref().map(|(r, _, _)| r.as_raw_handle() as HANDLE);
