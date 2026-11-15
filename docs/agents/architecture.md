@@ -522,9 +522,12 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   hook and when a window first takes the foreground, the shell injects `VK_F24` down + up
   with `dwExtraInfo = hotkey_guard::WARMUP_TAG`; the hook swallows exactly that key and
   the shell logs `warm-up: sent / seen / failed` and the hook latency. VM 2026-11-15: the
-  first press after the shell starts still reaches Start with any foreground window; the
-  warm-up counters show the hook stops being called ~100 ms after the start (when the
-  focus sink takes the foreground) until it is re-installed (open, status.md).
+  first press after the shell starts still reaches Start with any foreground window. A VM
+  bisect showed the cause: while the shell's focus sink holds the foreground and the shell
+  has its raw-input registration, the shell's own `WH_KEYBOARD_LL` hook is not called at
+  all (re-installs do not help); without the raw reader or without the sink every key
+  reaches it. Keeping legacy keyboard messages did not change it (tried and reverted;
+  open, status.md).
 - **Kiosk console apps in conhost (round 4, `seat_service::kiosk_console`):** while
   enabled with `desktops`, `seat1_desktop = false` and a kiosk-shell seat, the service sets
   the console user's `HKU\<SID>\Console\%%Startup` `DelegationConsole` and

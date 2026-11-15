@@ -1515,3 +1515,35 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     silently. A cheap follow-up (not built, needs a go): re-install the hook once after
     the start-up settles, and/or on a timer, and check with the warm-up counters.
     Earlier "0 missed" runs with Start already open are not evidence either way.
+  - **Hook-deaf round 2026-11-15 (maintainer: root cause + self-healing probe; guard-debug
+    track). Result: cause narrowed, not fixed; all code reverted (2f7487f).**
+    - **Bisect (temporary debug host, switches in a flags file, never committed; diff kept
+      outside the repo).** With the probe logging every miss: baseline, `noattach` (no
+      `AttachThreadInput`) and `nolock` (no `LockSetForegroundWindow` / `ClipCursor`) all
+      fail the same way: from the moment the focus sink takes the foreground (+~255 ms
+      after start, `SetForegroundWindow(sink)` ok) the hook sees **no** probe key, and
+      re-installing it every 150 ms does not help (`probe sent 22 seen 2 re-installs 20`).
+      `noraw` (no raw reader) and `nofocus` (no focus sink) have no miss. So the hook is not
+      "dropped once": `WH_KEYBOARD_LL` hooks of the process whose window holds the
+      foreground are not called while that process has its raw-input registration.
+      HYPOTHESIS: a `RIDEV_NOLEGACY` / `RIDEV_INPUTSINK` registration of the foreground
+      process makes Windows skip the legacy path including LL hooks. The guard runs "worked"
+      only after the first Windows key opened Start: the sink then lost the foreground for
+      good (`clipped false`).
+    - **Tried: keyboard without `RIDEV_NOLEGACY`** (mice kept it; shell windows swallowed
+      key messages so Alt+F4 could not close them, verified: the shell survived Alt+F4).
+      39e7f69, MSI 39e7f69 clean tree. **VM: FAIL** - cmd in front: 130 blocked, 1 missed,
+      194 probe re-installs; the leader shell's hook still saw almost nothing.
+    - **Self-healing probe** (440b7e5: warm-up every 2 s and on foreground changes,
+      re-install after 100 ms, `hotkey_guard::Probe` with 3 tests). Because a re-install
+      cannot revive the hook in this state, it re-installed ~7 times a second forever and
+      the warm-up latency reached 168 ms (1.9 s in a second shell): a risk for every key
+      of the PC. **Reverted** together with 39e7f69 (2f7487f); the code is back to 9f488be.
+    - **Found: two seat-1 kiosk shells after disable + enable** (same second, both
+      `--kiosk-shell --seat 1`, one `leader false`). Separate service bug in the seat-1
+      kiosk lifecycle (bcdbf19), open. The non-leader shell's hook worked, which fits the
+      cause above.
+    - **Next (needs a go):** bisect the registration itself: no `RIDEV_NOLEGACY` for mice
+      either, no `RIDEV_INPUTSINK`, without the HID usages; or move the raw reader into a
+      separate process so the hook's process never owns the foreground registration; or
+      hold the foreground with a window of another process.
