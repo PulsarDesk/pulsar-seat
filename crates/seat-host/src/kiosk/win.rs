@@ -25,6 +25,38 @@
 //! Every `SetWindowPos` on another process's window is `SWP_ASYNCWINDOWPOS` and hung
 //! windows (`IsHungAppWindow`) are skipped, so a hung seat app never blocks this thread.
 
+/// Diagnostics line, UTC timestamped, on stderr: the service redirects the shell's output
+/// to `logs\kiosk-shell-NN.log` (rotated at 1 MiB). Never secrets (no plan hex, no input
+/// text). Added after the 2026-11-15 VM test (the GUI-subsystem shell had no output).
+macro_rules! klog {
+    ($($t:tt)*) => { eprintln!("{} kiosk shell: {}", utc_now(), format_args!($($t)*)) };
+}
+
+/// `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+fn utc_now() -> String {
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = d.as_secs();
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // Civil date from days since 1970-01-01 (proleptic Gregorian).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z", rem / 3600, rem % 3600 / 60, rem % 60, d.subsec_millis())
+}
+
+/// Hotkey guard counters (hook thread writes, UI thread logs them every 10 s).
+static HOOK_EVENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static HOOK_BLOCKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Packets of the seat's devices routed by the shell (to compare with the hook's events).
+static HOOK_DETAIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 use super::{
     AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SHIM_LAUNCHER, SeatDevices, ShellArgs, ShellCommand,
     attach_action, drag_rect, filter_active, audio_notice, focus_policy, idle_text, kiosk_env_value, notices, place,
@@ -358,6 +390,8 @@ struct Shell {
     modified_threads: HashSet<u32>,
     /// Caption / border drag in progress: `(top, hit-test code, rect at the press)`.
     drag: Option<(u64, i32, Rect)>,
+    /// Last logged (hook events, hook blocked, seat packets).
+    diag_last: (u64, u64, u64),
 }
 
 thread_local! {
@@ -825,6 +859,7 @@ impl Shell {
         // SAFETY: no arguments.
         let me = unsafe { GetCurrentProcessId() };
         let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, me };
+        SEAT_PACKETS.fetch_add(packets.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let acts = self.router.on_packets(&packets, &q, &mut self.keys, now);
         self.run_actions(acts);
     }
@@ -851,6 +886,14 @@ impl Shell {
         }
         if self.tick % 20 == 0 {
             redraw(self.bar);
+        }
+        if self.tick % 40 == 0 {
+            use std::sync::atomic::Ordering::Relaxed;
+            let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), SEAT_PACKETS.load(Relaxed));
+            if now != self.diag_last {
+                self.diag_last = now;
+                klog!("counters: hook events {} blocked {}, seat packets {}, leader {}, clipped {}", now.0, now.1, now.2, self.leader, self.clipped);
+            }
         }
     }
 
@@ -900,7 +943,7 @@ impl Shell {
                 self.sink = create(&sink_class, WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED, WS_POPUP | WS_VISIBLE, Rect { x, y, width: 1, height: 1 });
                 // SAFETY: our window; almost fully transparent.
                 unsafe { SetLayeredWindowAttributes(self.sink, 0, 1, LWA_ALPHA) };
-                eprintln!("kiosk shell: seat {} holds the focus sink", self.args.seat);
+                klog!("seat {} holds the focus sink", self.args.seat);
             }
         }
         if !self.leader || self.sink.is_null() {
@@ -1221,7 +1264,7 @@ fn watch_stop(seat: seat_core::SeatNumber, tid: u32) {
     // (which grants SYSTEM full access, so the service can set it).
     let ev = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
     if ev.is_null() {
-        eprintln!("kiosk shell: stop event could not be created; the service will kill the shell");
+        klog!("stop event could not be created; the service will kill the shell");
         return;
     }
     // SAFETY: our handle. A stale signal (left by an earlier shell) does not count.
@@ -1256,12 +1299,48 @@ unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: L
         let k = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         // SAFETY: plain state queries.
         let (ctrl, shift) = unsafe { (GetAsyncKeyState(VK_CONTROL as i32) < 0, GetAsyncKeyState(VK_SHIFT as i32) < 0) };
-        if blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift }) {
+        let n = HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let block = blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift });
+        // Detail only for the guarded / modifier keys (never letters, digits or other
+        // keys that could be typed text, e.g. a password into a kiosk app).
+        let system_key = matches!(k.vkCode, 0x09 | 0x10..=0x12 | 0x1B | 0x5B | 0x5C | 0xA0..=0xA5);
+        if (block || system_key) && n < 4096 && HOOK_DETAIL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 64 {
+            klog!("hook: vk 0x{:02x} scan 0x{:02x} flags 0x{:x} msg 0x{:x} block {block}", k.vkCode, k.scanCode, k.flags, wparam);
+        }
+        if block {
+            HOOK_BLOCKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return 1;
         }
     }
     // SAFETY: pass on to the next hook.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
+/// Mandatory integrity RID of this process (0x2000 medium, 0x3000 high, ...).
+fn integrity_rid() -> Option<u32> {
+    use windows_sys::Win32::Security::{GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut tok = std::ptr::null_mut();
+    // SAFETY: own process token, query only; closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut tok) } == 0 {
+        return None;
+    }
+    let mut buf = [0u64; 16];
+    let mut len = 0u32;
+    // SAFETY: buffer of 128 bytes, aligned for TOKEN_MANDATORY_LABEL.
+    let ok = unsafe { GetTokenInformation(tok, TokenIntegrityLevel, buf.as_mut_ptr().cast(), std::mem::size_of_val(&buf) as u32, &mut len) };
+    // SAFETY: our handle.
+    unsafe { CloseHandle(tok) };
+    if ok == 0 {
+        return None;
+    }
+    // SAFETY: filled by GetTokenInformation; the SID points into `buf`.
+    unsafe {
+        let label = &*(buf.as_ptr() as *const TOKEN_MANDATORY_LABEL);
+        let sid = label.Label.Sid;
+        let n = *GetSidSubAuthorityCount(sid);
+        Some(*GetSidSubAuthority(sid, u32::from(n).saturating_sub(1)))
+    }
 }
 
 /// Runs the shell; returns the process exit code.
@@ -1270,7 +1349,25 @@ pub fn run(args: ShellArgs) -> i32 {
     // SAFETY: still single-threaded here (no thread of ours started yet).
     unsafe { std::env::set_var(seat_shim_core::KIOSK_SEAT_ENV, kiosk_env_value(args.seat)) };
     // Hotkey guard (round 4): only when seat 1 is not the console user's desktop.
-    let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop).then(start_hotkey_guard).flatten();
+    let wanted = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop);
+    let guard = wanted.then(start_hotkey_guard).flatten();
+    let mut session = 0u32;
+    // SAFETY: out pointer valid.
+    unsafe { windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId(GetCurrentProcessId(), &mut session) };
+    klog!(
+        "start: seat {} pid {} session {session} integrity 0x{:x} seat1_desktop {} apps {} hotkey guard {}",
+        args.seat,
+        // SAFETY: no arguments.
+        unsafe { GetCurrentProcessId() },
+        integrity_rid().unwrap_or(0),
+        args.plan.seat1_desktop,
+        args.plan.apps.len(),
+        match (wanted, guard) {
+            (false, _) => "off".to_string(),
+            (true, Some(t)) => format!("on (thread {t})"),
+            (true, None) => "FAILED".to_string(),
+        }
+    );
     let code = run_shell(args);
     if let Some(tid) = guard {
         // SAFETY: plain call; the guard thread unhooks and ends on WM_QUIT.
@@ -1295,7 +1392,7 @@ fn start_hotkey_guard() -> Option<u32> {
             // our image.
             let h = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hotkey_guard_proc), GetModuleHandleW(std::ptr::null()), 0) };
             if h.is_null() {
-                eprintln!("kiosk shell: hotkey guard not installed: {}", std::io::Error::last_os_error());
+                klog!("hotkey guard not installed: {}", std::io::Error::last_os_error());
                 let _ = tx.send(None);
                 return;
             }
@@ -1333,7 +1430,7 @@ fn run_shell(args: ShellArgs) -> i32 {
         Rect { x: 0, y: 0, width: CURSOR_W as u32, height: CURSOR_H as u32 },
     );
     if bar.is_null() || cursor.is_null() {
-        eprintln!("pulsar-seat-host: kiosk shell windows could not be created");
+        klog!("windows could not be created");
         return 3;
     }
     // SAFETY: our layered window; magenta is transparent.
@@ -1366,7 +1463,7 @@ fn run_shell(args: ShellArgs) -> i32 {
     let reader = match reader {
         Ok(r) => Some(r),
         Err(e) => {
-            eprintln!("pulsar-seat-host: kiosk shell raw input failed: {}", e.message);
+            klog!("raw input failed: {}", e.message);
             None
         }
     };
@@ -1413,6 +1510,7 @@ fn run_shell(args: ShellArgs) -> i32 {
         audio: KioskAudio::new(seat_media::create_app_endpoint_policy()),
         modified_threads: HashSet::new(),
         drag: None,
+        diag_last: (0, 0, 0),
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {
@@ -1438,7 +1536,7 @@ fn run_shell(args: ShellArgs) -> i32 {
             break;
         }
         if msg.hwnd.is_null() && msg.message == WM_APP_STOP {
-            eprintln!("kiosk shell: stop requested by the service");
+            klog!("stop requested by the service");
             break;
         }
         if msg.hwnd.is_null() && (msg.message == WM_APP_WAKE || msg.message == WM_TIMER) {

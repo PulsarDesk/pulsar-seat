@@ -96,7 +96,9 @@ pub fn decode_plan(hex: &str) -> Result<KioskPlan, String> {
 /// The shell launch: seat host binary in the console session with the console user's token
 /// (the shell starts the seat's apps as that user and posts messages to them; a SYSTEM or
 /// Low-integrity shell could do neither).
-pub fn shell_spec(install_dir: &Path, session_id: u32, plan: &KioskPlan) -> Result<LaunchSpec, SysError> {
+/// `log`: file the shell's stdout + stderr append to (the service opens it, so the
+/// console user needs no write access to the logs folder). See [`shell_log_path`].
+pub fn shell_spec(install_dir: &Path, session_id: u32, plan: &KioskPlan, log: Option<&Path>) -> Result<LaunchSpec, SysError> {
     Ok(LaunchSpec {
         exe: install_dir.join(seat_core::consts::HOST_EXE),
         args: vec![SHELL_FLAG.into(), "--seat".into(), plan.seat.get().to_string(), "--plan".into(), encode_plan(plan)?],
@@ -105,9 +107,26 @@ pub fn shell_spec(install_dir: &Path, session_id: u32, plan: &KioskPlan) -> Resu
         token: TokenKind::SessionUser,
         env_extra: Vec::new(),
         desktop: DEFAULT_DESKTOP.into(),
-        stdout: None,
+        stdout: log.map(Path::to_path_buf),
         placement: None,
     })
+}
+
+/// Largest kiosk shell log before it is rotated (one old file kept, `.1`).
+pub const MAX_SHELL_LOG_BYTES: u64 = 1024 * 1024;
+
+/// `<logs>\kiosk-shell-NN.log`.
+pub fn shell_log_path(log_dir: &Path, seat: SeatNumber) -> PathBuf {
+    log_dir.join(format!("kiosk-shell-{}.log", seat.two_digits()))
+}
+
+/// Rotate `path` to `path.1` when it is larger than `max` bytes (before a launch).
+pub fn rotate_log(path: &Path, max: u64) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > max) {
+        let old = path.with_extension("log.1");
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::rename(path, &old);
+    }
 }
 
 /// Command-line flag of the one-shot "release the console cursor" helper
@@ -170,7 +189,7 @@ mod tests {
         let g = GlobalSettings::default();
         let p = plan_for(seat(2), &c, &g, vec![Rect { x: 1920, y: 0, width: 1280, height: 1024 }]).unwrap();
         assert!(p.seat1_desktop);
-        let spec = shell_spec(Path::new(r"C:\PS"), 3, &p).unwrap();
+        let spec = shell_spec(Path::new(r"C:\PS"), 3, &p, None).unwrap();
         assert_eq!(spec.exe, Path::new(r"C:\PS").join(seat_core::consts::HOST_EXE));
         assert_eq!(&spec.args[..4], &[SHELL_FLAG.to_string(), "--seat".into(), "2".into(), "--plan".into()]);
         assert!(spec.args[4].bytes().all(|b| b.is_ascii_hexdigit()));
@@ -181,6 +200,24 @@ mod tests {
         assert_eq!(stop_event_name(seat(2)), "PulsarSeat.KioskStop.02");
         assert_eq!(session_stop_event(3, seat(12)), r"Session\3\PulsarSeat.KioskStop.12");
         assert_eq!(release_spec(Path::new(r"C:\PS"), 1).args, vec![RELEASE_FLAG.to_string()]);
+    }
+
+    #[test]
+    fn shell_log_is_per_seat_and_rotated() {
+        let dir = std::env::temp_dir().join(format!("pseat-klog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = shell_log_path(&dir, seat(3));
+        assert!(p.ends_with("kiosk-shell-03.log"));
+        std::fs::write(&p, vec![b'x'; 10]).unwrap();
+        rotate_log(&p, 100);
+        assert!(p.exists(), "small: kept");
+        rotate_log(&p, 5);
+        assert!(!p.exists() && p.with_extension("log.1").exists(), "large: rotated");
+        let mut c = SeatConfig::new(seat(3));
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![app("a")], idle_reset_minutes: 0 });
+        let plan = plan_for(seat(3), &c, &GlobalSettings::default(), Vec::new()).unwrap();
+        assert_eq!(shell_spec(Path::new(r"C:\PS"), 1, &plan, Some(&p)).unwrap().stdout.as_deref(), Some(p.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

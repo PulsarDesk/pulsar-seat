@@ -94,11 +94,13 @@ pub struct DesktopsOptions {
     pub stopper: Option<Arc<dyn ShellStopper>>,
     /// How long `log_off` waits for a shell that was asked to stop.
     pub stop_timeout: Duration,
+    /// Logs folder for the kiosk shells' output (`kiosk-shell-NN.log`); `None` = no log.
+    pub log_dir: Option<PathBuf>,
 }
 
 impl Default for DesktopsOptions {
     fn default() -> Self {
-        Self { mode: DesktopMode::Shared, install_dir: PathBuf::new(), events: None, stopper: None, stop_timeout: Duration::from_secs(3) }
+        Self { mode: DesktopMode::Shared, install_dir: PathBuf::new(), events: None, stopper: None, stop_timeout: Duration::from_secs(3), log_dir: None }
     }
 }
 
@@ -107,7 +109,11 @@ impl DesktopsOptions {
     pub fn platform() -> Self {
         #[cfg(windows)]
         {
-            Self { stopper: Some(Arc::new(crate::win::events::WindowsShellStop)), ..Self::default() }
+            // `%ProgramData%\Pulsar Seat\logs`, the service's logs folder.
+            let log_dir = std::env::var_os("ProgramData")
+                .map(PathBuf::from)
+                .map(|p| p.join(seat_core::consts::PRODUCT_DIR).join(seat_core::consts::LOGS_DIR));
+            Self { stopper: Some(Arc::new(crate::win::events::WindowsShellStop)), log_dir, ..Self::default() }
         }
         #[cfg(not(windows))]
         {
@@ -282,7 +288,11 @@ impl SessionBackend for DesktopsBackend {
             let plan = kiosk::plan_for(req.seat, req.config, req.settings, self.d.geometry_of(req.seat))
                 .ok_or_else(|| err(ErrorKind::Policy, reason::KIOSK_APP_MISSING, "no kiosk shell config"))?;
             let dir = kiosk::install_dir_or_exe(&self.opts.install_dir);
-            let spec = kiosk::shell_spec(&dir, console.session_id, &plan)?;
+            let log = self.opts.log_dir.as_ref().map(|d| kiosk::shell_log_path(d, req.seat));
+            if let Some(l) = &log {
+                kiosk::rotate_log(l, kiosk::MAX_SHELL_LOG_BYTES);
+            }
+            let spec = kiosk::shell_spec(&dir, console.session_id, &plan, log.as_deref())?;
             let p = self.d.launcher.launch(req.seat, &spec)?;
             log::info!("seat {}: kiosk shell started (pid {}, {} apps)", req.seat, p.pid, plan.apps.len());
             let sink = !plan.seat1_desktop;
