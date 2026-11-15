@@ -198,6 +198,24 @@ void TileLinks() {
     c->Release();
 }
 
+void TileImageDrawn() {
+    HBITMAP b = pulsar::TileImage(2);
+    BITMAP info{};
+    Check(b && GetObjectW(b, sizeof(info), &info) == sizeof(info) && info.bmWidth == 128 && info.bmHeight == 128, "tile image 128x128");
+    if (b) DeleteObject(b);
+    pulsar::SessionInfo s;
+    s.seat = 2;
+    auto* c = new pulsar::Credential(pulsar::Credential::Kind::Seat, CPUS_LOGON, s, nullptr);
+    CREDENTIAL_PROVIDER_FIELD_STATE st = CPFS_HIDDEN;
+    CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE is = CPFIS_NONE;
+    c->GetFieldState(pulsar::kFieldImage, &st, &is);
+    Check(st == CPFS_DISPLAY_IN_BOTH, "tile image shown");
+    HBITMAP fromTile = nullptr;
+    Check(c->GetBitmapValue(pulsar::kFieldImage, &fromTile) == S_OK && fromTile, "tile image from the tile");
+    if (fromTile) DeleteObject(fromTile);
+    c->Release();
+}
+
 void InertOutsideLogonUI() {
     Check(!pulsar::InLogonUI(), "this process is not LogonUI");
     ICredentialProvider* p = nullptr;
@@ -243,6 +261,7 @@ int wmain() {
     SessionDecisions();
     LinkText();
     TileLinks();
+    TileImageDrawn();
     InertOutsideLogonUI();
     std::printf("%d failed\n", g_failed);
     return g_failed == 0 ? 0 : 1;

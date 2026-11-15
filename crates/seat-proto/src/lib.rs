@@ -173,6 +173,8 @@ mod tests {
         assert_eq!(RequestBody::GetStatus.access(), Access::Status);
         assert_eq!(RequestBody::StartSeats { seats: None }.access(), Access::Admin);
         assert_eq!(RequestBody::RelogonSeat { seat: two }.access(), Access::OwnSeat(two));
+        assert_eq!(RequestBody::SwitchSeat { seat: two }.access(), Access::Admin);
+        assert_eq!(RequestBody::SwitchSeat { seat: two }.min_protocol(), 3);
         assert_eq!(RequestBody::HostTakeCredentials { seat: two }.access(), Access::Host(two));
         assert_eq!(RequestBody::MySeat.access(), Access::Any);
         assert_eq!(RequestBody::ConsoleInputReport { events: vec![] }.access(), Access::ConsoleListener);
@@ -271,6 +273,7 @@ mod tests {
         // Local-only requests.
         for r in [
             RequestBody::RelogonSeat { seat: two },
+            RequestBody::SwitchSeat { seat: two },
             RequestBody::HostGetAssignment { seat: two },
             RequestBody::HostTakeCredentials { seat: two },
             RequestBody::CredprovSwitch { seat: two },
@@ -328,12 +331,15 @@ mod tests {
             user_sid: None,
             switch_targets: vec![SeatNumber::new(1).unwrap()],
             pending: false,
+            preselect: false,
         });
         let j = serde_json::to_string(&Response::new(2, Ok(s))).unwrap();
         assert_eq!(
             j,
             r#"{"version":3,"id":2,"result":{"Ok":{"type":"credprov_session","data":{"seat":2,"auto_submit":true,"hide_others":true,"account":"PC\\ali","switch_targets":[1]}}}}"#
         );
+        let pre = ResponseBody::CredprovSession(CredprovSession { preselect: true, ..Default::default() });
+        assert!(serde_json::to_string(&pre).unwrap().contains(r#""preselect":true"#));
         let p = ResponseBody::CredprovSession(CredprovSession { pending: true, ..Default::default() });
         assert_eq!(
             serde_json::to_string(&p).unwrap(),

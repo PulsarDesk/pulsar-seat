@@ -25,12 +25,16 @@
 
 namespace pulsar {
 
+// Tile image (seat number on the accent colour), drawn at run time; caller owns it.
+HBITMAP TileImage(int seat);
+
 // Field ids (one descriptor set for both tile kinds; each tile hides what it does not use).
 enum Field : DWORD {
     kFieldTitle = 0,
     kFieldAccount,
     kFieldPassword,
     kFieldSubmit,
+    kFieldImage,
     kFieldLink0,
     kMaxLinks = 15,
     kFieldCount = kFieldLink0 + kMaxLinks,

@@ -28,6 +28,9 @@ struct SessionInfo {
     // Logon only: a fast_user_switch hand-over to this session is under way and the grant
     // is not armed yet; ask again shortly (Provider polls, bounded).
     bool pending = false;
+    // A password-less switch handed the console to this logon screen for `seat`: its tile
+    // is the default (selected) one, without auto-logon.
+    bool preselect = false;
 };
 
 // Same answer for the tiles and the filter (pending is not compared).

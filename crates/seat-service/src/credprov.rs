@@ -88,6 +88,10 @@ pub struct CredprovState {
     /// seat -> start generation of a start that came from a switch link (nobody
     /// authenticated): no stored password, no grant for it.
     pub unattended: std::collections::BTreeMap<SeatNumber, u64>,
+    /// A password-less switch handed the console to a logon screen for this seat: the
+    /// provider there preselects the seat's tile (`CredprovSession::preselect`) until
+    /// [`HANDOVER_MS`] or another switch. Added 2026-11-15.
+    pub switch_to: Option<Handover>,
 }
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> ProtoError {
@@ -210,32 +214,51 @@ impl Service {
         if !fus || !st.config.settings.enabled || !st.credprov.registered {
             return Ok(ResponseBody::CredprovSession(CredprovSession::default()));
         }
-        let seat = self.seat_of_session(&st, session);
-        let grant = self.live_grant(&st, session).filter(|g| !g.taken && Some(g.seat) == seat);
-        let domain_user = seat
+        let own = self.seat_of_session(&st, session);
+        // Logon screen a password-less switch opened for another seat: show that seat's
+        // tile, selected, without auto-logon (the user types the password).
+        let switch_to = if own.is_none() && scenario == CredprovScenario::Logon { self.switch_to(&st, session) } else { None };
+        let preselect = switch_to.is_some();
+        let seat = own.or(switch_to);
+        let grant = self.live_grant(&st, session).filter(|g| !g.taken && Some(g.seat) == own);
+        let configured = seat
             .and_then(|s| st.config.seat(s))
             .and_then(|c| c.account.domain_user())
             .map(|(d, u)| (d.to_owned(), u.to_owned()));
-        let account = domain_user
-            .as_ref()
-            .map(|(d, u)| if d.is_empty() || d == "." { format!(r".\{u}") } else { format!(r"{d}\{u}") });
+        // A seat without an account (seat 1 at the logon screen setting) gets its session
+        // user's tile: Windows 11 lists only tiles of a user with a password field on a
+        // seat's lock / logon screen, so a user-less switch tile was never shown there
+        // (VM test 2026-11-15, credprov.log). The target of a switch: that seat's session.
+        let user_session = match (configured.is_some(), switch_to) {
+            (true, _) => None,
+            (false, Some(t)) if t.is_console() => seat1_away,
+            (false, Some(t)) => st.seats.get(&t).and_then(|s| s.rt.session_id),
+            (false, None) => seat.map(|_| session),
+        };
         // Auto-submit (and with it the filter) only when the provider will really show the
         // seat tile: that needs the account. Without it the filter would hide every tile.
-        let auto = scenario == CredprovScenario::Logon && grant.is_some() && account.is_some();
+        let auto = scenario == CredprovScenario::Logon && grant.is_some() && configured.is_some();
         // A fast_user_switch hand-over to this console session is under way and no grant is
         // armed yet: the provider asks again shortly (LogonUI enumerates before we arm).
         let pending = scenario == CredprovScenario::Logon && grant.is_none() && self.handover_pending(&st, session, seat);
         // Switch links on every seat session's logon / lock screen (spec 35 §5.5), see
         // [`Self::switch_target`].
         let switch_targets: Vec<SeatNumber> =
-            st.config.seats.iter().map(|c| c.number).filter(|n| Self::switch_target(&st, seat, *n, seat1_away)).collect();
-        let cached_sid = domain_user.as_ref().and_then(|k| st.credprov.sids.get(k).cloned());
+            st.config.seats.iter().map(|c| c.number).filter(|n| Self::switch_target(&st, own, *n, seat1_away)).collect();
+        let cached_sid = configured.as_ref().and_then(|k| st.credprov.sids.get(k).cloned());
         drop(st);
+        // Session user outside the state lock.
+        let session_user = user_session.and_then(|id| self.platform.session_user(id));
+        let domain_user = configured.clone().or_else(|| session_user.as_ref().map(|u| (u.domain.clone(), u.name.clone())));
+        let account = domain_user
+            .as_ref()
+            .map(|(d, u)| if d.is_empty() || d == "." { format!(r".\{u}") } else { format!(r"{d}\{u}") });
         // SID of the seat account for the V2 tile. LookupAccountNameW never under the state
         // lock (it can wait for a domain controller); successful lookups are cached. The
         // provider uses it only when LogonUI's user array lists that SID.
-        let user_sid = match (cached_sid, &domain_user) {
+        let user_sid = match (cached_sid, &configured) {
             (Some(s), _) => Some(s),
+            (None, None) => session_user.map(|u| u.sid),
             (None, Some((d, u))) => {
                 let sid = self.platform.account_sid(d, u);
                 if let Some(s) = &sid {
@@ -243,10 +266,6 @@ impl Service {
                 }
                 sid
             }
-            // A seat without an account (seat 1 at the logon screen setting): the session's
-            // signed-in user, so the provider's switch tile sits on that user's lock screen
-            // (Windows 11 shows only that user's tiles there; VM test 2026-11-15).
-            (None, None) => self.platform.session_user(session).map(|u| u.sid),
         };
         Ok(ResponseBody::CredprovSession(CredprovSession {
             seat,
@@ -256,7 +275,48 @@ impl Service {
             user_sid: if seat.is_some() { user_sid } else { None },
             switch_targets,
             pending,
+            preselect,
         }))
+    }
+
+    /// Seat whose password-less switch opened the logon screen of `session` (the console,
+    /// not the session the switch came from, within [`HANDOVER_MS`]).
+    fn switch_to(&self, st: &State, session: u32) -> Option<SeatNumber> {
+        let h = st.credprov.switch_to.as_ref()?;
+        (self.now().saturating_sub(h.since_ms) < HANDOVER_MS
+            && h.from_session != Some(session)
+            && self.platform.console_session() == Some(session))
+        .then_some(h.seat)
+    }
+
+    /// `switch_seat` (admin, protocol 3): the console to a running seat (or seat 1's own
+    /// session while it waits off the console); an off seat is started. Same backend rules
+    /// as the switch links: no stored password, so the target's user signs in on a logon
+    /// screen with the seat's tile preselected.
+    pub(crate) fn switch_seat(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
+        if self.backends().session.kind() != SessionBackendKind::FastUserSwitch {
+            return Err(err(ErrorCode::Unsupported, "switching the console needs fast user switching"));
+        }
+        let seat1_away = if seat.is_console() { self.backends().session.console_seat_away() } else { None };
+        let active = {
+            let st = self.lock();
+            self.may_start(&st, true)?;
+            if st.config.seat(seat).is_none() {
+                return Err(err(ErrorCode::NotFound, "no such seat"));
+            }
+            if seat.is_console() && seat1_away.is_none() {
+                return Err(err(ErrorCode::InvalidValue, "seat 1 already holds the console").with_reason("on_console"));
+            }
+            st.seats.get(&seat).filter(|s| s.is_active() && !matches!(s.rt.state, SeatState::Stopping)).map(|s| s.rt.session_id)
+        };
+        log::info(&format!("switch to seat {seat} requested over the pipe"));
+        match active {
+            _ if seat.is_console() => self.spawn(move |s| s.reconnect_seat(seat)),
+            Some(Some(_)) => self.spawn(move |s| s.reconnect_seat(seat)),
+            Some(None) => {}
+            None => self.start_sequence(vec![seat]),
+        }
+        Ok(ResponseBody::Ack)
     }
 
     /// Start of a `fast_user_switch` hand-over of the console to `seat` (before the backend
@@ -473,9 +533,18 @@ impl Service {
             client_name: crate::seats::client_name(seat),
             credentials: creds,
         };
-        if let Err(e) = self.backends().session.start(&req) {
-            log::warn(&format!("seat {seat}: switch refused: {e}"));
-            self.notice("switch_refused", Some(seat), e.reason.clone());
+        let before = self.platform.console_session();
+        match self.backends().session.start(&req) {
+            Err(e) => {
+                log::warn(&format!("seat {seat}: switch refused: {e}"));
+                self.notice("switch_refused", Some(seat), e.reason.clone());
+            }
+            // No password: the console went to a logon screen (the session itself is not on
+            // the console); the provider there preselects this seat's tile.
+            Ok(seat_core::backend::session::StartStep::Started(info)) if self.platform.console_session() != Some(info.session_id) => {
+                self.lock().credprov.switch_to = Some(Handover { seat, from_session: before, since_ms: self.now() });
+            }
+            Ok(_) => self.lock().credprov.switch_to = None,
         }
     }
 }

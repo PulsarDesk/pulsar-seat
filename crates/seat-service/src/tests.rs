@@ -1907,8 +1907,50 @@ fn credprov_seat_without_account_gets_the_session_user_sid() {
         panic!()
     };
     assert_eq!(q.seat, Some(s(1)), "{q:?}");
-    assert!(q.account.is_none() && q.switch_targets.contains(&s(2)), "{q:?}");
+    // Its session user's tile (password field + links): Windows 11 never showed the
+    // user-less switch tile there (credprov.log, VM test 2026-11-15).
+    assert_eq!(q.account.as_deref(), Some(r"PC\admin"), "{q:?}");
+    assert!(q.switch_targets.contains(&s(2)), "{q:?}");
     assert_eq!(q.user_sid.as_deref(), Some("S-1-5-21-9-500"));
+}
+
+/// `switch_seat` (admin, protocol 3) puts a running seat back on the console without its
+/// password; the logon screen it opens preselects that seat's tile without auto-logon.
+#[test]
+fn switch_seat_over_the_pipe_preselects_the_target_tile() {
+    let h = fus_harness();
+    let mut a = admin();
+    // Seat 1 holds the console: nothing to switch back to.
+    assert_eq!(call(&h, &mut a, RequestBody::SwitchSeat { seat: s(1) }).unwrap_err().code, ErrorCode::InvalidValue);
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let two = seat_session_id(&h, s(2));
+    // A standard user may not.
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::SwitchSeat { seat: s(2) }).unwrap_err().code, ErrorCode::AccessDenied);
+    let n = h.f.fus.start_passwords.lock().unwrap().len();
+    call(&h, &mut a, RequestBody::SwitchSeat { seat: s(2) }).unwrap();
+    let starts = h.f.fus.start_passwords.lock().unwrap().clone();
+    assert_eq!(starts.len(), n + 1);
+    assert_eq!(starts.last(), Some(&(s(2), false)), "never with the stored password");
+    // The console (a fresh logon screen, not seat 2's session) preselects seat 2's tile.
+    let fresh = two + 70;
+    *h.p.console.lock().unwrap() = Some(fresh);
+    let mut c = logonui(&h, 970, fresh);
+    credprov_hello(&h, &mut c).unwrap();
+    let q = query(&h, &mut c);
+    assert_eq!(q.seat, Some(s(2)), "{q:?}");
+    assert!(q.preselect && !q.auto_submit && !q.hide_others, "{q:?}");
+    assert!(q.account.as_deref().is_some_and(|x| x.ends_with("ali")), "{q:?}");
+    assert!(q.switch_targets.is_empty(), "not a seat session: no links");
+    // The lock screen of another session never preselects; and it ends after HANDOVER_MS.
+    let ResponseBody::CredprovSession(lock) =
+        call(&h, &mut c, RequestBody::CredprovQuery { scenario: seat_proto::CredprovScenario::Unlock }).unwrap()
+    else {
+        panic!()
+    };
+    assert!(!lock.preselect);
+    h.clock.advance(crate::credprov::HANDOVER_MS + 1);
+    assert!(!query(&h, &mut c).preselect);
 }
 
 #[test]

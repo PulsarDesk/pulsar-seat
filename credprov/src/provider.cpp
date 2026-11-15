@@ -28,6 +28,7 @@ const wchar_t* LabelOf(DWORD field) {
         case kFieldAccount: return L"Hesap";
         case kFieldPassword: return L"Parola";
         case kFieldSubmit: return L"Gönder";
+        case kFieldImage: return L"Pulsar Seat";
         default: return L"Koltuk değiştir";
     }
 }
@@ -38,6 +39,7 @@ CREDENTIAL_PROVIDER_FIELD_TYPE TypeOf(DWORD field) {
         case kFieldAccount: return CPFT_SMALL_TEXT;
         case kFieldPassword: return CPFT_PASSWORD_TEXT;
         case kFieldSubmit: return CPFT_SUBMIT_BUTTON;
+        case kFieldImage: return CPFT_TILE_IMAGE;
         default: return CPFT_COMMAND_LINK;
     }
 }
@@ -229,6 +231,51 @@ void ApplyFilter(bool hide, const CLSID& ours, const GUID* providers, BOOL* allo
     }
 }
 
+// Tile image drawn at run time (no image file, nothing third-party): a 128x128 square in
+// the Pulsar accent colour with the seat number. LogonUI owns the returned bitmap.
+HBITMAP TileImage(int seat) {
+    constexpr int kSize = 128;
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = kSize;
+    bi.bmiHeader.biHeight = -kSize;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC screen = GetDC(nullptr);
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HDC dc = CreateCompatibleDC(screen);
+    ReleaseDC(nullptr, screen);
+    if (!bmp || !dc) {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        return nullptr;
+    }
+    HGDIOBJ oldBmp = SelectObject(dc, bmp);
+    RECT r{0, 0, kSize, kSize};
+    HBRUSH bg = CreateSolidBrush(RGB(0x3b, 0x5b, 0xdb));
+    FillRect(dc, &r, bg);
+    DeleteObject(bg);
+    HFONT font = CreateFontW(-72, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(0xff, 0xff, 0xff));
+    wchar_t text[8];
+    if (seat >= 1 && seat <= 64) {
+        StringCchPrintfW(text, ARRAYSIZE(text), L"%d", seat);
+    } else {
+        StringCchCopyW(text, ARRAYSIZE(text), L"P");
+    }
+    DrawTextW(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (oldFont) SelectObject(dc, oldFont);
+    if (font) DeleteObject(font);
+    SelectObject(dc, oldBmp);
+    DeleteDC(dc);
+    return bmp;
+}
+
 // ---- Credential ----------------------------------------------------------------------
 
 Credential::Credential(Kind kind, CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, const SessionInfo& info, Notifier* notifier)
@@ -302,7 +349,7 @@ IFACEMETHODIMP Credential::GetFieldState(DWORD field, CREDENTIAL_PROVIDER_FIELD_
     if (field >= kFieldCount) return E_INVALIDARG;
     *interactive = CPFIS_NONE;
     *state = CPFS_HIDDEN;
-    if (field == kFieldTitle) {
+    if (field == kFieldTitle || field == kFieldImage) {
         *state = CPFS_DISPLAY_IN_BOTH;
     } else if (field == kFieldAccount) {
         *state = CPFS_DISPLAY_IN_SELECTED_TILE;
@@ -335,9 +382,12 @@ IFACEMETHODIMP Credential::GetStringValue(DWORD field, LPWSTR* value) {
     return DupString(L"", value);
 }
 
-IFACEMETHODIMP Credential::GetBitmapValue(DWORD, HBITMAP* bitmap) {
-    if (bitmap) *bitmap = nullptr;
-    return E_NOTIMPL;
+IFACEMETHODIMP Credential::GetBitmapValue(DWORD field, HBITMAP* bitmap) {
+    if (!bitmap) return E_POINTER;
+    *bitmap = nullptr;
+    if (field != kFieldImage) return E_INVALIDARG;
+    *bitmap = TileImage(info_.seat);
+    return *bitmap ? S_OK : E_OUTOFMEMORY;
 }
 
 IFACEMETHODIMP Credential::GetCheckboxValue(DWORD, BOOL*, LPWSTR*) { return E_NOTIMPL; }
@@ -631,12 +681,15 @@ IFACEMETHODIMP Provider::GetCredentialCount(DWORD* count, DWORD* defaultIndex, B
     if (!count || !defaultIndex || !autoLogonWithDefault) return E_POINTER;
     if (cpus_ != CPUS_INVALID) Rebuild();
     *count = static_cast<DWORD>(tiles_.size());
-    *defaultIndex = autoDefault_ ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
+    // Default tile: the auto-logon seat tile, or the target seat's tile after a
+    // password-less switch (selected, the user types the password; no auto-logon).
+    const bool preselect = !autoDefault_ && info_.preselect && !tiles_.empty() && tiles_[0]->IsSeat();
+    *defaultIndex = (autoDefault_ || preselect) ? 0 : CREDENTIAL_PROVIDER_NO_DEFAULT;
     *autoLogonWithDefault = autoDefault_ ? TRUE : FALSE;
     std::wstring kinds;
     for (auto* t : tiles_) kinds += t->IsSeat() ? L"seat " : L"switch ";
-    Log(L"GetCredentialCount scenario %d: %lu tiles [%s] default %d sid %d", static_cast<int>(cpus_), *count, kinds.c_str(),
-        autoDefault_, !info_.userSid.empty());
+    Log(L"GetCredentialCount scenario %d: %lu tiles [%s] auto %d preselect %d sid %d", static_cast<int>(cpus_), *count, kinds.c_str(),
+        autoDefault_, preselect, !info_.userSid.empty());
     return S_OK;
 }
 

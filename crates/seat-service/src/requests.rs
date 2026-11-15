@@ -233,6 +233,7 @@ impl Service {
                     }
                 }
             }
+            B::SwitchSeat { seat } => self.switch_seat(seat),
             B::RelogonSeat { seat } => {
                 {
                     let st = self.lock();

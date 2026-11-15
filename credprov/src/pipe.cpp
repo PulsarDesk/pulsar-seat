@@ -213,7 +213,7 @@ std::wstring WideField(const json::Value* d, const char* key) {
 bool SameSession(const SessionInfo& a, const SessionInfo& b) {
     return a.reachable == b.reachable && a.seat == b.seat && a.autoSubmit == b.autoSubmit &&
            a.hideOthers == b.hideOthers && a.account == b.account && a.userSid == b.userSid &&
-           a.switchTargets == b.switchTargets;
+           a.switchTargets == b.switchTargets && a.preselect == b.preselect;
 }
 
 SessionInfo ServiceClient::Query(Scenario scenario) {
@@ -239,6 +239,8 @@ SessionInfo ServiceClient::Query(Scenario scenario) {
     info.autoSubmit = info.seat != 0 && !info.account.empty() && a && a->IsTrue();
     info.hideOthers = info.autoSubmit && h && h->IsTrue();
     info.pending = scenario == Scenario::Logon && p && p->IsTrue();
+    const json::Value* pre = d->Get("preselect");
+    info.preselect = scenario == Scenario::Logon && pre && pre->IsTrue();
     if (const json::Value* t = d->Get("switch_targets"); t && t->kind == json::Value::Kind::Array) {
         for (const auto& it : t->items) {
             if (it.IsInt() && it.i >= 1 && it.i <= 64 && info.switchTargets.size() < 16) {

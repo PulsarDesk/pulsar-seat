@@ -146,6 +146,12 @@ pub enum RequestBody {
     StopSeat { seat: SeatNumber },
     /// Log the seat's session off and start it again (spec 10 §8.5).
     RelogonSeat { seat: SeatNumber },
+    /// `fast_user_switch`: put a running local seat's session (or seat 1's own session
+    /// while it waits off the console) on the console. No stored password is used: the
+    /// console goes to a logon screen with that seat's user preselected (Windows reconnects
+    /// the session after the sign-in). An off seat is started as with `start_seats`.
+    /// Added 2026-11-15 (protocol 3, admin).
+    SwitchSeat { seat: SeatNumber },
     /// Ask the service to restart Windows (it asks nothing itself; the manager confirmed).
     RequestReboot,
 
@@ -386,6 +392,7 @@ impl RequestBody {
             | R::SetEnabled { .. }
             | R::ResolveInputMove { .. }
             | R::StartSeats { .. }
+            | R::SwitchSeat { .. }
             | R::StopSeat { .. }
             | R::RequestReboot
             | R::WizardStart { .. }
@@ -438,6 +445,7 @@ impl RequestBody {
         use RequestBody as R;
         match self {
             R::RelogonSeat { seat }
+            | R::SwitchSeat { seat }
             | R::HostGetAssignment { seat }
             | R::HostTakeCredentials { seat }
             | R::HostReport { seat, .. }
@@ -471,6 +479,7 @@ impl RequestBody {
         match self {
             R::GetConfig | R::ValidateConfig { .. } | R::ApplyConfig { .. } | R::ResetConfig { .. } | R::ImportReference { .. } => 3,
             _ if self.is_remote_kind_request() => 3,
+            R::SwitchSeat { .. } => 3,
             _ => crate::MIN_PROTOCOL_VERSION,
         }
     }
@@ -894,6 +903,11 @@ pub struct CredprovSession {
     /// bounded time and refreshes its tiles). Added 2026-11-13, additive.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending: bool,
+    /// A password-less switch handed the console to this logon screen for `seat`: its
+    /// tile is the default (selected) one, without auto-logon (logon scenario only).
+    /// Added 2026-11-15, additive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preselect: bool,
 }
 
 /// What a session agent reports (its session id and SIDs come from the pipe token, these

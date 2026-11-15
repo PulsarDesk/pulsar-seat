@@ -162,6 +162,9 @@ fn map_session_state(s: SessionState, user: Option<&SessionUser>) -> SeatState {
     match s {
         SessionState::Active if user.is_some() => SeatState::SignedIn { user: name },
         SessionState::Locked if user.is_some() => SeatState::Locked { user: name },
+        // Off the console (fast user switching, a disconnected RDP seat): still signed in,
+        // not at the logon screen (VM test 2026-11-15).
+        SessionState::Disconnected if user.is_some() => SeatState::SignedIn { user: name },
         SessionState::Gone => SeatState::Off,
         _ => SeatState::AtLogon,
     }
@@ -1482,6 +1485,15 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A seat session off the console keeps its signed-in user (VM test 2026-11-15: it
+    /// showed "at logon").
+    #[test]
+    fn disconnected_session_with_a_user_is_signed_in() {
+        let u = SessionUser { domain: "PC".into(), name: "ali".into(), sid: "S-1-5-21-9-1".into(), logon_sid: "S-1-5-5-0-1".into() };
+        assert!(matches!(map_session_state(SessionState::Disconnected, Some(&u)), SeatState::SignedIn { .. }));
+        assert_eq!(map_session_state(SessionState::Disconnected, None), SeatState::AtLogon);
+    }
 
     #[test]
     fn backoff_grows_and_caps() {

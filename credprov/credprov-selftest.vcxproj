@@ -62,7 +62,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>secur32.lib;advapi32.lib;ole32.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>secur32.lib;advapi32.lib;ole32.lib;kernel32.lib;user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- No /INTEGRITYCHECK: it makes the loader demand a signature, and the DLL is unsigned for now. -->
       <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>
       <GenerateDebugInformation>true</GenerateDebugInformation>
