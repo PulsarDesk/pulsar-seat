@@ -1379,9 +1379,8 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   - **Open:** (1) seat 1's lock screen still shows no switch links (tile not listed for
     pstest; HYPOTHESIS: Windows 11 does not list a provider tile without a password /
     submit field in the unlock scenario, or LogonUI gives no user array there; needs DLL
-    tracing). (2) With `seat1_desktop = false` the seat-1 kiosk shell is never started:
-    seat 1 is not "managed" under `seat_one_console` and only `start_sequence` calls
-    `SessionBackend::start` (maintainer decision: seat 1 lifecycle in kiosk mode).
+    tracing). (2) Done since (see the follow-up below): seat 1's kiosk shell with
+    `seat1_desktop = false`.
     (3) `start_seats` on a running FUS seat answers `ack` and does nothing (no pipe way to
     switch the console to a running seat; links / agent only). (4) After a switch away,
     seat 2's status shows `at_logon` although its user is signed in. (5) Contained console
@@ -1390,3 +1389,22 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     password-less switch the fresh logon screen preselects the last user, not the target
     seat's user (UX). (7) Credential tiles have no image (blank sign-in option icon).
     (8) Agent tray switch not exercised (synthetic mouse cannot click the tray).
+  - **Follow-up 2026-11-15: seat 1 kiosk shell (maintainer decision, option a; plan.md).**
+    bcdbf19: the service runs seat 1's kiosk shell itself while enabled with `desktops` and
+    `seat1_desktop = false` (start on enable / boot / tick, crash restart with back-off and
+    the crash limit, stop on disable, config change and shutdown; 3 tests with the mock
+    `desktops` backend). VM (MSI 519c00f, clean tree, `Set-U3Seat1Config`): **PASS** for
+    start, shell bar ("Uygulamalar", app button, "Oturumu kapat"), app launch (charmap,
+    cmd), keystrokes of the seat keyboard reaching the focused kiosk app, stop / cleanup on
+    disable (shell and apps gone, "kiosk shell stopped"). The first VM run (MSI bcdbf19)
+    showed the restart and give-up rules working on a real crash: 43760b0 fixed it (the
+    shell crashed in USER32 in WM_PAINT: `DrawTextW` got an empty `Vec<u16>`, whose pointer
+    0x2 it reads, whenever the bar had no notice line, i.e. always with `seat1_desktop =
+    false`; found from a WER LocalDumps dump of a debug-info build swapped into the VM).
+    **Hotkey guard: FAIL in the VM** - the Windows key from the Hyper-V synthetic keyboard
+    still opens Start (Win, Win+R, Win+E); Ctrl+Esc did not toggle Start (inconclusive).
+    HYPOTHESIS: the `WH_KEYBOARD_LL` hook is removed or not called for this input; needs
+    instrumentation (the shell logs nothing since it is a GUI binary). Also seen: `cmd.exe`
+    opens in Windows Terminal (default terminal), which lives outside the shell's job, so
+    it gets no bar button and no placement (apps that hand off to another process are a
+    known limit). Per-seat audio not testable (no audio endpoint in the VM).
