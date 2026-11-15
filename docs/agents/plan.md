@@ -189,3 +189,12 @@ otherwise:
   shell watches it, restarts it with back-off and stops it on exit; a minimal channel from
   the shell (an anonymous pipe, no key text) carries re-install and warm-up requests. No
   re-install loop; the hook thread does no blocking I/O.
+- **Driver round in the test VM** (2026-11-15; the user's answer, relayed by the
+  coordinator, to the 2026-11-13 decision "test-signing in a Hyper-V VM now"): only in the
+  VM PulsarSeatTest-arm64: Secure Boot off and `bcdedit /set testsigning on`; a
+  self-signed test code-signing certificate kept under `%USERPROFILE%\.pulsar-seat\testsign\`
+  on the dev machine (never in the repo, the MSI or the release signing path) and trusted
+  in the VM (Root + TrustedPublisher); our drivers (input filter, IddCx, storage minifilter
+  with a TEST ONLY altitude, split-pad) installed there with `pnputil` and run under Driver
+  Verifier once. Memory Integrity, HVCI and VBS stay on / untouched everywhere; an HVCI
+  block is a driver bug. Nothing changes on the host's boot or security configuration.
