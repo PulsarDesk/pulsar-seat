@@ -1571,3 +1571,16 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       reader's registration is not called while that process's window is in the
       foreground (HYPOTHESIS, VM only). **Maintainer decision:** raw reader in a separate
       process, or the foreground held by another process's window.
+  - **Round 2026-11-15: hotkey guard in a helper process (maintainer decision, plan.md) -
+    DONE, VM PASS** (fae86f1, MSI fae86f1 clean tree). The shell starts `pulsar-seat-host
+    --hotkey-guard --seat N` (no raw input; same user / session / desktop / integrity),
+    watches it, restarts it with back-off and stops it; one-byte commands over the helper's
+    stdin pipe (re-install per detected miss, warm-up, quit), no key data; protocol,
+    arguments and supervisor unit-tested (4 tests). VM, Start closed before each part
+    (screenshots): helper `PSEAT-VM\pstest`, session 2, integrity 0x2000, child of the
+    shell; **cmd in front: 132 of 132 guarded key events blocked, 0 missed**; **shell in
+    front: 132 blocked, 0 missed**; both with the focus sink in the foreground
+    (`clipped true`), no Run dialog, no Explorer window, Start never opened; warm-up latency
+    4-41 us, 0 re-installs. Helper killed -> "exited", started again 1 s later (restarts 1);
+    disable -> "stopped (quit)", no helper left. The Explorer-less kiosk console is not
+    needed for the guard. Untested on hardware.

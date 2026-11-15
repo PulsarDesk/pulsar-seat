@@ -512,26 +512,38 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   every keyboard without the filter and act as the console user on seat 1's desktop;
   `RIDEV_NOLEGACY` / `RIDEV_NOHOTKEYS` cannot stop them and a `WH_KEYBOARD_LL` hook cannot
   tell keyboards apart. Shown in the manager limits text and `tr::HINT`.
-  **Hotkey guard (round 4 kiosk-isolation):** with `seat1_desktop = false` every shell runs
-  a `WH_KEYBOARD_LL` hook on its own message-loop thread (`seat_input::hotkey_guard`; not on
-  the UI thread, which blocks while the shim launcher attaches) that swallows both Windows
-  keys, Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. Not with
+  **Hotkey guard (round 4 kiosk-isolation; helper process since 2026-11-15):** with
+  `seat1_desktop = false` every shell starts a helper, `pulsar-seat-host --hotkey-guard
+  --seat N` (`kiosk::guard`, `kiosk::guard_win`), that runs a `WH_KEYBOARD_LL` hook on its
+  own message-loop thread (`seat_input::hotkey_guard`) and swallows both Windows keys,
+  Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. Not with
   `seat1_desktop = true` (the hook cannot tell keyboards apart and would take these keys
-  from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode. HYPOTHESIS:
-  untested on hardware. VM test 2026-11-15: the router no longer posts the keys the guard names (it
-  posted VK_LWIN to the focused app); the hook still misses some Windows-key presses in the
-  kiosk console (open, status.md). Warm-up (9f488be): after installing / re-installing the
-  hook and when a window first takes the foreground, the shell injects `VK_F24` down + up
-  with `dwExtraInfo = hotkey_guard::WARMUP_TAG`; the hook swallows exactly that key and
-  the shell logs `warm-up: sent / seen / failed` and the hook latency. VM 2026-11-15: the
-  first press after the shell starts still reaches Start with any foreground window. A VM
-  bisect showed the cause: while the shell's focus sink holds the foreground and the shell
-  has its raw-input registration, the shell's own `WH_KEYBOARD_LL` hook is not called at
-  all (re-installs do not help); without the raw reader or without the sink every key
-  reaches it. No registration flag combination changes it (NOLEGACY, INPUTSINK, HID
-  usages, keyboard with no flags, only DEVNOTIFY: VM bisect 2026-11-15); only having no raw
-  reader in the process does. Open: raw reader in another process or the foreground held
-  by another process's window (maintainer decision, status.md).
+  from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode.
+  - **Why a separate process:** an LL hook in the shell itself is not called while the
+    shell's focus sink holds the foreground and the shell has its raw-input registration,
+    whatever the registration flags (VM bisect 2026-11-15: NOLEGACY, INPUTSINK, HID usages,
+    keyboard with no flags, only DEVNOTIFY all fail; no raw reader passes). The helper
+    registers no raw input. HYPOTHESIS: Windows skips the LL hooks of the process that owns
+    the foreground window and a raw-input registration (seen in the ARM64 VM only).
+  - **Process:** a plain child of the shell: same user, session, desktop and integrity, no
+    extra rights; it inherits the seat's job, so the service's stop ends it too. The shell
+    starts it on its first tick, watches it every tick and starts it again with a back-off
+    (1 s doubling to 30 s, reset after 60 s of stable run; `guard::Supervisor`), and stops
+    it on its own exit (quit command, pipe closed, kill after 1 s).
+  - **Channel:** the helper's stdin is an anonymous pipe from the shell (no name, only the
+    two processes hold it), one byte per command (`guard::GuardCmd`): `R` re-install the
+    hook (the shell's raw reader saw a guarded key the hook should have swallowed; once per
+    detected miss, never a loop), `W` one warm-up key (a window took the foreground for the
+    first time), `Q` quit; end of file ends the helper. No key data travels. The helper
+    writes its log lines (`hotkey guard: ...`) to the stderr it inherits from the shell, from
+    a logger thread; the hook thread does no I/O.
+  - **Warm-up:** after installing or re-installing the hook and on `W`, the helper injects
+    `VK_F24` down + up with `dwExtraInfo = hotkey_guard::WARMUP_TAG`; the hook swallows
+    exactly that key and the helper logs `warm-up: sent / seen / failed` and the latency.
+  - VM 2026-11-15 (MSI fae86f1): 0 misses in 3 x 22 presses (Win, Win+R, Win+E, first press
+    included) with cmd and with the shell in front, the focus sink holding the foreground
+    (`clipped true`); helper killed -> back after 1 s; disable -> helper gone. HYPOTHESIS:
+    untested on hardware.
 - **Kiosk console apps in conhost (round 4, `seat_service::kiosk_console`):** while
   enabled with `desktops`, `seat1_desktop = false` and a kiosk-shell seat, the service sets
   the console user's `HKU\<SID>\Console\%%Startup` `DelegationConsole` and
