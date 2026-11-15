@@ -1444,3 +1444,31 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       (`ERROR_PIPE_BUSY`, HYPOTHESIS: pipe instance / Low-integrity client admission). The
       SYSTEM-Low fallback keeps working. **Maintainer decision** on granting
       WINSTA_EXITWINDOWS before the pipe part is investigated.
+  - **Round 3 2026-11-15 (maintainer decisions in plan.md; MSI 620213e, clean tree).**
+    - **Console listener under its own account - FIXED, VM PASS** (ffc499d, 46e8962).
+      Three causes, one after the other: (1) USER32 init needs `WINSTA_EXITWINDOWS`
+      (granted on the listener's own journaled ACE only, accepted risk: it could log the
+      console user off; architecture.md); (2) `ERROR_PIPE_BUSY` at start (the listener
+      starts together with the kiosk shell; host clients now `WaitNamedPipeW` and retry);
+      (3) the pipe server check asked the SCM, which refuses a Low-integrity batch token
+      (`OpenSCManagerW` access denied); the service now passes its PID in
+      `PULSAR_SEAT_SERVICE_PID`. VM: listener runs as `PSEAT-VM\PulsarSeatHost`, integrity
+      0x1000 (Low), "console listener reporting", no SYSTEM fallback. **Not verified:**
+      wizard keys reaching the service - `wizard_start` never answers in this kiosk
+      configuration, also with the SYSTEM-Low listener (`HostTokenCompat=2`), so it is an
+      older, separate problem (open); `activity` events stay empty in both modes too.
+    - **Kiosk hotkey guard - VM FAIL, stopped as decided** (02012bf hardening only).
+      Measured over 66 presses (22 Win, 22 Win+R, 22 Win+E): 130 key events blocked, the
+      hook was called with 0 ms lag every time, except for the **first** Windows-key
+      press after the shell started, which never reached the hook (seen only by the raw
+      reader) and opened Start; later letters of Win+R / Win+E then typed into Start's
+      search, but no Run dialog or Explorer opened. Ruled out: time-critical guard thread,
+      no I/O in the hook, the raw-input `NOLEGACY|INPUTSINK` registration, the focus-sink
+      loop (disabled), hook removal (later presses caught without re-install). The miss
+      occurred in every run where Windows Terminal (hosting the kiosk's cmd) held the
+      foreground and the shell's sink did not (`clipped false`); in a run where the sink
+      held the foreground, no press was missed, and a standalone pass-through hook beside
+      the shell saw every press. HYPOTHESIS: Windows does not call low-level hooks for
+      the first key routed to a newly foreground Windows Terminal window. Misses are now
+      detected (raw input) and logged with a hook re-install. Next option per the decision:
+      an Explorer-less kiosk console, **not built without asking**.
