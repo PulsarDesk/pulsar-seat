@@ -18,7 +18,19 @@ testsigning + cert; clean-logged-on unchanged. End: restore testsigning-clean.
   test-signed into target\vm\testsigned\ARM64 (minifilter TEST ONLY altitude 409990);
   check-payload flags all 9 signed artefacts
 
-## BLOCKED (2026-11-15)
+## VM state (2026-11-15, coordinator ran vmprep after the user's go)
+- Secure Boot off, testsigning Yes, VBS status 0 before and after (never running in this
+  VM, so HVCI could not be exercised here), cert in Root + TrustedPublisher (certutil -f),
+  checkpoint testsigning-clean re-taken 23:02 with both stores.
+- input filter: pnputil oem2.inf, service PulsarSeatInput Running; stacks kbdclass >
+  PulsarSeatInput > hyperkbd (TEST ONLY VMBus keyboard model line, 2997c66) and mouclass >
+  PulsarSeatInput > mouhid.
+- seat-idd: root devnode ROOT\DISPLAY\0000 (hwid Root\PulsarSeatIdd, scratchpad
+  vm\mkroot.ps1); first start failed: IddCxAdapterInitAsync STATUS_INVALID_PARAMETER
+  (MaxMonitorsSupported 64; >16 refused) -> fixed e340421, device OK after the fix.
+- next: minifilter, split-pad store, MSI e340421, product backends, uninstall, Verifier
+
+## (resolved) BLOCKED (2026-11-15)
 - VM step (Stop-VM, Set-VMFirmware -EnableSecureBoot Off, bcdedit testsigning on, cert
   into Root + TrustedPublisher, reboot) was denied by the Claude Code permission system
   (auto mode classifier, "Undermining Oversight"). Not worked around. Needs the user to
