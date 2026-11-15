@@ -21,6 +21,23 @@ pub mod vk {
     pub const ESCAPE: u32 = 0x1B;
     pub const LWIN: u32 = 0x5B;
     pub const RWIN: u32 = 0x5C;
+    pub const F24: u32 = 0x87;
+}
+
+/// `dwExtraInfo` tag of the guard's warm-up key ("PSWU"): the shell injects [`WARMUP_VK`]
+/// down + up with it right after (re-)installing the hook and when a new window first takes
+/// the foreground, so the hook's first real call is not the first Windows-key press
+/// (VM 2026-11-15: that press was seen late and passed on). HYPOTHESIS: the late first call
+/// is a cold-path cost, not a per-window rule.
+pub const WARMUP_TAG: usize = 0x5053_5755;
+/// Key of the warm-up: F24, absent from normal keyboards.
+pub const WARMUP_VK: u32 = vk::F24;
+
+/// Whether a hook event is the guard's own warm-up key, which the hook swallows (down and
+/// up). Only the exact key with the exact tag: an F24 from a device or another injector
+/// passes through.
+pub fn is_warmup(vk_code: u32, extra_info: usize) -> bool {
+    vk_code == WARMUP_VK && extra_info == WARMUP_TAG
 }
 
 /// Modifier state at the time of the key (from the hook's flags and `GetAsyncKeyState`).
@@ -62,5 +79,15 @@ mod tests {
         assert!(!blocks(vk::ESCAPE, none));
         assert!(!blocks(0x41, alt) && !blocks(0x41, ctrl_shift));
         assert!(wanted(false) && !wanted(true));
+    }
+
+    #[test]
+    fn only_the_tagged_warmup_key_is_recognised() {
+        assert!(is_warmup(vk::F24, WARMUP_TAG));
+        assert!(!is_warmup(vk::F24, 0), "a real F24 passes through");
+        assert!(!is_warmup(vk::F24, WARMUP_TAG + 1));
+        assert!(!is_warmup(vk::LWIN, WARMUP_TAG), "the tag alone is not enough");
+        assert!(!is_warmup(0x41, WARMUP_TAG));
+        assert!(!blocks(WARMUP_VK, Mods::default()), "F24 is not a guarded hotkey");
     }
 }

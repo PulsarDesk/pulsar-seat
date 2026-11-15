@@ -65,6 +65,44 @@ static GUARD_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::n
 /// Thread message to the guard thread: unhook and hook again.
 const WM_APP_REHOOK: u32 = 0x8000 + 0x31;
 static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Thread message to the guard thread: inject the warm-up key (a new foreground window).
+const WM_APP_WARMUP: u32 = 0x8000 + 0x32;
+/// Warm-up keys injected (down + up = one) and seen by the hook (key-down only).
+static WARMUP_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WARMUP_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Time of the last injection and the hook's latency for it (µs on [`guard_clock_us`]).
+static WARMUP_AT_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WARMUP_LAST_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WARMUP_MAX_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Injections `SendInput` refused (e.g. UIPI: a higher-integrity foreground window).
+static WARMUP_FAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Monotonic µs since the first call (the guard's warm-up latency clock).
+fn guard_clock_us() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
+}
+
+/// Injects the guard's warm-up key (`seat_input::hotkey_guard::WARMUP_VK` down + up, tagged
+/// `WARMUP_TAG`), which the hook swallows: the hook's first real call is then not a
+/// Windows-key press. Called on the guard thread only.
+fn send_warmup() {
+    use seat_input::hotkey_guard::{WARMUP_TAG, WARMUP_VK};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput};
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: WARMUP_VK as u16, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: WARMUP_TAG } },
+    };
+    let inputs = [key(0), key(KEYEVENTF_KEYUP)];
+    WARMUP_AT_US.store(guard_clock_us(), std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: two valid INPUT records of the stated size.
+    let n = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    if n as usize == inputs.len() {
+        WARMUP_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        WARMUP_FAILED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 use super::{
     AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SHIM_LAUNCHER, SeatDevices, ShellArgs, ShellCommand,
@@ -401,6 +439,11 @@ struct Shell {
     drag: Option<(u64, i32, Rect)>,
     /// Last logged (hook events, hook blocked, seat packets).
     diag_last: (u64, u64, u64),
+    /// Last logged warm-up (sent, seen, failed).
+    warm_last: (u64, u64, u64),
+    /// Foreground window at the last tick and the windows that already had a warm-up.
+    fg_last: isize,
+    fg_warmed: HashSet<isize>,
 }
 
 thread_local! {
@@ -892,6 +935,7 @@ impl Shell {
         if self.policy == FocusPolicy::SinkLeader {
             self.keep_focus();
         }
+        self.warm_up_guard();
         if let Some(p) = job_pids(self.job) {
             self.pids = p;
         }
@@ -923,6 +967,41 @@ impl Shell {
                     self.clipped
                 );
             }
+        }
+    }
+
+    /// Hotkey guard warm-up: a window that takes the foreground for the first time gets one
+    /// warm-up key (VM 2026-11-15: the first Windows-key press under a new console window
+    /// reached the hook late and Start opened). Logs warm-up counters when they change.
+    fn warm_up_guard(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let guard = GUARD_TID.load(Relaxed);
+        if guard == 0 {
+            return;
+        }
+        // SAFETY: no arguments.
+        let fg = unsafe { GetForegroundWindow() } as isize;
+        if fg != self.fg_last {
+            self.fg_last = fg;
+            if self.fg_warmed.len() > 256 {
+                self.fg_warmed.clear();
+            }
+            if fg != 0 && self.fg_warmed.insert(fg) {
+                // SAFETY: plain thread message to our guard thread.
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(guard, WM_APP_WARMUP, 0, 0) };
+            }
+        }
+        let now = (WARMUP_SENT.load(Relaxed), WARMUP_SEEN.load(Relaxed), WARMUP_FAILED.load(Relaxed));
+        if now != self.warm_last {
+            self.warm_last = now;
+            klog!(
+                "warm-up: sent {} seen {} failed {}, hook latency last {} us max {} us",
+                now.0,
+                now.1,
+                now.2,
+                WARMUP_LAST_US.load(Relaxed),
+                WARMUP_MAX_US.load(Relaxed)
+            );
         }
     }
 
@@ -1326,6 +1405,17 @@ unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: L
     if code == HC_ACTION as i32 && lparam != 0 {
         // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
         let k = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        // Our own warm-up key: swallowed, never counted as a key event.
+        if seat_input::hotkey_guard::is_warmup(k.vkCode, k.dwExtraInfo) {
+            if wparam == 0x100 || wparam == 0x104 {
+                use std::sync::atomic::Ordering::Relaxed;
+                let lat = guard_clock_us().saturating_sub(WARMUP_AT_US.load(Relaxed));
+                WARMUP_LAST_US.store(lat, Relaxed);
+                WARMUP_MAX_US.fetch_max(lat, Relaxed);
+                WARMUP_SEEN.fetch_add(1, Relaxed);
+            }
+            return 1;
+        }
         // SAFETY: plain state queries.
         let (ctrl, shift) = unsafe { (GetAsyncKeyState(VK_CONTROL as i32) < 0, GetAsyncKeyState(VK_SHIFT as i32) < 0) };
         let n = HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1444,6 +1534,7 @@ fn start_hotkey_guard() -> Option<u32> {
             let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
             GUARD_TID.store(tid, std::sync::atomic::Ordering::Relaxed);
             let _ = tx.send(Some(tid));
+            send_warmup();
             // SAFETY: standard message loop of this thread; ends on WM_QUIT or an error.
             unsafe {
                 let mut msg: MSG = std::mem::zeroed();
@@ -1455,6 +1546,11 @@ fn start_hotkey_guard() -> Option<u32> {
                             klog!("hotkey guard not re-installed: {}", std::io::Error::last_os_error());
                             return;
                         }
+                        send_warmup();
+                        continue;
+                    }
+                    if msg.hwnd.is_null() && msg.message == WM_APP_WARMUP {
+                        send_warmup();
                         continue;
                     }
                     DispatchMessageW(&msg);
@@ -1566,6 +1662,9 @@ fn run_shell(args: ShellArgs) -> i32 {
         modified_threads: HashSet::new(),
         drag: None,
         diag_last: (0, 0, 0),
+        warm_last: (0, 0, 0),
+        fg_last: 0,
+        fg_warmed: HashSet::new(),
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {
