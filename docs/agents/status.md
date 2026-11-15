@@ -1667,3 +1667,45 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       minifilter attached, IddCx device OK and a virtual monitor added / removed, split-pad
       in the store; CodeIntegrity shows no block / warning (no 3033 / 3087 / 3089, only
       3116 / 3099 / 3085 information). No driver change needed.
+  - **Overnight batch 2026-11-16 (VM only; coordinator relay).**
+    - **MSI lifecycle on clean-logged-on: PASS.** Install (MSI ba917a9) + U1 config (seat
+      passwords) + repair `/fa`: service, config revision 2, 3 seats and the LSA secrets
+      kept. Major upgrade to a scratch 0.1.1 (versions bumped in Cargo.toml / package.json /
+      tauri.conf.json / both Cargo.lock only for that build, never committed): one product
+      (0.1.1), config and secrets kept. Uninstall `REMOVEUSERDATA=0`: ProgramData and
+      `HKLM\SOFTWARE\PulsarSplit` kept, a reinstall picks the config up; seat passwords and
+      seat-host accounts are deleted on every uninstall (by design, now in
+      installer/README.md). Uninstall `REMOVEUSERDATA=1`: nothing left (service, host
+      accounts, ProgramData, journal, both HKLM keys, credential provider, LSA secrets,
+      firewall rules, groups, tasks).
+    - **Remote seat on client Windows 11: PASS.** The config applies with the warning
+      `session_unavailable`; `start_seats` is refused with `session_unavailable` ("remote
+      seats need concurrent sessions"); seat stays off; the Terminal Server registry is
+      byte-identical (export hash), no RDP listener, firewall rule or session. Manager
+      (elevated) lists the seat under "Uzak koltuklar" as "Kapalı"; the reason text exists
+      in i18n but shows only on save / start (UX note).
+    - **U1 regression: one bug found and fixed (3e1003d).** Seat 2's lock screen links and
+      the password-less `switch_seat 1` preselect pass. `switch_seat 3` right after left
+      the console at a logon screen: the old password-less switch record (seat 1) still
+      answered LogonUI of the new console session, so the hand-over to seat 3 was never
+      "pending" and its one-time logon (armed 16 ms later) was never taken. A new hand-over
+      now supersedes an older switch record; regression test with a mutation check.
+      Not re-run in the VM (disk full, see below).
+    - **Driver Verifier under HVCI: PASS.** From `testsigning-hvci` (VBS 2 / HVCI 2):
+      input filter + minifilter under standard flags, reboot, kmdf_filter isolation
+      (keys never reached seat 1), 400-file I/O, minifilter unload / reload: no violation,
+      bugcheck, dump or CodeIntegrity warning; Verifier reset.
+    - **Gates:** `installer/scripts/ci-local.ps1` all green after 2530d7c (the API helper
+      test assumed no Pulsar Seat service on the build machine; this PC runs one).
+      Repairs of stray control characters left by earlier escaping slips (installer
+      README, ci-local.ps1, a comment in remote/win/wiring.rs).
+    - **MSIs:** ARM64 rebuilt from the clean tree 2530d7c: SHA-256
+      `1a4b5b5a69d66a5387f7fdcca175ecb7660dc847ad5c95e692ada534d8de4465`. **x64 NOT
+      rebuilt:** the build failed with "no space on device" (C: 0.0 GB free of 950 GB); the
+      x64 MSI in target\installer\dist is still the old 087cd09 one.
+    - **Morning items:** (1) C: is full: `Projects\pulsar\wt` holds ~296 GB (not touched);
+      deleting this repo's regenerable caches (target\dbg, target\exp, target\wf\debug,
+      ~13 GB) was denied by the permission system and skipped. (2) The test VM is
+      **PausedCritical** (Hyper-V paused it on the full disk) and could not be restored to
+      clean-logged-on. (3) x64 MSI rebuild and a VM re-run of U1 with 3e1003d once space is
+      free.
