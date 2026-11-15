@@ -80,9 +80,13 @@ mod tests {
     fn exports_answer_without_a_service() {
         assert_eq!(PulsarSeatApiVersion(), API_VERSION);
         assert_eq!(PulsarSeatMaxSeats(), 16);
-        // No PulsarSeat service on the build machine: 0, no panic.
-        assert_eq!(PulsarSeatCurrentSeat(), 0);
-        assert_eq!(PulsarSeatSeatOfProcess(std::process::id()), 0);
-        assert_eq!(PulsarSeatSeatOfSession(1), 0);
+        let seats = [PulsarSeatCurrentSeat(), PulsarSeatSeatOfProcess(std::process::id()), PulsarSeatSeatOfSession(1)];
+        if std::path::Path::new(r"\\.\pipe\PulsarSeat.Control").exists() {
+            // A dev box with Pulsar Seat installed: real answers, never out of range.
+            assert!(seats.iter().all(|s| *s <= PulsarSeatMaxSeats()), "{seats:?}");
+        } else {
+            // No PulsarSeat service on the build machine: 0, no panic.
+            assert_eq!(seats, [0, 0, 0]);
+        }
     }
 }
