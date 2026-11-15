@@ -1276,6 +1276,13 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         unsafe { EndPaint(h, &ps) };
         return 0;
     }
+    // Legacy keyboard messages reach the focus sink (the raw reader keeps them so the
+    // hotkey guard hook is called, `RawReaderConfig::kiosk_shell`); the shell acts on seat
+    // keys from raw input only. Swallowed so DefWindowProc never turns Alt+F4 into
+    // WM_CLOSE (which ends the shell) or F10 / Alt into menu mode.
+    if (0x0100..=0x0109).contains(&msg) {
+        return 0;
+    }
     if msg == WM_CLOSE {
         // Graceful end (someone closed a shell window): leave the loop, run shutdown.
         // SAFETY: plain call on this thread.
@@ -1603,7 +1610,7 @@ fn run_shell(args: ShellArgs) -> i32 {
     let fwd_tx = tx.clone();
     let mut forwarder = SeatForwarder::new(ChanSink { tx: fwd_tx, tid }, &InputSettings::default());
     let reader = RawReader::start(
-        RawReaderConfig::seat(&[]),
+        RawReaderConfig::kiosk_shell(),
         Box::new(move |n| match n {
             RawNotice::Event { unit, event } => {
                 let _ = forwarder.on_raw(&unit, &event);
