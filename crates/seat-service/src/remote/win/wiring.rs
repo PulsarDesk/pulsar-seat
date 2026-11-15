@@ -297,7 +297,7 @@ pub fn bluetooth(data_root: &Path) -> seat_pads::bluetooth::BtController {
     )
 }
 
-/// The one pad manager of both seat kinds. eedback routes local seats' virtual pads'
+/// The one pad manager of both seat kinds. Feedback routes local seats' virtual pads'
 /// feedback (rumble, lightbar, triggers) back to their physical pads; remote seats' pads
 /// have no target there and keep the null behaviour.
 fn pads(
