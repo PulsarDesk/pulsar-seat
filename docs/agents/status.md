@@ -163,7 +163,7 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     service launcher (docs corrected instead); passwordless seats on an NLA listener: design
     chosen (second loopback-only listener, architecture.md §4.1); built since (see the
     second-listener / fix-second-listener entry below).
-  - Verification (`CARGO_TARGET_DIR=targetgent-fix-rdp-client`): `cargo test -p seat-rdp`
+  - Verification (`CARGO_TARGET_DIR=target\agent-fix-rdp-client`): `cargo test -p seat-rdp`
     36 ok, `-p seat-host` 34 + 4 ok, `-p seat-proto` 11 ok, `-p seat-service` 134 ok;
     `cargo clippy -p seat-host -p seat-rdp -p seat-proto -p seat-service --all-targets -D
     warnings` clean for aarch64 and x86_64.
