@@ -28,6 +28,14 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
 use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, TerminateProcess, WaitForSingleObject};
 
+/// How long the reply pipe may stay open after the helper ended.
+const REPLY_EOF_WAIT: Duration = Duration::from_secs(3);
+
+/// The reader thread's output, or `None` when the pipe did not end within `limit`.
+fn reply_within(rx: &std::sync::mpsc::Receiver<Vec<u8>>, limit: Duration) -> Option<Vec<u8>> {
+    rx.recv_timeout(limit).ok()
+}
+
 /// Largest helper reply read (a CCD snapshot is a few KiB).
 const MAX_REPLY: u64 = 4 * 1024 * 1024;
 
@@ -144,10 +152,11 @@ impl ConsoleRunner for SessionConsoleRunner {
         let process = spawned.into_process();
         // Our copy of the write end must close, or the read never sees EOF.
         drop(writer);
-        let read = std::thread::spawn(move || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let mut out = Vec::new();
             let _ = reader.take(MAX_REPLY).read_to_end(&mut out);
-            out
+            let _ = tx.send(out);
         });
         let ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
         let ph = process.as_raw_handle() as HANDLE;
@@ -157,11 +166,13 @@ impl ConsoleRunner for SessionConsoleRunner {
             // SAFETY: our child; ends it so the pipe closes and the reader returns.
             unsafe { TerminateProcess(ph, 1) };
         }
-        let out = read.join().unwrap_or_default();
+        // The reply ends when every write end of the pipe is closed; a process the helper
+        // started could keep one open, so this wait is bounded too (VM test 2026-11-15).
+        let out = reply_within(&rx, REPLY_EOF_WAIT);
         if !done {
             return Err(BackendError::new(ErrorKind::Timeout, "helper_timeout", "display helper did not answer in time"));
         }
-        Ok(out)
+        out.ok_or_else(|| BackendError::new(ErrorKind::Timeout, "helper_output_open", "display helper output was not closed"))
     }
 }
 
@@ -188,6 +199,18 @@ mod tests {
         let cmd = SessionConsoleRunner::new().command_line(&args).unwrap();
         assert_eq!(cmd.matches(HELPER_FLAG).count(), 1, "{cmd}");
         assert!(cmd.contains(&format!("{HELPER_FLAG} snapshot")), "{cmd}");
+    }
+
+    /// A pipe kept open by another process (the identify overlay held the helper's stdout)
+    /// must not stall the caller forever.
+    #[test]
+    fn reply_wait_is_bounded() {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let t = std::time::Instant::now();
+        assert_eq!(reply_within(&rx, Duration::from_millis(50)), None);
+        assert!(t.elapsed() < Duration::from_secs(2));
+        tx.send(b"{}".to_vec()).unwrap();
+        assert_eq!(reply_within(&rx, Duration::from_millis(50)), Some(b"{}".to_vec()));
     }
 
     #[test]

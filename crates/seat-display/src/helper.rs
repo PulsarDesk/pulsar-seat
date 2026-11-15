@@ -89,8 +89,25 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
+/// Clear `HANDLE_FLAG_INHERIT` on this process's standard handles.
+fn no_inherit_std_handles() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+    for h in [std::io::stdin().as_raw_handle(), std::io::stdout().as_raw_handle(), std::io::stderr().as_raw_handle()] {
+        if !h.is_null() {
+            // SAFETY: our own standard handle; only its inherit flag changes.
+            unsafe { SetHandleInformation(h as _, HANDLE_FLAG_INHERIT, 0) };
+        }
+    }
+}
+
 fn spawn_overlay_child(json: &str) -> seat_core::backend::BackendResult<()> {
     let exe = std::env::current_exe().map_err(|e| BackendError::new(ErrorKind::Os, "identify", e.to_string()))?;
+    // Our stdout is the service's reply pipe and was inherited as an inheritable handle;
+    // std passes every inheritable handle to the child, so the long-lived overlay kept the
+    // pipe open and the service waited for its end forever (wizard_start never answered,
+    // VM test 2026-11-15). The overlay must not inherit any of our standard handles.
+    no_inherit_std_handles();
     Command::new(exe)
         .args([HELPER_FLAG, "identify-show", json])
         .stdin(Stdio::null())
