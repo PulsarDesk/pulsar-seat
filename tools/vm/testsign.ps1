@@ -98,6 +98,18 @@ foreach ($name in $Projects) {
         [System.IO.File]::WriteAllText($inf, $text, [System.Text.Encoding]::Unicode)
         Write-Host "$name : TEST ONLY altitude $testAltitude in the staged INF"
     }
+    if ($name -eq "seat-input-filter") {
+        # The Hyper-V synthetic keyboard is a VMBus device (no HID / PS/2 id), so the
+        # product's model lines never match it. TEST ONLY model line in the staged copy so
+        # the filter can be tested on the VM's keyboard stack.
+        $inf = Join-Path $dst "seat-input-filter.inf"
+        $text = [System.IO.File]::ReadAllText($inf)
+        $anchor = "%Ps2Kbd.Desc%  = SeatInput_Inst, *PNP0303"
+        if (-not $text.Contains($anchor)) { throw "keyboard model line not found in $inf" }
+        $text = $text.Replace($anchor, "$anchor`r`n%Kbd.Desc%     = SeatInput_Inst, VMBUS\{f912ad6d-2b17-48ea-bd65-f927a61c7684} ; Pulsar Seat TEST ONLY: Hyper-V synthetic keyboard")
+        [System.IO.File]::WriteAllText($inf, $text, [System.Text.Encoding]::Unicode)
+        Write-Host "$name : TEST ONLY Hyper-V keyboard model line in the staged INF"
+    }
     foreach ($bin in Get-ChildItem $dst -File | Where-Object { $_.Extension -in ".sys", ".dll" }) {
         Invoke-Tool $signtool @("sign", "/fd", "SHA256", "/sha1", $cert.Thumbprint, "/s", "My", $bin.FullName) "signtool $($bin.Name)"
     }
