@@ -405,6 +405,13 @@ fn create(class: &[u16], ex: u32, style: u32, r: Rect) -> HWND {
 }
 
 /// Transparent cursor for the sink window (AND mask 1, XOR mask 0).
+/// UTF-16 text for `DrawTextW`; `None` for an empty string (nothing to draw, and no
+/// dangling pointer handed to USER32).
+fn draw_text_buf(s: &str) -> Option<Vec<u16>> {
+    let w: Vec<u16> = s.encode_utf16().collect();
+    (!w.is_empty()).then_some(w)
+}
+
 fn blank_cursor() -> *mut c_void {
     let and = [0xFFu8; 128];
     let xor = [0u8; 128];
@@ -974,7 +981,10 @@ impl Shell {
             }
         };
         let text = |r: Rect, s: &str, c: u32, flags: u32| {
-            let mut w: Vec<u16> = s.encode_utf16().collect();
+            // An empty Vec's pointer is dangling (0x2 for u16) and DrawTextW reads it even
+            // with a length of 0: the shell crashed in USER32 whenever the bar had no
+            // notice line, e.g. with seat1_desktop = false (VM test 2026-11-15).
+            let Some(mut w) = draw_text_buf(s) else { return };
             let mut rc = RECT { left: r.x, top: r.y, right: r.x + r.width as i32, bottom: r.y + r.height as i32 };
             // SAFETY: buffer with explicit length.
             unsafe {
@@ -1476,8 +1486,15 @@ fn run_shell(args: ShellArgs) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::needs_state;
+    use super::{draw_text_buf, needs_state};
     use seat_input::kiosk::vk;
+
+    /// Empty bar text is never handed to DrawTextW (VM test 2026-11-15 crash).
+    #[test]
+    fn empty_text_is_not_drawn() {
+        assert_eq!(draw_text_buf(""), None);
+        assert_eq!(draw_text_buf("Ana"), Some(vec![u16::from(b'A'), u16::from(b'n'), u16::from(b'a')]));
+    }
 
     #[test]
     fn modifier_state_is_reapplied_until_released() {
