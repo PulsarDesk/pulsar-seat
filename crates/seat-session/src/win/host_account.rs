@@ -29,7 +29,7 @@ const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 
 use super::{owned, raw, wide, wide_secret};
 use crate::error::SysError;
-use crate::host_account::{AclOp, DESKTOP_ACCESS, TokenFacts, host_default_dacl_sddl, is_sid_string, winsta_access};
+use crate::host_account::{AclOp, DESKTOP_ACCESS, TokenFacts, host_default_dacl_sddl, is_sid_string, winsta_mask};
 
 /// A contained host token for `session_id` and the logon SID that has to be granted on the
 /// session's window station and desktop.
@@ -284,7 +284,7 @@ pub(crate) fn edit_dacl(handle: HANDLE, kind: SE_OBJECT_TYPE, sid: &str, mask: u
 /// **caller's** session. Run by the service as SYSTEM (no privileges, System integrity) in
 /// the target session; SYSTEM has full access to both objects there. `clipboard` (grant
 /// only) adds `WINSTA_ACCESSCLIPBOARD` to the window-station ACE.
-pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool) -> Result<(), SysError> {
+pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool, exit_windows: bool) -> Result<(), SysError> {
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, CloseWindowStation, OpenDesktopW, OpenWindowStationW};
     /// `READ_CONTROL | WRITE_DAC`.
     const ACCESS: u32 = 0x0002_0000 | 0x0004_0000;
@@ -294,7 +294,7 @@ pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool) -> Result<(),
     if ws.is_null() {
         return Err(SysError::last_win32("OpenWindowStationW"));
     }
-    let r = edit_dacl(ws as HANDLE, SE_WINDOW_OBJECT, sid, winsta_access(clipboard), op);
+    let r = edit_dacl(ws as HANDLE, SE_WINDOW_OBJECT, sid, winsta_mask(clipboard, exit_windows), op);
     // OpenDesktopW opens in the process's window station, which for the helper is WinSta0
     // (the service starts it on `winsta0\default`).
     let dname = wide("Default");

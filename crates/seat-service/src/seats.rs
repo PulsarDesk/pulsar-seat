@@ -745,6 +745,7 @@ impl Service {
             stdin_secret: Some(token.clone()),
             service_child: true,
             host_clipboard: self.seat_redirects_clipboard(seat),
+            host_exit_windows: false,
             host_seat: Some(seat),
             host_profile: self.seat_redirects_printers(seat),
         };
@@ -1067,6 +1068,7 @@ impl Service {
                 stdin_secret: None,
                 service_child: true,
                 host_clipboard: false,
+                host_exit_windows: false,
                 host_seat: None,
                 host_profile: false,
             };
@@ -1097,6 +1099,7 @@ impl Service {
                 stdin_secret: None,
                 service_child: false,
                 host_clipboard: false,
+                host_exit_windows: false,
                 host_seat: None,
                 host_profile: false,
             };
@@ -1207,6 +1210,7 @@ impl Service {
             stdin_secret: None,
             service_child: false,
             host_clipboard: false,
+            host_exit_windows: false,
             host_seat: None,
             host_profile: false,
         };

@@ -133,6 +133,19 @@ pub const WINSTA_ACCESSCLIPBOARD: u32 = 0x0004;
 pub fn winsta_access(clipboard: bool) -> u32 {
     if clipboard { WINSTA_ACCESS | WINSTA_ACCESSCLIPBOARD } else { WINSTA_ACCESS }
 }
+
+/// `WINSTA_EXITWINDOWS`: added only for the **console listener's** ACE (`--exit-windows`,
+/// maintainer decision 2026-11-15). USER32 initialisation of a process under the host
+/// account fails with `STATUS_DLL_INIT_FAILED` (0xc0000142) without it (bisected in the VM
+/// test: 0x4, 0x8 and 0x200 do not help, 0x40 does). Accepted risk: with it the listener's
+/// process could log the console user off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown and
+/// restart still need `SeShutdownPrivilege`, which the hardened token does not have.
+pub const WINSTA_EXITWINDOWS: u32 = 0x0040;
+
+/// Window-station mask with the optional rights of one host launch.
+pub fn winsta_mask(clipboard: bool, exit_windows: bool) -> u32 {
+    winsta_access(clipboard) | if exit_windows { WINSTA_EXITWINDOWS } else { 0 }
+}
 /// Rights on the `Default` desktop: `DESKTOP_READOBJECTS` (0x1), `DESKTOP_CREATEWINDOW`
 /// (0x2), `DESKTOP_CREATEMENU` (0x4), `DESKTOP_ENUMERATE` (0x40), `DESKTOP_WRITEOBJECTS`
 /// (0x80), `READ_CONTROL`, `SYNCHRONIZE`. No hooks, no journal record / playback, no
@@ -260,6 +273,9 @@ pub const DESKTOP_ACL_FLAG: &str = "--desktop-acl";
 
 /// Optional last flag of `--desktop-acl grant`: also `WINSTA_ACCESSCLIPBOARD`.
 pub const CLIPBOARD_FLAG: &str = "--clipboard";
+/// Optional flag of `--desktop-acl grant` (after `--clipboard` when both): also
+/// `WINSTA_EXITWINDOWS` (console listener only).
+pub const EXIT_WINDOWS_FLAG: &str = "--exit-windows";
 
 /// One run of the helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,15 +284,20 @@ pub struct AclRequest {
     pub sid: String,
     /// Grant only: the window-station ACE includes the clipboard.
     pub clipboard: bool,
+    /// Grant only: the window-station ACE includes `WINSTA_EXITWINDOWS`.
+    pub exit_windows: bool,
 }
 
 /// Arguments of the helper; `None` for a malformed SID. `clipboard` is ignored for a revoke
 /// (a revoke removes every ACE of the SID).
-pub fn desktop_acl_args(op: AclOp, sid: &str, clipboard: bool) -> Option<Vec<String>> {
+pub fn desktop_acl_args(op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Option<Vec<String>> {
     is_sid_string(sid).then(|| {
         let mut v = vec![DESKTOP_ACL_FLAG.into(), op.as_str().into(), "--sid".into(), sid.into()];
         if clipboard && op == AclOp::Grant {
             v.push(CLIPBOARD_FLAG.into());
+        }
+        if exit_windows && op == AclOp::Grant {
+            v.push(EXIT_WINDOWS_FLAG.into());
         }
         v
     })
@@ -293,13 +314,18 @@ pub fn parse_desktop_acl_args(args: &[String]) -> Option<Result<AclRequest, Stri
             Some("revoke") => AclOp::Revoke,
             _ => return Err("expected grant or revoke".to_string()),
         };
-        let clipboard = match rest.get(3).map(String::as_str) {
-            None => false,
-            Some(CLIPBOARD_FLAG) if op == AclOp::Grant && rest.len() == 4 => true,
-            Some(_) => return Err("unexpected argument after --sid".to_string()),
+        // Optional flags after the SID, in this order: --clipboard, --exit-windows.
+        let flags: Vec<&str> = rest.iter().skip(3).map(String::as_str).collect();
+        let (clipboard, exit_windows) = match flags.as_slice() {
+            [] => (false, false),
+            _ if op != AclOp::Grant => return Err("unexpected argument after --sid".to_string()),
+            [CLIPBOARD_FLAG] => (true, false),
+            [EXIT_WINDOWS_FLAG] => (false, true),
+            [CLIPBOARD_FLAG, EXIT_WINDOWS_FLAG] => (true, true),
+            _ => return Err("unexpected argument after --sid".to_string()),
         };
         match (rest.get(1).map(String::as_str), rest.get(2)) {
-            (Some("--sid"), Some(sid)) if is_sid_string(sid) => Ok(AclRequest { op, sid: sid.clone(), clipboard }),
+            (Some("--sid"), Some(sid)) if is_sid_string(sid) => Ok(AclRequest { op, sid: sid.clone(), clipboard, exit_windows }),
             _ => Err("expected --sid S-1-…".to_string()),
         }
     })();
@@ -630,21 +656,34 @@ mod tests {
 
     #[test]
     fn helper_args_round_trip() {
-        let req = |clipboard| AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard };
+        let req = |clipboard| AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard, exit_windows: false };
         for clip in [false, true] {
             let mut full = a(&["host.exe"]);
-            full.extend(desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42", clip).unwrap());
+            full.extend(desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42", clip, false).unwrap());
             assert_eq!(parse_desktop_acl_args(&full), Some(Ok(req(clip))));
         }
         // A revoke never carries the flag, and refuses it.
-        assert_eq!(desktop_acl_args(AclOp::Revoke, "S-1-5-5-0-1", true).unwrap().len(), 4);
+        assert_eq!(desktop_acl_args(AclOp::Revoke, "S-1-5-5-0-1", true, true).unwrap().len(), 4);
+        // The console listener's grant: --exit-windows (alone or after --clipboard).
+        for (clip, exit) in [(false, true), (true, true)] {
+            let mut full = vec!["host.exe".to_string()];
+            full.extend(desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42", clip, exit).unwrap());
+            assert_eq!(
+                parse_desktop_acl_args(&full),
+                Some(Ok(AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard: clip, exit_windows: exit }))
+            );
+        }
+        assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "grant", "--sid", "S-1-5-5-0-1", "--exit-windows", "--clipboard"])).unwrap().is_err());
+        assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "revoke", "--sid", "S-1-5-5-0-1", "--exit-windows"])).unwrap().is_err());
+        assert_eq!(winsta_mask(false, false), WINSTA_ACCESS);
+        assert_eq!(winsta_mask(false, true), WINSTA_ACCESS | WINSTA_EXITWINDOWS);
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "revoke", "--sid", "S-1-5-5-0-1", "--clipboard"])).unwrap().is_err());
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "grant", "--sid", "S-1-5-5-0-1", "--clipboard", "x"])).unwrap().is_err());
         assert_eq!(parse_desktop_acl_args(&a(&["x", "--seat", "2"])), None);
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "drop", "--sid", "S-1-5-5-0-1"])).unwrap().is_err());
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "grant", "--sid", "S-1-5;x"])).unwrap().is_err());
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "revoke", "--sid", "S-1-5-5-0-1", "extra"])).unwrap().is_err());
-        assert!(desktop_acl_args(AclOp::Revoke, "S-1-5-5-0-1 --x", false).is_none());
+        assert!(desktop_acl_args(AclOp::Revoke, "S-1-5-5-0-1 --x", false, false).is_none());
     }
 
     #[test]

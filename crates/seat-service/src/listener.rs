@@ -173,6 +173,8 @@ impl Service {
             service_child: true,
             // The console listener is not a seat: no clipboard redirection.
             host_clipboard: false,
+            // USER32 init under the host account needs WINSTA_EXITWINDOWS (VM test).
+            host_exit_windows: true,
             host_seat: None,
             host_profile: false,
         };

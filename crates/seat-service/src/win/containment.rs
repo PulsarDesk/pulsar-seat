@@ -72,7 +72,7 @@ pub trait HostSys: Send + Sync {
     /// SYSTEM, no privileges, System integrity (`HostTokenCompat=1`).
     fn compat_system_token(&self, session_id: u32) -> Result<Self::Token, String>;
     /// Run the `--desktop-acl` helper in `session_id` and wait for its success.
-    fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool) -> Result<(), String>;
+    fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Result<(), String>;
     /// The process (pid + creation time) still runs.
     fn alive(&self, pid: u32, created: u64) -> bool;
     fn session_exists(&self, session_id: u32) -> bool;
@@ -159,8 +159,8 @@ impl HostSys for WinHostSys {
     fn compat_system_token(&self, session_id: u32) -> Result<OwnedHandle, String> {
         seat_session::win::launch::restricted_system_token_in_session(session_id).map_err(|e| e.to_string())
     }
-    fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool) -> Result<(), String> {
-        run_acl_helper(&self.helper, session_id, op, sid, clipboard)
+    fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Result<(), String> {
+        run_acl_helper(&self.helper, session_id, op, sid, clipboard, exit_windows)
     }
     fn alive(&self, pid: u32, created: u64) -> bool {
         seat_session::win::process::is_running(pid, created)
@@ -183,6 +183,9 @@ pub struct HostRequest {
     pub session_id: u32,
     /// The seat redirects the clipboard (window-station clipboard right).
     pub clipboard: bool,
+    /// Console listener only: `WINSTA_EXITWINDOWS` on its window-station ACE (USER32 init
+    /// needs it; see `seat_session::host_account::WINSTA_EXITWINDOWS`).
+    pub exit_windows: bool,
     /// The seat whose host this is (`None` = console listener: shared account).
     pub seat: Option<SeatNumber>,
     /// Load the seat account's user profile for the host's lifetime.
@@ -239,7 +242,7 @@ impl<S: HostSys> GrantOps for SysOps<'_, S> {
         self.sys.session_exists(session_id)
     }
     fn revoke(&self, g: &Grant) -> Result<(), String> {
-        self.sys.acl_helper(g.session_id, AclOp::Revoke, &g.sid, false)
+        self.sys.acl_helper(g.session_id, AclOp::Revoke, &g.sid, false, false)
     }
     fn in_flight(&self, sid: &str) -> bool {
         self.in_flight.is_some_and(|f| f.contains(sid))
@@ -261,12 +264,12 @@ pub(crate) fn session_exists(session_id: u32) -> bool {
 
 /// Run `helper --desktop-acl <op> --sid <sid> [--clipboard]` as SYSTEM (no privileges,
 /// System integrity) in `session_id` and wait for exit code 0.
-fn run_acl_helper(helper: &Path, session_id: u32, op: AclOp, sid: &str, clipboard: bool) -> Result<(), String> {
+fn run_acl_helper(helper: &Path, session_id: u32, op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Result<(), String> {
     use seat_session::win::process::{SYSTEM_ONLY_SDDL, SpawnSpec, spawn};
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject};
-    let args = desktop_acl_args(op, sid, clipboard).ok_or_else(|| format!("bad SID {sid:?}"))?;
+    let args = desktop_acl_args(op, sid, clipboard, exit_windows).ok_or_else(|| format!("bad SID {sid:?}"))?;
     let cmd = seat_session::launch::command_line(helper, &args).map_err(|e| e.to_string())?;
     let token = seat_session::win::launch::restricted_system_token_in_session(session_id).map_err(|e| e.to_string())?;
     let sp = spawn(&SpawnSpec {
@@ -541,7 +544,7 @@ impl<S: HostSys> Containment<S> {
             book.record(Grant { session_id: req.session_id, sid: sid.clone(), pid: 0, created: 0 })?;
             in_flight.insert(sid.clone());
         }
-        if let Err(e) = self.sys.acl_helper(req.session_id, AclOp::Grant, &sid, req.clipboard) {
+        if let Err(e) = self.sys.acl_helper(req.session_id, AclOp::Grant, &sid, req.clipboard, req.exit_windows) {
             self.release(&sid);
             return Err(format!("desktop grant: {e}"));
         }
@@ -734,8 +737,8 @@ mod tests {
         fn compat_system_token(&self, _s: u32) -> Result<String, String> {
             Ok("compat".into())
         }
-        fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool) -> Result<(), String> {
-            self.call(format!("{op:?} {session_id} {sid}{}", if clipboard { " clip" } else { "" }));
+        fn acl_helper(&self, session_id: u32, op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Result<(), String> {
+            self.call(format!("{op:?} {session_id} {sid}{}{}", if clipboard { " clip" } else { "" }, if exit_windows { " exit" } else { "" }));
             if *self.helper_fail.lock().unwrap() == Some(op) { Err("helper exit code 3".into()) } else { Ok(()) }
         }
         fn alive(&self, pid: u32, _c: u64) -> bool {
@@ -747,7 +750,7 @@ mod tests {
     }
 
     fn rq(session_id: u32, clipboard: bool) -> HostRequest {
-        HostRequest { session_id, clipboard, seat: None, profile: false }
+        HostRequest { session_id, clipboard, exit_windows: false, seat: None, profile: false }
     }
 
     fn seat(n: u8) -> SeatNumber {
@@ -880,6 +883,16 @@ mod tests {
         assert!(c.grant_sids().is_empty());
         assert_eq!(c.sys.calls(), ["password L$PulsarSeat.HostAccount", "logon PulsarSeatHost 1", &format!("Grant 1 {sid} clip"), &format!("Revoke 1 {sid}")]);
         assert!(!c.account_failed());
+        // The console listener's grant (and only it) carries WINSTA_EXITWINDOWS; its ACE is
+        // journaled and revoked like every other when the process is gone.
+        let t = c.host_token(&HostRequest { exit_windows: true, ..rq(1, false) }).unwrap();
+        let sid2 = t.grant_sid.unwrap();
+        assert!(c.sys.calls().contains(&format!("Grant 1 {sid2} exit")), "{:?}", c.sys.calls());
+        assert_eq!(c.grant_sids(), vec![sid2.clone()]);
+        c.launched(&sid2, 101, 8);
+        c.exited(&[(101, Some(0))]);
+        assert!(c.grant_sids().is_empty());
+        assert_eq!(c.sys.calls().last(), Some(&format!("Revoke 1 {sid2}")));
     }
 
     #[test]

@@ -55,6 +55,9 @@ pub struct LaunchSpec {
     /// gets the window station's clipboard right (`seat_session::host_account::winsta_access`).
     /// `false` for everything else.
     pub host_clipboard: bool,
+    /// Console listener: as the contained host account its window-station ACE also gets
+    /// `WINSTA_EXITWINDOWS` (USER32 init needs it, maintainer decision 2026-11-15).
+    pub host_exit_windows: bool,
     /// Seat host of this seat: runs as the seat's own host account (`win::containment`,
     /// round 4 local-gaps). `None` for the console listener and everything else.
     pub host_seat: Option<seat_core::SeatNumber>,
