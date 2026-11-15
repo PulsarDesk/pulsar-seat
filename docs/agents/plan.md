@@ -198,3 +198,12 @@ otherwise:
   with a TEST ONLY altitude, split-pad) installed there with `pnputil` and run under Driver
   Verifier once. Memory Integrity, HVCI and VBS stay on / untouched everywhere; an HVCI
   block is a driver bug. Nothing changes on the host's boot or security configuration.
+- **Remote IDD role and HVCI in the test VM** (2026-11-16; the user's answer relayed by the
+  coordinator: "1 2 onay veriyorum" to (1) "VM'de remote rol testi: sürücü seviyesinde,
+  remote rolde adaptör + monitör oluşturmak" and (2) "VM'de HVCI testi: VM'de Memory
+  Integrity'yi açıp sürücülerimizi denemek. Açmak güvenliği artırır, azaltmaz."): only in
+  the VM PulsarSeatTest-arm64, nothing on the host. (1) remote-role adapter and monitor
+  through the driver's control interface, no stream server. (2) VBS + HVCI (Memory
+  Integrity) on in the VM if this Hyper-V ARM64 guest can run them under test-signing
+  (nested virtualization exposure allowed on the VM's configuration); nothing weakened to
+  force it; checkpoint `testsigning-hvci` if it works.
