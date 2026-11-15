@@ -1953,6 +1953,32 @@ fn switch_seat_over_the_pipe_preselects_the_target_tile() {
     assert!(!query(&h, &mut c).preselect);
 }
 
+/// A password-less switch to seat 1 followed by a start of seat 2: the fresh console's
+/// logon screen must not still preselect seat 1 (VM 2026-11-16: `switch_seat 1`, then
+/// `switch_seat 3` within the hand-over window; LogonUI was told "seat 1, preselect" and
+/// seat 3 never signed in).
+#[test]
+fn a_new_handover_supersedes_an_earlier_password_less_switch() {
+    let h = fus_harness();
+    let mut a = admin();
+    let home = seat_session_id(&h, s(1));
+    // Seat 1 is off the console; switching back to it has no password (preselect).
+    *h.f.fus.console_seat_away.lock().unwrap() = Some(home);
+    call(&h, &mut a, RequestBody::SwitchSeat { seat: s(1) }).unwrap();
+    assert!(h.s.lock().credprov.switch_to.as_ref().is_some_and(|t| t.seat == s(1)));
+    // Seat 2 (password stored) starts within the hand-over window.
+    *h.f.fus.console_seat_away.lock().unwrap() = None;
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    assert!(h.s.lock().credprov.switch_to.is_none(), "the start superseded the old switch");
+    // A fresh console session not bound to a seat yet: no stale seat 1 preselect.
+    let fresh = 900;
+    *h.p.console.lock().unwrap() = Some(fresh);
+    let mut c = logonui(&h, 990, fresh);
+    credprov_hello(&h, &mut c).unwrap();
+    let q = query(&h, &mut c);
+    assert!(!q.preselect && q.seat != Some(s(1)), "{q:?}");
+}
+
 #[test]
 fn credprov_no_auto_submit_without_an_account() {
     let h = fus_harness();

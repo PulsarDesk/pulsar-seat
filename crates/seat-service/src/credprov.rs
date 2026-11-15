@@ -326,6 +326,11 @@ impl Service {
         if seat.is_console() || self.backends().session.kind() != SessionBackendKind::FastUserSwitch {
             return;
         }
+        // A new hand-over of the console supersedes an earlier password-less switch: its
+        // record would still name the old target for HANDOVER_MS and the fresh logon screen
+        // would preselect that seat instead of waiting for this one (VM 2026-11-16:
+        // switch_seat 1, then switch_seat 3 -> seat 3 never signed in).
+        self.lock().credprov.switch_to = None;
         let console = self.platform.console_session();
         {
             let st = self.lock();
@@ -542,7 +547,10 @@ impl Service {
             // No password: the console went to a logon screen (the session itself is not on
             // the console); the provider there preselects this seat's tile.
             Ok(seat_core::backend::session::StartStep::Started(info)) if self.platform.console_session() != Some(info.session_id) => {
-                self.lock().credprov.switch_to = Some(Handover { seat, from_session: before, since_ms: self.now() });
+                let mut st = self.lock();
+                st.credprov.switch_to = Some(Handover { seat, from_session: before, since_ms: self.now() });
+                // This switch now owns the console's logon screen.
+                st.credprov.handover = None;
             }
             Ok(_) => self.lock().credprov.switch_to = None,
         }
