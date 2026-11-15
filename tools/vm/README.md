@@ -10,6 +10,7 @@ Scripts for testing an installed Pulsar Seat MSI inside a local Hyper-V test VM
 | `vm.ps1` | host (dot-source) | `Reset-TestVm`, `Install-TestMsi`, `Invoke-Vm`, `Invoke-Seatctl`, `Get-VmReport` over PowerShell Direct. |
 | `ui.ps1` | host | Synthetic keyboard and screenshots over Hyper-V WMI (`-Do "key:0x5B+0x52; type:cmd; key:0x0D; shot:x"`); `cred:<name>` types a VM password from the credential file without printing it. |
 | `scenarios.ps1` | host (dot-source after `vm.ps1`) | `Set-U1Config`, `Start-U1Seat`, `Set-U3Config`, `Update-VmConfig`, `Get-SeatSummary`. |
+| `testsign.ps1` | host | **VM driver round only (TEST ONLY).** `-Action Cert` makes the self-signed test certificate under `%USERPROFILE%\.pulsar-seat\testsign\` (key DPAPI-protected, never printed, never in the repo); `-Action Sign` test-signs the built driver packages into `target\vm\testsigned\<Platform>\` (TEST ONLY minifilter altitude in the staged INF). `check-payload` refuses every such file (`test_signed`). |
 
 Rules: Hyper-V Administrators membership is enough (no elevation on the host). Passwords
 travel only as `PSCredential` objects into the VM and are never printed. PowerShell

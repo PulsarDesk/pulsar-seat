@@ -10,6 +10,8 @@ import {
   hasHybridMetadata,
   checkDirs,
   checkSigned,
+  checkTestSigned,
+  TEST_SIGN_MARKER,
   hasCertificateTable,
   checkMachine,
   checkNotices,
@@ -418,6 +420,35 @@ describe("remote kind payload", () => {
       expect(v).toEqual(["microsoft_binary", "web_ui_asset"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("test-signing artefacts", () => {
+  const enc = (t: string) => new TextEncoder().encode(t);
+  const utf16 = (t: string) => {
+    const a = enc(t);
+    const b = new Uint8Array(a.length * 2);
+    a.forEach((c, i) => (b[i * 2] = c));
+    return b;
+  };
+  test("the marker in ASCII (a signer subject) or UTF-16LE (an INF) is refused", () => {
+    const sig = new Uint8Array([...pe(0xaa64), ...enc(`CN=${TEST_SIGN_MARKER} driver signing`)]);
+    expect(checkTestSigned("a.sys", sig)?.rule).toBe("test_signed");
+    expect(checkTestSigned("a.inf", utf16(`Instance1.Altitude = "409990" ; ${TEST_SIGN_MARKER}`))?.rule).toBe("test_signed");
+    expect(checkTestSigned("a.sys", pe(0xaa64))).toBeNull();
+    expect(checkTestSigned("a.cat", enc("Pulsar Seat release"))).toBeNull();
+  });
+  test("checkDirs refuses a test-signed binary and catalog anywhere in the payload", () => {
+    const d = mkdtempSync(join(tmpdir(), "payload-ts-"));
+    try {
+      writeFileSync(join(d, "tool.exe"), new Uint8Array([...pe(0xaa64), ...enc(TEST_SIGN_MARKER)]));
+      writeFileSync(join(d, "x.cat"), enc(TEST_SIGN_MARKER));
+      writeFileSync(join(d, "ok.exe"), pe(0xaa64));
+      const v = checkDirs([d], "arm64").filter((x) => x.rule === "test_signed");
+      expect(v.map((x) => x.path.split("/").pop()).sort()).toEqual(["tool.exe", "x.cat"]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
     }
   });
 });

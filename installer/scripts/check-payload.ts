@@ -89,6 +89,14 @@ const MS_DLL_PATTERNS: RegExp[] = [
 ];
 const CERT_EXT = new Set([".pfx", ".p12", ".cer", ".crt", ".der", ".pem", ".key", ".pvk", ".spc", ".p7b", ".sst"]);
 const PE_EXT = new Set([".exe", ".dll", ".sys"]);
+/**
+ * Subject marker of the VM test-signing certificate (tools/vm/testsign.ps1) and of the TEST
+ * ONLY minifilter altitude it writes into the staged INF. A file that carries it (in an
+ * Authenticode signature, a catalog or an INF, ASCII or UTF-16LE) is a test-signed VM
+ * artefact and never ships.
+ */
+export const TEST_SIGN_MARKER = "Pulsar Seat TEST ONLY";
+const TEST_SIGN_EXT = new Set([".exe", ".dll", ".sys", ".cat", ".inf", ".msi"]);
 const WEB_EXT = new Set([".html", ".htm"]);
 const WEB_DIRS = new Set(["web", "webui", "www"]);
 const BAD_DRIVERS = new Set([
@@ -170,6 +178,25 @@ export function findNameViolations(paths: string[], allowDrivers: boolean): Viol
     }
   }
   return out;
+}
+
+function indexOfBytes(hay: Uint8Array, needle: Uint8Array): number {
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+/** `test_signed` when the bytes carry [`TEST_SIGN_MARKER`] (ASCII or UTF-16LE). */
+export function checkTestSigned(path: string, bytes: Uint8Array): Violation | null {
+  const ascii = new TextEncoder().encode(TEST_SIGN_MARKER);
+  const utf16 = new Uint8Array(ascii.length * 2);
+  ascii.forEach((c, i) => (utf16[i * 2] = c));
+  if (indexOfBytes(bytes, ascii) >= 0 || indexOfBytes(bytes, utf16) >= 0) {
+    return { path, rule: "test_signed", severity: "error", detail: "VM test-signing artefact" };
+  }
+  return null;
 }
 
 /** Machines allowed in `apihelper/<folder>/` (the app-facing DLL for every app arch). */
@@ -458,6 +485,10 @@ export function checkDirs(dirs: string[], arch: Arch, opts: CheckOptions | boole
       for (const v of findNameViolations(files, o.allowDrivers ?? false)) all.push({ ...v, path: `${d}/${v.path}` });
     }
     for (const f of files) {
+      if (TEST_SIGN_EXT.has(ext(f))) {
+        const t = checkTestSigned(`${d}/${f}`, readFileSync(join(d, f)));
+        if (t) all.push(t);
+      }
       if (!PE_EXT.has(ext(f))) continue;
       const v = checkMachine(`${d}/${f}`, readHead(join(d, f)), arch, f);
       if (v) all.push(v);
