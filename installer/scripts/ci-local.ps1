@@ -119,7 +119,7 @@ try {
     # ---- payload (rust job release part)
     if ($Payload -or $Installers) {
         # Release helper DLLs in their own folder: Tauri's MSI bundler would pick up a DLL
-        # in <target>\<triple>elease (same rule as build-installer.ps1).
+        # in <target>\<triple>\release (same rule as build-installer.ps1).
         $helperDir = Join-Path $targetDir "apihelper"
         foreach ($t in $Targets) {
             $arch = $archOf[$t]
