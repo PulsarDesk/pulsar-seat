@@ -94,7 +94,7 @@ pub struct Writer {
 
 impl Writer {
     /// `(odd seq to write first, even seq to finish with)`.
-    pub fn next(&mut self) -> (u32, u32) {
+    pub fn advance(&mut self) -> (u32, u32) {
         let odd = self.seq.wrapping_add(1) | 1;
         self.seq = odd.wrapping_add(1);
         (odd, self.seq)
@@ -165,9 +165,9 @@ mod tests {
         assert_eq!(read_stable(|| encode(9, 1, 1, true)), None);
         assert_eq!(read_stable(|| [0u8; SECTION_SIZE]), None);
         let mut w = Writer::default();
-        let (a, b) = w.next();
+        let (a, b) = w.advance();
         assert!(a % 2 == 1 && b == a + 1);
-        let (c, _) = w.next();
+        let (c, _) = w.advance();
         assert!(c > b && c % 2 == 1);
     }
 }

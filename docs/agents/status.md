@@ -1725,3 +1725,25 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     (faf13c7). Manager: remote seat rows and seat page say "Başlatılamaz: eşzamanlı oturum
     yok" up front when the chosen or running session backend has no concurrent sessions
     (a06d140).
+  - 2026-11-17 (parity round, package kiosk, branch of this worktree): U3 kiosk gaps closed
+    in code, **all runtime behaviour HYPOTHESIS (nothing ran on hardware or in the VM)**.
+    (a) per-seat Windows users for kiosk seats 2+ (`seat_session::kiosk_account`,
+    seat-service `win::kiosk_logon`, `host_account::ensure_kiosk` / `prune_kiosk`,
+    `SessionLauncher::launch_as`; migration: missing `settings.kiosk.accounts` = per_seat;
+    fallback to the console user with probe note `kiosk_account_fallback`; focus mutex DACL
+    for every interactive user; conhost delegation in Pulsar kiosk accounts' hives);
+    (b) seat-1 console processes get the shim's raw-input data filter while kiosk seats run,
+    and the hotkey guard attributes legacy keys / clicks per device with `seat1_desktop =
+    true` (`--attribute`, `hotkey_guard::Attributor` / `MouseAttributor`); (c) kiosk map
+    includes USB hubs / other USB devices (XInput pads), kiosk apps' raw-input registrations
+    get `RIDEV_INPUTSINK`; (d) packaged apps by AUMID (`KioskShellApp.app_id`,
+    `IApplicationActivationManager`), hand-off / break-away / frame-window tracking
+    (`seat-host/src/kiosk/track.rs`), `KioskShellApp.fullscreen` (foreground + clip for the
+    focus leader, restore after focus-loss minimise); (e) router drives top-level scroll bars
+    (`WindowQuery::scroll_bar`, auto-repeat on the tick), seat cursor section +
+    `GetCursorPos` / `GetMessagePos` hooks (`seat_shim_core::kiosk_cursor`, `rt/cursor.rs`)
+    so popup menus open at the seat cursor; (f) Ctrl+Alt+Del / Win+L documented as not
+    blockable in user mode (manager limits text). Manager: per-seat-user toggle, "Kullanıcı:"
+    line, AUMID + full-screen fields. Gates green: cargo test 1650 (baseline 1629), clippy
+    aarch64 + x86_64, manager 202 (199) / check / build, shim test + clippy x64 + check i686,
+    bun test installer/scripts 51. No driver touched. Hardware tests needed: everything above.

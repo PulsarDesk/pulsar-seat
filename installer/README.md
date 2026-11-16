@@ -71,7 +71,8 @@ installer/scripts` covers the scripts.
   `msiexec /x PulsarSeat_<v>_<arch>.msi /qn REMOVEUSERDATA=1`. The update download cache
   (`%ProgramData%\Pulsar Seat\updates\`) is deleted on every uninstall.
   Upgrades keep the config and the LSA secrets. Every uninstall deletes the seat passwords
-  and the seat-host accounts with their LSA secrets, also with `REMOVEUSERDATA=0` (no
+  and the seat-host accounts and Pulsar's kiosk accounts (`PulsarKiosk<NN>`, with their
+  profiles; 2026-11-17) with their LSA secrets, also with `REMOVEUSERDATA=0` (no
   stored password outlives the product): a reinstall finds the kept configuration (seats,
   backends, revision) but the seat passwords must be set again (VM test 2026-11-16).
 

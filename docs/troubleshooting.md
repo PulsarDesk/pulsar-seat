@@ -404,11 +404,35 @@ sc stop PulsarSeat
 4. Kilit hâlâ kalkmadıysa oturumu kapatıp yeniden açın; imleç kilidi ve ön plan kilidi
    oturumla birlikte biter.
 
-Bilinen sınırlar: kiosk koltuklarında giriş yalnızca pencere iletileriyle çalışan
-uygulamalara ulaşır. Ham giriş, DirectInput ya da XInput kullanan oyunlar, tam ekran
-özel moddaki oyunlar ve mağaza (UWP / MSIX) uygulamaları kiosk koltuğunda çalışmaz.
-Giriş süzgeci kurulu değilse kiosk koltuklarının tuşları 1. koltuğun öndeki penceresine de
-ulaşabilir (yönetici uygulamasında "Giriş tam yalıtılmıyor" notu).
+Bilinen sınırlar: ham giriş, DirectInput ya da XInput kullanan oyunlar koltuğun kendi
+aygıtlarını yalnızca uygulama başına yalıtım açıksa alır. Tam ekran oyunlar için kiosk
+uygulamasında "Tam ekran" seçin; bilgisayarda aynı anda yalnızca bir oyun gerçek tam
+ekranda olabilir. Mağaza (UWP / MSIX) uygulamaları uygulama kimliğiyle (AUMID) eklenir ve
+her Windows sürümünde açılmayabilir. Giriş süzgeci kurulu değilse Pulsar kiosk
+klavyelerinin sistem tuşlarını aygıta göre ayırıp 1. koltuktan uzak tutmaya çalışır; kiosk
+farelerinin hareketi 1. koltuğun imlecini yine oynatabilir (yönetici uygulamasında "Giriş
+tam yalıtılmıyor" notu). Ctrl+Alt+Del ve Win+L hiçbir kullanıcı kipi programıyla
+engellenemez.
+
+## 9a. Kiosk koltuğu kendi kullanıcısıyla açılmıyor / eski ayarlar kayboldu
+
+2026-11-17'den beri 2. ve sonraki kiosk koltukları kendi Windows kullanıcısıyla çalışır:
+koltuğa hesap ve parola kayıtlıysa o hesapla, değilse Pulsar'ın oluşturduğu gizli yerel
+hesapla (`PulsarKiosk02` …). Bu hesaplar oturum açma ekranında görünmez ve Uzak Masaüstü
+ya da ağ üzerinden oturum açamaz.
+
+1. Güncellemeden önce kiosk uygulamalarının ayarları ve verileri 1. koltuğun kullanıcısının
+   profilindeydi; yeni koltuk kullanıcısının profili boş başlar. Bu veriler taşınmaz;
+   gerekiyorsa uygulamanın kendi dışa / içe aktarma özelliğini kullanın.
+2. Yönetici uygulamasında "Bir kiosk koltuğunun kendi kullanıcısı açılamadı" notu varsa o
+   koltuk 1. koltuğun kullanıcısıyla çalışıyordur. Hizmet günlüğünde (`logs\service.log`)
+   `could not be logged on` satırına bakın: kayıtlı parola yanlışsa koltuğun hesabını ve
+   parolasını yeniden girin; `PulsarKiosk..` adında Pulsar'ın oluşturmadığı bir hesap
+   varsa onu yeniden adlandırın.
+3. Eski davranışa dönmek için Temel sekmesinde "Her kiosk koltuğu kendi Windows
+   kullanıcısıyla çalışsın" seçeneğini kapatın. Pulsar'ın kiosk hesapları ve profilleri
+   koltuk kiosk koltuğu olmaktan çıkınca (hizmetin sonraki açılışında) ya da kaldırmada
+   silinir; seçeneği kapatmak onları silmez.
 
 ## 10. Kiosk koltuğunun sesi kendi aygıtından çıkmıyor
 

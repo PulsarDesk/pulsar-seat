@@ -276,7 +276,7 @@ pub(crate) fn run_acl_helper_args(helper: &Path, session_id: u32, args: &[String
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject};
-    let cmd = seat_session::launch::command_line(helper, &args).map_err(|e| e.to_string())?;
+    let cmd = seat_session::launch::command_line(helper, args).map_err(|e| e.to_string())?;
     let token = seat_session::win::launch::restricted_system_token_in_session(session_id).map_err(|e| e.to_string())?;
     let sp = spawn(&SpawnSpec {
         token: Some(token.as_raw_handle() as HANDLE),

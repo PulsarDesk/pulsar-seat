@@ -271,7 +271,7 @@ impl CursorSection {
 
     fn put(&mut self, x: i32, y: i32, alive: bool) {
         use seat_shim_core::kiosk_cursor::encode;
-        let (odd, even) = self.writer.next();
+        let (odd, even) = self.writer.advance();
         let busy = encode(odd, x, y, alive);
         let done = encode(even, x, y, alive);
         // SAFETY: our SECTION_SIZE-byte view; volatile so the order of the writes holds.

@@ -28,7 +28,16 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
 | `rds_loopback` (default) | `backends::rds_loopback` | RDP session on Windows Server + RDSH; seat host connects to `127.0.0.2:<listener port>` |
 | `termsrv_wrapper` (experimental, off) | `backends::termsrv_wrapper` + `termwrap` (feature `experimental-client-sku`) | same, on a client SKU through an operator-installed TermService wrapper |
 | `fast_user_switch` | `backends::fast_user_switch` | own session per seat, one on the console at a time (`WTSConnectSessionW` / `WTSDisconnectSession`) |
-| `desktops` | `backends::desktops` | kiosk app in the console session on the seat's monitors (shared desktop) or on a per-seat desktop object (`CreateDesktopW`, one visible at a time) |
+| `desktops` | `backends::desktops` | kiosk app in the console session on the seat's monitors (shared desktop) or on a per-seat desktop object (`CreateDesktopW`, one visible at a time); kiosk shells of seats 2+ run as the seat's own Windows user (`kiosk_account`, 2026-11-17) |
+
+- **Per-seat kiosk users** (`kiosk_account`, 2026-11-17): pure identity rule
+  (`identity_for`: console user for seat 1 and `accounts = shared`, the seat's account with
+  a stored password, else `PulsarKiosk<NN>`), account names / LSA secret names / logon
+  rights / desktop masks, the `SeatLogons` / `SeatLogon` traits the backend uses
+  (`DesktopsOptions::logons`; fake `fake::FakeSeatLogons`), `SessionLauncher::launch_as`
+  (Windows: duplicated primary token, same job and spawn path) and
+  `win::host_account::interactive_token_in_session`. The Windows logon (password, grant,
+  profile) is seat-service `win::kiosk_logon`. **Untested on hardware.**
 
 - **Probe** (`HostProbe.availability`): edition / RDSH role (`TSAppCompat`), ServiceDll stock
   (else `foreign_service_dll`), reference product (`reference_product_present`), TermService

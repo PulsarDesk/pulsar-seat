@@ -5,6 +5,10 @@
 //! owns the foreground window and a raw-input registration is not called: VM bisect
 //! 2026-11-15). Commands arrive as single bytes on stdin; log lines go to the inherited
 //! stderr (the shell's log). The hook thread does no I/O; a logger thread writes the lines.
+//!
+//! `--attribute` (`seat1_desktop = true`, parity 2026-11-17): the helper does read raw
+//! input, on its own thread and message-only window (it never owns the foreground), and
+//! decides per device; see the "attributing mode" section below.
 
 use super::guard::GuardCmd;
 use seat_core::SeatNumber;
