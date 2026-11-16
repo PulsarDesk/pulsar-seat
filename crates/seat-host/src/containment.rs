@@ -30,7 +30,7 @@ pub fn dispatch_acl(args: &[String]) -> Option<i32> {
     };
     #[cfg(windows)]
     {
-        Some(match seat_session::win::host_account::edit_session_desktop(&req.sid, req.op, req.clipboard, req.exit_windows) {
+        Some(match seat_session::win::host_account::edit_session_desktop_masks(&req.sid, req.op, req.masks().0, req.masks().1) {
             Ok(()) => ACL_EXIT_OK,
             Err(e) => {
                 eprintln!("pulsar-seat-host --desktop-acl {:?} {}: {e}", req.op, req.sid);

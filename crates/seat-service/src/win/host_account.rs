@@ -200,7 +200,12 @@ impl AccountOps for WinAccountOps {
             (s, c)
         };
         // Only the account Pulsar created (its comment) is ours to maintain or delete.
-        if comment != seat_session::host_account::ACCOUNT_COMMENT {
+        let ours = if seat_session::kiosk_account::is_kiosk_account_name(name) {
+            seat_session::kiosk_account::KIOSK_COMMENT
+        } else {
+            seat_session::host_account::ACCOUNT_COMMENT
+        };
+        if comment != ours {
             return Ok(Lookup::Foreign);
         }
         sid.map(Lookup::User).ok_or_else(|| "user SID not readable".into())
@@ -451,6 +456,16 @@ pub fn ensure_seat(seat: SeatNumber, group_sid: &str) -> Result<HostAccount, Str
 /// [`crate::host_account::prune`] with the real system.
 pub fn prune(keep: &[SeatNumber]) -> Vec<String> {
     crate::host_account::prune(&WinAccountOps, keep)
+}
+
+/// [`crate::host_account::ensure_kiosk`] with the real system.
+pub fn ensure_kiosk(seat: SeatNumber) -> Result<HostAccount, String> {
+    crate::host_account::ensure_kiosk(&WinAccountOps, seat)
+}
+
+/// [`crate::host_account::prune_kiosk`] with the real system.
+pub fn prune_kiosk(keep: &[SeatNumber]) -> Vec<String> {
+    crate::host_account::prune_kiosk(&WinAccountOps, keep)
 }
 
 /// [`crate::host_account::remove_all`] with the real system (uninstall).

@@ -430,9 +430,21 @@ export const t = {
     title: (seat: number) => `${seat}. koltuk: kiosk koltuğu`,
     enable: 'Bu koltuk kiosk koltuğu olsun',
     intro:
-      'Kiosk koltuğu 1. koltukla aynı Windows oturumunda, aynı kullanıcıyla çalışır. Koltuğun ekranlarında yalnızca aşağıdaki uygulamalar açılır. Klavyesi ve faresi yalnızca bu uygulamalara gider; ancak bu, 1. koltuk da kiosk koltuğuysa ya da giriş filtresi etkinse geçerlidir.',
+      'Kiosk koltuğu 1. koltukla aynı Windows oturumunda çalışır; “her kiosk koltuğu kendi Windows kullanıcısıyla çalışsın” açıksa (varsayılan) kendi kullanıcı profili, ayarları ve uygulama verileri olur. Koltuğun ekranlarında yalnızca aşağıdaki uygulamalar açılır. Klavyesi ve faresi yalnızca bu uygulamalara gider; ancak bu, 1. koltuk da kiosk koltuğuysa ya da giriş filtresi etkinse tam olarak geçerlidir.',
     limits:
-      'Sınırlar: bütün koltuklar aynı kullanıcı profilini ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar, tam ekran oyunlar, Mağaza (UWP / MSIX) uygulamaları ve zaten açık bir kopyaya devreden programlar (ör. ayrı profil verilmemiş tarayıcılar) kiosk koltuğunda çalışmaz. Ses: kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı verirseniz, koltuğun uygulamaları Windows 10 1803 ve sonrasında uygulama başına varsayılan aygıt olarak bunu kullanır (belgelenmemiş bir Windows arabirimi; Windows güncellemeleri bunu bozabilir, o zaman ses 1. koltuğun varsayılan aygıtından çıkar). Aynı programı iki kiosk koltuğunda kullanmak bu ayarı paylaştırır. Kiosk koltuğu tam bir kilit değildir: 1. koltuk normal masaüstü olarak kalıyorsa Windows sistem tuşları (Windows tuşu, Win+R, Win+E, Win+L, Alt+Tab, Ctrl+Shift+Esc) her klavyeden çalışır ve 1. koltuğun ekranında Başlat menüsünü, Çalıştır penceresini, Gezgin’i veya Görev Yöneticisi’ni açabilir. 1. koltuk masaüstü olarak kullanılmıyorsa kiosk kabuğu Windows tuşlarını, Alt+Tab, Alt+Esc, Ctrl+Esc ve Ctrl+Shift+Esc tuşlarını yutar; Win+L yine çalışır. Ctrl+Alt+Del hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir; buradan oturumu kapatmak bütün koltukları kapatır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
+      'Sınırlar: bütün koltuklar aynı Windows oturumunu ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar ve uygulamalar koltuğun kendi aygıtlarını yalnızca uygulama başına yalıtım (Gelişmiş sekmesi) açıksa alır. Tam ekran oyunlar için uygulamada “Tam ekran” seçin: oyun öne geçer, ama aynı anda bilgisayarda yalnızca bir oyun gerçek tam ekranda olabilir. Mağaza (UWP / MSIX) uygulamaları uygulama kimliğiyle (AUMID) eklenir; her Windows sürümünde açılmayabilirler. Zaten açık bir kopyaya devreden programlar koltuğun kendi kullanıcısıyla çalışıyorsa koltukta kalır. Ses: kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı verirseniz, koltuğun uygulamaları Windows 10 1803 ve sonrasında uygulama başına varsayılan aygıt olarak bunu kullanır (belgelenmemiş bir Windows arabirimi; Windows güncellemeleri bunu bozabilir, o zaman ses 1. koltuğun varsayılan aygıtından çıkar). Kiosk koltuğu tam bir kilit değildir: Ctrl+Alt+Del ve Win+L Windows tarafından kullanıcı kipindeki her programdan önce işlenir; hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir ve buradan oturumu kapatmak bütün koltukları kapatır. Diğer sistem tuşları (Windows tuşu, Win+R, Win+E, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc) kiosk klavyelerinden 1. koltuğun masaüstüne ulaşmaz; giriş filtresi yoksa bu, klavyeleri ayırt eden en iyi çaba yöntemiyle yapılır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
+    appId: 'Mağaza uygulaması kimliği (AUMID, isteğe bağlı)',
+    appIdHint: 'Örnek: Microsoft.WindowsCalculator_8wekyb3d8bbwe!App. Doluysa program yolu gerekmez.',
+    notAppId: 'Geçersiz uygulama kimliği (Paket!Uygulama biçiminde olmalı).',
+    fullscreen: 'Tam ekran',
+    perSeatAccounts: 'Her kiosk koltuğu kendi Windows kullanıcısıyla çalışsın',
+    perSeatAccountsHint:
+      'Açıkken 2. ve sonraki kiosk koltukları kendi kullanıcısıyla çalışır: koltuğa hesap ve parola kayıtlıysa o hesapla, değilse Pulsar’ın oluşturduğu gizli bir yerel hesapla (PulsarKiosk02 …). Her koltuğun profili, ayarları ve uygulama verileri ayrı olur. İlk açılışta yeni profil oluşturulur; eskiden 1. koltuğun kullanıcısında kalan uygulama verileri taşınmaz. Kapalıyken bütün kiosk koltukları 1. koltuğun kullanıcısıyla çalışır.',
+    account: {
+      console: 'Kullanıcı: 1. koltuğun kullanıcısı',
+      seat: (user: string) => `Kullanıcı: ${user}`,
+      auto: (user: string) => `Kullanıcı: ${user} (Pulsar hesabı)`
+    },
     appTitle: 'Döşeme adı',
     program: 'Program yolu',
     args: 'Bağımsız değişkenler',
@@ -447,9 +459,9 @@ export const t = {
     notAbsolute: 'Tam yol gerekiyor (sürücü harfiyle ya da \\\\sunucu\\paylaşım ile başlamalı).',
     seatOneDesktop: '1. koltuk normal masaüstü olarak kalsın',
     seatOneDesktopHint:
-      'Açıkken kiosk koltukları öne geçmez. Giriş filtresi yoksa kiosk koltuklarının tuşları ve fareleri 1. koltuğa da gider: fareleri 1. koltuğun imlecini oynatır ve pencerelerine tıklar. 1. koltuğun imleci de kiosk ekranlarına girip oradaki uygulamaları etkinleştirebilir; o uygulamalar bundan sonra 1. koltukta yazılanları alır. Giriş filtresi etkinse kiosk koltuklarının girişi hizmet üzerinden yalnızca kendi kabuğuna gider. Kapalıyken 1. koltuk da kiosk koltuğu olur ve kendi uygulama listesini kullanır.',
+      'Açıkken kiosk koltukları öne geçmez. Giriş filtresi yoksa Pulsar, kiosk klavyelerinden gelen Windows tuşunu, Alt+Tab, Alt+Esc, Ctrl+Esc ve Ctrl+Shift+Esc tuşlarını aygıta göre ayırıp 1. koltuktan uzak tutar (1. koltuğun kendi klavyesi bunları kullanmaya devam eder); Windows izin verirse kiosk klavyelerinin diğer tuşları ve kiosk farelerinin tıklamaları da 1. koltuğa gitmez. Kiosk farelerinin hareketi 1. koltuğun imlecini yine oynatabilir. 1. koltuğun uygulamaları, uygulama başına yalıtım açıksa kiosk aygıtlarını ham girişte görmez. Giriş filtresi etkinse kiosk koltuklarının girişi hizmet üzerinden yalnızca kendi kabuğuna gider. Kapalıyken 1. koltuk da kiosk koltuğu olur ve kendi uygulama listesini kullanır.',
     systemKeys:
-      'Windows sistem tuşları (Windows tuşu, Alt+Tab, Ctrl+Shift+Esc) ve Ctrl+Alt+Del kiosk koltuklarından da çalışır ve bütün koltukları etkiler.',
+      'Ctrl+Alt+Del (güvenli dikkat dizisi) ve Win+L kullanıcı kipinde engellenemez: hangi klavyeden basılırsa basılsın bütün koltukları etkiler. Diğer Windows sistem tuşları kiosk klavyelerinden 1. koltuğa ulaşmaz (giriş filtresi yoksa aygıta göre ayırma en iyi çaba ile yapılır).',
     backendOnly: 'Kiosk koltukları yalnızca “Eşzamanlı kiosk koltukları” oturum yöntemiyle çalışır.',
     audio: {
       routed: (render: string | null, capture: string | null) =>
@@ -671,7 +683,9 @@ export const t = {
     no_per_user_isolation: 'Bütün koltuklar aynı Windows kullanıcısıyla çalışır (kullanıcı yalıtımı yok)',
     one_kiosk_visible_at_a_time: 'Aynı anda yalnızca bir kiosk masaüstü görünür',
     kiosk_shell_seat_aware_apps_only:
-      'Kiosk koltuklarında giriş yalnızca pencere iletileriyle çalışan uygulamalara ulaşır; ham giriş, DirectInput / XInput kullanan oyunlar ve mağaza (UWP) uygulamaları çalışmaz',
+      'Kiosk koltuklarında giriş pencere iletileriyle gelir; ham giriş, DirectInput / XInput kullanan oyunlar koltuğun aygıtlarını yalnızca uygulama başına yalıtım açıksa alır; tam ekran ve mağaza (UWP) uygulamaları en iyi çaba ile desteklenir',
+    kiosk_per_seat_accounts: 'Kiosk koltukları kendi Windows kullanıcılarıyla çalışabilir (2. koltuktan başlayarak)',
+    kiosk_account_fallback: 'Bir kiosk koltuğunun kendi kullanıcısı açılamadı; o koltuk 1. koltuğun kullanıcısıyla çalışıyor (hizmet günlüğüne bakın)',
     no_privacy_from_console: 'Koltuğun görüntüsü 1. koltuktan gizlenemez',
     audio_off: 'Ses kapalı',
     shared_fallback_unconfigured: 'Ortak ses aygıtı seçilmemiş; koltuk sessiz kalabilir',

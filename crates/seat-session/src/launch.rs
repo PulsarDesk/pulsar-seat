@@ -56,6 +56,13 @@ pub trait SessionLauncher: Send + Sync {
     /// Starts the process suspended, puts it into the per-seat job (created once,
     /// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), then resumes it.
     fn launch(&self, seat: SeatNumber, spec: &LaunchSpec) -> Result<Launched, SysError>;
+    /// [`SessionLauncher::launch`] with a caller-provided token (a kiosk seat's own user,
+    /// `crate::kiosk_account::SeatLogon::token`, a raw handle valid during the call).
+    /// Launchers that cannot take one refuse.
+    fn launch_as(&self, seat: SeatNumber, spec: &LaunchSpec, token: usize) -> Result<Launched, SysError> {
+        let _ = (seat, spec, token);
+        Err(SysError::Other("this launcher cannot start a process with a given token".into()))
+    }
     /// Ends every process in the seat's job.
     fn kill_job(&self, seat: SeatNumber) -> Result<(), SysError>;
     /// The process is still running.

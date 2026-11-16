@@ -4,7 +4,7 @@
 <script lang="ts">
   import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
-  import { formatArgs, isAbsoluteWindowsPath, parseArgs } from '#lib/model.ts';
+  import { formatArgs, isAbsoluteWindowsPath, isAppUserModelId, parseArgs } from '#lib/model.ts';
   import { MAX_KIOSK_APPS, type KioskShell } from '#lib/types.ts';
 
   interface Props {
@@ -15,20 +15,21 @@
   }
   let { seat, shell, onSave, onCancel }: Props = $props();
 
-  type Row = { title: string; command: string; args: string; autostart: boolean; monitor: number };
+  type Row = { title: string; command: string; args: string; autostart: boolean; monitor: number; appId: string; fullscreen: boolean };
   // svelte-ignore state_referenced_locally
   let enabled = $state(shell !== null);
   // svelte-ignore state_referenced_locally
   let rows = $state<Row[]>(
-    (shell?.apps ?? []).map((a) => ({ title: a.title, command: a.command, args: formatArgs(a.args ?? []), autostart: a.autostart, monitor: a.monitor + 1 }))
+    (shell?.apps ?? []).map((a) => ({ title: a.title, command: a.command, args: formatArgs(a.args ?? []), autostart: a.autostart, monitor: a.monitor + 1, appId: a.app_id ?? '', fullscreen: a.fullscreen ?? false }))
   );
   // svelte-ignore state_referenced_locally
   let idle = $state(shell?.idle_reset_minutes ?? 0);
 
   const bad = $derived(rows.map((r) => r.command.trim() !== '' && !isAbsoluteWindowsPath(r.command)));
+  const badId = $derived(rows.map((r) => r.appId.trim() !== '' && !isAppUserModelId(r.appId)));
   const idleBad = $derived(!Number.isInteger(idle) || idle < 0 || idle > 1440);
   const tooMany = $derived(rows.length > MAX_KIOSK_APPS);
-  const invalid = $derived(enabled && (bad.some(Boolean) || idleBad || tooMany));
+  const invalid = $derived(enabled && (bad.some(Boolean) || badId.some(Boolean) || idleBad || tooMany));
 
   function submit(e: Event) {
     e.preventDefault();
@@ -39,10 +40,19 @@
     }
     onSave({
       apps: rows
-        .filter((r) => r.command.trim() !== '')
+        .filter((r) => r.command.trim() !== '' || r.appId.trim() !== '')
         .map((r) => {
           const args = parseArgs(r.args);
-          return { title: r.title.trim(), command: r.command.trim(), autostart: r.autostart, monitor: Math.max(0, (r.monitor || 1) - 1), ...(args.length ? { args } : {}) };
+          const appId = r.appId.trim();
+          return {
+            title: r.title.trim(),
+            command: r.command.trim(),
+            autostart: r.autostart,
+            monitor: Math.max(0, (r.monitor || 1) - 1),
+            ...(args.length ? { args } : {}),
+            ...(appId ? { app_id: appId } : {}),
+            ...(r.fullscreen ? { fullscreen: true } : {})
+          };
         }),
       idle_reset_minutes: idle
     });
@@ -74,13 +84,20 @@
             <span>{t.kiosk.monitor}</span>
             <input type="number" min="1" max="16" bind:value={row.monitor} />
           </label>
+          <label class="field">
+            <span>{t.kiosk.appId}</span>
+            <input bind:value={row.appId} aria-invalid={badId[i] ? 'true' : 'false'} spellcheck="false" title={t.kiosk.appIdHint} />
+          </label>
           <label class="toggle"><input type="checkbox" bind:checked={row.autostart} /> {t.kiosk.autostart}</label>
+          <label class="toggle"><input type="checkbox" bind:checked={row.fullscreen} /> {t.kiosk.fullscreen}</label>
           <button type="button" onclick={() => rows.splice(i, 1)}>{t.kiosk.remove}</button>
         </div>
         {#if bad[i]}<p class="error" role="alert">{t.kiosk.notAbsolute}</p>{/if}
+        {#if badId[i]}<p class="error" role="alert">{t.kiosk.notAppId}</p>{/if}
       {/each}
       {#if tooMany}<p class="error" role="alert">{t.kiosk.tooMany}</p>{/if}
-      <button type="button" disabled={rows.length >= MAX_KIOSK_APPS} onclick={() => rows.push({ title: '', command: '', args: '', autostart: false, monitor: 1 })}>{t.kiosk.add}</button>
+      <p class="hint">{t.kiosk.appIdHint}</p>
+      <button type="button" disabled={rows.length >= MAX_KIOSK_APPS} onclick={() => rows.push({ title: '', command: '', args: '', autostart: false, monitor: 1, appId: '', fullscreen: false })}>{t.kiosk.add}</button>
       <label class="field">
         <span>{t.kiosk.idle}</span>
         <input type="number" min="0" max="1440" bind:value={idle} aria-invalid={idleBad ? 'true' : 'false'} />

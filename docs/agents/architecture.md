@@ -210,7 +210,7 @@ Defined in `seat-core::backend`; all `Send + Sync`, synchronous, errors as
 | `rds_loopback` | Windows Server + RD Session Host (x64 in practice) | **yes** | RDP loopback to `127.0.0.2`, client name `PSEAT-NN` |
 | `termsrv_wrapper` | client SKUs with an operator-installed TermService wrapper | **off; experimental**, needs `experimental_ack == EXPERIMENTAL_WARNING_VERSION` | same as above |
 | `fast_user_switch` | everywhere, ARM64 too | runtime fallback | one active seat at a time |
-| `desktops` | client SKUs, ARM64 | opt-in | kiosk apps on the seat's monitors in the console session (no per-user isolation) |
+| `desktops` | client SKUs, ARM64 | opt-in | kiosk apps on the seat's monitors in the console session (per-seat Windows users since 2026-11-17, one session) |
 
 Seat ↔ session matching (seat-session, 2026-11-12): the documented RDP ActiveX control used by
 the seat host has no client-name property (the session's WTS client name is this PC's name),
@@ -413,7 +413,8 @@ Methods: `kind`, `caps -> SessionCaps`, `probe -> HostProbe`, `prepare_host(&Glo
 #### 4.1.3 Kiosk shell seats (`desktops`, spec 35 §5.1 U3 / D′, 2026-11-13 kiosk-shell)
 
 Concurrent kiosk seats inside the console session, for client SKUs on x64 and ARM64. Not
-true multi-seat: one Windows user, profile and clipboard for every seat.
+true multi-seat: one session (one clipboard, one secure attention sequence) for every seat;
+since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat users").
 
 - **Config (additive):** `SeatConfig.kiosk_shell {apps: [{title, command, args, autostart,
   monitor}], idle_reset_minutes}` (≤ 16 apps, idle 0 = off or 1..=1440) and
@@ -479,8 +480,8 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   (`DragStart` / `DragTo`, host moves or sizes from the rect at the press), caption buttons
   act on release over the same button (`WM_SYSCOMMAND` close / minimise / maximise-restore),
   caption double click toggles maximise, menu bar and system menu open in keyboard mode
-  (`SC_KEYMENU`); top-level scroll bars get nothing (wheel works); popup menus an app opens
-  itself still follow the real cursor. Touch: a primary contact that vanishes without "up"
+  (`SC_KEYMENU`); top-level scroll bars are driven by the router and popup menus follow the
+  seat cursor since 2026-11-17 (see "Top-level scroll bars", "Seat cursor for apps"). Touch: a primary contact that vanishes without "up"
   is released. Back to the launcher: bar button or Ctrl+Alt+Home (consumed).
 - **Filter session map (round 4 local-gaps):** kiosk seats report the console session as
   their session; mapping them in the filter's `SET_SESSIONS` would let every console
@@ -520,9 +521,10 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   `seat1_desktop = false` every shell starts a helper, `pulsar-seat-host --hotkey-guard
   --seat N` (`kiosk::guard`, `kiosk::guard_win`), that runs a `WH_KEYBOARD_LL` hook on its
   own message-loop thread (`seat_input::hotkey_guard`) and swallows both Windows keys,
-  Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. Not with
-  `seat1_desktop = true` (the hook cannot tell keyboards apart and would take these keys
-  from seat 1's user). Ctrl+Alt+Del and Win+L stay out of reach of user mode.
+  Alt+Tab, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc from every keyboard. With
+  `seat1_desktop = true` the helper runs in its attributing mode since 2026-11-17 (raw input
+  tells the keyboards apart; see "Seat 1 and kiosk input without the filter"). Ctrl+Alt+Del
+  and Win+L stay out of reach of user mode.
   - **Why a separate process:** an LL hook in the shell itself is not called while the
     shell's focus sink holds the foreground and the shell has its raw-input registration,
     whatever the registration flags (VM bisect 2026-11-15: NOLEGACY, INPUTSINK, HID usages,
@@ -582,12 +584,12 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
     interfaces (PS/2). Seat-1 console processes get the HID groups while a kiosk seat of
     their session wants HID isolation (kiosk devices denied to them).
   - **Limits:** since parity-arm64 (2026-11-17) native ARM64 apps take the ARM64 module
-    (Microsoft Detours backend) and the ARM64 MSI ships `shim\arm64\`, `shim\x64\` and
-    `shim\x86\`; the shell calls its own architecture's launcher
+    (Microsoft Detours backend) and the ARM64 MSI ships `shimrm64\`, `shimd\` and
+    `shim\`; the shell calls its own architecture's launcher
     (`seat_shim_core::launch::native_launcher`), which hands x64 / x86 apps to theirs (x64
     and x86 modules under emulation on ARM64: HYPOTHESIS). 32-bit apps:
-    `GetRawInputBuffer` is passed through (WOW64 buffer layout reported to differ, HYPOTHESIS). Seat-1 console apps still
-    receive raw-input data of kiosk keyboards (only the HID groups apply to them). The
+    `GetRawInputBuffer` is passed through (WOW64 buffer layout reported to differ, HYPOTHESIS). Seat-1 console apps get the
+    raw-input data filter too since 2026-11-17 (kiosk devices dropped for them). The
     launcher blocks the shell's UI thread while it attaches (≤ 15 s per remote thread).
     **HYPOTHESIS: nothing of this ran on hardware.**
 - **Audio (round 4 kiosk-audio, 2026-11-14):** one session = one system default endpoint,
@@ -627,10 +629,89 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
   shell leaves a persisted entry for that exe until its next kiosk launch overwrites it;
   child processes (browser audio services) are covered by the job tick or by the per-exe
   entry; capture routing works the same as render.
-- **Limits / open:** apps reading raw input, DirectInput, XInput, `GetAsyncKeyState`,
-  `GetCursorPos`; exclusive full-screen games; packaged apps; apps that hand off to a running
-  instance. Untested on hardware: everything in the shell, the stop event across sessions,
-  the release helper, the filter packet stream to the shell.
+- **Per-seat users (parity 2026-11-17, `seat_session::kiosk_account`, seat-service
+  `win::kiosk_logon`):** `settings.kiosk.accounts` (`per_seat` default, `shared` = the old
+  behaviour; a missing field reads as `per_seat`, which is the migration of older configs).
+  `desktops::start` asks `DesktopsOptions::logons` (wired by the service, not in console dev
+  mode) for the seat's identity (`kiosk_account::identity_for`): seat 1 and `shared` = the
+  console user; the seat's configured account when a password is stored for it; otherwise
+  Pulsar's own local account `PulsarKiosk<NN>` (`host_account::ensure_kiosk`: random
+  password in LSA `L$PulsarSeat.KioskAccount.NN`, `Users` only, interactive logon granted,
+  remote / network / service / batch logon denied, hidden from the logon screen, comment
+  marks it as Pulsar's; created or maintained once per service run; pruned at service start
+  for seats that are no longer kiosk seats and at uninstall, profile included). The logon:
+  `LogonUserW(LOGON32_LOGON_INTERACTIVE)` + `TokenSessionId` = console
+  (`win::host_account::interactive_token_in_session`), the logon SID journaled
+  (`run\kiosk-grants.json`) before `pulsar-seat-host --desktop-acl grant --sid S --kiosk`
+  grants the interactive user's rights on `WinSta0` / `Default`
+  (`KIOSK_WINSTA_ACCESS` / `KIOSK_DESKTOP_ACCESS`), `LoadUserProfileW`, then
+  `SessionLauncher::launch_as` (`CreateProcessAsUserW` with that token, the seat's job). The
+  logon lives as long as the shell (dropped on `log_off` or when a dead shell is restarted:
+  profile unloaded, grant revoked; a crashed run's grants are swept at the next start). Any
+  failure falls back to the console user (log line, probe note `kiosk_account_fallback`;
+  with logons wired the probe reports `kiosk_per_seat_accounts` instead of
+  `no_per_user_isolation`). The shell's apps inherit the seat user; the focus mutex now has
+  a DACL for every interactive user (`SYNCHRONIZE | MUTEX_MODIFY_STATE`) so shells of
+  different users still compete for it. `SessionBackend::kiosk_users` lists the shells'
+  user SIDs; the service sets conhost delegation in the hives of Pulsar's own kiosk accounts
+  (kiosk-only users, no journal) and leaves a seat's configured account alone. Data the apps
+  kept in the console user's profile before the migration is not moved. Manager: toggle
+  "Her kiosk koltuğu kendi Windows kullanıcısıyla çalışsın" and a "Kullanıcı: …" line per
+  kiosk seat. `SessionCaps::per_user` stays `false` (one session).
+- **Seat 1 and kiosk input without the filter (parity 2026-11-17):** (1) per-process module:
+  seat-1 console processes get the raw-input data filter while a kiosk seat of their
+  session runs (`decide::hook_plan_full`, `Role::Console`), so apps that read raw input never
+  see kiosk keyboards / mice; (2) hotkey guard **attributing mode** (`seat1_desktop = true`,
+  `pulsar-seat-host --hotkey-guard --seat N --attribute`): the helper also reads raw input
+  (keyboards + mice, `RIDEV_INPUTSINK`, own message-only window and thread) and tells kiosk
+  devices (kiosk map, parent chain) from seat 1's; `seat_input::hotkey_guard::Attributor`
+  matches raw records with `WH_KEYBOARD_LL` calls: raw first = decided at once (every key of
+  a kiosk keyboard is kept from seat 1), hook first = guarded hotkeys are held back and
+  dropped (kiosk) or re-injected with `REPLAY_TAG` (seat 1, or no record within 40 ms), in
+  order. `WH_MOUSE_LL` + `MouseAttributor`: clicks and wheel of kiosk mice found in the raw
+  list are swallowed (moves always pass: kiosk mice still move the system cursor without the
+  filter). Not run while the KMDF filter is active (the kiosk devices never reach the
+  session then). Ctrl+Alt+Del (SAS) and Win+L cannot be blocked from user mode at all
+  (Winlogon / the secure desktop handle them before any hook); documented in the manager.
+  **HYPOTHESIS:** the order of raw input and low-level hooks, the timings and the helper's
+  hooks being called while it owns a raw-input registration (it never owns the foreground).
+- **Per-seat devices in apps (parity 2026-11-17):** the kiosk map now lists the seat's USB
+  hubs / ports and other USB devices as well (`service::kiosk_map_entries`), so XInput pads
+  (XUSB, not HID) and pads on a seat's hub are classified as the seat's; kiosk processes'
+  `RegisterRawInputDevices` get `RIDEV_INPUTSINK` (`kiosk_cursor::kiosk_raw_flags`), since a
+  kiosk app is almost never the foreground window; DirectInput / XInput go through the HID /
+  XUSB open and enumeration filters. The module side needs the shim on the app's
+  architecture (x64 / x86, and ARM64 once that module ships; the shell has no arch gate).
+- **Seat cursor for apps:** the shell publishes its cursor in `Local\PulsarSeat.KioskCursor.NN`
+  (`seat_shim_core::kiosk_cursor`, seqlock record); kiosk processes' `GetCursorPos`,
+  `GetPhysicalCursorPos`, `GetCursorInfo` and `GetMessagePos` answer from it (flag 4 of the
+  kiosk map), so popup menus opened at "the cursor" (`TrackPopupMenu(Ex)`) and tooltips
+  follow the seat's mouse. `WM_CONTEXTMENU` already carried the seat position.
+- **Top-level scroll bars:** `WindowQuery::scroll_bar` (`GetScrollBarInfo` +
+  `GetScrollInfo`); the router posts `WM_VSCROLL` / `WM_HSCROLL` itself: `SB_LINE*` /
+  `SB_PAGE*` on the press with auto-repeat (400 ms, then every 50 ms, driven by the 250 ms
+  tick), `SB_THUMBTRACK` while the thumb is dragged, `SB_THUMBPOSITION` + `SB_ENDSCROLL` on
+  release. 16-bit positions only (as in the message itself).
+- **Hand-offs, packaged and full-screen apps (best effort, `seat-host/src/kiosk/track.rs`):**
+  a process / window snapshot every second adds break-away children of seat processes
+  (created after their parent), and, when the shell runs as a per-seat user, every process
+  of that user in the session except shell infrastructure; seat windows owned by other
+  processes (packaged apps' `ApplicationFrameWindow` hosting a seat process, owned windows)
+  are routed and placed too. A reset ends the tracked processes outside the job (creation
+  time checked). Packaged apps (`KioskShellApp.app_id`, AUMID) are started with
+  `IApplicationActivationManager::ActivateApplication`, their pid tracked and offered to the
+  seat's job. `KioskShellApp.fullscreen`: while it is the seat's focused app and covers a
+  seat monitor, the focus leader gives it the real foreground (instead of the sink) and clips
+  the cursor onto it; a minimised full-screen window is restored unless the seat user
+  minimised it. One exclusive full-screen window per PC at a time (one foreground); with
+  `seat1_desktop = true` no kiosk app gets the foreground (seat 1 has it).
+- **Limits / open:** `GetAsyncKeyState` / `GetKeyState` of other threads still show the
+  console's state; `SetCursorPos` of a seat app moves the console cursor; scroll positions
+  above 65 535; packaged apps for a per-seat user without Explorer may be refused
+  (HYPOTHESIS); in `shared` mode a hand-off to an instance already running for the console
+  user stays with that instance. Untested on hardware: everything in the shell, the stop
+  event across sessions, the release helper, the filter packet stream to the shell, the
+  seat-user logon, the attributing guard.
 
 ### 4.2 Display (`DisplayBinding` service-side, `FrameSink` host-side; seat-display)
 

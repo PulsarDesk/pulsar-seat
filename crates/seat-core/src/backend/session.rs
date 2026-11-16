@@ -326,6 +326,13 @@ pub trait SessionBackend: Send + Sync {
     fn kiosk_shells(&self) -> Vec<KioskShellProcess> {
         Vec::new()
     }
+    /// User SIDs of the kiosk shells that run as their seat's own Windows user
+    /// (`desktops`, `settings.kiosk.accounts = per_seat`): the service writes per-user
+    /// settings (conhost delegation) into these users' loaded hives. Others: none. Added
+    /// 2026-11-17 (additive).
+    fn kiosk_users(&self) -> Vec<KioskUser> {
+        Vec::new()
+    }
     /// `fast_user_switch`: session id of seat 1's own session while it waits off the
     /// console (the backend remembered it when it first switched the console away); a
     /// `start` of seat 1 then connects it back (spec 35 §5.5). Others: `None`. Added
@@ -333,6 +340,16 @@ pub trait SessionBackend: Send + Sync {
     fn console_seat_away(&self) -> Option<u32> {
         None
     }
+}
+
+/// A kiosk shell running as its seat's own Windows user (see
+/// [`SessionBackend::kiosk_users`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct KioskUser {
+    pub seat: SeatNumber,
+    pub user_sid: String,
+    /// A Pulsar-made kiosk account (kiosk-only user), not the seat's configured account.
+    pub pulsar_account: bool,
 }
 
 /// One running kiosk shell (see [`SessionBackend::kiosk_shells`]).

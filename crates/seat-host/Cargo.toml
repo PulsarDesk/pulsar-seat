@@ -41,6 +41,8 @@ windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    # Kiosk shell: packaged apps through IApplicationActivationManager (src/kiosk/win_track.rs).
+    "Win32_UI_Shell",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Variant",
@@ -49,13 +51,19 @@ windows = { version = "0.62.2", features = [
 # Pipe client (src/pipe.rs) and the session agent's tasks (src/agent.rs): flat Win32 APIs.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
+    # Hotkey guard attributing mode (src/kiosk/guard_win.rs): parent chain of a raw-input device.
+    "Win32_Devices_DeviceAndDriverInstallation",
     # Kiosk shell (src/kiosk/win.rs): GDI painting, DWM cloak check, app job, DPI mode.
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_JobObjects",
+    # Kiosk shell hand-off tracking and seat cursor section (src/kiosk/win_track.rs).
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Memory",
     "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
     "Win32_System_Registry",

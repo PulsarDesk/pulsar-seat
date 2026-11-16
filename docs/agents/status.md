@@ -1807,3 +1807,37 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     installer scripts 54, `build-drivers.ps1 -Projects seat-wfp` ARM64 + x64 Release + Debug
     clean (PE 0xAA64 / 0x8664). No test deleted. Open HYPOTHESIS items as in the net-wfp
     entry above (VM test plan in drivers/seat-wfp/README.md).
+- 2026-11-17 (parity round, package kiosk, branch worktree-wf_b025704c-d7f-2): U3 kiosk gaps closed
+    in code, **all runtime behaviour HYPOTHESIS (nothing ran on hardware or in the VM)**.
+    (a) per-seat Windows users for kiosk seats 2+ (`seat_session::kiosk_account`,
+    seat-service `win::kiosk_logon`, `host_account::ensure_kiosk` / `prune_kiosk`,
+    `SessionLauncher::launch_as`; migration: missing `settings.kiosk.accounts` = per_seat;
+    fallback to the console user with probe note `kiosk_account_fallback`; focus mutex DACL
+    for every interactive user; conhost delegation in Pulsar kiosk accounts' hives);
+    (b) seat-1 console processes get the shim's raw-input data filter while kiosk seats run,
+    and the hotkey guard attributes legacy keys / clicks per device with `seat1_desktop =
+    true` (`--attribute`, `hotkey_guard::Attributor` / `MouseAttributor`); (c) kiosk map
+    includes USB hubs / other USB devices (XInput pads), kiosk apps' raw-input registrations
+    get `RIDEV_INPUTSINK`; (d) packaged apps by AUMID (`KioskShellApp.app_id`,
+    `IApplicationActivationManager`), hand-off / break-away / frame-window tracking
+    (`seat-host/src/kiosk/track.rs`), `KioskShellApp.fullscreen` (foreground + clip for the
+    focus leader, restore after focus-loss minimise); (e) router drives top-level scroll bars
+    (`WindowQuery::scroll_bar`, auto-repeat on the tick), seat cursor section +
+    `GetCursorPos` / `GetMessagePos` hooks (`seat_shim_core::kiosk_cursor`, `rt/cursor.rs`)
+    so popup menus open at the seat cursor; (f) Ctrl+Alt+Del / Win+L documented as not
+    blockable in user mode (manager limits text). Manager: per-seat-user toggle, "Kullanıcı:"
+    line, AUMID + full-screen fields. Gates green: cargo test 1650 (baseline 1629), clippy
+    aarch64 + x86_64, manager 202 (199) / check / build, shim test + clippy x64 + check i686,
+    bun test installer/scripts 51. No driver touched. Hardware tests needed: everything above.
+- 2026-11-17 (integrate kiosk): merged branch worktree-wf_b025704c-d7f-2 (7d4bf0d) into main.
+  Conflicts only in `shim/module/src/rt/mod.rs` (kept both `mod backend` from arm64 and
+  `mod cursor` from kiosk; the cursor hooks go through `rt::hook::install`, so they use
+  Detours on native ARM64 and retour on x86 / x64) and in the doc logs (architecture.md
+  §4.1.3 limits now state the ARM64 module from parity-arm64 plus the seat-1 raw-input
+  filter from kiosk; status / journal keep both sides). Gates on main: cargo test 1664
+  passed / 6 ignored (1646 + 18 kiosk tests; the kiosk report's 1650 was measured against
+  its own base), clippy -D warnings aarch64 + x86_64 clean, shim tests (1 + 7 + 3) host and
+  x86_64, clippy x86_64 + aarch64, check i686, debug build aarch64 + x64, manager 203 / check
+  / build, bun test installer/scripts 54. No driver touched; no test deleted. Kiosk runtime
+  behaviour stays HYPOTHESIS (list in the kiosk entry above); new HYPOTHESIS: the seat
+  cursor hooks under the ARM64 Detours backend.

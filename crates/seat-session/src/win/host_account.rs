@@ -64,6 +64,43 @@ pub fn account_token_in_session(account: &str, password: &Secret, session_id: u3
     Ok(HostToken { token, logon_sid })
 }
 
+/// A kiosk seat user's token (`crate::kiosk_account`): primary, in the target session.
+pub struct SeatUserToken {
+    pub token: OwnedHandle,
+    /// Logon SID to grant on the session's window station and desktop.
+    pub logon_sid: String,
+    /// The user's SID.
+    pub user_sid: String,
+}
+
+/// Interactive logon of a kiosk seat's user (`LogonUserW(LOGON32_LOGON_INTERACTIVE)`; an
+/// administrator's account yields its filtered UAC token), moved into `session_id`
+/// (needs SeTcbPrivilege: the service). No hardening: kiosk apps run as a normal user at
+/// Medium integrity, like the console user's. `domain` = `"."` for a local account.
+pub fn interactive_token_in_session(domain: &str, user: &str, password: &Secret, session_id: u32) -> Result<SeatUserToken, SysError> {
+    use windows_sys::Win32::Security::LOGON32_LOGON_INTERACTIVE;
+    let u = wide(user);
+    let d = wide(domain);
+    let pw = wide_secret(password.expose());
+    let mut h: HANDLE = std::ptr::null_mut();
+    // SAFETY: NUL-terminated strings; the password buffer is wiped on drop.
+    if unsafe { LogonUserW(u.as_ptr(), d.as_ptr(), pw.as_ptr(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &mut h) } == 0 {
+        return Err(SysError::last_win32("LogonUserW"));
+    }
+    drop(pw);
+    let token = owned(h, "LogonUserW")?;
+    // SAFETY: 4-byte session id.
+    if unsafe { SetTokenInformation(raw(&token), TokenSessionId, (&session_id as *const u32).cast(), 4) } == 0 {
+        return Err(SysError::last_win32("SetTokenInformation(TokenSessionId)"));
+    }
+    let logon_sid = token_logon_sid(raw(&token))?.ok_or_else(|| SysError::Other("interactive token without a logon SID".into()))?;
+    let user_sid = token_facts(raw(&token))?.user_sid;
+    if !is_sid_string(&user_sid) {
+        return Err(SysError::Other("user SID not readable".into()));
+    }
+    Ok(SeatUserToken { token, logon_sid, user_sid })
+}
+
 /// Set the token's default DACL to [`host_default_dacl_sddl`] (SYSTEM + `logon_sid` full
 /// access, Owner Rights `READ_CONTROL`, nothing for the user SID). Needs
 /// `TOKEN_ADJUST_DEFAULT` on `token`.
@@ -285,6 +322,13 @@ pub(crate) fn edit_dacl(handle: HANDLE, kind: SE_OBJECT_TYPE, sid: &str, mask: u
 /// the target session; SYSTEM has full access to both objects there. `clipboard` (grant
 /// only) adds `WINSTA_ACCESSCLIPBOARD` to the window-station ACE.
 pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool, exit_windows: bool) -> Result<(), SysError> {
+    edit_session_desktop_masks(sid, op, winsta_mask(clipboard, exit_windows), DESKTOP_ACCESS)
+}
+
+/// [`edit_session_desktop`] with explicit masks (`AclRequest::masks`; kiosk seat logons
+/// get the interactive user's rights). A revoke removes every ACE of `sid` whatever the
+/// masks.
+pub fn edit_session_desktop_masks(sid: &str, op: AclOp, winsta: u32, desktop: u32) -> Result<(), SysError> {
     use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, CloseWindowStation, OpenDesktopW, OpenWindowStationW};
     /// `READ_CONTROL | WRITE_DAC`.
     const ACCESS: u32 = 0x0002_0000 | 0x0004_0000;
@@ -294,7 +338,7 @@ pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool, exit_windows:
     if ws.is_null() {
         return Err(SysError::last_win32("OpenWindowStationW"));
     }
-    let r = edit_dacl(ws as HANDLE, SE_WINDOW_OBJECT, sid, winsta_mask(clipboard, exit_windows), op);
+    let r = edit_dacl(ws as HANDLE, SE_WINDOW_OBJECT, sid, winsta, op);
     // OpenDesktopW opens in the process's window station, which for the helper is WinSta0
     // (the service starts it on `winsta0\default`).
     let dname = wide("Default");
@@ -303,7 +347,7 @@ pub fn edit_session_desktop(sid: &str, op: AclOp, clipboard: bool, exit_windows:
     let d = if desk.is_null() {
         Err(SysError::last_win32("OpenDesktopW"))
     } else {
-        let d = edit_dacl(desk as HANDLE, SE_WINDOW_OBJECT, sid, DESKTOP_ACCESS, op);
+        let d = edit_dacl(desk as HANDLE, SE_WINDOW_OBJECT, sid, desktop, op);
         // SAFETY: handle from OpenDesktopW.
         unsafe { CloseDesktop(desk) };
         d

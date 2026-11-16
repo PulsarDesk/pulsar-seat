@@ -20,8 +20,10 @@
 //!   character. Other keys (arrows, Enter, Backspace, F-keys, shortcuts, modifiers) are
 //!   posted as `WM_KEYDOWN` / `WM_KEYUP` (`WM_SYSKEY*` with Alt or F10) and carry the seat's
 //!   key state so the host can apply it to the target thread (best effort).
-//! - Apps that read input another way get nothing from extra seats: `GetAsyncKeyState`,
-//!   `GetCursorPos`, raw input, DirectInput, XInput, games in exclusive full screen.
+//! - Apps that read input another way: raw input, DirectInput and XInput get the seat's own
+//!   devices only when the per-process module runs in the app (kiosk seat map, raw-input
+//!   data filter, HID / XUSB open filter); `GetCursorPos` the seat cursor likewise.
+//!   `GetAsyncKeyState` / `GetKeyState` of other threads still see the console's state.
 //! - Mouse: the window that got a button down keeps every move and the button up until all
 //!   buttons are up (capture). Double clicks only for classes with `CS_DBLCLKS`.
 //! - Non-client area (asked once per button down with [`WindowQuery::hit_test`], the
@@ -33,9 +35,17 @@
 //!   window); caption buttons act on button up over the same button
 //!   ([`KioskAction::Caption`], posted as `WM_SYSCOMMAND`); a double click on the caption
 //!   toggles maximise; menu bar and system menu open in keyboard mode (`SC_KEYMENU`; arrows,
-//!   Enter, Esc of the seat drive them). Scroll bars of top-level windows get nothing
-//!   (the wheel works). Popup menus an app opens itself with `TrackPopupMenu` still follow
-//!   the real cursor; the seat's keys still reach them.
+//!   Enter, Esc of the seat drive them). Scroll bars of top-level windows (parity
+//!   2026-11-17): the router drives them itself from [`WindowQuery::scroll_bar`]: arrows
+//!   and page areas post `SB_LINE*` / `SB_PAGE*` on the press and auto-repeat from the
+//!   host's tick ([`KioskRouter::on_tick`]), the thumb posts `SB_THUMBTRACK` while dragged
+//!   and `SB_THUMBPOSITION` on release, `SB_ENDSCROLL` last (positions above 65 535 are cut
+//!   to 16 bits, as in the real message; apps that read `SIF_TRACKPOS` see none). Popup
+//!   menus an app opens at "the cursor" follow the seat's cursor when the per-process
+//!   module runs in the app (`GetCursorPos` / `GetMessagePos` answer with the seat's
+//!   position, `seat_shim_core::kiosk_cursor`); `WM_CONTEXTMENU` from `DefWindowProc`
+//!   already carries the seat position (it converts the posted client coordinates).
+//!   Inside an open menu the seat's clicks are posted to the menu window like any other.
 //! - Home: the task bar's "Uygulamalar" button, or **Ctrl+Alt+Home** on a seat keyboard
 //!   ([`HOME_CHORD_VK`], consumed, never posted). Ctrl+Alt+Del is *not* a seat key: it is the
 //!   secure attention sequence of the whole console session (Winlogon), shown on every
@@ -73,7 +83,92 @@ pub mod wm {
     pub const MOUSEHWHEEL: u32 = 0x020E;
     pub const SYSCOMMAND: u32 = 0x0112;
     pub const NCHITTEST: u32 = 0x0084;
+    pub const HSCROLL: u32 = 0x0114;
+    pub const VSCROLL: u32 = 0x0115;
 }
+
+/// `SB_*` request codes of `WM_VSCROLL` / `WM_HSCROLL` (winuser.h values).
+pub mod sb {
+    pub const LINEUP: usize = 0;
+    pub const LINEDOWN: usize = 1;
+    pub const PAGEUP: usize = 2;
+    pub const PAGEDOWN: usize = 3;
+    pub const THUMBPOSITION: usize = 4;
+    pub const THUMBTRACK: usize = 5;
+    pub const ENDSCROLL: usize = 8;
+}
+
+/// A top-level window's own scroll bar (`GetScrollBarInfo` + `GetScrollInfo` of the host),
+/// in screen pixels. Offsets run along the bar from its start (top / left edge).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollBar {
+    pub vertical: bool,
+    /// The whole bar, arrows included.
+    pub bar: Rect,
+    /// Length of one arrow button (`dxyLineButton`).
+    pub arrow: i32,
+    /// Thumb start / end offsets (`xyThumbTop` / `xyThumbBottom`).
+    pub thumb_top: i32,
+    pub thumb_bottom: i32,
+    /// `SCROLLINFO` range, page and position.
+    pub min: i32,
+    pub max: i32,
+    pub page: u32,
+    pub pos: i32,
+}
+
+/// The part of a scroll bar under a point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPart {
+    LineUp,
+    PageUp,
+    Thumb,
+    PageDown,
+    LineDown,
+}
+
+impl ScrollBar {
+    fn len(&self) -> i32 {
+        i32::try_from(if self.vertical { self.bar.height } else { self.bar.width }).unwrap_or(i32::MAX)
+    }
+    /// Offset of a screen point along the bar.
+    pub fn along(&self, x: i32, y: i32) -> i32 {
+        if self.vertical { y - self.bar.y } else { x - self.bar.x }
+    }
+    /// The part at a screen point (`None` outside the bar).
+    pub fn part_at(&self, x: i32, y: i32) -> Option<ScrollPart> {
+        if !contains(&self.bar, x, y) {
+            return None;
+        }
+        let o = self.along(x, y);
+        Some(if o < self.arrow {
+            ScrollPart::LineUp
+        } else if o >= self.len() - self.arrow {
+            ScrollPart::LineDown
+        } else if o < self.thumb_top {
+            ScrollPart::PageUp
+        } else if o < self.thumb_bottom {
+            ScrollPart::Thumb
+        } else {
+            ScrollPart::PageDown
+        })
+    }
+    /// Scroll position for the thumb's start at offset `thumb_start` (the classic
+    /// proportional mapping over the track between the arrows), clamped to the range.
+    pub fn pos_for(&self, thumb_start: i32) -> i32 {
+        let thumb = (self.thumb_bottom - self.thumb_top).max(0);
+        let track = (self.len() - 2 * self.arrow - thumb).max(1);
+        let span = i64::from(self.max) - i64::from(self.min) - i64::from(self.page.max(1)) + 1;
+        let span = span.max(0);
+        let off = i64::from((thumb_start - self.arrow).clamp(0, track));
+        let pos = i64::from(self.min) + (off * span + i64::from(track) / 2) / i64::from(track);
+        pos.clamp(i64::from(self.min), i64::from(self.min) + span) as i32
+    }
+}
+
+/// First auto-repeat of a held scroll arrow / page area, then the interval.
+pub const SCROLL_REPEAT_DELAY_MS: u64 = 400;
+pub const SCROLL_REPEAT_MS: u64 = 50;
 
 /// `WM_NCHITTEST` results the router acts on (winuser.h values).
 pub mod ht {
@@ -202,6 +297,25 @@ pub trait WindowQuery {
     fn hit_test(&self, _top: u64, _x: i32, _y: i32) -> i32 {
         ht::CLIENT
     }
+    /// The top-level window's own vertical / horizontal scroll bar (`None`: none, or not
+    /// readable). Asked on a press on [`ht::VSCROLL`] / [`ht::HSCROLL`].
+    fn scroll_bar(&self, _top: u64, _vertical: bool) -> Option<ScrollBar> {
+        None
+    }
+}
+
+/// A press on a top-level window's scroll bar (the router drives it, see module doc).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScrollPress {
+    top: u64,
+    sb: ScrollBar,
+    part: ScrollPart,
+    /// Thumb drag: cursor offset minus the thumb start at the press.
+    grab: i32,
+    /// Last position posted with `SB_THUMBTRACK`.
+    last_pos: i32,
+    pressed_ms: u64,
+    last_repeat_ms: u64,
 }
 
 /// Window-frame action of a click on a caption button or the menu bar.
@@ -400,6 +514,8 @@ pub struct KioskRouter {
     nc_press: Option<(u64, i32)>,
     /// Caption / border drag: `(top, cursor at the press)`.
     drag: Option<(u64, (i32, i32))>,
+    /// Press on a top-level scroll bar (parity 2026-11-17).
+    scroll: Option<ScrollPress>,
     touch_primary: Option<u32>,
     last_input_ms: u64,
 }
@@ -426,9 +542,71 @@ impl KioskRouter {
             last_caption: None,
             nc_press: None,
             drag: None,
+            scroll: None,
             touch_primary: None,
             last_input_ms: 0,
         }
+    }
+
+    /// Housekeeping of the host's tick: auto-repeat of a held scroll arrow or page area.
+    pub fn on_tick(&mut self, now_ms: u64) -> Vec<KioskAction> {
+        let Some(s) = self.scroll.as_mut() else { return Vec::new() };
+        let code = match s.part {
+            ScrollPart::LineUp => sb::LINEUP,
+            ScrollPart::LineDown => sb::LINEDOWN,
+            ScrollPart::PageUp => sb::PAGEUP,
+            ScrollPart::PageDown => sb::PAGEDOWN,
+            ScrollPart::Thumb => return Vec::new(),
+        };
+        if now_ms.saturating_sub(s.pressed_ms) < SCROLL_REPEAT_DELAY_MS || now_ms.saturating_sub(s.last_repeat_ms) < SCROLL_REPEAT_MS {
+            return Vec::new();
+        }
+        s.last_repeat_ms = now_ms;
+        let msg = if s.sb.vertical { wm::VSCROLL } else { wm::HSCROLL };
+        vec![Self::post(s.top, msg, code, 0)]
+    }
+
+    /// Left press on a top-level scroll bar (`code` = [`ht::VSCROLL`] / [`ht::HSCROLL`]).
+    fn scroll_down(&mut self, top: u64, code: i32, q: &dyn WindowQuery, now_ms: u64, out: &mut Vec<KioskAction>) {
+        let (x, y) = self.cursor;
+        let Some(sb) = q.scroll_bar(top, code == ht::VSCROLL) else { return };
+        let Some(part) = sb.part_at(x, y) else { return };
+        let msg = if sb.vertical { wm::VSCROLL } else { wm::HSCROLL };
+        let grab = sb.along(x, y) - sb.thumb_top;
+        self.scroll = Some(ScrollPress { top, sb, part, grab, last_pos: sb.pos, pressed_ms: now_ms, last_repeat_ms: now_ms });
+        let req = match part {
+            ScrollPart::LineUp => sb::LINEUP,
+            ScrollPart::LineDown => sb::LINEDOWN,
+            ScrollPart::PageUp => sb::PAGEUP,
+            ScrollPart::PageDown => sb::PAGEDOWN,
+            // The thumb moves with the cursor (`SB_THUMBTRACK` on moves).
+            ScrollPart::Thumb => return,
+        };
+        out.push(Self::post(top, msg, req, 0));
+    }
+
+    /// Thumb drag: the position under the cursor, posted when it changes.
+    fn scroll_move(&mut self, x: i32, y: i32, out: &mut Vec<KioskAction>) {
+        let Some(s) = self.scroll.as_mut() else { return };
+        if s.part != ScrollPart::Thumb {
+            return;
+        }
+        let pos = s.sb.pos_for(s.sb.along(x, y) - s.grab);
+        if pos != s.last_pos {
+            s.last_pos = pos;
+            let msg = if s.sb.vertical { wm::VSCROLL } else { wm::HSCROLL };
+            out.push(Self::post(s.top, msg, sb::THUMBTRACK | ((pos as u16 as usize) << 16), 0));
+        }
+    }
+
+    /// Button up after a scroll-bar press: final position of a thumb drag, then the end.
+    fn scroll_up(&mut self, out: &mut Vec<KioskAction>) {
+        let Some(s) = self.scroll.take() else { return };
+        let msg = if s.sb.vertical { wm::VSCROLL } else { wm::HSCROLL };
+        if s.part == ScrollPart::Thumb {
+            out.push(Self::post(s.top, msg, sb::THUMBPOSITION | ((s.last_pos as u16 as usize) << 16), 0));
+        }
+        out.push(Self::post(s.top, msg, sb::ENDSCROLL, 0));
     }
 
     pub fn cursor(&self) -> (i32, i32) {
@@ -544,6 +722,10 @@ impl KioskRouter {
             out.push(KioskAction::DragTo { top, dx: x - start.0, dy: y - start.1 });
             return;
         }
+        if self.scroll.is_some() {
+            self.scroll_move(x, y, out);
+            return;
+        }
         if self.nc_press.is_some() {
             // Pressed on a caption button / menu: nothing tracks the move.
             return;
@@ -583,6 +765,9 @@ impl KioskRouter {
                             let code = q.hit_test(h.top, x, y);
                             if !ht::clientish(code) {
                                 self.nc_down(bit, h.top, code, now_ms, out);
+                                if bit == buttons::LEFT && (code == ht::VSCROLL || code == ht::HSCROLL) {
+                                    self.scroll_down(h.top, code, q, now_ms, out);
+                                }
                                 self.nc_press = Some((h.top, code));
                             }
                         }
@@ -635,6 +820,7 @@ impl KioskRouter {
             self.capture = None;
             self.nc_press = None;
             self.drag = None;
+            self.scroll = None;
         }
     }
 
@@ -668,6 +854,10 @@ impl KioskRouter {
     /// Left button up after a frame press: caption buttons and menus act now, over the
     /// same part of the same window only (moving away cancels, like real buttons).
     fn nc_up(&mut self, top: u64, code: i32, q: &dyn WindowQuery, out: &mut Vec<KioskAction>) {
+        if self.scroll.is_some() {
+            self.scroll_up(out);
+            return;
+        }
         if ht::draggable(code) {
             self.drag = None;
             return;
@@ -849,6 +1039,7 @@ impl KioskRouter {
     pub fn release_all(&mut self) -> Vec<KioskAction> {
         let mut out = self.release_keys();
         let (x, y) = self.cursor;
+        self.scroll_up(&mut out);
         self.nc_press = None;
         self.drag = None;
         if let Some(h) = self.capture.take()
@@ -1300,6 +1491,82 @@ mod tests {
         let a = route(&mut r, &[InputPacket::Buttons { down: buttons::RIGHT, up: 0 }, InputPacket::Buttons { down: 0, up: buttons::RIGHT }], 3000);
         assert!(a.contains(&KioskAction::Caption { top: APP, cmd: CaptionCommand::SystemMenu }));
         assert!(posts(&a).is_empty());
+    }
+
+    /// The app window with a vertical scroll bar at x 980..1000, y 30..1030.
+    struct Scrolly;
+    const BAR: ScrollBar = ScrollBar {
+        vertical: true,
+        bar: Rect { x: 980, y: 30, width: 20, height: 1000 },
+        arrow: 20,
+        thumb_top: 100,
+        thumb_bottom: 200,
+        min: 0,
+        max: 1000,
+        page: 100,
+        pos: 80,
+    };
+    impl WindowQuery for Scrolly {
+        fn hit(&self, x: i32, y: i32) -> Option<Hit> {
+            Table { dead: vec![] }.hit(x, y)
+        }
+        fn key_target(&self, top: u64) -> u64 {
+            top
+        }
+        fn alive(&self, _hwnd: u64) -> bool {
+            true
+        }
+        fn client_origin(&self, _hwnd: u64) -> Option<(i32, i32)> {
+            Some((10, 30))
+        }
+        fn hit_test(&self, _top: u64, x: i32, y: i32) -> i32 {
+            if (980..1000).contains(&x) && y >= 30 { ht::VSCROLL } else { ht::CLIENT }
+        }
+        fn scroll_bar(&self, top: u64, vertical: bool) -> Option<ScrollBar> {
+            (top == APP && vertical).then_some(BAR)
+        }
+    }
+
+    fn sroute(r: &mut KioskRouter, p: &[InputPacket], now: u64) -> Vec<KioskAction> {
+        r.on_packets(p, &Scrolly, &mut UsLayout, now)
+    }
+
+    #[test]
+    fn top_level_scroll_bars_are_driven_by_the_router() {
+        assert_eq!(BAR.part_at(990, 35), Some(ScrollPart::LineUp));
+        assert_eq!(BAR.part_at(990, 100), Some(ScrollPart::PageUp));
+        assert_eq!(BAR.part_at(990, 150), Some(ScrollPart::Thumb));
+        assert_eq!(BAR.part_at(990, 600), Some(ScrollPart::PageDown));
+        assert_eq!(BAR.part_at(990, 1020), Some(ScrollPart::LineDown));
+        assert_eq!(BAR.part_at(970, 600), None);
+        assert_eq!(BAR.pos_for(20), 0);
+        assert_eq!(BAR.pos_for(20 + 880), 901, "track end = max - page + 1");
+        assert_eq!(BAR.pos_for(-50), 0, "clamped");
+
+        let mut r = KioskRouter::new(area());
+        // Arrow: one line on the press, repeats after the delay, end on release.
+        r.on_packets(&[InputPacket::Abs { x: 0, y: 0, o: 0 }, InputPacket::Move { dx: 990, dy: 1020 }], &Scrolly, &mut UsLayout, 1);
+        let a = sroute(&mut r, &[LDOWN], 10);
+        assert_eq!(posts(&a), vec![(APP, wm::VSCROLL, sb::LINEDOWN, 0)], "no WM_NC* button message");
+        assert!(r.on_tick(10 + SCROLL_REPEAT_DELAY_MS - 1).is_empty());
+        assert_eq!(posts(&r.on_tick(10 + SCROLL_REPEAT_DELAY_MS)), vec![(APP, wm::VSCROLL, sb::LINEDOWN, 0)]);
+        assert!(r.on_tick(10 + SCROLL_REPEAT_DELAY_MS + 1).is_empty(), "interval");
+        let a = sroute(&mut r, &[LUP], 600);
+        assert_eq!(posts(&a), vec![(APP, wm::VSCROLL, sb::ENDSCROLL, 0)]);
+        assert!(r.on_tick(2000).is_empty(), "released: no more repeats");
+        // Thumb: track while dragged, position + end on release.
+        sroute(&mut r, &[InputPacket::Move { dx: 0, dy: 180 - 1020 }], 700);
+        assert!(posts(&sroute(&mut r, &[LDOWN], 701)).is_empty(), "the thumb waits for a move");
+        let a = sroute(&mut r, &[InputPacket::Move { dx: 0, dy: 430 }], 702);
+        let want = BAR.pos_for(BAR.along(990, 610) - 50);
+        assert_eq!(posts(&a), vec![(APP, wm::VSCROLL, sb::THUMBTRACK | ((want as usize) << 16), 0)]);
+        assert!(posts(&sroute(&mut r, &[InputPacket::Move { dx: 9, dy: 0 }], 703)).is_empty(), "same position: nothing");
+        let a = sroute(&mut r, &[LUP], 704);
+        assert_eq!(posts(&a), vec![(APP, wm::VSCROLL, sb::THUMBPOSITION | ((want as usize) << 16), 0), (APP, wm::VSCROLL, sb::ENDSCROLL, 0)]);
+        // A seat reset in the middle of a press ends it.
+        sroute(&mut r, &[InputPacket::Move { dx: -9, dy: -500 }], 800);
+        sroute(&mut r, &[LDOWN], 801);
+        assert!(posts(&r.release_all()).contains(&(APP, wm::VSCROLL, sb::ENDSCROLL, 0)));
     }
 
     #[test]

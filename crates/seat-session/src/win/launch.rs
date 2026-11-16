@@ -269,6 +269,34 @@ impl SessionLauncher for WindowsLauncher {
             TokenKind::RestrictedSystemInSession => restricted_system_token_in_session(spec.session_id)?,
             TokenKind::SessionUser => self.user_token(spec.session_id)?,
         };
+        self.launch_with_token(seat, spec, token)
+    }
+
+    /// A kiosk seat logon's token (`crate::kiosk_account::SeatLogon::token`), duplicated
+    /// as a primary token; the spec's `token` kind is ignored (treated as a user token).
+    fn launch_as(&self, seat: SeatNumber, spec: &LaunchSpec, token: usize) -> Result<Launched, SysError> {
+        let t = duplicate_primary(token as HANDLE)?;
+        self.launch_with_token(seat, &LaunchSpec { token: TokenKind::SessionUser, ..spec.clone() }, t)
+    }
+
+    fn kill_job(&self, seat: SeatNumber) -> Result<(), SysError> {
+        let j = self.jobs.lock().unwrap_or_else(|p| p.into_inner()).remove(&seat);
+        if let Some(j) = j {
+            // SAFETY: our job handle; dropping it afterwards also kills (KILL_ON_JOB_CLOSE).
+            if unsafe { TerminateJobObject(raw(&j), 1) } == 0 {
+                return Err(SysError::last_win32("TerminateJobObject"));
+            }
+        }
+        Ok(())
+    }
+
+    fn is_running(&self, p: Launched) -> bool {
+        super::process::is_running(p.pid, p.creation_time)
+    }
+}
+
+impl WindowsLauncher {
+    fn launch_with_token(&self, seat: SeatNumber, spec: &LaunchSpec, token: OwnedHandle) -> Result<Launched, SysError> {
         let base = user_environment(raw(&token))?;
         let env = env_block(&base, &spec.env_extra)?;
         let cmd = command_line(&spec.exe, &spec.args)?;
@@ -311,21 +339,6 @@ impl SessionLauncher for WindowsLauncher {
         let pid = sp.pid;
         drop(sp.into_process());
         Ok(Launched { pid, creation_time })
-    }
-
-    fn kill_job(&self, seat: SeatNumber) -> Result<(), SysError> {
-        let j = self.jobs.lock().unwrap_or_else(|p| p.into_inner()).remove(&seat);
-        if let Some(j) = j {
-            // SAFETY: our job handle; dropping it afterwards also kills (KILL_ON_JOB_CLOSE).
-            if unsafe { TerminateJobObject(raw(&j), 1) } == 0 {
-                return Err(SysError::last_win32("TerminateJobObject"));
-            }
-        }
-        Ok(())
-    }
-
-    fn is_running(&self, p: Launched) -> bool {
-        super::process::is_running(p.pid, p.creation_time)
     }
 }
 

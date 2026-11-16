@@ -264,10 +264,46 @@ pub struct KioskShellApp {
     /// Index of the seat monitor the app's window goes to (clamped to the seat's monitors).
     #[serde(default)]
     pub monitor: u8,
+    /// Packaged (UWP / MSIX) app: its Application User Model ID (`Family!App`). Set = the
+    /// shell activates it through `IApplicationActivationManager` instead of starting
+    /// `command` (which may then be empty). Added 2026-11-17 (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    /// The app uses exclusive full screen (games): while it is the seat's focused app and
+    /// its shell holds the seat focus, its window gets the real foreground instead of the
+    /// focus sink, and it is restored when Windows minimises it on focus loss. Best effort;
+    /// only one window of the PC can be in exclusive full screen at a time. Added
+    /// 2026-11-17 (additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fullscreen: bool,
 }
+
+impl KioskShellApp {
+    /// A desktop app (no AUMID, not full screen, no args, no autostart, monitor 0).
+    pub fn desktop(title: &str, command: &str) -> Self {
+        Self { title: title.into(), command: command.into(), args: Vec::new(), autostart: false, monitor: 0, app_id: None, fullscreen: false }
+    }
+}
+
+/// Longest AUMID accepted (`PackageFamilyName!AppId`).
+pub const MAX_APP_ID_CHARS: usize = 160;
 
 /// Most apps per kiosk seat.
 pub const MAX_KIOSK_APPS: usize = 16;
+
+/// Whose Windows account a kiosk seat's shell and apps run as (2026-11-17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KioskAccountMode {
+    /// Every kiosk seat but seat 1 runs as its own Windows user: the seat's configured
+    /// account when a password is stored for it, else a Pulsar-made local account
+    /// (`PulsarKiosk02` ...). Own profile, HKCU, app data and per-app audio entries per
+    /// seat. Default, also for configs written before 2026-11-17.
+    #[default]
+    PerSeat,
+    /// The behaviour before 2026-11-17: every kiosk seat runs as the console user.
+    Shared,
+}
 
 /// Machine-wide kiosk-seat options (spec 35 §5.1). Added 2026-11-13 (additive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,11 +314,16 @@ pub struct KioskSettings {
     /// seats' keys also reach seat 1's focused window (`input_not_isolated`). `false`: seat
     /// 1 is a kiosk seat too and the shells keep the foreground on their own sink window.
     pub seat1_desktop: bool,
+    /// Per-seat Windows users (default) or the console user for every kiosk seat. A missing
+    /// field (configs before 2026-11-17, when every kiosk seat ran as the console user)
+    /// reads as [`KioskAccountMode::PerSeat`]: that is the migration. Data the apps kept in
+    /// the console user's profile is not moved (documented).
+    pub accounts: KioskAccountMode,
 }
 
 impl Default for KioskSettings {
     fn default() -> Self {
-        Self { seat1_desktop: true }
+        Self { seat1_desktop: true, accounts: KioskAccountMode::PerSeat }
     }
 }
 

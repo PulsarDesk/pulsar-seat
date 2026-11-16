@@ -40,23 +40,30 @@ pub struct KioskFlags {
     pub hid_isolation: bool,
     /// `GetRawInputData` / `GetRawInputBuffer` drop input of other seats' devices.
     pub raw_input: bool,
+    /// `GetCursorPos` / `GetPhysicalCursorPos` / `GetCursorInfo` / `GetMessagePos` answer
+    /// with the seat's own cursor (published by the shell, [`crate::kiosk_cursor`]), so
+    /// popup menus and apps that read the cursor follow the seat's mouse (parity
+    /// 2026-11-17). Entries written before that have no bit 4 and read as off.
+    #[serde(default)]
+    pub cursor: bool,
 }
 
 impl Default for KioskFlags {
     fn default() -> Self {
-        Self { hid_isolation: true, raw_input: true }
+        Self { hid_isolation: true, raw_input: true, cursor: true }
     }
 }
 
 impl KioskFlags {
     pub const HID: u32 = 1;
     pub const RAW_INPUT: u32 = 2;
+    pub const CURSOR: u32 = 4;
 
     pub fn bits(self) -> u32 {
-        (self.hid_isolation as u32 * Self::HID) | (self.raw_input as u32 * Self::RAW_INPUT)
+        (self.hid_isolation as u32 * Self::HID) | (self.raw_input as u32 * Self::RAW_INPUT) | (self.cursor as u32 * Self::CURSOR)
     }
     pub fn from_bits(b: u32) -> Self {
-        Self { hid_isolation: b & Self::HID != 0, raw_input: b & Self::RAW_INPUT != 0 }
+        Self { hid_isolation: b & Self::HID != 0, raw_input: b & Self::RAW_INPUT != 0, cursor: b & Self::CURSOR != 0 }
     }
 }
 
@@ -237,8 +244,11 @@ mod tests {
         let mut no_flags = base.clone();
         no_flags.retain(|(n, _)| n != V_FLAGS);
         assert_eq!(decode_kiosk_entry(&no_flags).unwrap().flags, KioskFlags::default());
-        let f = KioskFlags { hid_isolation: false, raw_input: true };
+        let f = KioskFlags { hid_isolation: false, raw_input: true, cursor: false };
         assert_eq!(KioskFlags::from_bits(f.bits()), f);
+        assert_eq!(KioskFlags::default().bits(), 7);
+        // A round-4 entry (bits 1 | 2) has no cursor bit.
+        assert!(!KioskFlags::from_bits(3).cursor && KioskFlags::from_bits(4).cursor);
     }
 
     #[test]

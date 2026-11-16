@@ -1421,7 +1421,11 @@ pub(crate) fn kiosk_map_entries(
             let n = u32::from(seat.get());
             let mut devices: Vec<String> = eff
                 .iter()
-                .filter(|e| matches!(e.kind, DeviceKind::Keyboard | DeviceKind::Mouse | DeviceKind::Hid))
+                // Parity 2026-11-17: also the seat's USB hubs / ports and other USB devices,
+                // so XInput pads (XUSB, not HID) and pads on a seat's hub are the seat's in
+                // the module's chain walk too (the rule only looks at HID, XUSB and keyboard
+                // / mouse interface paths, so a storage device listed here changes nothing).
+                .filter(|e| matches!(e.kind, DeviceKind::Keyboard | DeviceKind::Mouse | DeviceKind::Hid | DeviceKind::UsbHub | DeviceKind::Other))
                 .filter(|e| e.mask.single() == Some(*seat))
                 .filter_map(|e| instance_of(&e.key))
                 .collect();
@@ -1461,6 +1465,9 @@ mod kiosk_map_tests {
             eff("mon2", DeviceKind::Monitor, SeatMask::from_seats([s(2)])),
             eff("shared", DeviceKind::Keyboard, SeatMask::SHARED),
             eff("noid", DeviceKind::Mouse, SeatMask::from_seats([s(2)])),
+            eff("xpad3", DeviceKind::Other, SeatMask::from_seats([s(3)])),
+            eff("hub3", DeviceKind::UsbHub, SeatMask::from_seats([s(3)])),
+            eff("cam3", DeviceKind::Webcam, SeatMask::from_seats([s(3)])),
         ];
         let inst = |k: &DeviceKey| (k.as_str() != "noid").then(|| format!(r"HID\{}\1", k.as_str()));
         let kiosk = [s(2), s(3)].into_iter().collect();
@@ -1470,7 +1477,8 @@ mod kiosk_map_tests {
         assert_eq!(e.len(), 2);
         assert_eq!((e[0].seat, e[0].session_id), (2, 1));
         assert_eq!(e[0].devices, vec![r"HID\kb2\1".to_string(), r"HID\ms2\1".into()]);
-        assert_eq!(e[1].devices, vec![r"HID\pad3\1".to_string()]);
+        // XInput pads (USB "other") and the seat's hub too; never a webcam.
+        assert_eq!(e[1].devices, vec![r"HID\hub3\1".to_string(), r"HID\pad3\1".into(), r"HID\xpad3\1".into()]);
         // Not in the console session (switching) or dedicated host: nothing.
         assert!(kiosk_map_entries(&logons, &kiosk, None, false, &devs, inst).is_empty());
         assert!(kiosk_map_entries(&logons, &kiosk, Some(1), true, &devs, inst).is_empty());
@@ -1528,6 +1536,24 @@ impl Service {
     pub(crate) fn host_account_seats(&self) -> Vec<SeatNumber> {
         host_account_seats(&self.lock().config)
     }
+
+    /// Seats whose Pulsar kiosk account is kept (2026-11-17): local seats 2+ with a kiosk
+    /// shell. The service start removes the others
+    /// (`host_account::prune_kiosk`, profile included).
+    pub(crate) fn kiosk_account_seats(&self) -> Vec<SeatNumber> {
+        kiosk_account_seats(&self.lock().config)
+    }
+}
+
+/// Pure part of [`Service::kiosk_account_seats`].
+/// The mode is not looked at: switching to `shared` for a while must not delete the seats'
+/// profiles.
+pub(crate) fn kiosk_account_seats(cfg: &Config) -> Vec<SeatNumber> {
+    cfg.seats
+        .iter()
+        .filter(|s| s.is_local() && !s.number.is_console() && s.local_settings().kiosk_shell.is_some())
+        .map(|s| s.number)
+        .collect()
 }
 
 /// Pure part of [`Service::host_account_seats`].
@@ -1547,5 +1573,18 @@ mod host_account_seat_tests {
         assert_eq!(host_account_seats(&c), vec![s(2), s(3)]);
         c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
         assert_eq!(host_account_seats(&c), vec![s(1), s(2), s(3)]);
+    }
+
+    #[test]
+    fn kiosk_seats_keep_their_kiosk_account() {
+        let s = |n| SeatNumber::new(n).unwrap();
+        let mut c = Config { seats: vec![seat_core::config::SeatConfig::new(s(1)), seat_core::config::SeatConfig::new(s(2)), seat_core::config::SeatConfig::new(s(3))], ..Config::default() };
+        assert!(kiosk_account_seats(&c).is_empty());
+        for n in [0, 2] {
+            c.seats[n].local_mut().unwrap().kiosk_shell = Some(seat_core::config::KioskShell::default());
+        }
+        assert_eq!(kiosk_account_seats(&c), vec![s(3)], "seat 1 never has one");
+        c.settings.kiosk.accounts = seat_core::config::KioskAccountMode::Shared;
+        assert_eq!(kiosk_account_seats(&c), vec![s(3)], "shared for a while keeps the profiles");
     }
 }

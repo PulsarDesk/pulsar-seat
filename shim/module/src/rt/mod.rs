@@ -17,6 +17,7 @@
 //!    registry / API calls) sees `None` and passes through, so it can never deadlock.
 
 mod backend;
+mod cursor;
 mod device;
 mod fault;
 mod focus;
@@ -81,6 +82,7 @@ fn mask(plan: HookPlan, installed: HookPlan) -> HookPlan {
         steam_cmdline: plan.steam_cmdline && installed.steam_cmdline,
         hkcu_redirect: plan.hkcu_redirect && installed.hkcu_redirect,
         raw_input_data: plan.raw_input_data && installed.raw_input_data,
+        cursor_pos: plan.cursor_pos && installed.cursor_pos,
     }
 }
 
@@ -157,11 +159,18 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
     if matches!(now.role, Role::Kiosk { .. }) || (matches!(now.role, Role::Console) && facts.kiosk_seat.is_some()) {
         // Started by a kiosk shell (round 4): the HID groups and the raw-input data filter,
         // also when the kiosk map entry is not published yet (the live plan decides).
-        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, ..Default::default() };
+        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, cursor_pos: true, ..Default::default() };
     }
     if matches!(now.role, Role::Console) {
-        // The console only needs the HID rule, and only while a seat asks for it.
-        return HookPlan { hid_open: now.plan.hid_open, hid_enumeration: now.plan.hid_enumeration, ..Default::default() };
+        // The console only needs the HID rule, and only while a seat asks for it; and the
+        // raw-input data filter while a kiosk seat of its session runs (parity 2026-11-17:
+        // kiosk keyboards / mice never reach seat-1 apps through raw input).
+        return HookPlan {
+            hid_open: now.plan.hid_open,
+            hid_enumeration: now.plan.hid_enumeration,
+            raw_input_data: now.plan.raw_input_data,
+            ..Default::default()
+        };
     }
     let verified = WNF_FOCUS_CANDIDATES.iter().all(|n| wnf_known_with(build, *n, &cfg.wnf_builds));
     HookPlan {
@@ -176,6 +185,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         steam_cmdline: exe == "steam.exe",
         hkcu_redirect: STEAM_EXES.contains(&exe),
         raw_input_data: false,
+        cursor_pos: false,
     }
 }
 
@@ -259,7 +269,8 @@ fn init_once() {
             || (want.mask_remote && !got.mask_remote)
             || (want.steam_cmdline && !got.steam_cmdline)
             || (want.hkcu_redirect && !got.hkcu_redirect)
-            || (want.raw_input_data && !got.raw_input_data);
+            || (want.raw_input_data && !got.raw_input_data)
+            || (want.cursor_pos && !got.cursor_pos);
         health::send(&facts, role_label, got.any(), failed.then_some("hook_failed"));
     }
 }
@@ -276,6 +287,7 @@ unsafe fn install_hooks(want: HookPlan) -> HookPlan {
             steam_cmdline: want.steam_cmdline && steam::install(),
             hkcu_redirect: want.hkcu_redirect && reg::install(),
             raw_input_data: want.raw_input_data && raw::install(),
+            cursor_pos: want.cursor_pos && cursor::install(),
         }
     }
 }

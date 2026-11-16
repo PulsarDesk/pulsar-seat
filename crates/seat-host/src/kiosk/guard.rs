@@ -28,9 +28,28 @@ pub fn parse_guard_args(args: &[String]) -> Option<Result<SeatNumber, String>> {
     Some(seat.and_then(|s| s.parse::<u8>().ok()).and_then(SeatNumber::new).ok_or_else(|| "--seat N missing".to_string()))
 }
 
+/// Flag of the attributing mode (`seat1_desktop = true`, parity 2026-11-17): the helper also
+/// reads raw input (keyboards and mice, `RIDEV_INPUTSINK` on its own message-only window)
+/// and keeps only kiosk devices' hotkeys, keys and clicks away from seat 1
+/// (`seat_input::hotkey_guard::Attributor`).
+pub const ATTRIBUTE_FLAG: &str = "--attribute";
+
 /// Command line of the helper for `seat` (after the exe).
-pub fn guard_args(seat: SeatNumber) -> Vec<String> {
-    vec![GUARD_FLAG.to_string(), "--seat".to_string(), seat.to_string()]
+pub fn guard_args(seat: SeatNumber, mode: seat_input::hotkey_guard::GuardMode) -> Vec<String> {
+    let mut v = vec![GUARD_FLAG.to_string(), "--seat".to_string(), seat.to_string()];
+    if mode == seat_input::hotkey_guard::GuardMode::Attribute {
+        v.push(ATTRIBUTE_FLAG.into());
+    }
+    v
+}
+
+/// The helper's mode from its command line.
+pub fn parse_guard_mode(args: &[String]) -> seat_input::hotkey_guard::GuardMode {
+    if args.iter().any(|a| a == ATTRIBUTE_FLAG) {
+        seat_input::hotkey_guard::GuardMode::Attribute
+    } else {
+        seat_input::hotkey_guard::GuardMode::Swallow
+    }
 }
 
 /// Shell -> helper commands (one byte each).
@@ -132,9 +151,15 @@ mod tests {
     #[test]
     fn guard_args_round_trip() {
         let seat = SeatNumber::new(2).unwrap();
+        use seat_input::hotkey_guard::GuardMode;
         let mut line = strings(&["pulsar-seat-host.exe"]);
-        line.extend(guard_args(seat));
+        line.extend(guard_args(seat, GuardMode::Swallow));
         assert_eq!(parse_guard_args(&line), Some(Ok(seat)));
+        assert_eq!(parse_guard_mode(&line), GuardMode::Swallow);
+        let mut line = strings(&["pulsar-seat-host.exe"]);
+        line.extend(guard_args(seat, GuardMode::Attribute));
+        assert_eq!(parse_guard_args(&line), Some(Ok(seat)));
+        assert_eq!(parse_guard_mode(&line), GuardMode::Attribute);
         assert_eq!(parse_guard_args(&strings(&["x", "--kiosk-shell"])), None);
         assert!(parse_guard_args(&strings(&["x", GUARD_FLAG])).unwrap().is_err());
         assert!(parse_guard_args(&strings(&["x", GUARD_FLAG, "--seat", "0"])).unwrap().is_err());

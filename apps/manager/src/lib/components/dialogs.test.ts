@@ -102,6 +102,26 @@ describe('KioskShellDialog', () => {
     });
   });
 
+  it('takes a packaged app by AUMID and the full-screen flag', async () => {
+    const onSave = vi.fn();
+    render(KioskShellDialog, { seat: 2, shell: { apps: [], idle_reset_minutes: 0 }, onSave, onCancel: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: t.kiosk.add }));
+    await user.type(screen.getByLabelText(t.kiosk.appTitle), 'Hesap');
+    const id = screen.getByLabelText(t.kiosk.appId);
+    await user.type(id, 'yanlis');
+    expect(screen.getByRole('alert')).toHaveTextContent(t.kiosk.notAppId);
+    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    await user.clear(id);
+    await user.type(id, 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App');
+    await user.click(screen.getByRole('checkbox', { name: t.kiosk.fullscreen }));
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave).toHaveBeenCalledWith({
+      apps: [{ title: 'Hesap', command: '', autostart: false, monitor: 0, app_id: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', fullscreen: true }],
+      idle_reset_minutes: 0
+    });
+  });
+
   it('switching it off saves null', async () => {
     const onSave = vi.fn();
     render(KioskShellDialog, { seat: 3, shell: { apps: [], idle_reset_minutes: 0 }, onSave, onCancel: vi.fn() });

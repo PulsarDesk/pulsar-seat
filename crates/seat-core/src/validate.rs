@@ -340,6 +340,16 @@ pub fn is_absolute_windows_path(p: &str) -> bool {
     drive || unc
 }
 
+/// An Application User Model ID of a packaged app: `PackageFamilyName!AppId`, ASCII
+/// letters, digits, `.`, `_` and `-` on both sides of one `!`, at most
+/// [`crate::config::MAX_APP_ID_CHARS`] characters (no quotes, spaces or separators, so it
+/// can go into a COM call or a log line as it is).
+pub fn is_app_user_model_id(s: &str) -> bool {
+    let Some((family, app)) = s.split_once('!') else { return false };
+    let ok = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    s.len() <= crate::config::MAX_APP_ID_CHARS && ok(family) && ok(app)
+}
+
 /// Kiosk shells (spec 35 §5.1 U3).
 fn kiosk_checks(config: &Config, out: &mut Vec<Issue>) {
     for s in &config.seats {
@@ -350,8 +360,13 @@ fn kiosk_checks(config: &Config, out: &mut Vec<Issue>) {
         };
         // The shell starts `command` as `lpApplicationName` (no PATH search, relative to the
         // shell's own folder), so only an absolute, already trimmed path is accepted.
+        // A packaged app (AUMID) needs no command; a command given anyway must be absolute.
         let bad_app = k.apps.iter().any(|a| {
-            !text_ok(&a.title, 64) || !text_ok(&a.command, 260) || !is_absolute_windows_path(&a.command) || a.args.iter().any(|x| x.contains('\0'))
+            let target_ok = match &a.app_id {
+                Some(id) => is_app_user_model_id(id) && (a.command.is_empty() || (text_ok(&a.command, 260) && is_absolute_windows_path(&a.command))),
+                None => text_ok(&a.command, 260) && is_absolute_windows_path(&a.command),
+            };
+            !text_ok(&a.title, 64) || !target_ok || a.args.iter().any(|x| x.contains('\0'))
         });
         let bad_idle = k.idle_reset_minutes > 1440;
         if k.apps.len() > crate::config::MAX_KIOSK_APPS || bad_app || bad_idle {
@@ -716,7 +731,7 @@ mod tests {
     #[test]
     fn kiosk_shell_checks() {
         use crate::config::{KioskShell, KioskShellApp};
-        let app = |t: &str, c: &str| KioskShellApp { title: t.into(), command: c.into(), args: vec![], autostart: false, monitor: 0 };
+        let app = |t: &str, c: &str| KioskShellApp::desktop(t, c);
         let mut c = Config::default();
         let mut s2 = SeatConfig::new(s(2));
         s2.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![app("Not defteri", r"C:\Windows\notepad.exe")], idle_reset_minutes: 10 });
@@ -739,12 +754,33 @@ mod tests {
         }
         c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = (0..17).map(|i| app(&format!("a{i}"), r"C:\x.exe")).collect();
         assert!(codes(&c).contains(&IssueCode::InvalidKioskShell));
+        // Packaged apps: an AUMID instead of a command.
+        let mut uwp = app("Hesap", "");
+        uwp.app_id = Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into());
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = vec![uwp.clone()];
+        assert!(!codes(&c).contains(&IssueCode::InvalidKioskShell));
+        for bad in ["NoBang", "a!", "!b", "a b!c", "a!b\"c", "a!b!c"] {
+            uwp.app_id = Some(bad.into());
+            c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = vec![uwp.clone()];
+            assert!(codes(&c).contains(&IssueCode::InvalidKioskShell), "{bad}");
+        }
+        uwp.app_id = Some("A.B_x!App".into());
+        uwp.command = "relative.exe".into();
+        c.seats[1].local_mut().unwrap().kiosk_shell.as_mut().unwrap().apps = vec![uwp];
+        assert!(codes(&c).contains(&IssueCode::InvalidKioskShell), "a command next to an AUMID must still be absolute");
         c.seats[1].local_mut().unwrap().kiosk_shell = None;
         c.seats[0].local_mut().unwrap().kiosk_shell = Some(KioskShell::default());
         assert!(codes(&c).contains(&IssueCode::KioskShellIgnoredOnSeatOne));
         c.settings.kiosk.seat1_desktop = false;
         assert!(!codes(&c).contains(&IssueCode::KioskShellIgnoredOnSeatOne));
-        // Old documents without the new fields keep working.
+        // Old documents without the new fields keep working; their kiosk seats migrate to
+        // per-seat accounts.
+        let old = Config::from_json(r#"{"seats":[{"number":2,"name":"x"}],"settings":{"kiosk":{"seat1_desktop":false}}}"#).unwrap();
+        assert!(!old.settings.kiosk.seat1_desktop);
+        assert_eq!(old.settings.kiosk.accounts, crate::config::KioskAccountMode::PerSeat);
+        let shared = Config::from_json(r#"{"settings":{"kiosk":{"accounts":"shared"}}}"#).unwrap();
+        assert_eq!(shared.settings.kiosk.accounts, crate::config::KioskAccountMode::Shared);
+        assert!(shared.to_json().contains("\"accounts\": \"shared\""));
         let old = Config::from_json(r#"{"seats":[{"number":2,"name":"x"}]}"#).unwrap();
         assert!(old.settings.kiosk.seat1_desktop);
         assert!(old.seats.iter().all(|s| s.local_settings().kiosk_shell.is_none()));

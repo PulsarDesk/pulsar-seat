@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -73,6 +73,7 @@
         {#each draft.seats as s (s.number)}
           {@const rt = store.status?.seats.find((r) => r.seat === s.number)}
           {@const ka = kioskMode ? kioskAudio(draft, s.number, store.devices, desktopsNotes) : null}
+          {@const kacc = kioskMode ? kioskAccountOf(draft, s.number, store.view?.password_set.includes(s.number) ?? false) : null}
           <tr>
             <td>
               <button type="button" class="link" onclick={() => (dialog = { kind: 'name', seat: s.number })}>{s.number}. {s.name === String(s.number) ? '' : s.name}</button>
@@ -139,6 +140,11 @@
                   </small>
                   {#if ka.sharedWith.length}<br /><small class="warn-text">{t.kiosk.audio.sharedApp(ka.sharedWith)}</small>{/if}
                 {/if}
+                {#if kacc}
+                  <br /><small class="hint" data-testid={`kiosk-account-${s.number}`}>
+                    {kacc.kind === 'console' ? t.kiosk.account.console : kacc.kind === 'seat' ? t.kiosk.account.seat(kacc.user) : t.kiosk.account.auto(kacc.user)}
+                  </small>
+                {/if}
               </td>
             {/if}
             <td class="hint">{rt ? seatLabel(rt.state) : t.none}</td>
@@ -163,6 +169,18 @@
       </label>
       <p class="hint">{t.kiosk.seatOneDesktopHint}</p>
       <p class="hint">{t.kiosk.systemKeys}</p>
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={kioskPerSeatAccounts(draft)}
+          onchange={(e) => {
+            const on = e.currentTarget.checked;
+            store.edit((c) => setKioskPerSeatAccounts(c, on));
+          }}
+        />
+        {t.kiosk.perSeatAccounts}
+      </label>
+      <p class="hint">{t.kiosk.perSeatAccountsHint}</p>
     {:else if draft.seats.some((s) => localOf(s).kiosk_shell)}
       <p class="hint">{t.kiosk.backendOnly}</p>
     {/if}

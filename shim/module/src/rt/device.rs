@@ -128,7 +128,7 @@ pub enum Check {
     Open,
     /// An enumeration (CfgMgr32, SetupAPI, `GetRawInputDeviceList`).
     Enumeration,
-    /// A raw-input record (`GetRawInputData` / `GetRawInputBuffer`, kiosk role only).
+    /// A raw-input record (`GetRawInputData` / `GetRawInputBuffer`, kiosk role, and seat-1 console apps while a kiosk seat runs).
     RawData,
 }
 

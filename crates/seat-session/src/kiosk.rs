@@ -179,7 +179,7 @@ mod tests {
         SeatNumber::new(n).unwrap()
     }
     fn app(t: &str) -> KioskShellApp {
-        KioskShellApp { title: t.into(), command: r"C:\Program Files\Ç\a b.exe".into(), args: vec!["--x \"y\"".into()], autostart: true, monitor: 1 }
+        KioskShellApp { args: vec!["--x \"y\"".into()], autostart: true, monitor: 1, ..KioskShellApp::desktop(t, r"C:\Program Files\Ç\a b.exe") }
     }
 
     #[test]

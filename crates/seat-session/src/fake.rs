@@ -198,6 +198,71 @@ pub struct FakeLauncher {
     pub fail: AtomicBool,
     /// `launch` takes this long (ms; race tests).
     pub delay_ms: AtomicU32,
+    /// `(pid, token)` of every `launch_as`.
+    pub tokens: Mutex<Vec<(u32, usize)>>,
+}
+
+/// Fake kiosk logons: token = 7000 + seat, SID `S-1-5-21-9-9-9-<1000+seat>`; counts live
+/// logons so tests see the drop (profile unload + grant revoke on Windows).
+#[derive(Default)]
+pub struct FakeSeatLogons {
+    pub fail: AtomicBool,
+    pub passwords: Mutex<Vec<SeatNumber>>,
+    pub made: Mutex<Vec<(SeatNumber, u32, crate::kiosk_account::KioskIdentity)>>,
+    pub live: Arc<AtomicU32>,
+    pub bound: Arc<Mutex<Vec<(SeatNumber, u32)>>>,
+}
+
+struct FakeLogon {
+    auto: bool,
+    seat: SeatNumber,
+    label: String,
+    live: Arc<AtomicU32>,
+    bound: Arc<Mutex<Vec<(SeatNumber, u32)>>>,
+}
+
+impl crate::kiosk_account::SeatLogon for FakeLogon {
+    fn token(&self) -> usize {
+        7000 + usize::from(self.seat.get())
+    }
+    fn user_sid(&self) -> String {
+        format!("S-1-5-21-9-9-9-{}", 1000 + u32::from(self.seat.get()))
+    }
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+    fn pulsar_account(&self) -> bool {
+        self.auto
+    }
+    fn bind(&self, pid: u32, _created: u64) {
+        lock(&self.bound).push((self.seat, pid));
+    }
+}
+
+impl Drop for FakeLogon {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl crate::kiosk_account::SeatLogons for FakeSeatLogons {
+    fn logon(
+        &self,
+        seat: SeatNumber,
+        session_id: u32,
+        identity: &crate::kiosk_account::KioskIdentity,
+    ) -> Result<Arc<dyn crate::kiosk_account::SeatLogon>, SysError> {
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(SysError::Win32 { api: "LogonUserW", code: 1326 });
+        }
+        lock(&self.made).push((seat, session_id, identity.clone()));
+        self.live.fetch_add(1, Ordering::SeqCst);
+        let auto = matches!(identity, crate::kiosk_account::KioskIdentity::Auto { .. });
+        Ok(Arc::new(FakeLogon { auto, seat, label: identity.label(), live: self.live.clone(), bound: self.bound.clone() }))
+    }
+    fn has_password(&self, seat: SeatNumber) -> bool {
+        lock(&self.passwords).contains(&seat)
+    }
 }
 
 impl FakeLauncher {
@@ -224,6 +289,12 @@ impl SessionLauncher for FakeLauncher {
         lock(&self.launched).push((seat, spec.clone()));
         lock(&self.alive).push((seat, pid));
         Ok(Launched { pid, creation_time: u64::from(pid) })
+    }
+
+    fn launch_as(&self, seat: SeatNumber, spec: &LaunchSpec, token: usize) -> Result<Launched, SysError> {
+        let l = self.launch(seat, spec)?;
+        lock(&self.tokens).push((l.pid, token));
+        Ok(l)
     }
 
     fn kill_job(&self, seat: SeatNumber) -> Result<(), SysError> {

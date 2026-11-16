@@ -402,8 +402,13 @@ pub struct HookPlan {
     /// HKCU Steam key redirect (shared-account fallback only).
     pub hkcu_redirect: bool,
     /// `GetRawInputData` / `GetRawInputBuffer` drop records of other seats' devices
-    /// (kiosk role only, round 4).
+    /// (kiosk role, round 4; seat-1 console processes too while a kiosk seat of their
+    /// session runs, parity 2026-11-17).
     pub raw_input_data: bool,
+    /// `GetCursorPos` / `GetPhysicalCursorPos` / `GetCursorInfo` / `GetMessagePos` answer
+    /// with the seat's own cursor ([`crate::kiosk_cursor`]; kiosk role only, parity
+    /// 2026-11-17).
+    pub cursor_pos: bool,
 }
 
 impl HookPlan {
@@ -415,6 +420,7 @@ impl HookPlan {
             || self.steam_cmdline
             || self.hkcu_redirect
             || self.raw_input_data
+            || self.cursor_pos
     }
 }
 
@@ -447,7 +453,11 @@ pub fn hook_plan_full(
             // seat-owned input while any running seat asks for HID isolation.
             let hid = map.iter().any(|e| e.flags.hid_isolation)
                 || kiosk.iter().any(|e| e.flags.hid_isolation && e.session_id == p.session_id);
-            HookPlan { hid_open: hid, hid_enumeration: hid, ..HookPlan::default() }
+            // Parity 2026-11-17: seat-1 console apps also drop raw-input records of kiosk
+            // devices (games and apps that read keyboards / mice through raw input), while a
+            // kiosk seat of their session asks for it.
+            let raw = kiosk.iter().any(|e| e.flags.raw_input && e.session_id == p.session_id);
+            HookPlan { hid_open: hid, hid_enumeration: hid, raw_input_data: raw, ..HookPlan::default() }
         }
         Role::Kiosk { seat, session_id } => {
             let Some(e) =
@@ -459,6 +469,7 @@ pub fn hook_plan_full(
                 hid_open: e.flags.hid_isolation,
                 hid_enumeration: e.flags.hid_isolation,
                 raw_input_data: e.flags.raw_input,
+                cursor_pos: e.flags.cursor,
                 ..HookPlan::default()
             }
         }
@@ -477,6 +488,7 @@ pub fn hook_plan_full(
                 steam_cmdline: steam && exe == "steam.exe",
                 hkcu_redirect: steam && f.shared_account,
                 raw_input_data: false,
+                cursor_pos: false,
             }
         }
     }
@@ -751,15 +763,23 @@ mod tests {
         p.kiosk_seat = Some(2);
         let r = role_full(&p, &[], &k);
         let plan = hook_plan_full(&r, &p, &[], &k, &ShimConfig::default(), 26100);
-        assert!(plan.hid_open && plan.hid_enumeration && plan.raw_input_data);
+        assert!(plan.hid_open && plan.hid_enumeration && plan.raw_input_data && plan.cursor_pos);
+        assert!(!hook_plan_full(&Role::Console, &facts(1, 1, "b.exe"), &[], &k, &ShimConfig::default(), 26100).cursor_pos, "seat 1 keeps the real cursor");
         assert!(!plan.focus_filter && !plan.mask_remote && !plan.steam_cmdline && !plan.hkcu_redirect);
         let mut off = k.clone();
-        off[0].flags = crate::kiosk::KioskFlags { hid_isolation: false, raw_input: false };
+        off[0].flags = crate::kiosk::KioskFlags { hid_isolation: false, raw_input: false, cursor: false };
         assert!(!hook_plan_full(&r, &p, &[], &off, &ShimConfig::default(), 26100).any());
         // Seat 1 apps: HID rule while a kiosk seat of the session wants it.
         let c = facts(1, 1, r"c:\apps\b.exe");
         assert!(hook_plan_full(&Role::Console, &c, &[], &k, &ShimConfig::default(), 26100).hid_open);
         assert!(!hook_plan_full(&Role::Console, &c, &[], &off, &ShimConfig::default(), 26100).any());
+        // ... and the raw-input data filter (parity 2026-11-17): kiosk keyboards and mice
+        // never reach seat-1 apps through raw input; seat-1 devices still do.
+        assert!(hook_plan_full(&Role::Console, &c, &[], &k, &ShimConfig::default(), 26100).raw_input_data);
+        let other_session = vec![KioskSeatEntry { session_id: 7, ..kiosk(2, &[]) }];
+        assert!(!hook_plan_full(&Role::Console, &c, &[], &other_session, &ShimConfig::default(), 26100).raw_input_data);
+        assert_eq!(hid_access(&Role::Console, &DeviceOrigin::KioskDevice { seat: 2 }), Access::Deny);
+        assert_eq!(hid_access(&Role::Console, &DeviceOrigin::Console), Access::Grant);
         let cfg = ShimConfig { disabled_targets: vec!["a.exe".into()], ..Default::default() };
         assert!(!hook_plan_full(&r, &p, &[], &k, &cfg, 26100).any());
     }
