@@ -1758,3 +1758,13 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   - Gates: cargo 1634 passed / 6 ignored (was 1629), clippy aarch64 + x86_64 clean, shim
     11 tests (was 10) + clippy aarch64 / x86_64 + check i686, manager 199 / check / build,
     installer scripts 54. No test deleted.
+- 2026-11-17 (integrate arm64): merged `worktree-wf_b025704c-d7f-1` (a301559, 1dcaace) into
+  main with a merge commit; no conflicts (the branch was based on main's head dbeff2e).
+  - A stale pre-merge `credprov\build\ARM64\Release` DLL (plain ARM64) made the
+    `check-payload` test "the real ARM64X build passes when present" fail; a fresh
+    `build-credprov.ps1` run (ARM64 ARM64X + x64, self-tests 0 failed) fixed it. Rebuild
+    credprov after pulling this change.
+  - Gates on main: cargo 1634 passed (was 1629), clippy aarch64 + x86_64 clean, shim 11 tests
+    on aarch64 and x86_64 + check x86_64 / i686 / aarch64 + clippy aarch64 / x86_64, manager
+    199 / check / build, installer scripts 54. No test deleted. Open HYPOTHESIS items as in
+    the parity-arm64 entry above.
