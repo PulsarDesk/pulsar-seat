@@ -73,6 +73,32 @@ fn wanted(slot: u8, kind: PadKind, generation: u32) -> PadWanted {
 }
 
 #[test]
+fn media_section_carries_haptics_and_mic() {
+    let mut r = rig();
+    let a = r.m.wanted(&ctx(), &wanted(0, PadKind::Ds5, 1)).unwrap().unwrap();
+    assert!(a.media, "DualSense pads announce the media section");
+    let pad = PadId::new(SEAT, 0).unwrap();
+    let m = r.chans.media_of(&a.channel).unwrap();
+    // Game -> speaker / haptics: into the out ring for the stream server.
+    let fb = r.usbip.sink(&pad).unwrap();
+    fb.haptics_pcm(&pad, 4, 48_000, &[3u8; 32]);
+    assert_eq!(crate::media::read_ring(&*m, crate::media::Ring::Out, 1024, 8), vec![3u8; 32]);
+    assert_eq!(crate::media::flags(&*m) & layout::MEDIA_FLAG_SPEAKER, layout::MEDIA_FLAG_SPEAKER);
+    // Another format is not put into the ring (fixed 4 ch / 48 kHz).
+    fb.haptics_pcm(&pad, 2, 44_100, &[1u8; 8]);
+    assert!(crate::media::read_ring(&*m, crate::media::Ring::Out, 1024, 1).is_empty());
+    // Client mic -> the pad's microphone, on the next pump.
+    assert!(crate::media::write_ring(&*m, crate::media::Ring::In, &[5u8; 16]));
+    r.m.pump();
+    assert!(r.usbip.calls().contains(&FakePadCall::Mic(pad.clone(), vec![5u8; 16])));
+    // X360 pads have no audio: no media flag.
+    let b = r.m.wanted(&ctx(), &wanted(1, PadKind::X360, 1)).unwrap().unwrap();
+    assert!(!b.media);
+    let j = serde_json::to_value(&b).unwrap();
+    assert!(j.get("media").is_none(), "additive: absent when false");
+}
+
+#[test]
 fn attach_reuse_and_generation() {
     let mut r = rig();
     let a = r.m.wanted(&ctx(), &wanted(0, PadKind::Ds5, 1)).unwrap().unwrap();

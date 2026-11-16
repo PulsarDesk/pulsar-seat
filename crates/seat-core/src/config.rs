@@ -193,6 +193,13 @@ pub struct SeatConfig {
     /// 2026-11-13 (additive).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub startup_apps: Vec<KioskApp>,
+    /// USB ids (`0xVVVV/0xPPPP`, at most [`MAX_PAD_IGNORE_DEVICES`]) that SDL-based games
+    /// of this seat ignore (`SDL_GAMECONTROLLER_IGNORE_DEVICES` in the environment of the
+    /// seat processes the service starts; spec/remote 50 §7.2). The service adds the ids
+    /// of physical pads routed elsewhere when no pad of this seat shares them. Added
+    /// 2026-11-17 (additive, both kinds).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pad_ignore_devices: Vec<String>,
     /// Physical-seat part; set iff `kind == local`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSeat>,
@@ -465,6 +472,8 @@ pub struct IpProgram {
 
 /// Longest program list kept on save (longer lists get a warning, spec 10 §7.4).
 pub const MAX_IP_PROGRAMS: usize = 256;
+/// Most entries of [`SeatConfig::pad_ignore_devices`].
+pub const MAX_PAD_IGNORE_DEVICES: usize = 64;
 
 fn yes() -> bool {
     true
@@ -484,6 +493,7 @@ impl SeatConfig {
             wallpaper: false,
             ip_binding: None,
             startup_apps: Vec::new(),
+            pad_ignore_devices: Vec::new(),
             local: Some(LocalSeat::default()),
             remote: None,
         }
@@ -746,6 +756,12 @@ pub struct InputSettings {
     /// Service-gap buffer per unit (spec 50 §4.1.5).
     pub gap_buffer_ms: u32,
     pub gap_buffer_packets: u32,
+    /// Physical game pads are scoped to one session through their device nodes
+    /// (`seat_input::pad_scope`): a pad routed to a local seat opens only for that seat's
+    /// user, and while remote seats run the other pads open only for the console user.
+    /// Every change is journaled and restored at service stop, on the next start after a
+    /// crash, and when this is turned off. Added 2026-11-17, default on.
+    pub pad_device_scope: bool,
 }
 
 impl Default for InputSettings {
@@ -756,6 +772,7 @@ impl Default for InputSettings {
             unfiltered_hid_usages: vec![(0x59, 0)],
             gap_buffer_ms: 1_000,
             gap_buffer_packets: 256,
+            pad_device_scope: true,
         }
     }
 }

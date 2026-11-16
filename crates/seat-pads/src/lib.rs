@@ -8,26 +8,32 @@
 //! - [`manager::PadManager`]: pad lifecycle per seat (spec 60 §3.5), ownership registry,
 //!   orphan cleanup, device security + session id, channel pump, feedback.
 //! - Pure modules: [`reports`], [`shm`], [`mapping`], [`ids`], [`descriptors`],
-//!   [`features`], [`layout`], [`control`], [`bluetooth`] (plan only).
+//!   [`features`], [`layout`], [`control`], [`bluetooth`] (plan only); physical pads of
+//!   local seats: [`generic`] (HID usages to state), [`switch_pro`], [`bt`] (Bluetooth
+//!   output reports with CRC).
 //! - [`win`]: the real Windows implementations of every system trait.
 //! - [`fake`]: in-memory fakes (feature `fake`).
 
 pub mod bluetooth;
+pub mod bt;
 pub mod channel;
 pub mod control;
 pub mod descriptors;
 pub mod error;
 pub mod features;
+pub mod generic;
 pub mod ids;
 pub mod journal;
 pub mod layout;
 pub mod manager;
 pub mod mapping;
+pub mod media;
 pub mod nonce;
 pub mod owners;
 pub mod pulsarpad;
 pub mod reports;
 pub mod shm;
+pub mod switch_pro;
 pub mod types;
 pub mod usbip;
 pub mod vigem;

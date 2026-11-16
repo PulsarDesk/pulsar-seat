@@ -123,6 +123,9 @@ pub struct Running {
     pipe_name: String,
     /// Local seats' virtual pads (None without the engine's pad manager).
     local_pads: Arc<Mutex<Option<seat_input::local_pads::LocalPadHub>>>,
+    /// Physical pad scoping and the local seat map (None in a `--console` dev run, which
+    /// never changes device properties of the developer's PC).
+    pad_rt: Arc<Mutex<Option<crate::pad_runtime::PadRuntime>>>,
 }
 
 /// Build everything; the pipe name is claimed here (fails if already owned).
@@ -259,8 +262,10 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
     let local_pads = engine.as_ref().and_then(|e| e.local_pad_parts()).map(|(mgr, router)| {
         seat_input::local_pads::LocalPadHub::new(mgr, Arc::new(seat_input::win::pad_io::WinPadSource), router)
     });
+    let pad_rt = (!opts.console).then(|| crate::pad_runtime::PadRuntime::start(&opts.data_dir));
     Ok(Running {
         local_pads: Arc::new(Mutex::new(local_pads)),
+        pad_rt: Arc::new(Mutex::new(pad_rt)),
         service,
         engine,
         health: Mutex::new(health),
@@ -280,10 +285,19 @@ impl Running {
         std::thread::spawn(move || s.boot());
         let (s, stop, engine) = (self.service.clone(), self.stop.clone(), self.engine.clone());
         let local_pads = self.local_pads.clone();
+        let pad_rt = self.pad_rt.clone();
         std::thread::spawn(move || {
             let mut last_engine_tick = std::time::Instant::now();
+            let mut last_pad_tick = std::time::Instant::now();
             while !stop.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(TICK_MS));
+                if last_pad_tick.elapsed() >= Duration::from_secs(1) {
+                    last_pad_tick = std::time::Instant::now();
+                    let remote_running = engine.as_ref().is_some_and(|e| e.active_seats() > 0);
+                    if let Some(p) = pad_rt.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        p.tick(&s, remote_running);
+                    }
+                }
                 // The remote engine keeps Pulsar Split's 1 s tick (watchdogs, stream servers).
                 if let Some(e) = &engine
                     && last_engine_tick.elapsed() >= Duration::from_secs(1)
@@ -358,6 +372,10 @@ impl Running {
         if let Some(mut hub) = self.local_pads.lock().unwrap_or_else(|e| e.into_inner()).take() {
             hub.shutdown();
         }
+        // Physical pads back to their own security, our seat map entries gone.
+        if let Some(mut p) = self.pad_rt.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            p.shutdown();
+        }
         self.service.shutdown_with(progress);
         self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = &self.health_shutdown {
@@ -378,7 +396,7 @@ fn sync_local_pads(s: &Service, hub: &Mutex<Option<seat_input::local_pads::Local
             N::Attached { unit_key, pad_id } => log::info(&format!("local pad {unit_key}: virtual pad {pad_id} attached")),
             N::Pending { unit_key, pad_id } => log::info(&format!("local pad {unit_key}: virtual pad {pad_id} pending")),
             N::Removed { unit_key } => log::info(&format!("local pad {unit_key}: virtual pad removed")),
-            N::Unsupported { unit_key } => log::info(&format!("local pad {unit_key}: layout not readable (Xbox / generic HID), no virtual pad")),
+            N::Unsupported { unit_key } => log::info(&format!("local pad {unit_key}: report descriptor not readable, no virtual pad")),
             N::Denied { unit_key, detail } => log::warn(&format!("local pad {unit_key}: no virtual pad: {detail}")),
             N::OpenFailed { unit_key, error } => log::warn(&format!("local pad {unit_key}: physical pad not opened: {error}")),
         }

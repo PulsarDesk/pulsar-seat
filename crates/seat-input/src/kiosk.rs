@@ -380,6 +380,104 @@ pub enum KioskAction {
     DragTo { top: u64, dx: i32, dy: i32 },
     /// Caption button / menu bar click (host: `WM_SYSCOMMAND`, see [`sc`]).
     Caption { top: u64, cmd: CaptionCommand },
+    /// A pen contact for the seat's app window under it, injected as `PT_PEN` pointer
+    /// input (host: `InjectSyntheticPointerInput` on the seat's synthetic pen device).
+    /// Only when the host enabled pen injection ([`KioskRouter::set_pen_injection`]).
+    Pen(PenAction),
+}
+
+/// One injected pen frame (screen coordinates of the console desktop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PenAction {
+    pub x: i32,
+    pub y: i32,
+    /// The seat app's top-level window the pen is over (or captured by since its down).
+    pub top: u64,
+    pub phase: PenPhase,
+    /// 0..=1024 (`POINTER_PEN_INFO.pressure`).
+    pub pressure: u16,
+    pub info: seat_core::backend::input::PenInfo,
+}
+
+/// `POINTER_FLAG_*` / `PEN_FLAG_*` / `PEN_MASK_*` values (winuser.h, documented with
+/// `InjectSyntheticPointerInput`).
+pub mod pointer {
+    pub const FLAG_INRANGE: u32 = 0x0000_0002;
+    pub const FLAG_INCONTACT: u32 = 0x0000_0004;
+    pub const FLAG_PRIMARY: u32 = 0x0000_2000;
+    pub const FLAG_DOWN: u32 = 0x0001_0000;
+    pub const FLAG_UPDATE: u32 = 0x0002_0000;
+    pub const FLAG_UP: u32 = 0x0004_0000;
+    pub const PEN_FLAG_BARREL: u32 = 0x1;
+    pub const PEN_FLAG_INVERTED: u32 = 0x2;
+    pub const PEN_FLAG_ERASER: u32 = 0x4;
+    pub const PEN_MASK_PRESSURE: u32 = 0x1;
+    pub const PEN_MASK_ROTATION: u32 = 0x2;
+    pub const PEN_MASK_TILT_X: u32 = 0x4;
+    pub const PEN_MASK_TILT_Y: u32 = 0x8;
+}
+
+impl PenAction {
+    /// `POINTER_INFO.pointerFlags` for this frame. Leaving the range is an update without
+    /// `INRANGE` (documented injection sequence).
+    pub fn pointer_flags(&self) -> u32 {
+        use pointer::*;
+        FLAG_PRIMARY
+            | match self.phase {
+                PenPhase::Hover => FLAG_INRANGE | FLAG_UPDATE,
+                PenPhase::Down => FLAG_INRANGE | FLAG_INCONTACT | FLAG_DOWN,
+                PenPhase::Update => FLAG_INRANGE | FLAG_INCONTACT | FLAG_UPDATE,
+                PenPhase::Up => FLAG_INRANGE | FLAG_UP,
+                PenPhase::Leave => FLAG_UPDATE,
+            }
+    }
+
+    /// `(penFlags, penMask, pressure, rotation, tiltX, tiltY)` of `POINTER_PEN_INFO`.
+    pub fn pen_fields(&self) -> (u32, u32, u32, u32, i32, i32) {
+        use pointer::*;
+        let i = &self.info;
+        let mut flags = 0;
+        if i.barrel {
+            flags |= PEN_FLAG_BARREL;
+        }
+        if i.inverted {
+            flags |= PEN_FLAG_INVERTED;
+        }
+        if i.eraser {
+            flags |= PEN_FLAG_ERASER;
+        }
+        let mut mask = PEN_MASK_PRESSURE;
+        if i.rotation.is_some() {
+            mask |= PEN_MASK_ROTATION;
+        }
+        if i.tilt_x.is_some() {
+            mask |= PEN_MASK_TILT_X;
+        }
+        if i.tilt_y.is_some() {
+            mask |= PEN_MASK_TILT_Y;
+        }
+        (
+            flags,
+            mask,
+            u32::from(self.pressure.min(1024)),
+            u32::from(i.rotation.unwrap_or(0) % 360),
+            i32::from(i.tilt_x.unwrap_or(0).clamp(-90, 90)),
+            i32::from(i.tilt_y.unwrap_or(0).clamp(-90, 90)),
+        )
+    }
+}
+
+/// `POINTER_FLAG_*` shape of a pen frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PenPhase {
+    /// In range, not touching.
+    Hover,
+    Down,
+    /// Touching, moved.
+    Update,
+    Up,
+    /// Left the range (after a hover or an up).
+    Leave,
 }
 
 /// The seat's monitors (screen coordinates of the console desktop).
@@ -518,6 +616,10 @@ pub struct KioskRouter {
     scroll: Option<ScrollPress>,
     touch_primary: Option<u32>,
     last_input_ms: u64,
+    /// The host can inject `PT_PEN` input (it created the seat's synthetic pen device).
+    pen_injection: bool,
+    /// Pen in range over a seat app window: `(contact id, top, touching)`.
+    pen: Option<(u32, u64, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,6 +647,18 @@ impl KioskRouter {
             scroll: None,
             touch_primary: None,
             last_input_ms: 0,
+            pen_injection: false,
+            pen: None,
+        }
+    }
+
+    /// The host created the seat's synthetic pen device: pen contacts over the seat's own
+    /// app windows become [`KioskAction::Pen`] (pressure, tilt, rotation, eraser, barrel)
+    /// instead of an emulated left button.
+    pub fn set_pen_injection(&mut self, on: bool) {
+        self.pen_injection = on;
+        if !on {
+            self.pen = None;
         }
     }
 
@@ -698,7 +812,11 @@ impl KioskRouter {
                 }
                 InputPacket::Buttons { down, up } => self.buttons_changed(*down, *up, q, now_ms, &mut out),
                 InputPacket::Wheel { d, h } => self.wheel(*d, *h, q, &mut out),
-                InputPacket::Touch { o, contacts } => self.touch(*o, contacts, q, now_ms, &mut out),
+                InputPacket::Touch { o, contacts } => {
+                    if !(self.pen_injection && (self.pen.is_some() || contacts.iter().any(|c| c.pen)) && self.pen_frame(*o, contacts, q, &mut out)) {
+                        self.touch(*o, contacts, q, now_ms, &mut out);
+                    }
+                }
                 InputPacket::Consumer { .. } => {}
                 InputPacket::Sas => {
                     out.extend(self.release_all());
@@ -917,6 +1035,56 @@ impl KioskRouter {
             }
             _ => self.move_to(x, y, q, out),
         }
+    }
+
+    /// Pen frame as injected pointer input. `false` = not handled here (the pen is over
+    /// something that is not one of the seat's apps): the caller emulates the mouse.
+    fn pen_frame(&mut self, o: u8, contacts: &[seat_core::backend::input::TouchContact], q: &dyn WindowQuery, out: &mut Vec<KioskAction>) -> bool {
+        let c = match self.pen {
+            Some((id, ..)) => contacts.iter().find(|c| c.pen && c.id == id),
+            None => contacts.iter().find(|c| c.pen),
+        };
+        let Some(c) = c else {
+            // The tracked pen vanished from the frame: lift / leave it.
+            if let Some((_, top, touching)) = self.pen.take() {
+                let (x, y) = self.cursor;
+                if touching {
+                    out.push(KioskAction::Pen(PenAction { x, y, top, phase: PenPhase::Up, pressure: 0, info: Default::default() }));
+                }
+                out.push(KioskAction::Pen(PenAction { x, y, top, phase: PenPhase::Leave, pressure: 0, info: Default::default() }));
+                return true;
+            }
+            return false;
+        };
+        let Some((x, y)) = self.area.abs(c.x, c.y, o) else { return self.pen.is_some() };
+        let info = c.pen_info.unwrap_or_default();
+        let touching_before = self.pen.is_some_and(|(_, _, t)| t);
+        // Over a seat app, or captured by the app it touched down on.
+        let top = match self.pen {
+            Some((_, top, true)) => top,
+            _ => match q.hit(x, y) {
+                Some(h) if h.owner == HitOwner::SeatApp => h.top,
+                _ => {
+                    if let Some((_, top, _)) = self.pen.take() {
+                        out.push(KioskAction::Pen(PenAction { x, y, top, phase: PenPhase::Leave, pressure: 0, info }));
+                    }
+                    return false;
+                }
+            },
+        };
+        let phase = match c.phase.as_str() {
+            "down" => PenPhase::Down,
+            "update" if touching_before => PenPhase::Update,
+            "update" => PenPhase::Down,
+            "up" => PenPhase::Up,
+            _ => PenPhase::Hover,
+        };
+        self.cursor = (x, y);
+        out.push(KioskAction::Cursor { x, y });
+        out.push(KioskAction::Pen(PenAction { x, y, top, phase, pressure: if matches!(phase, PenPhase::Down | PenPhase::Update) { c.pressure.min(1024) } else { 0 }, info }));
+        self.focus = Some(Focus::App(top));
+        self.pen = Some((c.id, top, matches!(phase, PenPhase::Down | PenPhase::Update)));
+        true
     }
 
     fn set_key(&mut self, v: u16, down: bool) {
@@ -1247,6 +1415,66 @@ mod tests {
         assert!(!posts(&a).is_empty());
     }
 
+    fn pen(phase: &str, x: u16, info: Option<seat_core::backend::input::PenInfo>) -> InputPacket {
+        InputPacket::Touch {
+            o: 0,
+            contacts: vec![TouchContact { id: 2, x, y: 3000, phase: phase.into(), pressure: 700, pen: true, pen_info: info }],
+        }
+    }
+
+    fn pens(a: &[KioskAction]) -> Vec<PenAction> {
+        a.iter().filter_map(|x| if let KioskAction::Pen(p) = x { Some(*p) } else { None }).collect()
+    }
+
+    #[test]
+    fn pen_is_injected_over_seat_apps_only() {
+        use seat_core::backend::input::PenInfo;
+        let mut r = KioskRouter::new(area());
+        // Without injection: the pen emulates the left button (posted messages).
+        let a = route(&mut r, &[pen("down", 1000, None)], 1);
+        assert!(pens(&a).is_empty() && !posts(&a).is_empty());
+        route(&mut r, &[pen("up", 1000, None)], 2);
+        r.set_pen_injection(true);
+        let info = PenInfo { tilt_x: Some(30), tilt_y: Some(-10), rotation: Some(90), barrel: true, eraser: false, inverted: false };
+        // x 1000 of 65535 over 1920 px = 29 px: the seat app.
+        let a = route(&mut r, &[pen("hover", 1000, Some(info))], 3);
+        let p = pens(&a);
+        assert_eq!(p.len(), 1);
+        assert_eq!((p[0].phase, p[0].top, p[0].pressure), (PenPhase::Hover, APP, 0));
+        let a = route(&mut r, &[pen("down", 1000, Some(info))], 4);
+        let p = pens(&a)[0];
+        assert_eq!((p.phase, p.pressure, p.info), (PenPhase::Down, 700, info));
+        assert!(posts(&a).is_empty(), "no emulated mouse while injecting");
+        // Dragged over another seat's window while touching: still the app's (capture).
+        let a = route(&mut r, &[pen("update", 40000, Some(info))], 5);
+        assert_eq!(pens(&a)[0].phase, PenPhase::Update);
+        assert_eq!(pens(&a)[0].top, APP);
+        let a = route(&mut r, &[pen("up", 40000, None)], 6);
+        assert_eq!(pens(&a)[0].phase, PenPhase::Up);
+        // Hovering over the other seat's window: leave, then mouse emulation (nothing for
+        // a foreign window).
+        let a = route(&mut r, &[pen("hover", 40000, None)], 7);
+        assert_eq!(pens(&a).iter().map(|p| p.phase).collect::<Vec<_>>(), vec![PenPhase::Leave]);
+        // The pen leaves the frame entirely.
+        route(&mut r, &[pen("hover", 1000, None)], 8);
+        let a = route(&mut r, &[InputPacket::Touch { o: 0, contacts: vec![] }], 9);
+        assert_eq!(pens(&a).iter().map(|p| p.phase).collect::<Vec<_>>(), vec![PenPhase::Leave]);
+    }
+
+    #[test]
+    fn pen_pointer_fields() {
+        use seat_core::backend::input::PenInfo;
+        let info = PenInfo { tilt_x: Some(100), tilt_y: None, rotation: Some(400), barrel: false, eraser: true, inverted: true };
+        let a = PenAction { x: 1, y: 2, top: APP, phase: PenPhase::Down, pressure: 2000, info };
+        assert_eq!(a.pointer_flags(), pointer::FLAG_PRIMARY | pointer::FLAG_INRANGE | pointer::FLAG_INCONTACT | pointer::FLAG_DOWN);
+        assert_eq!(
+            a.pen_fields(),
+            (pointer::PEN_FLAG_ERASER | pointer::PEN_FLAG_INVERTED, pointer::PEN_MASK_PRESSURE | pointer::PEN_MASK_ROTATION | pointer::PEN_MASK_TILT_X, 1024, 40, 90, 0)
+        );
+        let leave = PenAction { phase: PenPhase::Leave, ..a };
+        assert_eq!(leave.pointer_flags() & pointer::FLAG_INRANGE, 0);
+    }
+
     #[test]
     fn cursor_is_clamped_to_the_seat_monitors() {
         let a = SeatArea::new(vec![Rect { x: 0, y: 0, width: 100, height: 100 }, Rect { x: 200, y: 0, width: 100, height: 50 }]);
@@ -1404,7 +1632,7 @@ mod tests {
         let mut r = KioskRouter::new(area());
         let t = |phase: &str| InputPacket::Touch {
             o: 0,
-            contacts: vec![TouchContact { id: 7, x: 1000, y: 3000, phase: phase.into(), pressure: 0, pen: false }],
+            contacts: vec![TouchContact { id: 7, x: 1000, y: 3000, phase: phase.into(), pressure: 0, pen: false, pen_info: None }],
         };
         let a = route(&mut r, &[t("down")], 1);
         assert!(posts(&a).iter().any(|p| p.1 == wm::LBUTTONDOWN));
@@ -1626,7 +1854,7 @@ mod tests {
         let mut r = KioskRouter::new(area());
         let t = |id: u32, phase: &str| InputPacket::Touch {
             o: 0,
-            contacts: vec![TouchContact { id, x: 1000, y: 3000, phase: phase.into(), pressure: 0, pen: false }],
+            contacts: vec![TouchContact { id, x: 1000, y: 3000, phase: phase.into(), pressure: 0, pen: false, pen_info: None }],
         };
         route(&mut r, &[t(7, "down")], 1);
         // Contact 7 vanished without "up"; a new finger 8 comes down.

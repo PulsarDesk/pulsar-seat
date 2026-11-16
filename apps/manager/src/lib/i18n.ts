@@ -384,7 +384,11 @@ export const t = {
     colWallpaper: 'Koltuk duvar kağıdı',
     colVirtualPads: 'Sanal oyun kolu',
     virtualPadsHint:
-      'Sanal oyun kolu: bu koltuğa atanan PlayStation kolu için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kol oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). Gerçek kol öteki koltuklarda da görünmeye devam eder; oyunu sanal kola yönlendirin. Xbox kolları henüz desteklenmez.',
+      'Sanal oyun kolu: bu koltuğa atanan oyun kolu (PlayStation, Switch Pro, Xbox ya da başka bir HID kolu) için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kol oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). “Fiziksel kolları koltuğa kilitle” açıkken gerçek kol yalnızca bu koltukta açılır.',
+    colPadIgnore: 'SDL’nin yok sayacağı kollar',
+    padIgnoreHint:
+      'Bu koltukta SDL kullanan oyunların görmezden geleceği kollar, 0xVVVV/0xPPPP biçiminde, virgülle ayrılmış. Başka koltuklara verilmiş kollar kendiliğinden eklenir.',
+    padIgnorePlaceholder: '0x045E/0x0B09',
     colState: 'Şu anki durum',
     logonScreen: 'Oturum açma ekranı',
     seatOneAlways: '1. koltuk her zaman çalışır.',
@@ -513,6 +517,9 @@ export const t = {
     hotkeyOff: 'Kapalı',
     hotkeyChange: 'Değiştir…',
     systemButtons: 'Ek koltuklardaki güç ve uyku tuşları bütün bilgisayarı etkileyebilsin',
+    padDeviceScope: 'Fiziksel oyun kollarını koltuğa kilitle',
+    padDeviceScopeHint:
+      'Bir koltuğa verilen kol yalnızca o koltuğun kullanıcısı tarafından açılabilir; uzak koltuklar çalışırken diğer kollar yalnızca bu bilgisayarın başındaki kullanıcıya kalır. Değişiklikler hizmet durunca geri alınır.',
     devices: 'Aygıtlar',
     adminsBypass: 'Yöneticiler bütün koltukların aygıtlarına erişebilsin',
     classDefaults: 'Sınıf düzeyinde varsayılan erişim tanımları (sistem değişikliği)',
@@ -1236,6 +1243,7 @@ export const issueText: Record<string, string> = {
   cpu_no_core: 'Koltuğa hiç çekirdek kalmıyor; kaydedilemez.',
   cpu_only_efficiency_cores: 'Koltuğa yalnızca verimlilik çekirdekleri verilmiş; yavaş çalışabilir.',
   invalid_ip_address: 'IP adresi geçersiz.',
+  invalid_pad_ignore_device: 'Yok sayılacak kol listesinde 0xVVVV/0xPPPP biçiminde olmayan bir girdi var (ya da liste çok uzun).',
   duplicate_ip_address: 'Aynı IP adresi birden fazla koltuğa verilmiş.',
   too_many_ip_programs: 'Program listesi çok uzun; fazlası kaydedilmez.',
   invalid_ip_program: 'Program listesinde yolu boş bir satır var.',
@@ -1540,6 +1548,7 @@ export const rt = {
     padBackend: 'Sanal kumanda sürücüsü',
     auto: 'Otomatik',
     bluetoothConsoleOnly: 'Bluetooth yalnızca fiziksel ekranda (konsol oturumu) kullanılsın',
+    padAudio: 'DualSense hoparlör, mikrofon ve titreşim sesi uzak koltuklara da gitsin (yalnızca Pulsar akışı; hizmet yeniden başlayınca geçerli)',
     displayBackend: 'Sanal ekran yöntemi',
     log: 'Kayıt',
     verbosity: 'Ayrıntı düzeyi'

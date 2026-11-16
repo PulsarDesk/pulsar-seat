@@ -1841,3 +1841,53 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   / build, bun test installer/scripts 54. No driver touched; no test deleted. Kiosk runtime
   behaviour stays HYPOTHESIS (list in the kiosk entry above); new HYPOTHESIS: the seat
   cursor hooks under the ARM64 Detours backend.
+- 2026-11-17 (parity round, package pads-pen; branch of this worktree; untested on
+  hardware, every runtime path HYPOTHESIS):
+  - **Local seats read every HID pad**: PlayStation and Switch Pro (`seat_pads::switch_pro`,
+    init at open) by their public layouts, Xbox HID collections and generic HID
+    joysticks / gamepads through their own report descriptor (`HidP_*` value and button
+    caps, `seat_pads::generic` profiles). `Unsupported` only when a descriptor cannot be
+    read.
+  - **Bluetooth feedback**: DualSense 0x31 / DualShock 4 0x11 with CRC-32 (`seat_pads::bt`),
+    Xbox Bluetooth 0x03 (rumble + impulse triggers), Switch Pro rumble 0x10 + player
+    lights; output reports zero-padded to `OutputReportByteLength`.
+  - **Physical pad scoping** (`seat_input::pad_scope`, `seat-service/src/pad_runtime.rs`,
+    setting `input.pad_device_scope`, default on, manager "Fiziksel oyun kollarını koltuğa
+    kilitle"): device SDDL (owner user) + session id on the HID collection and its parent,
+    journaled before every change, restored at start / stop / setting off. Owner = the
+    local seat a pad is routed to, else the console user while remote seats run (spec/remote
+    60 console pad scoping without the shim). **XInput per seat**: local seats with their
+    own session are in the shim seat map with their pads (and parents) as `PadInstances`.
+  - **SDL hints**: `SeatConfig::pad_ignore_devices` (manager column "SDL’nin yok sayacağı
+    kollar") plus the ids of pads routed elsewhere, as `SDL_GAMECONTROLLER_IGNORE_DEVICES`
+    / `SDL_JOYSTICK_IGNORE_DEVICES` for every process the service starts in a seat.
+  - **Controller audio (remote)**: protocol 2 media section per pad (`seat_pads::media`;
+    contract `docs/split/agents/pulsar-host-backend.md` §5), `pad.attach.media`, usbip
+    DualSense mic fed from it, speaker / haptics PCM into it; remote DualSense audio
+    interfaces only with `RemoteSettings::pad_audio` (default off). Sunshine stays
+    HID-only (Moonlight has no controller audio). Needs a pulsar-desktop change to use it.
+  - **Pen**: tilt X / Y, rotation, barrel, eraser, invert from HID (`PenInfo` on the wire)
+    into MS-RDPEI pen contacts (hosted seats; hosted digitizers are routable now) and into
+    kiosk seats as `PT_PEN` injection (`seat-host/src/kiosk/pen_win.rs`).
+  - Gates (2026-11-17): cargo test --workspace 1663 passed (baseline 1629), clippy
+    -D warnings aarch64 + x86_64 clean, manager 200 tests (199) / check / build, shim
+    tests + x64 / x86 check, installer scripts 51, split-pad driver ARM64 + x64 clean
+    (it includes `seat-pads/src/layout.rs`). No test deleted; one test changed on purpose
+    (`hub_other_kind_parses_input_and_rebuilds_feedback`: Bluetooth now gets feedback).
+  - Open: hardware tests of every item above; pulsar-desktop media support; Xbox USB
+    rumble (XInput only) and generic HID force feedback (PID page) are not done.
+- 2026-11-17 (integrate pads-pen): merged branch worktree-wf_b025704c-d7f-3 (7df1632) into
+  main. Conflicts: `apps/manager/src/lib/components/BasicTab.svelte` (one import line: kept
+  kiosk's per-seat account helpers and added pads-pen's `setPadIgnoreDevices` /
+  `parsePadIgnoreList`), `crates/seat-host/src/kiosk/win.rs` `run_shell` (kept kiosk's
+  attributing hotkey guard `GuardHelper::new(seat, hotkey_guard::mode(..))` and added
+  pads-pen's synthetic pen device + `router.set_pen_injection`), and the doc logs (status /
+  journal keep both sides). Gates on main: cargo test --workspace 1695 passed (1664 + 31
+  pads-pen tests), clippy -D warnings aarch64 host + x86_64-pc-windows-msvc clean, shim tests
+  (1 + 7 + 3) + check x86_64 / i686 / aarch64, manager 204 tests / check 0 errors / build,
+  bun test installer/scripts 54, build-drivers.ps1 -Projects split-pad ARM64 + x64 Release +
+  Debug clean (PE 0xAA64 / 0x8664). No test deleted. Learned: build-drivers.ps1 must be
+  started with the repository as the current directory, else cargo misses
+  `.cargo/config.toml` (crt-static) and wdk-build fails with `StaticCrtNotEnabled`. Runtime
+  behaviour stays HYPOTHESIS (list in the pads-pen entry above); new HYPOTHESIS: kiosk pen
+  injection together with the per-seat kiosk user and the attributing hotkey guard.

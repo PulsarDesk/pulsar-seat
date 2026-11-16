@@ -65,12 +65,16 @@ fn attrs(sd: &Sd) -> SECURITY_ATTRIBUTES {
 }
 
 fn create_section(name: &str) -> Result<MappedSection, PadError> {
+    create_section_sized(name, layout::SECTION_SIZE)
+}
+
+fn create_section_sized(name: &str, size: usize) -> Result<MappedSection, PadError> {
     let sd = Sd::from_sddl(SECTION_SDDL)?;
     let sa = attrs(&sd);
     let w = wide(name);
     // SAFETY: valid attributes and name.
     let h = Handle(unsafe {
-        CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE, 0, layout::SECTION_SIZE as u32, w.as_ptr())
+        CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE, 0, size as u32, w.as_ptr())
     });
     let err = last_error();
     if !h.valid() {
@@ -81,12 +85,12 @@ fn create_section(name: &str) -> Result<MappedSection, PadError> {
         return Err(PadError::MarkerConflict(format!("{name} already exists")));
     }
     // SAFETY: valid section handle.
-    let view = unsafe { MapViewOfFile(h.0, FILE_MAP_ALL_ACCESS, 0, 0, layout::SECTION_SIZE) };
+    let view = unsafe { MapViewOfFile(h.0, FILE_MAP_ALL_ACCESS, 0, 0, size) };
     if view.Value.is_null() {
         return Err(PadError::os("MapViewOfFile", last_error()));
     }
-    // SAFETY: page-aligned view of SECTION_SIZE bytes, unmapped only on drop.
-    let shm = unsafe { RawShm::new(view.Value as *mut u8, layout::SECTION_SIZE) };
+    // SAFETY: page-aligned view of `size` bytes, unmapped only on drop.
+    let shm = unsafe { RawShm::new(view.Value as *mut u8, size) };
     Ok(MappedSection { _h: h, view, shm })
 }
 
@@ -127,6 +131,9 @@ impl ChannelFactory for WinChannelFactory {
         let in_evt = create_event(&format!("{base}{}", layout::SUFFIX_IN_EVT))?;
         let out_evt = create_event(&format!("{base}{}", layout::SUFFIX_OUT_EVT))?;
         let raw = in_evt.0 .0 as isize;
+        // Protocol 2 media section (controller audio), same DACL as the others.
+        let media = create_section_sized(&format!("{base}{}", layout::SUFFIX_MEDIA), layout::MEDIA_SECTION_SIZE)?;
+        let media_evt = create_event(&format!("{base}{}", layout::SUFFIX_MEDIA_EVT))?;
         Ok(Box::new(ShmChannel::create(
             base,
             kind_value,
@@ -136,7 +143,8 @@ impl ChannelFactory for WinChannelFactory {
             Box::new(out_evt),
             Some(raw),
             Box::new(qpc),
-        )))
+        )
+        .with_media(media, Box::new(media_evt))?))
     }
 }
 

@@ -304,6 +304,15 @@ pub fn split_args(s: &str) -> Vec<String> {
     out
 }
 
+/// Environment of the processes the service starts in a remote seat: the Steam IPC
+/// override (when on) and the SDL ignore list (the seat's `pad_ignore_devices`; physical
+/// pads of the PC never reach remote seats, so no ids are added automatically).
+fn seat_env(seat_id: &str, steam: bool, pad_ignore: &[String]) -> Vec<(String, String)> {
+    let mut env = if steam { seat_shim_core::steam_env(seat_id) } else { Vec::new() };
+    env.extend(seat_input::pad_scope::sdl_env(&seat_input::pad_scope::sdl_ignore_list(pad_ignore, &[], &[])));
+    env
+}
+
 impl Engine {
     pub fn new(d: Deps) -> Self {
         Engine(Arc::new(Inner {
@@ -675,7 +684,7 @@ impl Engine {
                 args: split_args(&app.arguments),
                 session_id,
                 token: TokenKind::SeatUser,
-                env_extra: if global.steam_isolation { seat_shim_core::steam_env(&seat.id) } else { Vec::new() },
+                env_extra: seat_env(&seat.id, global.steam_isolation, &seat.pad_ignore_devices),
                 desktop: DEFAULT_DESKTOP.into(),
                 stdout: None,
             };
@@ -1064,10 +1073,14 @@ impl Engine {
     /// SYSTEM), like autostart. The "Masaüstü" entry (no command) launches nothing.
     /// `Ok(None)`: the entry has no command (the "Masaüstü" entry), nothing is launched.
     fn launch_seat_app(&self, seat_id: &str, app_id: &str) -> Result<Option<u32>, String> {
-        let (session_id, steam) = {
+        let (session_id, steam, pad_ignore) = {
             let seats = lock(&self.0.seats);
             let run = seats.get(seat_id).ok_or("seat_not_running")?;
-            (run.res.session.as_ref().map(|s| s.session_id).ok_or("seat_not_running")?, run.global.steam_isolation)
+            (
+                run.res.session.as_ref().map(|s| s.session_id).ok_or("seat_not_running")?,
+                run.global.steam_isolation,
+                run.seat.pad_ignore_devices.clone(),
+            )
         };
         let dir = SeatDir::checked(&self.d().data_root, seat_id).map_err(|e| e.code().to_string())?;
         let apps = match self.d().stream.fs.read(&dir.apps).map_err(|e| e.code().to_string())? {
@@ -1089,7 +1102,7 @@ impl Engine {
             args: argv,
             session_id,
             token: TokenKind::SeatUser,
-            env_extra: if steam { seat_shim_core::steam_env(seat_id) } else { Vec::new() },
+            env_extra: seat_env(seat_id, steam, &pad_ignore),
             desktop: DEFAULT_DESKTOP.into(),
             stdout: None,
         };

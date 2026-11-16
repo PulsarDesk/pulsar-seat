@@ -288,6 +288,12 @@ pub trait VirtualPad: Send {
     fn refresh_instance(&mut self) -> Option<String> {
         self.instance_id()
     }
+    /// Microphone PCM for the pad's microphone endpoint (interleaved s16le, 48 kHz,
+    /// `layout::MEDIA_IN_CHANNELS` channels; media section protocol 2). Pads without a
+    /// microphone ignore it.
+    fn submit_mic(&mut self, _pcm: &[u8]) -> Result<(), PadError> {
+        Ok(())
+    }
     fn remove(self: Box<Self>) -> Result<(), PadError>;
 }
 

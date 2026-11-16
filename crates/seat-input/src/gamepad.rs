@@ -21,6 +21,11 @@
 //! explicit preference) and forwards the routed physical pad into it. The physical pad itself
 //! stays shared without the HID visibility filter.
 //!
+//! Since 2026-11-17 the service also scopes physical pads through their device nodes
+//! (`crate::pad_scope`: SDDL + session id on the HID collection and its parent, where the
+//! XUSB interface of Xbox pads lives) and lists them in the shim seat map of local seats,
+//! so XInput opens in shimmed processes follow the seat (HYPOTHESIS: untested).
+//!
 //! The manager shows pads as `gamepads_shared` (raw input host) or `xinput_pads_shared`
 //! (filter) so nobody expects isolation that does not exist.
 

@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, setPadIgnoreDevices, parsePadIgnoreList, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -63,6 +63,7 @@
           <th>{t.basic.colStart}</th>
           <th>{t.basic.colWallpaper}</th>
           <th>{t.basic.colVirtualPads}</th>
+          <th title={t.basic.padIgnoreHint}>{t.basic.colPadIgnore}</th>
           <th>{t.basic.colApps}</th>
           <th>{t.redirect.column}</th>
           {#if kioskMode}<th>{t.kiosk.column}</th>{/if}
@@ -111,6 +112,17 @@
                 title={t.basic.virtualPadsHint}
                 checked={localOf(s).virtual_pads ?? false}
                 onchange={(e) => store.edit((c) => setVirtualPads(c, s.number, e.currentTarget.checked))}
+              />
+            </td>
+            <td>
+              <input
+                type="text"
+                size="14"
+                aria-label={`${s.number}. ${t.basic.colPadIgnore}`}
+                title={t.basic.padIgnoreHint}
+                placeholder={t.basic.padIgnorePlaceholder}
+                value={(s.pad_ignore_devices ?? []).join(', ')}
+                onchange={(e) => store.edit((c) => setPadIgnoreDevices(c, s.number, parsePadIgnoreList(e.currentTarget.value)))}
               />
             </td>
             <td>

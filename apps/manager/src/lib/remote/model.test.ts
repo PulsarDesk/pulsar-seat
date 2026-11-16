@@ -82,6 +82,7 @@ describe('remote seat records', () => {
   it('remote settings default like RemoteSettings::default and round-trip', () => {
     const c = demoConfig();
     expect(remoteSettingsOf(c).bluetooth_console_only).toBe(true);
+    expect(remoteSettingsOf(c).pad_audio ?? false).toBe(false);
     const g = { ...remoteSettingsOf(c), multi_session: true };
     expect(remoteSettingsOf(setRemoteSettings(c, g)).multi_session).toBe(true);
   });

@@ -142,6 +142,17 @@ to their launchers. `GetRawInputBuffer` filtering covers ARM64 too (64-bit `RAWI
 layout, same as x64). 32-bit apps keep `GetRawInputBuffer` unfiltered (WOW64 layout).
 HYPOTHESIS: no hook ran in a seat on hardware.
 
+## Local hosted seats (2026-11-17, pads-pen)
+
+Local seats with a session of their own (hosted / dedicated seats) are published in the
+same seat map as remote seats (`seat-service/src/pad_runtime.rs`): seat id
+`5053454c-4f43-4100-8000-<seat number>`, the seat user, and as `PadInstances` the
+instance ids of the HID units routed to that seat alone plus the parents of its pads (the
+XUSB interface of an Xbox pad sits on the parent). So the existing rules apply unchanged:
+a shimmed process of seat N opens (HID and XInput) only seat N's pads, the console no
+longer opens them, and seats never open the console's (unrouted) pads. The module itself
+did not change. Kiosk seats keep their own map. HYPOTHESIS: never ran on hardware.
+
 ## DXVK (opt-in per game, spec 50 §10.2)
 
 No system DLL redirect and no DXVK binaries in this repo or the installer. `shimctl dxvk

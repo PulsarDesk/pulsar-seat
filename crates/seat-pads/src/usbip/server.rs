@@ -105,6 +105,13 @@ impl DeviceSlot {
         true
     }
 
+    /// Microphone PCM for the device's mic endpoint.
+    pub fn push_mic(&self, pcm: &[u8]) {
+        if let Ok(mut d) = self.dev.lock() {
+            d.push_mic(pcm);
+        }
+    }
+
     /// New input report; wakes the pump.
     pub fn set_input(&self, report: &[u8], motion: bool) -> bool {
         let ok = self.dev.lock().map(|mut d| d.set_input(report, motion)).unwrap_or(false);

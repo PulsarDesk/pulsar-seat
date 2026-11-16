@@ -325,6 +325,27 @@ Cost, and how to pay it:
     and mic are off for split seats; the manager says so.
   - Later: protocol 2 of spec 60 §4.5 adds a per-pad media ring (`<base>_Media`,
     Pulsar-defined, 48 kHz PCM blocks both ways). OQ pulsar-host-4.
+  - **Done on the service side (2026-11-17, additive, `seat_pads::media`):** every pad
+    channel also has the section `<base>_Media` (131072 bytes, same DACL as `_In` /
+    `_Out`) and the auto-reset event `<base>_MediaEvt` (set after each out write).
+    `pad.attach` carries `media: true` when the pad has controller audio (DualSense /
+    Edge); absent = false. Header (little-endian): magic `PPMD` at 0, version 2 at 4,
+    header size 64 at 6, rate 48000 at 8, out channels 4 at 12, in channels 2 at 14; out
+    ring: capacity 65536 at 16, write counter at 20, read counter at 24, dropped blocks at
+    28; in ring: capacity 32768 at 32, write at 36, read at 40, dropped at 44; flags at 48
+    (bit 0 speaker streaming, bit 1 mic open); data: out ring at 64, in ring at 64 + 65536.
+    Counters only grow (u32 wrapping), offset = counter % capacity, single producer and
+    single consumer per ring; a producer drops a whole block when it does not fit.
+    `pulsar-host` reads the **out** ring (4-channel s16le: speaker / headset L / R, haptics
+    L / R) and sends it to the client's DualSense; it writes the client's microphone
+    (2-channel s16le) into the **in** ring. The service plays the in ring into the usbip
+    DualSense's mic endpoint and fills the out ring from its speaker endpoint. Remote
+    seats' pads expose the audio interfaces only with the global setting `pad_audio`
+    (default off; HYPOTHESIS: USB audio of a locally attached device may not be usable
+    from a seat session). Request to pulsar-desktop: open the section when
+    `media: true`, carry the two PCM streams over the existing session (no new port).
+    Sunshine seats stay HID-only: the Moonlight protocol has no controller-audio channel
+    (rumble, trigger rumble, LEDs and adaptive triggers only).
 - To avoid two DualSense emulations, seat-pads may reuse pulsar-core's `input::ds5`
   device and USB/IP server (our GPL-3 code) as a git dependency. Decide in OQ pulsar-host-4.
 - Mapping in `pulsar-host`: a client `GamepadState` / `Ds5Report` becomes a

@@ -73,6 +73,8 @@
 #[cfg(windows)]
 pub mod win;
 #[cfg(windows)]
+pub mod pen_win;
+#[cfg(windows)]
 pub mod guard_win;
 pub mod guard;
 pub mod track;

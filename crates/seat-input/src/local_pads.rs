@@ -18,15 +18,17 @@
 //!   installed; its driver is signed).
 //! - **Own pad driver (`drivers/split-pad`, PulsarPad) is unsigned**: used only when the
 //!   seat explicitly prefers it ([`LocalPadPolicy::preferred`]), never by default.
-//! - The **physical** pad stays visible to every session unless the HID visibility filter
-//!   runs (unsigned, not loaded). XInput pads are always shared. So a game in another seat
-//!   can still read the physical pad; the virtual pad only gives the owning seat a pad that
-//!   is its own. Games should be pointed at the virtual pad (HYPOTHESIS: most games pick
-//!   the first XInput slot, which may be the physical pad).
-//! - Device securing (SDDL + session id on the devnode), orphan cleanup and feedback
-//!   routing back to the physical pad (rumble, LEDs) are `seat_pads::PadManager` work;
-//!   this bridge takes a plain [`PadBackend`]. Wiring into the service is not done: the
-//!   feature is off by default and nothing in `seat-service` enables it yet.
+//! - The **physical** pad is scoped to its seat by the service since 2026-11-17
+//!   ([`crate::pad_scope`]: device SDDL + session id on the pad's HID collection and its
+//!   parent, plus the shim seat map for XInput in shimmed processes). Without that (setting
+//!   off, ARM64 apps, the session-0 GameInput service) a game in another seat may still
+//!   read the physical pad (HYPOTHESIS: most games pick the first XInput slot).
+//! - Every HID pad is read since 2026-11-17 ([`RoutedPad::layout`]): PlayStation and
+//!   Switch Pro by their public layouts, others through their report descriptor.
+//! - Device securing (SDDL + session id on the virtual devnode), orphan cleanup and
+//!   feedback routing back to the physical pad (rumble, LEDs, Bluetooth CRC reports) are
+//!   `seat_pads::PadManager` / [`LocalFeedbackRouter`] work. The service enables the
+//!   feature (round 4); per seat it stays off by default.
 //! - Untested on hardware.
 
 use std::collections::BTreeMap;
@@ -34,9 +36,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use seat_pads::mapping::{self, Cap, ClientType, Resolved};
+use seat_pads::generic::{self, HidLayout, HidSample};
 use seat_pads::{
     BackendAvailability, BackendId, Feedback, FeedbackSink, PadBackend, PadCaps, PadCreate, PadError, PadId, PadKind,
-    PadManager, PadState, PadWanted, SeatPadContext, VirtualPad, buttons, layout, reports,
+    PadManager, PadState, PadWanted, SeatPadContext, VirtualPad, bt, buttons, layout, reports, switch_pro,
 };
 
 use crate::gamepad::PadFamily;
@@ -285,6 +288,40 @@ pub fn is_local_seat_pad_id(seat_id: &str) -> bool {
     seat_id.trim_matches(|c| c == '{' || c == '}').to_ascii_lowercase().starts_with("5053454c-4f43-4100-8000-")
 }
 
+/// Bus of a physical pad (`InputInfo::bus` of its unit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PadBus {
+    #[default]
+    Usb,
+    Bluetooth,
+    Other,
+}
+
+impl PadBus {
+    /// From the inventory's bus text (`usb`, `bluetooth`, `bthle`, ...).
+    pub fn from_info(bus: &str) -> Self {
+        match bus.to_ascii_lowercase().as_str() {
+            "usb" => Self::Usb,
+            "bluetooth" | "bt" | "bth" | "bthle" | "ble" | "bthenum" => Self::Bluetooth,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// How the hub reads (and gives feedback to) a physical pad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalLayout {
+    /// DualShock 4 / DualSense / Edge: public report layouts, read as they are.
+    PlayStation(PadKind),
+    /// Nintendo Switch Pro Controller: reports 0x30 / 0x3F (`seat_pads::switch_pro`).
+    SwitchPro,
+    /// Any other HID pad (Xbox through its HID collection, generic HID joysticks and
+    /// gamepads): decoded with the collection's own report descriptor (Windows `HidP_*`,
+    /// [`PhysicalPadIo::hid_layout`] / [`PhysicalPadIo::hid_sample`]) and mapped by
+    /// `seat_pads::generic`. `xinput` = Xbox family.
+    Hid { xinput: bool },
+}
+
 /// One physical pad the input router gives to a local seat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutedPad {
@@ -295,15 +332,26 @@ pub struct RoutedPad {
     pub family: PadFamily,
     pub vendor_id: u16,
     pub product_id: u16,
+    pub bus: PadBus,
 }
 
 impl RoutedPad {
-    /// The physical pad's own report layout, if the hub can read it. Only PlayStation pads
-    /// (DS4 / DualSense / Edge, USB or Bluetooth): their HID reports are public layouts.
-    /// Xbox (XInput / GIP / xinputhid) and generic HID pads are not read yet.
-    pub fn readable_kind(&self) -> Option<PadKind> {
+    /// How the hub reads this pad. Every HID pad is readable since 2026-11-17: PlayStation
+    /// and Switch Pro by their public layouts, everything else through its descriptor.
+    pub fn layout(&self) -> PhysicalLayout {
         let k = mirror_kind(self.family, self.vendor_id, self.product_id);
-        k.is_playstation().then_some(k)
+        if k.is_playstation() {
+            PhysicalLayout::PlayStation(k)
+        } else if switch_pro::is_switch_pro(self.vendor_id, self.product_id) {
+            PhysicalLayout::SwitchPro
+        } else {
+            PhysicalLayout::Hid { xinput: self.family == PadFamily::XInput }
+        }
+    }
+
+    /// Virtual pad kind for this pad ([`mirror_kind`]).
+    pub fn mirror(&self) -> PadKind {
+        mirror_kind(self.family, self.vendor_id, self.product_id)
     }
 }
 
@@ -326,7 +374,8 @@ pub enum LocalPadNote {
     /// Create runs on a worker (usbip-win2): the pad appears a moment later.
     Pending { unit_key: String, pad_id: String },
     Removed { unit_key: String },
-    /// The physical pad's layout cannot be read (Xbox / generic HID pads).
+    /// The physical pad's reports cannot be decoded (a HID pad whose report descriptor
+    /// the source could not read).
     Unsupported { unit_key: String },
     /// No installed backend for the kind, or the create failed.
     Denied { unit_key: String, detail: String },
@@ -344,6 +393,15 @@ pub trait PhysicalPadIo: Send {
     fn read(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String>;
     /// Writer for output reports (feedback), usable from other threads.
     fn writer(&self) -> Arc<dyn PhysicalPadWriter>;
+    /// Input usages the collection declares ([`PhysicalLayout::Hid`] pads). `None` = the
+    /// descriptor could not be read: the pad is reported unsupported.
+    fn hid_layout(&self) -> Option<HidLayout> {
+        None
+    }
+    /// One input report decoded through the collection's descriptor.
+    fn hid_sample(&self, _report: &[u8]) -> Option<HidSample> {
+        None
+    }
 }
 
 /// Writes output reports to a physical pad.
@@ -374,25 +432,64 @@ pub fn forward_physical(mgr: &mut PadManager, pad: &PadId, physical: PadKind, ra
     }
 }
 
+/// Feeds a decoded state (Switch Pro, generic HID pads) into its virtual pad.
+/// `Ok(false)` while the pad's create is still pending.
+pub fn forward_state(mgr: &mut PadManager, pad: &PadId, s: &PadState) -> Result<bool, PadError> {
+    if mgr.wire_kind(pad).is_none() {
+        return Ok(false);
+    }
+    mgr.submit(pad, s).map(|_| true)
+}
+
+/// How the reader turns one physical report into virtual pad input.
+enum Decoder {
+    Ps(PadKind),
+    Switch,
+    Hid { profile: generic::Profile, layout: HidLayout },
+}
+
+/// Feedback state kept per physical pad (rebuilt reports carry every field each time).
+#[derive(Default)]
+struct FbState {
+    ds: reports::Ds5Output,
+    strong: u16,
+    weak: u16,
+    lt: u16,
+    rt: u16,
+    /// 4-bit counter (DualSense Bluetooth sequence, Switch Pro packet number).
+    seq: u8,
+}
+
+impl FbState {
+    fn next_seq(&mut self) -> u8 {
+        self.seq = self.seq.wrapping_add(1) & 0x0F;
+        self.seq
+    }
+}
+
 /// Physical side of one virtual pad, for feedback.
 struct FeedbackTarget {
-    physical: PadKind,
+    layout: PhysicalLayout,
     writer: Arc<dyn PhysicalPadWriter>,
-    /// Set by the reader from the first report: Bluetooth reports (0x31 / 0x11).
+    /// From the unit's bus, and set by the reader from the first report (PlayStation
+    /// Bluetooth reports 0x31 / 0x11).
     bluetooth: AtomicBool,
-    /// Last state sent to a DualSense / DS4 rebuilt from parsed feedback.
-    state: Mutex<reports::Ds5Output>,
+    state: Mutex<FbState>,
 }
 
 /// Feedback (rumble, lightbar, player LEDs, adaptive triggers) from a local seat's virtual
 /// pad back to the physical pad. It is the `PadManager`'s sink for every pad, so pads of
 /// remote seats (no target here) are ignored, as with the `NullSink` before.
 ///
-/// - Same kind as the physical pad (DualSense on usbip-win2, DS4 on ViGEm DS4): the game's
-///   output report goes to the pad unchanged (adaptive triggers included).
-/// - Another kind (a DualSense behind a ViGEm X360 pad): rumble and lightbar are rebuilt
-///   into the physical pad's own output report.
-/// - Bluetooth pads get no feedback yet: their output reports need a CRC (open item).
+/// - PlayStation, same kind as the virtual pad (DualSense on usbip-win2, DS4 on ViGEm DS4):
+///   the game's output report goes to the pad unchanged (adaptive triggers included); on
+///   Bluetooth it is rewrapped as report 0x31 / 0x11 with its CRC (`seat_pads::bt`).
+/// - PlayStation, another kind (a DualSense behind a ViGEm X360 pad): rumble, lightbar,
+///   player LEDs and triggers are rebuilt into the physical pad's own report (USB or
+///   Bluetooth).
+/// - Switch Pro: rumble (report 0x10) and player lights (sub-command 0x30).
+/// - Xbox pads on Bluetooth: rumble and impulse triggers (report 0x03).
+/// - Other HID pads (and Xbox pads on USB, whose rumble only XInput reaches): none.
 #[derive(Default)]
 pub struct LocalFeedbackRouter {
     targets: Mutex<BTreeMap<PadId, Arc<FeedbackTarget>>>,
@@ -404,12 +501,12 @@ impl LocalFeedbackRouter {
         Self::default()
     }
 
-    fn add(&self, pad: PadId, physical: PadKind, writer: Arc<dyn PhysicalPadWriter>) -> Arc<FeedbackTarget> {
+    fn add(&self, pad: PadId, layout: PhysicalLayout, bluetooth: bool, writer: Arc<dyn PhysicalPadWriter>) -> Arc<FeedbackTarget> {
         let t = Arc::new(FeedbackTarget {
-            physical,
+            layout,
             writer,
-            bluetooth: AtomicBool::new(false),
-            state: Mutex::new(reports::Ds5Output::default()),
+            bluetooth: AtomicBool::new(bluetooth),
+            state: Mutex::new(FbState::default()),
         });
         lock(&self.targets).insert(pad, t.clone());
         t
@@ -443,28 +540,60 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl FeedbackSink for LocalFeedbackRouter {
     fn feedback(&self, pad: &PadId, f: Feedback) {
         let Some((t, wire)) = self.target(pad) else { return };
-        if t.bluetooth.load(Ordering::SeqCst) || wire == Some(t.physical) {
-            // Bluetooth: not yet; same kind: `raw_output` already forwarded the report.
-            return;
-        }
-        let report = {
+        let bluetooth = t.bluetooth.load(Ordering::SeqCst);
+        let report: Option<Vec<u8>> = {
             let mut s = lock(&t.state);
-            match f {
-                Feedback::Rumble { strong, weak } => {
-                    s.strong = (strong >> 8) as u8;
-                    s.weak = (weak >> 8) as u8;
+            match t.layout {
+                PhysicalLayout::PlayStation(kind) => {
+                    if wire == Some(kind) {
+                        // Same kind: `raw_output` already forwarded the game's report.
+                        return;
+                    }
+                    match f {
+                        Feedback::Rumble { strong, weak } => {
+                            s.ds.strong = (strong >> 8) as u8;
+                            s.ds.weak = (weak >> 8) as u8;
+                        }
+                        Feedback::Led { r, g, b } => s.ds.rgb = Some((r, g, b)),
+                        Feedback::PlayerLeds { mask } => s.ds.player_leds = Some(mask),
+                        Feedback::AdaptiveTrigger { raw } => s.ds.triggers = Some(raw),
+                        Feedback::TriggerRumble { .. } => return,
+                    }
+                    let usb = match kind {
+                        PadKind::Ds5 | PadKind::Ds5Edge => reports::ds5_output(&s.ds).to_vec(),
+                        PadKind::Ds4 => reports::ds4_output(s.ds.weak, s.ds.strong, s.ds.rgb.unwrap_or((0, 0, 0x40))).to_vec(),
+                        _ => return,
+                    };
+                    if bluetooth {
+                        let seq = s.next_seq();
+                        bt::ps_bt_output(kind, &usb, seq).map(|r| r.to_vec())
+                    } else {
+                        Some(usb)
+                    }
                 }
-                Feedback::Led { r, g, b } => s.rgb = Some((r, g, b)),
-                Feedback::PlayerLeds { mask } => s.player_leds = Some(mask),
-                Feedback::AdaptiveTrigger { raw } => s.triggers = Some(raw),
-                Feedback::TriggerRumble { .. } => return,
-            }
-            match t.physical {
-                PadKind::Ds5 | PadKind::Ds5Edge => reports::ds5_output(&s).to_vec(),
-                PadKind::Ds4 => reports::ds4_output(s.weak, s.strong, s.rgb.unwrap_or((0, 0, 0x40))).to_vec(),
-                _ => return,
+                PhysicalLayout::SwitchPro => match f {
+                    Feedback::Rumble { strong, weak } => {
+                        let seq = s.next_seq();
+                        Some(switch_pro::rumble_report(seq, strong, weak))
+                    }
+                    Feedback::PlayerLeds { mask } => {
+                        let seq = s.next_seq();
+                        Some(switch_pro::subcommand_report(seq, switch_pro::subcmd::SET_PLAYER_LIGHTS, &[switch_pro::player_lights(mask)]))
+                    }
+                    _ => None,
+                },
+                PhysicalLayout::Hid { xinput: true } if bluetooth => {
+                    match f {
+                        Feedback::Rumble { strong, weak } => (s.strong, s.weak) = (strong, weak),
+                        Feedback::TriggerRumble { left, right } => (s.lt, s.rt) = (left, right),
+                        _ => return,
+                    }
+                    Some(bt::xbox_bt_output(s.strong, s.weak, s.lt, s.rt).to_vec())
+                }
+                PhysicalLayout::Hid { .. } => None,
             }
         };
+        let Some(report) = report else { return };
         if let Err(e) = t.writer.write(&report) {
             log::debug!("pad {pad}: feedback to the physical pad failed: {e}");
         }
@@ -472,10 +601,20 @@ impl FeedbackSink for LocalFeedbackRouter {
 
     fn raw_output(&self, pad: &PadId, source: u8, report: &[u8]) {
         let Some((t, wire)) = self.target(pad) else { return };
-        if source == layout::SOURCE_SET_FEATURE || t.bluetooth.load(Ordering::SeqCst) || wire != Some(t.physical) {
+        let PhysicalLayout::PlayStation(kind) = t.layout else { return };
+        if source == layout::SOURCE_SET_FEATURE || wire != Some(kind) {
             return;
         }
-        if let Err(e) = t.writer.write(report) {
+        let out = if t.bluetooth.load(Ordering::SeqCst) {
+            let seq = lock(&t.state).next_seq();
+            match bt::ps_bt_output(kind, report, seq) {
+                Some(r) => r.to_vec(),
+                None => return,
+            }
+        } else {
+            report.to_vec()
+        };
+        if let Err(e) = t.writer.write(&out) {
             log::debug!("pad {pad}: output report to the physical pad failed: {e}");
         }
     }
@@ -509,6 +648,8 @@ pub struct LocalPadHub {
 
 /// Reader poll timeout: the thread checks its stop flag at least this often.
 const READ_TIMEOUT_MS: u32 = 100;
+/// `quiet` tag of a pad whose reports cannot be decoded.
+const UNSUPPORTED: &str = "unsupported";
 
 impl LocalPadHub {
     /// `router` must be the `PadManager`'s feedback sink (`PadManager::new`).
@@ -555,17 +696,17 @@ impl LocalPadHub {
             if self.live.contains_key(&key) {
                 continue;
             }
-            let Some(kind) = p.readable_kind() else {
-                self.note_once(&mut notes, &key, "unsupported", LocalPadNote::Unsupported { unit_key: key.clone() });
+            if self.quiet.get(&key).map(String::as_str) == Some(UNSUPPORTED) {
+                // Its descriptor could not be read: not re-opened every tick.
                 continue;
-            };
-            match self.attach(seat, p, slot, kind) {
+            }
+            match self.attach(seat, p, slot) {
                 Ok(n) => {
                     self.quiet.remove(&key);
                     notes.push(n);
                 }
                 Err(n) => {
-                    let tag = format!("{n:?}");
+                    let tag = if matches!(n, LocalPadNote::Unsupported { .. }) { UNSUPPORTED.to_string() } else { format!("{n:?}") };
                     self.note_once(&mut notes, &key, &tag, n);
                 }
             }
@@ -580,9 +721,19 @@ impl LocalPadHub {
         }
     }
 
-    fn attach(&mut self, seat: &LocalPadSeat, p: &RoutedPad, slot: u8, kind: PadKind) -> Result<LocalPadNote, LocalPadNote> {
+    fn attach(&mut self, seat: &LocalPadSeat, p: &RoutedPad, slot: u8) -> Result<LocalPadNote, LocalPadNote> {
         let unit_key = p.unit_key.clone();
         let mut io = self.source.open(&p.interface_path).map_err(|error| LocalPadNote::OpenFailed { unit_key: unit_key.clone(), error })?;
+        let physical = p.layout();
+        let kind = p.mirror();
+        let decoder = match physical {
+            PhysicalLayout::PlayStation(k) => Decoder::Ps(k),
+            PhysicalLayout::SwitchPro => Decoder::Switch,
+            PhysicalLayout::Hid { xinput } => match io.hid_layout() {
+                Some(l) => Decoder::Hid { profile: generic::profile_for(xinput, &l), layout: l },
+                None => return Err(LocalPadNote::Unsupported { unit_key }),
+            },
+        };
         let seat_id = local_seat_pad_id(seat.seat);
         let pad_id = PadId::new(&seat_id, slot).map_err(|e| LocalPadNote::Denied { unit_key: unit_key.clone(), detail: e.to_string() })?;
         self.generation = self.generation.wrapping_add(1);
@@ -593,14 +744,34 @@ impl LocalPadHub {
             pads_enabled: true,
             max_slots: None,
         };
-        let wanted = PadWanted {
-            slot,
-            kind,
-            client_type: ClientType::Ps,
-            caps: vec![Cap::Rumble, Cap::TriggerRumble, Cap::Touchpad, Cap::Accel, Cap::Gyro, Cap::Battery, Cap::RgbLed],
-            generation: self.generation,
+        let caps = match physical {
+            PhysicalLayout::PlayStation(_) => vec![Cap::Rumble, Cap::TriggerRumble, Cap::Touchpad, Cap::Accel, Cap::Gyro, Cap::Battery, Cap::RgbLed],
+            PhysicalLayout::SwitchPro => vec![Cap::Rumble, Cap::Accel, Cap::Gyro],
+            PhysicalLayout::Hid { .. } => vec![Cap::Rumble, Cap::TriggerRumble],
         };
-        let target = self.router.add(pad_id.clone(), kind, io.writer());
+        let client_type = match physical {
+            PhysicalLayout::PlayStation(_) => ClientType::Ps,
+            PhysicalLayout::SwitchPro => ClientType::Nintendo,
+            PhysicalLayout::Hid { .. } => ClientType::Xbox,
+        };
+        let wanted = PadWanted { slot, kind, client_type, caps, generation: self.generation };
+        let target = self.router.add(pad_id.clone(), physical, p.bus == PadBus::Bluetooth, io.writer());
+        if physical == PhysicalLayout::SwitchPro {
+            // Full report mode, IMU, vibration, player light (USB: the 0x80 handshake first).
+            let init = {
+                let mut st = lock(&target.state);
+                let mut c = st.seq;
+                let r = switch_pro::init_reports(p.bus == PadBus::Usb, &mut c, slot);
+                st.seq = c;
+                r
+            };
+            for r in init {
+                if let Err(e) = target.writer.write(&r) {
+                    log::info!("pad {pad_id}: Switch Pro init write failed: {e}");
+                    break;
+                }
+            }
+        }
         let answer = lock(&self.mgr).wanted(&ctx, &wanted);
         let note = match answer {
             Ok(Some(_)) => LocalPadNote::Attached { unit_key: unit_key.clone(), pad_id: pad_id.to_string() },
@@ -618,7 +789,7 @@ impl LocalPadHub {
             std::thread::Builder::new()
                 .name(format!("local-pad-{slot}"))
                 .spawn(move || {
-                    read_loop(&mut *io, &mgr, &router, &target, &pad, kind, &stop, &key);
+                    read_loop(&mut *io, &mgr, &router, &target, &pad, &decoder, &stop, &key);
                     dead.store(true, Ordering::SeqCst);
                 })
                 .ok()
@@ -674,7 +845,7 @@ fn read_loop(
     router: &LocalFeedbackRouter,
     target: &FeedbackTarget,
     pad: &PadId,
-    kind: PadKind,
+    decoder: &Decoder,
     stop: &AtomicBool,
     unit_key: &str,
 ) {
@@ -689,15 +860,34 @@ fn read_loop(
                 break;
             }
         };
-        if matches!(report.first(), Some(0x31) | Some(0x11)) {
-            target.bluetooth.store(true, Ordering::SeqCst);
-        }
+        // Decode outside the manager lock.
+        let state = match decoder {
+            Decoder::Ps(_) => {
+                if matches!(report.first(), Some(0x31) | Some(0x11)) {
+                    target.bluetooth.store(true, Ordering::SeqCst);
+                }
+                None
+            }
+            Decoder::Switch => match switch_pro::parse_input(&report) {
+                Some(s) => Some(s),
+                None => continue,
+            },
+            Decoder::Hid { profile, layout } => match io.hid_sample(&report) {
+                Some(sample) => Some(generic::map_sample(*profile, layout, &sample)),
+                None => continue,
+            },
+        };
         let mut m = lock(mgr);
         if !wire_known && let Some(w) = m.wire_kind(pad) {
             router.set_wire(pad, w);
             wire_known = true;
         }
-        if let Err(e) = forward_physical(&mut m, pad, kind, &report) {
+        let r = match (decoder, state) {
+            (Decoder::Ps(kind), _) => forward_physical(&mut m, pad, *kind, &report),
+            (_, Some(s)) => forward_state(&mut m, pad, &s),
+            (_, None) => Ok(false),
+        };
+        if let Err(e) = r {
             log::debug!("pad {pad}: forward: {e}");
         }
     }
@@ -902,6 +1092,8 @@ mod tests {
         reports: Mutex<VecDeque<Vec<u8>>>,
         writes: Mutex<Vec<Vec<u8>>>,
         fail_open: std::sync::atomic::AtomicBool,
+        /// Descriptor of a generic HID pad (None: not decodable).
+        hid: Mutex<Option<HidLayout>>,
     }
 
     struct PhysIo(Arc<Phys>);
@@ -917,6 +1109,22 @@ mod tests {
         }
         fn writer(&self) -> Arc<dyn PhysicalPadWriter> {
             Arc::new(PhysWriter(self.0.clone()))
+        }
+        fn hid_layout(&self) -> Option<HidLayout> {
+            self.0.hid.lock().unwrap().clone()
+        }
+        /// Test decoding: byte 0 = report id 0x01, byte 1 = pressed button number,
+        /// bytes 2..4 = X (u16, 0..=65535).
+        fn hid_sample(&self, r: &[u8]) -> Option<HidSample> {
+            if r.len() < 4 || r[0] != 0x01 {
+                return None;
+            }
+            let x = i32::from(u16::from_le_bytes([r[2], r[3]]));
+            Some(HidSample {
+                buttons: if r[1] != 0 { vec![u16::from(r[1])] } else { vec![] },
+                consumer: vec![],
+                values: vec![generic::HidValue { page: 1, usage: generic::USAGE_X, value: x, min: 0, max: 65535 }],
+            })
         }
     }
 
@@ -975,6 +1183,7 @@ mod tests {
             family: PadFamily::Hid,
             vendor_id: 0x054C,
             product_id: 0x0CE6,
+            bus: PadBus::Usb,
         }
     }
 
@@ -1006,8 +1215,16 @@ mod tests {
         assert!(is_local_seat_pad_id(&id) && is_local_seat_pad_id(&id.to_ascii_uppercase()));
         assert!(!is_local_seat_pad_id("0a1b2c3d-0000-4000-8000-00000000abcd"));
         let xbox = RoutedPad { family: PadFamily::XInput, vendor_id: 0x045E, product_id: 0x0B12, ..ds5("x") };
-        assert_eq!(xbox.readable_kind(), None);
-        assert_eq!(ds5("d").readable_kind(), Some(PadKind::Ds5));
+        assert_eq!(xbox.layout(), PhysicalLayout::Hid { xinput: true });
+        assert_eq!(xbox.mirror(), PadKind::XOne);
+        assert_eq!(ds5("d").layout(), PhysicalLayout::PlayStation(PadKind::Ds5));
+        let sw = RoutedPad { vendor_id: 0x057E, product_id: 0x2009, ..ds5("s") };
+        assert_eq!(sw.layout(), PhysicalLayout::SwitchPro);
+        let generic_pad = RoutedPad { vendor_id: 0x1234, product_id: 0x5678, ..ds5("g") };
+        assert_eq!(generic_pad.layout(), PhysicalLayout::Hid { xinput: false });
+        assert_eq!(PadBus::from_info("BTHLE"), PadBus::Bluetooth);
+        assert_eq!(PadBus::from_info("usb"), PadBus::Usb);
+        assert_eq!(PadBus::from_info("i2c"), PadBus::Other);
     }
 
     #[test]
@@ -1063,10 +1280,15 @@ mod tests {
         wait("state", || {
             r.vigem.calls().iter().any(|c| matches!(c, FakePadCall::Submit(p, s) if *p == pad && s.buttons & buttons::SOUTH != 0))
         });
-        // Bluetooth pad: no feedback written (needs a CRC; open item).
+        // Bluetooth pad: the rebuilt report goes out as 0x31 with its CRC (2026-11-17).
         let fb = r.vigem.sink(&pad).unwrap();
         fb.feedback(&pad, Feedback::Rumble { strong: 0xFFFF, weak: 0x1000 });
-        assert!(r.phys.writes.lock().unwrap().is_empty());
+        let w = r.phys.writes.lock().unwrap().clone();
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0][0], w[0].len()), (0x31, seat_pads::bt::PS_BT_OUTPUT_LEN));
+        assert!(seat_pads::bt::ps_crc_ok(seat_pads::bt::PS_OUTPUT_CRC_SEED, &w[0]));
+        // The USB body inside: rumble motors at USB offsets 3 / 4 (+2 for the BT header).
+        assert_eq!((w[0][5], w[0][6]), (0x10, 0xFF));
         r.hub.shutdown();
         assert!(r.vigem.calls().contains(&FakePadCall::Removed(pad)));
     }
@@ -1086,6 +1308,86 @@ mod tests {
         let parsed = seat_pads::reports::parse_output(PadKind::Ds5, &w[1]);
         assert!(parsed.contains(&Feedback::Rumble { strong: 0xFFFF, weak: 0x1010 }));
         assert!(parsed.contains(&Feedback::Led { r: 1, g: 2, b: 3 }));
+    }
+
+    #[test]
+    fn hub_bluetooth_same_kind_rewraps_output() {
+        let mut r = hub_rig(true);
+        let bt_pad = RoutedPad { bus: PadBus::Bluetooth, ..ds5("hid;inst=DS5BT") };
+        r.hub.sync(&[seat(2, 4, vec![bt_pad])]);
+        let pad = PadId::new(&local_seat_pad_id(2), 0).unwrap();
+        r.phys.reports.lock().unwrap().push_back(usb_ds5());
+        wait("report", || r.usbip.calls().iter().any(|c| matches!(c, FakePadCall::Report(..))));
+        let fb = r.usbip.sink(&pad).unwrap();
+        let mut out = vec![0u8; 48];
+        out[0] = 0x02;
+        out[1] = 0x0C;
+        out[11] = 0x26; // a trigger effect byte
+        fb.raw_output(&pad, layout::SOURCE_WRITE_REPORT, &out);
+        let w = r.phys.writes.lock().unwrap().clone();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0][0], 0x31);
+        assert_eq!(&w[0][3..50], &out[1..48]);
+        assert!(seat_pads::bt::ps_crc_ok(seat_pads::bt::PS_OUTPUT_CRC_SEED, &w[0]));
+    }
+
+    #[test]
+    fn hub_switch_pro_init_input_and_rumble() {
+        let mut r = hub_rig(false);
+        let sw = RoutedPad { vendor_id: 0x057E, product_id: 0x2009, ..ds5("hid;inst=SW") };
+        let notes = r.hub.sync(&[seat(2, 4, vec![sw])]);
+        assert!(matches!(&notes[..], [LocalPadNote::Attached { .. }]), "{notes:?}");
+        // USB init: four 0x80 commands, then four sub-commands.
+        let w = r.phys.writes.lock().unwrap().clone();
+        assert_eq!(w.len(), 8);
+        assert_eq!(w[0], vec![0x80, 0x02]);
+        assert_eq!((w[4][0], w[4][10], w[4][11]), (0x01, 0x03, 0x30));
+        let pad = PadId::new(&local_seat_pad_id(2), 0).unwrap();
+        let mut rep = vec![0u8; 49];
+        rep[0] = 0x30;
+        rep[3] = 0x04; // B = south
+        r.phys.reports.lock().unwrap().push_back(rep);
+        wait("state", || {
+            r.vigem.calls().iter().any(|c| matches!(c, FakePadCall::Submit(p, s) if *p == pad && s.buttons & buttons::SOUTH != 0))
+        });
+        let fb = r.vigem.sink(&pad).unwrap();
+        fb.feedback(&pad, Feedback::Rumble { strong: 0xFFFF, weak: 0 });
+        let last = r.phys.writes.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(last[0], 0x10);
+        assert_eq!(&last[2..6], &seat_pads::switch_pro::rumble_side(0xFFFF));
+    }
+
+    #[test]
+    fn hub_generic_and_xbox_bluetooth_pads() {
+        let mut r = hub_rig(false);
+        *r.phys.hid.lock().unwrap() = Some(HidLayout { values: vec![(1, generic::USAGE_X)], button_count: 12 });
+        let xb = RoutedPad {
+            family: PadFamily::XInput,
+            vendor_id: 0x045E,
+            product_id: 0x0B13,
+            bus: PadBus::Bluetooth,
+            ..ds5("hid;inst=XBT")
+        };
+        let notes = r.hub.sync(&[seat(2, 4, vec![xb])]);
+        assert!(matches!(&notes[..], [LocalPadNote::Attached { .. }]), "{notes:?}");
+        let pad = PadId::new(&local_seat_pad_id(2), 0).unwrap();
+        r.phys.reports.lock().unwrap().push_back(vec![0x01, 1, 0xFF, 0xFF]);
+        wait("state", || {
+            r.vigem.calls().iter().any(|c| matches!(c, FakePadCall::Submit(p, s) if *p == pad && s.buttons & buttons::SOUTH != 0 && s.lx == 32767))
+        });
+        let fb = r.vigem.sink(&pad).unwrap();
+        fb.feedback(&pad, Feedback::Rumble { strong: 0xFFFF, weak: 0 });
+        fb.feedback(&pad, Feedback::TriggerRumble { left: 0, right: 0xFFFF });
+        let w = r.phys.writes.lock().unwrap().clone();
+        assert_eq!(w.last().unwrap(), &seat_pads::bt::xbox_bt_output(0xFFFF, 0, 0, 0xFFFF).to_vec());
+        // A generic USB HID pad: input yes, feedback none.
+        r.hub.sync(&[]);
+        let g = RoutedPad { vendor_id: 0x1234, product_id: 0x5678, ..ds5("hid;inst=GEN") };
+        r.hub.sync(&[seat(3, 5, vec![g])]);
+        let before = r.phys.writes.lock().unwrap().len();
+        let pad3 = PadId::new(&local_seat_pad_id(3), 0).unwrap();
+        r.vigem.sink(&pad3).unwrap().feedback(&pad3, Feedback::Rumble { strong: 0xFFFF, weak: 0 });
+        assert_eq!(r.phys.writes.lock().unwrap().len(), before);
     }
 
     #[test]

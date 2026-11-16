@@ -58,6 +58,13 @@ pub struct RemoteSettings {
     pub bluetooth_console_only: bool,
     /// v2: display backend override; `None` = automatic.
     pub display_backend: Option<DisplayBackendPref>,
+    /// DualSense pads of remote seats get the speaker / microphone USB interfaces too
+    /// (usbip-win2 composite; audio haptics, pad speaker, headset, pad mic), fed through the
+    /// pad media section (protocol 2) by stream servers that carry controller audio (the
+    /// Pulsar stream server). Off = HID only for seat sessions (USB audio of a locally
+    /// attached device may not be usable from a remote session: HYPOTHESIS). Read at
+    /// service start. Added 2026-11-17 (additive).
+    pub pad_audio: bool,
 }
 
 impl Default for RemoteSettings {
@@ -72,6 +79,7 @@ impl Default for RemoteSettings {
             pad_backend: None,
             bluetooth_console_only: true,
             display_backend: None,
+            pad_audio: false,
         }
     }
 }
@@ -284,6 +292,10 @@ pub struct RemoteSeatRecord {
     /// size at the next seat start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_mode: Option<LastMode>,
+    /// The seat's `SeatConfig::pad_ignore_devices` (SDL ignore list for the processes the
+    /// service starts in the seat). Added 2026-11-17 (additive).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pad_ignore_devices: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

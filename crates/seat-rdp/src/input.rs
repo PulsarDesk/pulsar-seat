@@ -15,7 +15,10 @@ use ironrdp_pdu::input::mouse::PointerFlags;
 use ironrdp_pdu::input::mouse_rel::PointerRelFlags;
 use ironrdp_pdu::input::mouse_x::PointerXFlags;
 use ironrdp_pdu::input::{MousePdu, MouseRelPdu, MouseXPdu};
-use ironrdp_rdpei::pdu::{PenContact, PenContactFlags, PenEventPdu, PenFrame, TouchContact, TouchContactFlags, TouchEventPdu, TouchFrame};
+use ironrdp_rdpei::pdu::{
+    PenContact, PenContactDataFlags, PenContactFlags, PenEventPdu, PenFlags, PenFrame, TouchContact, TouchContactFlags, TouchEventPdu,
+    TouchFrame,
+};
 use seat_input::rdp::{RdpContact, RdpInputEvent, kbdflags, ptrflags};
 
 /// One translated item, in input order.
@@ -117,7 +120,29 @@ fn touch_contact(c: &RdpContact, slots: &mut ContactSlots) -> Option<TouchContac
 fn pen_contact(c: &RdpContact) -> PenContact {
     let flags = PenContactFlags::from_bits_truncate(legal_touch(c.flags).bits());
     // Without multipen injection every pen uses device id 0 (MS-RDPEI 2.2.3.7.1.1).
-    PenContact::new(0, c.x, c.y, flags).with_pressure(u32::from(c.pressure.min(1024)))
+    let mut p = PenContact::new(0, c.x, c.y, flags).with_pressure(u32::from(c.pressure.min(1024)));
+    let Some(info) = c.pen_info else { return p };
+    let mut pf = PenFlags::empty();
+    pf.set(PenFlags::BARREL_PRESSED, info.barrel);
+    pf.set(PenFlags::ERASER_PRESSED, info.eraser);
+    pf.set(PenFlags::INVERTED, info.inverted);
+    if !pf.is_empty() {
+        p = p.with_pen_flags(pf);
+    }
+    if let Some(r) = info.rotation {
+        // MS-RDPEI: 0..=359 degrees, clockwise.
+        p = p.with_rotation(r % 360);
+    }
+    // MS-RDPEI: tiltX / tiltY -90..=90 degrees; each one is optional on its own.
+    if let Some(t) = info.tilt_x {
+        p.fields_present.insert(PenContactDataFlags::TILTX_PRESENT);
+        p.fields.tilt_x = Some(t.clamp(-90, 90));
+    }
+    if let Some(t) = info.tilt_y {
+        p.fields_present.insert(PenContactDataFlags::TILTY_PRESENT);
+        p.fields.tilt_y = Some(t.clamp(-90, 90));
+    }
+    p
 }
 
 /// Translate in order; consecutive fast-path events share one batch.
@@ -220,7 +245,7 @@ mod tests {
 
     #[test]
     fn touch_and_pen_frames_split_batches() {
-        let c = |flags, pen| RdpContact { id: 300, x: 5, y: 6, flags, pen, pressure: 2000 };
+        let c = |flags, pen| RdpContact { id: 300, x: 5, y: 6, flags, pen, pressure: 2000, pen_info: None };
         let out = translate(&[
             RdpInputEvent::Scancode { flags: 0, code: 0x1E },
             RdpInputEvent::Touch { contacts: vec![c(contact_flags::DOWN | contact_flags::INRANGE | contact_flags::INCONTACT, false)] },
@@ -238,12 +263,29 @@ mod tests {
         // A bare DOWN is normalised to DOWN|INRANGE|INCONTACT; pressure capped at 1024.
         assert!(pc.contact_flags.is_legal());
         assert_eq!(pc.fields.pressure, Some(1024));
+        assert_eq!(pc.fields.pen_flags, None, "no pen info: optional fields absent");
+    }
+
+    #[test]
+    fn pen_tilt_rotation_and_buttons() {
+        use seat_core::backend::input::PenInfo;
+        let info = PenInfo { tilt_x: Some(-120), tilt_y: None, rotation: Some(370), barrel: true, eraser: false, inverted: true };
+        let c = RdpContact { id: 1, x: 5, y: 6, flags: contact_flags::DOWN, pen: true, pressure: 300, pen_info: Some(info) };
+        let out = translate(&[RdpInputEvent::Pen { contacts: vec![c] }], &mut ContactSlots::new(4));
+        let Outgoing::Pen(p) = &out[0] else { panic!() };
+        let pc = &p.frames[0].contacts[0];
+        assert_eq!(pc.fields.pen_flags, Some(PenFlags::BARREL_PRESSED | PenFlags::INVERTED));
+        assert_eq!(pc.fields.rotation, Some(10));
+        assert_eq!((pc.fields.tilt_x, pc.fields.tilt_y), (Some(-90), None));
+        assert!(pc.fields_present.contains(PenContactDataFlags::TILTX_PRESENT));
+        assert!(!pc.fields_present.contains(PenContactDataFlags::TILTY_PRESENT));
+        assert!(pc.fields_present.contains(PenContactDataFlags::PENFLAGS_PRESENT | PenContactDataFlags::ROTATION_PRESENT));
     }
 
     #[test]
     fn contact_ids_get_distinct_slots() {
         let mut slots = ContactSlots::new(2);
-        let c = |id, flags| RdpContact { id, x: 1, y: 1, flags, pen: false, pressure: 0 };
+        let c = |id, flags| RdpContact { id, x: 1, y: 1, flags, pen: false, pressure: 0, pen_info: None };
         let down = contact_flags::DOWN | contact_flags::INRANGE | contact_flags::INCONTACT;
         // 44 and 300 collide under `& 0xFF`; slots keep them apart.
         let out = translate(&[RdpInputEvent::Touch { contacts: vec![c(44, down), c(300, down), c(7, down)] }], &mut slots);

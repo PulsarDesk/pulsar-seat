@@ -1092,6 +1092,7 @@ impl Service {
                 Err(e) => log::warn(&format!("seat {seat}: agent not started: {e}")),
             }
         }
+        let sdl = self.pad_sdl_env(seat);
         for (i, app) in apps.into_iter().enumerate() {
             let exe = std::path::PathBuf::from(app.command.trim());
             if !exe.is_absolute() {
@@ -1101,7 +1102,7 @@ impl Service {
             }
             let spec = LaunchSpec {
                 session_id,
-                env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().collect(),
+                env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().chain(sdl.iter().cloned()).collect(),
                 exe,
                 args: app.args.clone(),
                 log_name: format!("app-{session_id}-{i}.log"),
@@ -1210,9 +1211,10 @@ impl Service {
         if !caller.user_sid.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(&user.sid)) {
             return Err(ProtoError::new(ErrorCode::AccessDenied, "only the seat's signed-in user may start apps in it"));
         }
+        let sdl = self.pad_sdl_env(seat);
         let spec = LaunchSpec {
             session_id: caller.session_id,
-            env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().collect(),
+            env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().chain(sdl).collect(),
             exe,
             args: args.to_vec(),
             log_name: format!("app-{}-launcher.log", caller.session_id),

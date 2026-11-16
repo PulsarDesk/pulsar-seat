@@ -37,7 +37,8 @@ export const DEFAULT_REMOTE_SETTINGS: R.GlobalSettings = {
   multi_session: false,
   pad_backend: null,
   bluetooth_console_only: true,
-  display_backend: null
+  display_backend: null,
+  pad_audio: false
 };
 
 /** `seat_core::remote::DisplaySettings::default()`. */

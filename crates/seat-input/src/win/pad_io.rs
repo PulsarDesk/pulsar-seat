@@ -3,10 +3,17 @@
 //! the service (session 0) with shared read / write access, overlapped reads with a
 //! timeout, output reports written with `WriteFile`.
 //!
+//! The collection's preparsed data (`HidD_GetPreparsedData`) decodes generic HID pads
+//! (Xbox HID collections, generic joysticks): [`PhysicalPadIo::hid_layout`] lists its value
+//! usages, [`PhysicalPadIo::hid_sample`] reads buttons (page 0x09), consumer usages and
+//! every value with `HidP_*`. Output reports shorter than the collection's
+//! `OutputReportByteLength` are zero-padded (`WriteFile` on a HID collection needs exactly
+//! that length).
+//!
 //! HYPOTHESIS (untested on hardware): a shared open from session 0 does not disturb the
-//! seat's own readers of the pad (games open HID pads shared too), and `WriteFile` of the
-//! USB output report layout reaches a DualSense / DS4 on USB. Bluetooth output needs a CRC
-//! and is not written (see `LocalFeedbackRouter`).
+//! seat's own readers of the pad (games open HID pads shared too); `WriteFile` of the output
+//! report layouts (USB and the Bluetooth reports with CRC, `seat_pads::bt`) reaches the pad;
+//! padding to the longest output report is accepted by the Bluetooth HID stack.
 
 use std::sync::Arc;
 
@@ -21,6 +28,8 @@ use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED
 use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use crate::local_pads::{PhysicalPadIo, PhysicalPadSource, PhysicalPadWriter};
+use crate::win::hid::{HidDevice, ValueCap};
+use seat_pads::generic::{HidLayout, HidSample, HidValue, PAGE_BUTTON, PAGE_CONSUMER};
 
 /// Largest input report read (DualSense Bluetooth 0x31 is 78 bytes).
 const READ_BUFFER: usize = 128;
@@ -75,13 +84,22 @@ impl PhysicalPadSource for WinPadSource {
         if h == INVALID_HANDLE_VALUE {
             return Err(last_error(&format!("open {interface_path}")));
         }
-        Ok(Box::new(WinPadIo { h: Arc::new(Owned(h as usize)), ev: event()? }))
+        let owned = Arc::new(Owned(h as usize));
+        // The preparsed data stays readable after the open (read-only queries).
+        let dev = HidDevice::from_handle(h);
+        let output_len = dev.as_ref().map_or(0, |d| usize::from(d.output_len));
+        let caps = dev.as_ref().map(HidDevice::value_caps).unwrap_or_default();
+        Ok(Box::new(WinPadIo { h: owned, ev: event()?, dev, caps, output_len }))
     }
 }
 
 struct WinPadIo {
     h: Arc<Owned>,
     ev: Owned,
+    dev: Option<HidDevice>,
+    /// Input value usages (generic decoding), read once.
+    caps: Vec<ValueCap>,
+    output_len: usize,
 }
 
 // SAFETY: the handles are plain kernel handles; every call passes its own OVERLAPPED.
@@ -120,12 +138,37 @@ impl PhysicalPadIo for WinPadIo {
     }
 
     fn writer(&self) -> Arc<dyn PhysicalPadWriter> {
-        Arc::new(WinPadWriter { h: self.h.clone() })
+        Arc::new(WinPadWriter { h: self.h.clone(), output_len: self.output_len })
+    }
+
+    fn hid_layout(&self) -> Option<HidLayout> {
+        let dev = self.dev.as_ref()?;
+        if self.caps.is_empty() {
+            return None;
+        }
+        Some(HidLayout { values: self.caps.iter().map(|c| (c.page, c.usage)).collect(), button_count: dev.button_max(PAGE_BUTTON) })
+    }
+
+    fn hid_sample(&self, report: &[u8]) -> Option<HidSample> {
+        let dev = self.dev.as_ref()?;
+        let values: Vec<HidValue> = self
+            .caps
+            .iter()
+            .filter_map(|c| dev.logical(c, report).map(|value| HidValue { page: c.page, usage: c.usage, value, min: c.min, max: c.max }))
+            .collect();
+        let buttons = dev.pressed(PAGE_BUTTON, report);
+        if values.is_empty() && buttons.is_empty() {
+            // Another report id (vendor / feature data): nothing of ours in it.
+            return None;
+        }
+        Some(HidSample { buttons, consumer: dev.pressed(PAGE_CONSUMER, report), values })
     }
 }
 
 struct WinPadWriter {
     h: Arc<Owned>,
+    /// `OutputReportByteLength` of the collection (0 = unknown: written as given).
+    output_len: usize,
 }
 
 // SAFETY: see WinPadIo; each write has its own event and OVERLAPPED.
@@ -135,6 +178,15 @@ unsafe impl Sync for WinPadWriter {}
 
 impl PhysicalPadWriter for WinPadWriter {
     fn write(&self, report: &[u8]) -> Result<(), String> {
+        let padded;
+        let report = if self.output_len > report.len() {
+            let mut v = report.to_vec();
+            v.resize(self.output_len, 0);
+            padded = v;
+            &padded[..]
+        } else {
+            report
+        };
         let ev = event()?;
         let mut ov = OVERLAPPED { hEvent: ev.raw(), ..Default::default() };
         let mut done = 0u32;

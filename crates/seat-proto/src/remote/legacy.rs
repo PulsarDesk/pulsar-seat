@@ -26,6 +26,9 @@ impl Request {
     }
 }
 
+// A wire enum decoded once per request: the size of the seat-record variant does not
+// matter (boxing it would only churn every call site; 2026-11-17 `pad_ignore_devices`).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum RequestBody {
