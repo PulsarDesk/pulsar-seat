@@ -1,28 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Source IP address per seat (spec 80 §4.2, §11.3).
 //!
-//! **User mode only, no driver.** Windows has no documented user-mode way to force the
-//! source address of an unmodified app's sockets (that needs a WFP bind-redirect callout
-//! driver — a later maintainer decision). So this module:
+//! Two layers:
 //!
-//! 1. lists the PC's IPv4 addresses (static ones are offered to a seat);
-//! 2. helps create extra static addresses on an adapter (`CreateUnicastIpAddressEntry`,
-//!    journaled, removed on uninstall);
-//! 3. keeps the per-seat model (address + rule + app/folder list) and the matching rule,
-//!    so apps that have a "bind to address" setting can be pointed at the seat address,
-//!    and a future WFP backend can enforce the same model unchanged.
+//! 1. **Enforcement: the WFP callout driver** `drivers/seat-wfp` ([`crate::wfp`]). The
+//!    service pushes a session id -> seat address map; the driver binds wildcard binds and
+//!    sets the local address of outbound connects of the seat's processes (TCP / UDP,
+//!    IPv4, by the seat's rule and program list). Unsigned builds are never loaded, so
+//!    until a Microsoft-signed package is installed the second layer is all there is.
+//! 2. **Fallback, user mode:** every program the service starts in a seat for the user
+//!    (startup apps, the launcher request) gets [`SOURCE_IP_ENV`] when the seat's rule
+//!    picks it ([`launch_env`]), so apps (or wrappers) that can bind to an address can be
+//!    pointed at it. The seat agent itself never gets it. It stays set with the driver
+//!    loaded too (harmless, and it helps apps that bind explicitly).
 //!
-//! The config holds the model as `SeatConfig::ip_binding` + `settings.ip_programs`
-//! ([`from_config`]). Best effort today (`ENFORCEMENT = AppSettingOnly`): every program the
-//! service starts in a seat for the user (startup apps, the launcher request) gets
-//! [`SOURCE_IP_ENV`] when the seat's rule picks it ([`launch_env`]), so apps (or wrappers)
-//! that can bind to an address can be pointed at it. The seat agent itself never gets it.
-//! **Limits (documented):** nothing forces the source address of an unmodified app's
-//! sockets; processes Windows starts itself (Explorer, apps launched from the Start menu)
-//! do not get the variable; children inherit the environment of the process that starts
-//! them, so a child of a program that has the variable has it too, **whatever the rule says
-//! about the child** (and a child of a program without it never gets it); only a WFP
-//! bind-redirect callout driver could enforce it (maintainer decision, spec 80 §11.3).
+//! This module also lists the PC's IPv4 addresses (static ones are offered to a seat),
+//! helps create extra static addresses on an adapter (`CreateUnicastIpAddressEntry`,
+//! journaled, removed on uninstall) and keeps the per-seat model (address + rule +
+//! app/folder list) and the matching rule. The config holds the model as
+//! `SeatConfig::ip_binding` + `settings.ip_programs` ([`from_config`]).
+//!
+//! **Limits of the fallback (documented):** nothing forces the source address of an
+//! unmodified app's sockets; processes Windows starts itself (Explorer, apps launched from
+//! the Start menu) do not get the variable; children inherit the environment of the
+//! process that starts them, so a child of a program that has the variable has it too,
+//! **whatever the rule says about the child**. The driver has none of these limits: it
+//! decides per socket from the process's session and image path. Its own limits: IPv4
+//! only, seats sharing a session (kiosk shell seats in the console session) are left out,
+//! explicit binds to an address stay as the program chose (`drivers/seat-wfp/README.md`).
 
 use crate::journal::{Change, Journal, JournalError};
 use crate::ops::{LocalAddress, OpsError, SystemOps};
@@ -68,14 +73,19 @@ pub struct SeatAddress {
     pub apps: Vec<AppEntry>,
 }
 
-/// How the address reaches apps today.
+/// How the address reaches apps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Enforcement {
-    /// Apps must be told to bind to it (app setting); nothing forces it.
+    /// Apps must be told to bind to it (app setting, `PULSAR_SEAT_SOURCE_IP`); nothing
+    /// forces it. The state without the driver.
     AppSettingOnly,
+    /// The source-IP callout driver holds the seat's session in its map
+    /// ([`crate::wfp::Enforcement::Driver`]).
+    WfpCallout,
 }
 
+/// The baseline without a loaded driver (the service reports the live state).
 pub const ENFORCEMENT: Enforcement = Enforcement::AppSettingOnly;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

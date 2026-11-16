@@ -15,6 +15,7 @@
 //! | `launcher` (Windows) | suspended start in a job with hard / soft CPU limits |
 //! | [`srcip`] | source IP per seat: address list, journaled extra addresses, per-seat rule model |
 //! | [`drivers`] | signed driver package staging through the driver store |
+//! | [`wfp`] | client of the source-IP callout driver `drivers/seat-wfp`: session -> seat address map, DOS -> NT paths |
 //! | [`importer`] | reference `default_configuration.json` -> our config |
 //! | [`seatapi`] | "which seat am I on" pipe client + drop-in name mapping |
 //! | [`apps`] | known single-instance / profile-locking apps, `Local\` object names |
@@ -24,7 +25,7 @@
 //! The app-facing helper DLL (`pulsar-seat-api.dll`, x86 / x64 / ARM64 / ARM64EC) is the
 //! separate crate `apihelper/` (own workspace) on top of [`seatapi`].
 //!
-//! No kernel components, no injection, no Windows Update blocking, no silent policy
+//! No kernel components of its own (the [`wfp`] driver is a separate package), no injection, no Windows Update blocking, no silent policy
 //! writes, no firewall rules, no security-state changes.
 
 pub mod apps;
@@ -39,6 +40,7 @@ pub mod seatapi;
 pub mod setup;
 pub mod srcip;
 pub mod tweaks;
+pub mod wfp;
 
 #[cfg(windows)]
 pub mod launcher;

@@ -133,7 +133,7 @@ export interface ServiceStatus {
   last_event_seq: number;
 }
 
-export type DriverId = 'kbd_mou_filter' | 'hid_filter' | 'idd' | 'storage_minifilter';
+export type DriverId = 'kbd_mou_filter' | 'hid_filter' | 'idd' | 'storage_minifilter' | 'source_ip_callout';
 
 export type Availability =
   | { state: 'available' }
@@ -165,6 +165,22 @@ export interface BackendReport {
   audio: BackendInfo[];
   gates: BackendInfo[];
   drivers: { driver: DriverId; status: DriverStatus }[];
+  /** How the per-seat source addresses are applied (service 2026-11-17+; absent before). */
+  source_ip?: SourceIpReport;
+}
+
+/** `driver`: the WFP callout enforces the seat addresses; `environment`: only programs
+ *  that read `PULSAR_SEAT_SOURCE_IP` use them. */
+export type SourceIpEnforcement = 'driver' | 'environment';
+
+export interface SourceIpReport {
+  enforcement: SourceIpEnforcement;
+  /** Why `environment`: `driver_not_loaded`, `driver_busy`, `driver_version_mismatch`,
+   *  `driver_pass_through`, `map_invalid`, `map_refused`. */
+  reason?: string;
+  enforced: SeatNumber[];
+  shared_session: SeatNumber[];
+  dropped_paths: string[];
 }
 
 export type CheckOutcome = 'pass' | 'warn' | 'fail' | 'info';

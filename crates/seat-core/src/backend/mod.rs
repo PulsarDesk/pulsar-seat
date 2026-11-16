@@ -73,6 +73,9 @@ pub enum DriverId {
     Idd,
     /// `drivers/seat-storage-filter` (FltMgr; exception, needs the maintainer's OK).
     StorageMinifilter,
+    /// `drivers/seat-wfp` (KMDF WFP callout, ALE bind / connect redirect): enforces the
+    /// per-seat source IPv4 address (spec 80 §11.3). Added 2026-11-17 (additive).
+    SourceIpCallout,
 }
 
 /// Load state of one of our drivers, reported by the service.

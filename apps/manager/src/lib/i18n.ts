@@ -98,7 +98,21 @@ export const t = {
 
   network: {
     intro: 'Bazı ağ programları ve yerel ağ oyunları her koltuğun kendi IP adresini kullanmasını ister. Her koltuğa bu bilgisayarın sabit IPv4 adreslerinden birini verebilirsiniz.',
-    bestEffort: 'Pulsar Seat bu ayarı saklar ve destekleyen programlarda uygular; çekirdek düzeyinde zorlama yapılmaz. Programın kendi “şu adrese bağlan” ayarı varsa onu da aynı adrese getirin.',
+    bestEffort: 'Kaynak IP sürücüsü yüklü değilken Pulsar Seat bu ayarı saklar ve yalnızca destekleyen programlarda uygular. Programın kendi “şu adrese bağlan” ayarı varsa onu da aynı adrese getirin.',
+    enforcedByDriver: (seats: string) => `Kaynak IP sürücüsü yüklü: ${seats} koltuğunun programları bağlantılarında koltuğun adresini kullanır.`,
+    driverReady: 'Kaynak IP sürücüsü yüklü; bir koltuk oturum açınca adresi zorlanır.',
+    driverMissing: (why: string) => `Kaynak IP sürücüsü kullanılamıyor (${why}). Adres yalnızca PULSAR_SEAT_SOURCE_IP değişkenini okuyan ya da kendi adres ayarı olan programlarda geçerli.`,
+    driverReasons: {
+      driver_not_loaded: 'sürücü yüklü değil',
+      driver_busy: 'sürücü başka bir işlem tarafından kullanılıyor',
+      driver_version_mismatch: 'sürücü sürümü uyuşmuyor',
+      driver_pass_through: 'sürücü kurtarma kipinde',
+      map_invalid: 'koltuk listesi gönderilemedi',
+      map_refused: 'sürücü koltuk listesini kabul etmedi'
+    } as Record<string, string>,
+    sharedSession: (seats: string) => `${seats} koltuğu oturumunu başka bir koltukla paylaşıyor; adresi sürücüyle zorlanmaz.`,
+    droppedPaths: (n: number) => `Program listesindeki ${n} yol sürücüye aktarılamadı (bilinmeyen sürücü harfi ya da göreli yol).`,
+    driverScope: 'Sürücü yalnızca IPv4 bağlantılarına dokunur; programın kendisinin seçtiği adresler ve bu bilgisayarın içindeki (127.x) bağlantılar olduğu gibi kalır.',
     seat: 'Koltuk',
     address: 'IP adresi',
     rule: 'Kural',
@@ -768,7 +782,8 @@ export const t = {
     kbd_mou_filter: 'Klavye/fare süzgeci',
     hid_filter: 'HID süzgeci',
     idd: 'Sanal ekran sürücüsü',
-    storage_minifilter: 'Depolama süzgeci'
+    storage_minifilter: 'Depolama süzgeci',
+    source_ip_callout: 'Kaynak IP sürücüsü'
   } as Record<string, string>,
 
   driverStatus: {
@@ -1210,6 +1225,9 @@ export const issueText: Record<string, string> = {
   duplicate_ip_address: 'Aynı IP adresi birden fazla koltuğa verilmiş.',
   too_many_ip_programs: 'Program listesi çok uzun; fazlası kaydedilmez.',
   invalid_ip_program: 'Program listesinde yolu boş bir satır var.',
+  loopback_ip_address: '127 ile başlayan adresler yalnızca bu bilgisayarın içinde çalışır; koltuk bu adresle yerel ağa çıkamaz.',
+  link_local_ip_address: '169.254 ile başlayan adresi Windows kendisi verir ve değişebilir; sabit bir adres seçin.',
+  ip_binding_shared_session: 'Bu kiosk koltuğu oturumunu başka koltuklarla paylaşıyor; IP adresi sürücüyle zorlanamaz, yalnızca destekleyen programlar kullanır.',
   clone_not_allowed: 'Bir ekrana birden fazla çıkış seçilmiş ama klonlamaya izin verilmemiş.',
   same_account_fast_user_switch: 'Hızlı kullanıcı geçişinde her koltuğun ayrı bir hesabı olmalı.',
   invalid_kiosk_shell: 'Kiosk koltuğunun ayarları geçersiz (en çok 16 uygulama, adı ve yolu dolu, boşta sıfırlama 0–1440 dakika).',

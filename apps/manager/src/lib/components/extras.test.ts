@@ -69,6 +69,26 @@ describe('network tab', () => {
     expect(api.state.config.seats[1].ip_binding?.address).toBe('192.168.1.21');
   });
 
+  it('says how the addresses are applied: driver or the environment fallback', async () => {
+    const { store, user } = await setup();
+    await user.click(screen.getByRole('tab', { name: t.tabs.network }));
+    const box = await screen.findByTestId('ip-enforcement');
+    await vi.waitFor(() => expect(box).toHaveTextContent(t.network.driverMissing(t.network.driverReasons.driver_not_loaded)));
+    store.backends = {
+      ...store.backends!,
+      source_ip: { enforcement: 'driver', enforced: [2, 3], shared_session: [4], dropped_paths: ['Z:\\x.exe'] }
+    };
+    await vi.waitFor(() => expect(box).toHaveTextContent(t.network.enforcedByDriver('2., 3.')));
+    expect(box).toHaveTextContent(t.network.driverScope);
+    expect(box).toHaveTextContent(t.network.sharedSession('4.'));
+    expect(box).toHaveTextContent(t.network.droppedPaths(1));
+    store.backends = { ...store.backends!, source_ip: { enforcement: 'driver', enforced: [], shared_session: [], dropped_paths: [] } };
+    await vi.waitFor(() => expect(box).toHaveTextContent(t.network.driverReady));
+    // An older service sends no report: the stored-only hint.
+    store.backends = { ...store.backends!, source_ip: undefined };
+    await vi.waitFor(() => expect(box).toHaveTextContent(t.network.bestEffort));
+  });
+
   it('adds programs from the browse and folder pickers without duplicates', async () => {
     const { store, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.network }));

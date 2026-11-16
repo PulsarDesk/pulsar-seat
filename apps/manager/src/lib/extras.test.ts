@@ -84,6 +84,12 @@ describe('per-seat addresses', () => {
     const long = Array.from({ length: MAX_IP_PROGRAMS + 1 }, (_, i) => ({ title: `${i}`, path: `C:\\p${i}.exe`, enabled: true }));
     expect(localIssues(setIpPrograms(c, long), null).map((i) => i.code)).toContain('too_many_ip_programs');
     expect(localIssues(setIpBinding(c, 1, { address: 'x', rule: 'all_programs' }), null).map((i) => i.code)).toContain('invalid_ip_address');
+    // Source-IP driver rules, same as seat-core: loopback refused, link-local and class E.
+    const codes = (a: string) => localIssues(setIpBinding(c, 1, { address: a, rule: 'all_programs' }), null).map((i) => [i.code, i.severity]);
+    expect(codes('127.0.0.5')).toContainEqual(['loopback_ip_address', 'error']);
+    expect(codes('127.0.0.5').map(([x]) => x)).not.toContain('invalid_ip_address');
+    expect(codes('169.254.3.4')).toContainEqual(['link_local_ip_address', 'warning']);
+    expect(codes('240.1.2.3')).toContainEqual(['invalid_ip_address', 'error']);
   });
 });
 

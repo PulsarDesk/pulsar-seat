@@ -65,6 +65,20 @@ pub struct LaunchSpec {
     pub host_profile: bool,
 }
 
+/// Result of [`Platform::publish_source_ip_map`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceIpPublish {
+    pub enforcement: seat_compat::wfp::Enforcement,
+    /// Program-list entries without an NT path (left out of the driver's lists).
+    pub dropped_paths: Vec<String>,
+}
+
+/// Map a seat's drive letter to its NT device in tests (`C:` only).
+#[cfg(test)]
+pub(crate) fn test_dos_device(drive: &str) -> Option<String> {
+    drive.eq_ignore_ascii_case("C:").then(|| r"\Device\HarddiskVolume3".to_string())
+}
+
 /// Longest secret written to a child's stdin (seat-host `flow::MAX_TOKEN_BYTES`).
 pub const MAX_STDIN_SECRET_BYTES: usize = 512;
 
@@ -126,6 +140,14 @@ pub trait Platform: Send + Sync {
     fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
         let _ = entries;
         Ok(())
+    }
+    /// Push the source-IP map to `drivers/seat-wfp` (seat-compat `wfp`, net-wfp
+    /// 2026-11-17): exactly these seats afterwards, each signed in in its own session.
+    /// Converts the program lists to NT paths and sends only when the map changed.
+    /// Default: no driver on this platform.
+    fn publish_source_ip_map(&self, seats: &[seat_compat::wfp::SessionSeat]) -> SourceIpPublish {
+        let _ = seats;
+        SourceIpPublish { enforcement: seat_compat::wfp::Enforcement::EnvironmentOnly { reason: "driver_not_loaded".into() }, dropped_paths: Vec::new() }
     }
     /// Whether a process this platform holds a verified handle for is still running.
     /// Unknown PIDs are reported as not running.
@@ -316,6 +338,9 @@ pub mod mock {
         pub account_lookups: AtomicU32,
         /// Loaded user hives: SID -> (DelegationConsole, DelegationTerminal).
         pub delegation: Mutex<BTreeMap<String, Delegation>>,
+        /// Source-IP driver fake (seat-compat `wfp`); not loaded unless a test loads it.
+        pub wfp: seat_compat::wfp::FakeWfp,
+        pub wfp_publisher: seat_compat::wfp::Publisher,
         next_pid: AtomicU32,
     }
 
@@ -347,6 +372,10 @@ pub mod mock {
     }
 
     impl Platform for MockPlatform {
+        fn publish_source_ip_map(&self, seats: &[seat_compat::wfp::SessionSeat]) -> super::SourceIpPublish {
+            let (map, dropped_paths) = seat_compat::wfp::build_seats(seats, super::test_dos_device);
+            super::SourceIpPublish { enforcement: self.wfp_publisher.publish(&self.wfp, &map), dropped_paths }
+        }
         fn console_session(&self) -> Option<u32> {
             *lock(&self.console)
         }

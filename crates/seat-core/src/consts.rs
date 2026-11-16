@@ -73,6 +73,12 @@ pub const DEVPROP_SEAT_REVISION_PID: u32 = 3;
 pub const INPUT_FILTER_SERVICE: &str = "PulsarSeatInput";
 /// Kernel service of `drivers/seat-storage-filter` (`ServiceName` in its INF).
 pub const STORAGE_FILTER_SERVICE: &str = "PulsarSeatStorageGate";
+/// Kernel service of `drivers/seat-wfp` (`seatwfp.sys`, WFP source-IP callout; `AddService`
+/// name in its INF).
+pub const WFP_CALLOUT_SERVICE: &str = "PulsarSeatWfp";
+/// Named control device of `drivers/seat-wfp` (`seat_compat::wfp`). Its DACL admits only
+/// the service SID of [`SERVICE_NAME`].
+pub const WFP_CONTROL_DEVICE: &str = r"\\.\PulsarSeatWfp";
 /// Control device interface of `drivers/seat-idd` (IddCx virtual display).
 pub const IDD_INTERFACE_GUID: &str = "3250655a-777f-450a-9ed6-9bd48c2a93b6";
 /// Filter-manager communication port of `drivers/seat-storage-filter` (exception, needs OK).

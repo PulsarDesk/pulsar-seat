@@ -21,7 +21,7 @@ param(
     [ValidateSet("Cert", "Sign")] [string] $Action = "Sign",
     [ValidateSet("ARM64", "x64")] [string] $Platform = "ARM64",
     [string] $Configuration = "Release",
-    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "split-pad"),
+    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "seat-wfp", "split-pad"),
     [string] $Sdk = "10.0.28000.0"
 )
 

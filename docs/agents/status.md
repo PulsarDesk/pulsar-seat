@@ -1768,3 +1768,31 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     on aarch64 and x86_64 + check x86_64 / i686 / aarch64 + clippy aarch64 / x86_64, manager
     199 / check / build, installer scripts 54. No test deleted. Open HYPOTHESIS items as in
     the parity-arm64 entry above.
+- 2026-11-17 (parity net-wfp, done, not on hardware): **source IP per seat with real
+  enforcement.** New driver `drivers/seat-wfp` (`seatwfp.sys`, service `PulsarSeatWfp`):
+  KMDF non-PnP WFP callout, primitive INF class `WFPCALLOUTS`, ALE bind-redirect V4
+  (wildcard binds of a seat process get the seat address, port kept) and connect-redirect
+  V4 (local address of outbound TCP / UDP, loopback and other callouts' redirects left
+  alone); own sublayer, callouts and filters in a dynamic engine session, BFE state
+  subscription; session id -> address map with rule (all / only listed / all except
+  listed) and NT-path program lists over `\\.\PulsarSeatWfp` (exclusive, DACL = the
+  `PulsarSeat` service SID only); fail open before the first map and after the service
+  handle closes; Safe Mode / `Parameters\PassThrough` = no filters. Built ARM64 + x64,
+  Release + Debug, zero warnings, infverif /w, ApiValidator, `-Analyze` clean; unsigned,
+  never loaded. Rust side: `seat_compat::wfp` (wire format pinned against the header,
+  service SID derived from the name in a test, DOS -> NT paths, `Publisher`, `FakeWfp`),
+  `seat_compat::drivers` reads `DefaultInstall.NT<arch>` (primitive packages pass the
+  arch check; a new primitive install asks for a reboot), `DriverId::SourceIpCallout`,
+  `Service::publish_source_ip` in every ownership run (shared sessions left out),
+  `get_backends.source_ip`, new issue codes `loopback_ip_address` (error),
+  `link_local_ip_address`, `ip_binding_shared_session` (warnings), class E invalid.
+  Manager: network tab says driver / fallback / why, seat lists, dropped paths (Turkish),
+  `localIssues` mirror. `PULSAR_SEAT_SOURCE_IP` fallback unchanged. build-drivers.ps1,
+  run-sdv.ps1, testsign.ps1, ci.yml SDV step, release checklist list the driver.
+  Gates: cargo test 1644 (baseline 1629), clippy aarch64 + x86_64 clean, manager 200
+  (baseline 199) + check + build, installer scripts 51, shim workspace unchanged.
+  **HYPOTHESIS / open (VM test plan in drivers/seat-wfp/README.md):** classify at
+  PASSIVE_LEVEL on both layers; the connect-redirect local-address rewrite honoured for
+  TCP and UDP; WFP app ids of programs on network shares (`\device\mup\…`); dual-stack
+  sockets classified at the V4 layers; the SID-string SDDL accepted by
+  `WdfControlDeviceInitAllocate`; `pnputil /install` not starting the primitive service.

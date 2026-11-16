@@ -377,8 +377,10 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
           { driver: 'kbd_mou_filter', status: { state: 'not_installed' } },
           { driver: 'hid_filter', status: { state: 'not_installed' } },
           { driver: 'idd', status: { state: 'not_installed' } },
-          { driver: 'storage_minifilter', status: { state: 'not_installed' } }
-        ]
+          { driver: 'storage_minifilter', status: { state: 'not_installed' } },
+          { driver: 'source_ip_callout', status: { state: 'not_installed' } }
+        ],
+        source_ip: { enforcement: 'environment', reason: 'driver_not_loaded', enforced: [], shared_session: [], dropped_paths: [] }
       };
     },
     preflight: async () => {

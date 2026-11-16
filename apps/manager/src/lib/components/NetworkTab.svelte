@@ -2,6 +2,7 @@
 <!-- Per-seat network addresses tab (spec 10 §2.1 tab 4, §7.4): one row per seat; clicking a
      row opens the per-seat IP binding dialog. -->
 <script lang="ts">
+  import { onMount } from 'svelte';
   import IpBindingDialog from './IpBindingDialog.svelte';
   import { t } from '#lib/i18n.ts';
   import { setIpBinding, setIpPrograms } from '#lib/model.ts';
@@ -18,6 +19,12 @@
   let editing = $state<SeatNumber | null>(initialSeat);
   const draft = $derived(store.draft);
   const programs = $derived(draft?.settings.ip_programs ?? []);
+  // How the addresses are applied (source-IP driver or the environment fallback).
+  const ip = $derived(store.backends?.source_ip);
+  const seatList = (seats: SeatNumber[]) => seats.map((n) => `${n}.`).join(', ');
+  onMount(() => {
+    if (!store.backends) void store.refreshBackends();
+  });
 </script>
 
 <p>{t.network.intro}</p>
@@ -38,7 +45,22 @@
     </tbody>
   </table>
   <p class="hint">{t.network.programs}: {t.network.programsCount(programs.length)}</p>
-  <p class="hint">{t.network.bestEffort}</p>
+  <div class="enforcement" data-testid="ip-enforcement">
+    {#if ip?.enforcement === 'driver'}
+      <p class="hint">{ip.enforced.length ? t.network.enforcedByDriver(seatList(ip.enforced)) : t.network.driverReady}</p>
+      <p class="hint">{t.network.driverScope}</p>
+    {:else if ip}
+      <p class="hint">{t.network.driverMissing(t.network.driverReasons[ip.reason ?? ''] ?? ip.reason ?? '')}</p>
+    {:else}
+      <p class="hint">{t.network.bestEffort}</p>
+    {/if}
+    {#if ip?.shared_session.length}
+      <p class="hint warn">{t.network.sharedSession(seatList(ip.shared_session))}</p>
+    {/if}
+    {#if ip?.dropped_paths.length}
+      <p class="hint warn" title={ip.dropped_paths.join('\n')}>{t.network.droppedPaths(ip.dropped_paths.length)}</p>
+    {/if}
+  </div>
 {:else if store.needsElevation}
   <p class="hint">{t.adminToView}</p>
 {:else}
@@ -78,6 +100,9 @@
   }
   .row {
     cursor: pointer;
+  }
+  .warn {
+    color: var(--warn, inherit);
   }
   .row:hover {
     background: color-mix(in srgb, var(--accent) 8%, transparent);

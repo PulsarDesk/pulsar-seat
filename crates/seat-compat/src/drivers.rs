@@ -58,8 +58,13 @@ pub struct InfInfo {
     pub provider: Option<String>,
     /// `CatalogFile` / `CatalogFile.<decoration>` values: (decoration lowercase or "", file).
     pub catalogs: Vec<(String, String)>,
-    /// Target decorations of the `[Manufacturer]` section, lowercase (`ntarm64`, `ntamd64.10.0...19041`).
+    /// Target decorations of the `[Manufacturer]` section, lowercase (`ntarm64`, `ntamd64.10.0...19041`),
+    /// plus those of `[DefaultInstall.<decoration>]` sections of a primitive package.
     pub decorations: Vec<String>,
+    /// Primitive (non-PnP) package: `[DefaultInstall.NT<arch>]` sections, no device
+    /// (the source-IP callout `seat-wfp.inf`, the storage minifilter). `pnputil
+    /// /add-driver … /install` runs the DefaultInstall section (Windows 10 1903+).
+    pub primitive: bool,
 }
 
 /// INF architecture decoration of a machine (`ntarm64`, `ntamd64`).
@@ -99,6 +104,15 @@ pub fn parse_inf(text: &str) -> InfInfo {
         }
         if l.starts_with('[') && l.ends_with(']') {
             section = l[1..l.len() - 1].trim().to_ascii_lowercase();
+            if let Some(dec) = section.strip_prefix("defaultinstall.") {
+                let dec = dec.strip_suffix(".services").unwrap_or(dec);
+                if dec.starts_with("nt") {
+                    info.primitive = true;
+                    if !info.decorations.iter().any(|d| d == dec) {
+                        info.decorations.push(dec.to_string());
+                    }
+                }
+            }
             continue;
         }
         let Some((k, v)) = l.split_once('=') else {
@@ -316,6 +330,10 @@ fn stage_one(j: &Journal, inf: &Path, machine: u16) -> StageOutcome {
         }
     };
     let ops = crate::win::WinOps;
+    // A primitive package (the source-IP callout) gets its kernel service from the
+    // DefaultInstall section; the service starts at the next boot (StartType 2), so a new
+    // install asks for a reboot. HYPOTHESIS: `pnputil /install` does not start it.
+    let primitive = std::fs::read(inf).map(|b| parse_inf(&decode_inf(&b)).primitive).unwrap_or(false);
     // Publish into the store (or learn the existing oemNN.inf name).
     let (published, newly) = match crate::win::publish_inf(inf) {
         Ok(x) => x,
@@ -383,7 +401,7 @@ fn stage_one(j: &Journal, inf: &Path, machine: u16) -> StageOutcome {
             if newly {
                 StageOutcome::Installed {
                     published,
-                    reboot_needed: code == 3010,
+                    reboot_needed: code == 3010 || primitive,
                 }
             } else {
                 StageOutcome::AlreadyOurs { published }
@@ -394,7 +412,7 @@ fn stage_one(j: &Journal, inf: &Path, machine: u16) -> StageOutcome {
             if newly {
                 StageOutcome::Installed {
                     published,
-                    reboot_needed: false,
+                    reboot_needed: primitive,
                 }
             } else {
                 StageOutcome::AlreadyOurs { published }
@@ -415,6 +433,24 @@ mod tests {
     use crate::preflight::{IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64};
 
     const INF: &str = "\u{feff}; Pulsar test\r\n[Version]\r\nSignature=\"$WINDOWS NT$\"\r\nClass=Keyboard\r\nClassGuid={4D36E96B-E325-11CE-BFC1-08002BE10318}\r\nProvider=%Pulsar%\r\nCatalogFile=pseat.cat ; comment\r\nCatalogFile.NTarm64 = pseat_arm64.cat\r\n\r\n[Manufacturer]\r\n%Pulsar% = Models, NTamd64.10.0...19041, NTarm64\r\n";
+
+    /// The source-IP callout ships as a primitive package (class WFPCALLOUTS, DefaultInstall
+    /// per architecture): the stage pre-check must see both architectures.
+    #[test]
+    fn primitive_wfp_package_supports_both_arches() {
+        let text = decode_inf(include_bytes!("../../../drivers/seat-wfp/seat-wfp.inf"));
+        let info = parse_inf(&text);
+        assert!(info.primitive);
+        assert_eq!(info.class.as_deref(), Some("WFPCALLOUTS"));
+        assert_eq!(info.class_guid.as_deref(), Some("57465043-616c-6c6f-7574-5f636c617373"));
+        assert!(info.supports(IMAGE_FILE_MACHINE_ARM64) && info.supports(IMAGE_FILE_MACHINE_AMD64));
+        assert_eq!(info.catalog_for(IMAGE_FILE_MACHINE_ARM64), Some("seat-wfp.cat"));
+        assert!(text.contains("AddService = %ServiceName%") && text.contains("\"PulsarSeatWfp\""));
+        // A PnP INF is not primitive; a DefaultInstall without a decoration adds nothing.
+        assert!(!parse_inf(INF).primitive);
+        let plain = parse_inf("[Version]\r\nClass=X\r\n[DefaultInstall]\r\nCopyFiles=a\r\n");
+        assert!(!plain.primitive && plain.decorations.is_empty());
+    }
 
     #[test]
     fn parses_inf() {

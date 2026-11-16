@@ -125,6 +125,9 @@ pub(crate) struct State {
     pub remote_rt: BTreeMap<SeatNumber, SeatRuntime>,
     /// Seat 1's kiosk shell under `seat1_desktop = false` (`crate::seat1_kiosk`).
     pub seat1_kiosk: crate::seat1_kiosk::Seat1Kiosk,
+    /// Last source-IP publish (`Service::publish_source_ip`, net-wfp); `None` before the
+    /// first ownership run.
+    pub source_ip: Option<seat_proto::SourceIpReport>,
 }
 
 pub struct Service {
@@ -242,6 +245,7 @@ impl Service {
                 credprov: Default::default(),
                 remote_rt: BTreeMap::new(),
                 seat1_kiosk: Default::default(),
+                source_ip: None,
             }),
 
             password_known,
@@ -779,12 +783,66 @@ impl Service {
         }
     }
 
+    /// Source IP per seat (spec 80 §11.3, net-wfp 2026-11-17): push the session ->
+    /// address map of the signed-in seats (local logons plus running remote seats) to the
+    /// WFP callout and remember how the addresses are applied (`get_backends`). Seats that
+    /// share a session are left out (the driver decides per session). Without the driver
+    /// the `PULSAR_SEAT_SOURCE_IP` fallback of the launcher stays the only path.
+    pub(crate) fn publish_source_ip(&self, logons: &[SeatLogon]) {
+        use seat_proto::{SourceIpEnforcement, SourceIpReport};
+        let (entries, shared) = {
+            let st = self.lock();
+            let mut all: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
+            for (n, rt) in &st.remote_rt {
+                if let Some(sid) = rt.session_id
+                    && !all.iter().any(|(s, _)| s == n)
+                {
+                    all.push((*n, sid));
+                }
+            }
+            source_ip_entries(&all, &st.config)
+        };
+        let r = self.platform.publish_source_ip_map(&entries);
+        let report = match r.enforcement {
+            seat_compat::wfp::Enforcement::Driver { seats, .. } => SourceIpReport {
+                enforcement: SourceIpEnforcement::Driver,
+                reason: None,
+                enforced: seats.into_iter().filter_map(|n| u8::try_from(n).ok().and_then(SeatNumber::new)).collect(),
+                shared_session: shared,
+                dropped_paths: r.dropped_paths,
+            },
+            seat_compat::wfp::Enforcement::EnvironmentOnly { reason } => SourceIpReport {
+                enforcement: SourceIpEnforcement::Environment,
+                reason: Some(reason),
+                enforced: Vec::new(),
+                shared_session: shared,
+                dropped_paths: r.dropped_paths,
+            },
+        };
+        let mut st = self.lock();
+        if st.source_ip.as_ref() != Some(&report) {
+            let seats: Vec<String> = report.enforced.iter().map(|s| s.get().to_string()).collect();
+            log::info(&format!(
+                "source ip: {:?}{} enforced=[{}] shared_session={} dropped_paths={}",
+                report.enforcement,
+                report.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default(),
+                seats.join(","),
+                report.shared_session.len(),
+                report.dropped_paths.len()
+            ));
+        }
+        st.source_ip = Some(report);
+    }
+
     pub fn apply_ownership(&self) {
 
         let (eff, settings, logons, dedicated, revision) = {
             let mut st = self.lock();
             st.ownership_dirty = false;
             if !st.config.settings.enabled || st.safe_reason == Some(SafeModeReason::WindowsSafeMode) {
+                drop(st);
+                // Multiseat off: no seat address is enforced either.
+                self.publish_source_ip(&[]);
                 return;
             }
             let eff = st.inventory.effective(&st.config);
@@ -819,6 +877,8 @@ impl Service {
                 log::warn(&format!("kiosk seat map: {e}"));
             }
         }
+        // Source IP per seat (net-wfp): session -> address map for the WFP callout.
+        self.publish_source_ip(&logons);
         let mut iso: HashMap<DeviceKey, IsolationStatus> = HashMap::new();
         let overrides = self.lock().input_overrides.clone();
         let routes: Vec<InputRoute> = eff
@@ -1317,6 +1377,24 @@ pub(crate) fn filter_session_map(all: &[(SeatNumber, u32)], console: Option<u32>
         })
         .copied()
         .collect()
+}
+
+/// Source-IP map entries (net-wfp): one per signed-in seat with a valid address whose
+/// session (never 0) no other signed-in seat shares, plus the seats left out because
+/// they share it.
+pub(crate) fn source_ip_entries(logons: &[(SeatNumber, u32)], config: &Config) -> (Vec<seat_compat::wfp::SessionSeat>, Vec<SeatNumber>) {
+    let programs = &config.settings.ip_programs;
+    let mut out = Vec::new();
+    let mut shared = Vec::new();
+    for (seat, sid) in logons {
+        let Some(address) = config.seat(*seat).and_then(|c| seat_compat::srcip::from_config(c, programs)) else { continue };
+        if *sid == 0 || logons.iter().any(|(s, x)| s != seat && x == sid) {
+            shared.push(*seat);
+            continue;
+        }
+        out.push(seat_compat::wfp::SessionSeat { session_id: *sid, address });
+    }
+    (out, shared)
 }
 
 /// Kiosk seat map entries (round 4 kiosk-isolation, seat-shim-core `kiosk`): one per kiosk

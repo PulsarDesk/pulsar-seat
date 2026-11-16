@@ -923,13 +923,33 @@ monitor's same-container hub keeps a seat the monitor is not on.
   until the session's job is dropped). Seat hosts and the console listener never get a
   job. Not covered: Explorer and anything started from it / the Start menu, UAC-elevated
   programs; the agent does not call the launcher request yet. Untested on hardware.
-- **Source IP (spec 80 §11.3), best effort:** every program the service starts for the
-  user (startup apps, launcher request) whose seat rule (`ip_binding` +
-  `settings.ip_programs`) picks it gets `PULSAR_SEAT_SOURCE_IP=<address>`
-  (`seat_compat::srcip::{from_config, launch_env}`); the agent never gets it (children
-  inherit the environment whatever the rule says). Nothing forces the socket source
-  address of an unmodified app; that needs a WFP bind-redirect callout driver (maintainer
-  decision).
+- **Source IP (spec 80 §11.3), two layers (net-wfp, 2026-11-17):**
+  1. **Enforced by the WFP callout `drivers/seat-wfp`** (KMDF, non-PnP, ALE bind-redirect +
+     connect-redirect V4; `drivers/seat-wfp/README.md`). `Service::publish_source_ip` runs
+     in every `apply_ownership` (boot, config apply, hot-plug, each logon / logoff): the
+     signed-in seats (local logons + running remote seats) with a valid `ip_binding`,
+     minus seats that share their session (`source_ip_entries`; kiosk shell seats in the
+     console session), go to `Platform::publish_source_ip_map`. The Windows platform
+     converts the program list to NT paths (`seat_compat::wfp::build_seats`,
+     `QueryDosDeviceW`; unconvertible entries are reported as `dropped_paths`) and sends
+     the session -> address map over `\\.\PulsarSeatWfp` (`seat_compat::wfp::Publisher`:
+     only on change, rising generation, re-sent when the driver lost it). The handle stays
+     open for the service's lifetime; the driver drops the map when it closes (fail open:
+     session ids are reused). Multiseat off / Windows Safe Mode = empty map.
+     `get_backends` carries `source_ip` (`SourceIpReport`: `driver` with the enforced
+     seats, or `environment` with the reason) and the driver row `source_ip_callout`
+     (probe through the same handle). Config validation: loopback seat address = error
+     (`loopback_ip_address`), link-local = warning, kiosk shell seat with an address =
+     warning (`ip_binding_shared_session`), class E = invalid.
+  2. **Fallback, always on:** every program the service starts for the user (startup
+     apps, launcher request) whose seat rule (`ip_binding` + `settings.ip_programs`) picks
+     it gets `PULSAR_SEAT_SOURCE_IP=<address>` (`seat_compat::srcip::{from_config,
+     launch_env}`); the agent never gets it (children inherit the environment whatever the
+     rule says). Without a loaded (Microsoft-signed) driver this is the only path.
+  Driver limits: IPv4 only; explicit binds to an address and loopback traffic untouched;
+  per session, not per seat. HYPOTHESIS until the VM run (driver README test plan):
+  PASSIVE_LEVEL classify, connect-redirect local-address rewrite, app ids of network
+  paths, SID-string SDDL on the control device.
 - **SYSTEM children:** seat hosts get `D:P(A;;GA;;;SY)` as process / thread DACL
   (`win/platform.rs` `launch`); the console helper and seat-session SYSTEM launches pass
   `SpawnSpec.object_sddl = SYSTEM_ONLY_SDDL`.

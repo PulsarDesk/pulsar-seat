@@ -23,7 +23,7 @@
 # <WorkDir>\sdv-summary.txt (one line per project with the counts and why it failed).
 param(
     [Parameter(Mandatory = $true)] [string] $EwdkRoot,
-    [string[]] $Projects = @("seat-input-filter", "seat-storage-filter"),
+    [string[]] $Projects = @("seat-input-filter", "seat-storage-filter", "seat-wfp"),
     [ValidateSet("x64")] [string] $Platform = "x64",
     [string] $Configuration = "Release",
     [string] $WorkDir = "",

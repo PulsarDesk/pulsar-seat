@@ -71,6 +71,17 @@ pub enum IssueCode {
     TooManyIpPrograms,
     /// A program-list row without a path.
     InvalidIpProgram,
+    /// Source address in 127.0.0.0/8: with the source-IP callout loaded the seat's sockets
+    /// would be bound to loopback and lose the LAN (error). Added 2026-11-17 (net-wfp).
+    LoopbackIpAddress,
+    /// Source address in 169.254.0.0/16 (link-local, assigned by Windows and liable to
+    /// change; warning). Added 2026-11-17 (net-wfp).
+    LinkLocalIpAddress,
+    /// The seat runs in a session it shares with other seats (kiosk shell in the console
+    /// session): the source-IP callout works per session, so the address is not enforced
+    /// for this seat; only programs that read `PULSAR_SEAT_SOURCE_IP` use it (warning).
+    /// Added 2026-11-17 (net-wfp).
+    IpBindingSharedSession,
     /// A monitor is fed by more than one output while cloning is not allowed (spec 10 §7.5).
     CloneNotAllowed,
     /// Session method `fast_user_switch`: two seats use the same account (sessions are
@@ -408,9 +419,19 @@ fn ip_checks(config: &Config, out: &mut Vec<Issue>) {
     for s in &config.seats {
         let Some(b) = &s.ip_binding else { continue };
         match b.address.trim().parse::<std::net::Ipv4Addr>() {
-            Ok(a) if !(a.is_unspecified() || a.is_broadcast() || a.is_multicast()) => {
+            Ok(a) if a.is_loopback() => {
+                out.push(Issue::new(Severity::Error, IssueCode::LoopbackIpAddress).seat(s.number).field("ip_binding"));
+            }
+            // Class E (240.0.0.0/4) is never a source address either (the driver refuses it).
+            Ok(a) if !(a.is_unspecified() || a.is_broadcast() || a.is_multicast() || a.octets()[0] >= 240) => {
+                if a.is_link_local() {
+                    out.push(Issue::new(Severity::Warning, IssueCode::LinkLocalIpAddress).seat(s.number).field("ip_binding"));
+                }
                 if used.insert(a, s.number).is_some() {
                     out.push(Issue::new(Severity::Warning, IssueCode::DuplicateIpAddress).seat(s.number).field("ip_binding"));
+                }
+                if s.local.as_ref().is_some_and(|l| l.kiosk_shell.is_some()) {
+                    out.push(Issue::new(Severity::Warning, IssueCode::IpBindingSharedSession).seat(s.number).field("ip_binding"));
                 }
             }
             _ => out.push(Issue::new(Severity::Error, IssueCode::InvalidIpAddress).seat(s.number).field("ip_binding")),
@@ -545,6 +566,13 @@ mod tests {
         c.settings.ip_programs.push(IpProgram { title: "x".into(), path: " ".into(), enabled: true });
         let got = codes(&validate(&c, None));
         assert!(got.contains(&IssueCode::InvalidIpAddress) && got.contains(&IssueCode::InvalidIpProgram), "{got:?}");
+        // Source-IP callout rules (net-wfp): loopback refused, link-local warned.
+        c.settings.ip_programs.clear();
+        c.seats[1].ip_binding = Some(IpBinding { address: "127.0.0.5".into(), rule: IpRule::AllPrograms });
+        let got = validate(&c, None);
+        assert!(got.iter().any(|i| i.code == IssueCode::LoopbackIpAddress && i.severity == Severity::Error), "{got:?}");
+        c.seats[1].ip_binding = Some(IpBinding { address: "169.254.3.4".into(), rule: IpRule::AllPrograms });
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::LinkLocalIpAddress]);
         let mut c = Config::default();
         let mut a = assign("mon;1", DeviceKind::Monitor, s(1).mask());
         a.options.outputs = vec![1, 2];

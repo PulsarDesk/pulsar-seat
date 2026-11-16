@@ -131,10 +131,11 @@ impl Service {
             B::GetBackends => {
                 let settings = self.lock().config.settings.clone();
                 let mut r = backends::report(self.factory.as_ref(), &settings, &self.backends());
-                r.drivers = [DriverId::KbdMouFilter, DriverId::HidFilter, DriverId::Idd, DriverId::StorageMinifilter]
+                r.drivers = [DriverId::KbdMouFilter, DriverId::HidFilter, DriverId::Idd, DriverId::StorageMinifilter, DriverId::SourceIpCallout]
                     .into_iter()
                     .map(|d| DriverReport { driver: d, status: self.platform.driver_status(d) })
                     .collect();
+                r.source_ip = self.lock().source_ip.clone();
                 Ok(ResponseBody::Backends(r))
             }
             B::Preflight => Ok(ResponseBody::Checks(self.platform.preflight())),

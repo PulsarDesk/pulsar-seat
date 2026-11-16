@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Pulsar Seat source-IP callout (KMDF, non-PnP, WFP). Needs Visual Studio / Build Tools +
+     the matching WDK. Built with WDK 10.0.28000 (unsigned). See README.md. -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{3E8A5B21-6C4D-4F9A-B7E2-1D0C9F8A6B53}</ProjectGuid>
+    <RootNamespace>seatwfp</RootNamespace>
+    <!-- WDK 10.0.28000: the first WDK whose MSBuild tasks load in VS 2026 (18). -->
+    <WindowsTargetPlatformVersion>10.0.28000.0</WindowsTargetPlatformVersion>
+    <TargetName>seatwfp</TargetName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>KMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
+    <KMDF_VERSION_MINOR>15</KMDF_VERSION_MINOR>
+    <Driver_SpectreMitigation>Spectre</Driver_SpectreMitigation>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- NX pool only (HVCI); ExAllocatePoolZero falls back on older Windows. -->
+      <PreprocessorDefinitions>POOL_NX_OPTIN=1;POOL_ZERO_DOWN_LEVEL_SUPPORT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+    </ClCompile>
+    <Link>
+      <!-- fwpkclnt: the WFP kernel client (FwpsXxx / FwpmXxx). -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)fwpkclnt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Signature checked at load; required for HVCI-compatible drivers. -->
+      <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+    <DriverSign>
+      <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
+    </DriverSign>
+    <Inf>
+      <!-- DriverVer date stays as written in the INF (see seat-input-filter.vcxproj). -->
+      <SpecifyDriverVerDirectiveDate>false</SpecifyDriverVerDirectiveDate>
+      <TimeStamp>0.1.0.0</TimeStamp>
+    </Inf>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="include\seatwfp_ioctl.h" />
+    <ClInclude Include="src\seatwfp.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\guids.c" />
+    <ClCompile Include="src\driver.c" />
+    <ClCompile Include="src\map.c" />
+    <ClCompile Include="src\callout.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The driver binary goes into the package dir next to the INF (inf2cat, infverif). -->
+    <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="seat-wfp.inf" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

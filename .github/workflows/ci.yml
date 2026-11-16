@@ -415,7 +415,7 @@ jobs:
           $img = Mount-DiskImage -ImagePath $env:EWDK_PATH -Access ReadOnly -PassThru
           $letter = ($img | Get-Volume).DriveLetter
           "EWDK_ROOT=${letter}:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-      - name: SDV (seat-input-filter KMDF, seat-storage-filter WDM)
+      - name: SDV (seat-input-filter KMDF, seat-storage-filter WDM, seat-wfp KMDF)
         run: ./installer/scripts/run-sdv.ps1 -EwdkRoot $env:EWDK_ROOT -Platform x64 -WorkDir target/sdv
       - name: Unmount EWDK
         if: always()

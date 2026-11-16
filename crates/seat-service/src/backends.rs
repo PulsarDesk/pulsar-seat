@@ -326,7 +326,7 @@ pub fn report(
         info(kind_name(&k), b.availability(), false, sel.gates.contains(&k), a.gates.contains(&k), serde_json::to_value(b.caps()).unwrap_or_default(), Vec::new())
     })
     .collect();
-    seat_proto::BackendReport { session, display, input, audio, gates, drivers: Vec::new() }
+    seat_proto::BackendReport { session, display, input, audio, gates, drivers: Vec::new(), source_ip: None }
 }
 
 // ---------------------------------------------------------------------------------------

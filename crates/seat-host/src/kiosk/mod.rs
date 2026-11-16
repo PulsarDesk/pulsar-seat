@@ -591,7 +591,7 @@ mod tests {
         assert!(!tr::HINT.starts_with("Ctrl+Alt+Del"));
         assert!(tr::HINT.contains("Ctrl+Alt+Home"));
         let info = |kind: &str, active: bool| BackendInfo { kind: kind.into(), availability: Availability::Available, experimental: false, selected: active, active, caps: serde_json::Value::Null, notes: vec![] };
-        let mut r = BackendReport { session: vec![], display: vec![], input: vec![info("raw_input_host", true), info("kmdf_filter", false)], audio: vec![], gates: vec![], drivers: vec![] };
+        let mut r = BackendReport { session: vec![], display: vec![], input: vec![info("raw_input_host", true), info("kmdf_filter", false)], audio: vec![], gates: vec![], drivers: vec![], source_ip: None };
         assert!(!filter_active(&r));
         r.input[1].active = true;
         assert!(filter_active(&r));

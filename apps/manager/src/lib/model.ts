@@ -417,7 +417,19 @@ export function isUsableIpv4(a: string): boolean {
   const b = m.slice(1).map(Number);
   if (b.some((x, i) => x > 255 || (m[i + 1].length > 1 && m[i + 1].startsWith('0')))) return false;
   if (b.every((x) => x === 0) || b.every((x) => x === 255)) return false;
-  return b[0] < 224 || b[0] > 239;
+  // Multicast (224-239) and class E (240-255) are never a source address (seat-core).
+  return b[0] < 224;
+}
+
+/** 127.0.0.0/8: refused as a seat address (the source-IP driver would cut the seat off
+ *  the LAN). */
+export function isLoopbackIpv4(a: string): boolean {
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(a.trim());
+}
+
+/** 169.254.0.0/16: assigned by Windows when DHCP fails, may change. */
+export function isLinkLocalIpv4(a: string): boolean {
+  return /^169\.254\.\d{1,3}\.\d{1,3}$/.test(a.trim());
 }
 
 /** Per-seat source address (spec 10 §7.4); `null` = not assigned. */
@@ -899,9 +911,18 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
   for (const s of c.seats) {
     if (!s.ip_binding) continue;
     const a = s.ip_binding.address.trim();
-    if (!isUsableIpv4(a)) out.push(issue('error', 'invalid_ip_address', { seat: s.number, field: 'ip_binding' }));
-    else if (ips.has(a)) out.push(issue('warning', 'duplicate_ip_address', { seat: s.number, field: 'ip_binding' }));
+    if (isUsableIpv4(a) && isLoopbackIpv4(a)) {
+      out.push(issue('error', 'loopback_ip_address', { seat: s.number, field: 'ip_binding' }));
+      continue;
+    }
+    if (!isUsableIpv4(a)) {
+      out.push(issue('error', 'invalid_ip_address', { seat: s.number, field: 'ip_binding' }));
+      continue;
+    }
+    if (isLinkLocalIpv4(a)) out.push(issue('warning', 'link_local_ip_address', { seat: s.number, field: 'ip_binding' }));
+    if (ips.has(a)) out.push(issue('warning', 'duplicate_ip_address', { seat: s.number, field: 'ip_binding' }));
     else ips.add(a);
+    if (s.local?.kiosk_shell) out.push(issue('warning', 'ip_binding_shared_session', { seat: s.number, field: 'ip_binding' }));
   }
   const progs = c.settings.ip_programs ?? [];
   if (progs.length > MAX_IP_PROGRAMS) out.push(issue('warning', 'too_many_ip_programs', { field: 'settings.ip_programs' }));

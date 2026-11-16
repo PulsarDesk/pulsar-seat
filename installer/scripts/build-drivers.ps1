@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Builds the Pulsar Seat drivers for ARM64 and x64: the three MSBuild drivers
-# (drivers/<name>/<name>.vcxproj; seat-idd carries both IddCx roles, local and remote) and
+# Builds the Pulsar Seat drivers for ARM64 and x64: the four MSBuild drivers
+# (drivers/<name>/<name>.vcxproj; seat-idd carries both IddCx roles, local and remote;
+# seat-wfp is the source-IP WFP callout) and
 # the Rust UMDF pad driver drivers/split-pad (cargo + stampinf + inf2cat, own workspace).
 # Checks that the build is warning-free, runs infverif on each INF, runs ApiValidator (the SDK's
 # Universal DDI list) on every .sys / .dll and checks the PE machine of every .sys / .dll. Output: target/drivers/<Platform>/<Configuration>/<project>/ (package:
@@ -18,7 +19,7 @@
 param(
     [string[]] $Platforms = @("ARM64", "x64"),
     [string[]] $Configurations = @("Release", "Debug"),
-    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "split-pad"),
+    [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "seat-wfp", "split-pad"),
     [string] $Sdk = "10.0.28000.0",
     [string] $OutRoot = "",
     # Also run the WDK code analysis (/analyze with the driver rule sets).

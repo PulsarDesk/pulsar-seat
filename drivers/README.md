@@ -22,6 +22,7 @@ only, never copied (spec 00 §3.9 item 5).
 | `seat-input-filter/` | Keyboard / mouse isolation **and** HID collection visibility (one driver `seatinput.sys`, role per devnode class; sources written, see its README) | KMDF | device upper filter **below** kbdclass / mouclass (extension INF, `AddFilter`; never class-wide); upper filter on HID collection devnodes, decides on create by requestor session | `InputRouter` / `kmdf_filter`; `DriverId::KbdMouFilter` + `HidFilter` | service `INPUT_FILTER_SERVICE` (`PulsarSeatInput`); named control device `\\.\PulsarSeatInput` (a non-PnP control device cannot register an interface) |
 | `seat-idd/` | Virtual monitor per seat (sources written, see its README) | IddCx (UMDF 2) | root device via INF with a real hardware id | `DisplayBinding` / `pulsar_idd`; `DriverId::Idd` | `IDD_INTERFACE_GUID` |
 | `seat-storage-filter/` | Strict storage isolation | FltMgr minifilter | allocated altitude (to request; placeholder `UNALLOCATED` today) | `DeviceGate` / `storage_minifilter`; `DriverId::StorageMinifilter` | service `STORAGE_FILTER_SERVICE` (`PulsarSeatStorageGate`); port `MINIFILTER_PORT_NAME` |
+| `seat-wfp/` | Source IPv4 address per seat (spec 80 §11.3; added 2026-11-17, see its README) | KMDF, non-PnP WFP callout (INF class `WFPCALLOUTS`, primitive package) | ALE bind-redirect + connect-redirect V4, own sublayer in a dynamic engine session | `seat_compat::wfp` (service `publish_source_ip`); `DriverId::SourceIpCallout` | service `WFP_CALLOUT_SERVICE` (`PulsarSeatWfp`); named control device `\\.\PulsarSeatWfp`, DACL = the `PulsarSeat` service SID only |
 
 Remote seat kind (from Pulsar Split, merge-plan.md). Built by `build-drivers.ps1` since
 round 4 (2026-11-14), unsigned, never loaded:
@@ -96,7 +97,10 @@ maintainer's explicit OK before it is ever installed (spec 70 §5.3, spec 90 §1
   `seat_input::convert::Hotkey::emergency_key`). Untested on hardware.
 - Never: class-wide filter entries, editing other software's `UpperFilters` / `LowerFilters`,
   legacy (non-PnP) services, LegacyDriver placeholder devnodes, kernel patching, registry
-  views of Windows keys, process / image-load hooks.
+  views of Windows keys, process / image-load hooks. ("Legacy service" = a kernel service
+  made with `CreateService` / `sc create` outside the driver store. The two non-PnP drivers,
+  the storage minifilter and the source-IP callout, are primitive driver-store packages
+  whose `DefaultInstall` section adds their service.)
 - Installed and removed only through the driver store (`pnputil /add-driver … /install`,
   `pnputil /delete-driver oem<N>.inf /uninstall`). Offline recovery: `dism /image:…
   /remove-driver`, documented in the troubleshooting guide ([docs/troubleshooting.md](../docs/troubleshooting.md), Turkish user copy).
@@ -108,7 +112,7 @@ maintainer's explicit OK before it is ever installed (spec 70 §5.3, spec 90 §1
 
 | State | When |
 | --- | --- |
-| `not_installed` | its service key (input, storage) or device interface (IddCx) is missing |
+| `not_installed` | its service key (input, storage, source IP) or device interface (IddCx) is missing |
 | `installed_not_loaded` | installed, but no control device / port / interface answers (not loaded) |
 | `loaded {interface_major, interface_minor, build}` | the version query answered with our `DRIVER_INTERFACE_MAJOR` |
 | `version_mismatch {found}` | the version query answered with another major |
@@ -120,6 +124,7 @@ The version query is the first call every control interface answers and the only
 | --- | --- | --- |
 | input filter | `IOCTL_SEATINPUT_GET_VERSION` (0x222000) on `\\.\PulsarSeatInput` -> `SEATINPUT_VERSION` | `seat_input::win::probe_filter_version` |
 | storage minifilter | `PSSG_CMD_QUERY_VERSION` on port `\PulsarSeatStorageGate` -> `PSSG_VERSION_REPLY` | `seat_media::probe_minifilter_version` |
+| source-IP callout | `IOCTL_SEATWFP_GET_VERSION` (0x222000) on `\\.\PulsarSeatWfp` -> `SEATWFP_VERSION` | `seat_compat::wfp::win::WinWfp` (the service's own exclusive handle, kept open) |
 | IddCx | `IOCTL_PSIDD_GET_VERSION` (0x22e400) on the `IDD_INTERFACE_GUID` interface -> `PSIDD_VERSION` | `seat_display::win::idd::probe_idd_version` |
 
 The input control device is exclusive and the minifilter port takes one connection: while

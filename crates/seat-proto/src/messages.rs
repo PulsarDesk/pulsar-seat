@@ -672,6 +672,40 @@ pub struct BackendReport {
     pub audio: Vec<BackendInfo>,
     pub gates: Vec<BackendInfo>,
     pub drivers: Vec<DriverReport>,
+    /// How the per-seat source addresses are applied right now (source-IP callout or the
+    /// `PULSAR_SEAT_SOURCE_IP` fallback). Added 2026-11-17 (net-wfp, additive); `None`
+    /// from older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ip: Option<SourceIpReport>,
+}
+
+/// `driver`: the WFP callout `drivers/seat-wfp` holds the session -> address map;
+/// `environment`: only programs that read `PULSAR_SEAT_SOURCE_IP` use the address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceIpEnforcement {
+    Driver,
+    Environment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceIpReport {
+    pub enforcement: SourceIpEnforcement,
+    /// Why `environment` (`driver_not_loaded`, `driver_busy`, `driver_version_mismatch`,
+    /// `driver_pass_through`, `map_invalid`, `map_refused`); `None` for `driver`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Signed-in seats whose address the driver enforces.
+    #[serde(default)]
+    pub enforced: Vec<SeatNumber>,
+    /// Signed-in seats with an address that share their session with another seat (kiosk
+    /// shell seats in the console session): not in the map, the fallback only.
+    #[serde(default)]
+    pub shared_session: Vec<SeatNumber>,
+    /// Program-list entries that have no NT path (unknown drive, relative path): left out
+    /// of the driver's list.
+    #[serde(default)]
+    pub dropped_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -191,10 +191,21 @@ Kovan Yükle** ile `D:\Windows\System32\config\SYSTEM` açılabilir. İşiniz bi
   programlar; yönetici olarak (UAC onayıyla) çalıştırılan programlar.
 - Çekirdek ayarını değiştirdiğinizde çalışan koltuk yeni ayarı hemen alır. Kesin sınırı
   kaldırmak ise ancak o koltukta oturum kapatılıp yeniden açıldığında etkili olur.
-- **Koltuğun kaynak IP adresi** zorla uygulanmaz. Yalnızca ayarlarında "adrese bağlan"
-  seçeneği olan ya da `PULSAR_SEAT_SOURCE_IP` ortam değişkenini okuyan programlar bu adresi
-  kullanabilir. Değişken, Pulsar Seat'in başlattığı programlara verilir; bu programların
-  açtığı programlar da kurala bakılmaksızın değişkeni devralır.
+- **Koltuğun kaynak IP adresi**, Pulsar Seat'in kaynak IP sürücüsü yüklüyse zorla
+  uygulanır: koltuk oturumundaki programların IPv4 bağlantıları koltuğun adresinden çıkar
+  (Ağ adresleri sekmesi "Kaynak IP sürücüsü yüklü" der). Sürücü Microsoft imzası alana kadar
+  yüklenmez; o zamana kadar yalnızca ayarlarında "adrese bağlan" seçeneği olan ya da
+  `PULSAR_SEAT_SOURCE_IP` ortam değişkenini okuyan programlar bu adresi kullanabilir.
+  Değişken, Pulsar Seat'in başlattığı programlara verilir; bu programların açtığı programlar
+  da kurala bakılmaksızın değişkeni devralır.
+- Sürücü yüklüyken de dokunulmayanlar: programın kendisinin seçtiği adres, bu bilgisayarın
+  içindeki (127.x) bağlantılar, IPv6 bağlantıları ve oturumunu başka koltuklarla paylaşan
+  kiosk koltukları.
+- Sürücü ağ bağlantılarını bozarsa: `HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatWfp\Parameters`
+  altında `PassThrough` değerini 1 yapıp bilgisayarı yeniden başlatın (Güvenli Mod'da sürücü
+  zaten hiçbir şey yapmaz). Kaldırmak için: `pnputil /enum-drivers` ile `seat-wfp.inf`
+  paketinin `oem<N>.inf` adını bulun, `sc stop PulsarSeatWfp` ve
+  `pnputil /delete-driver oem<N>.inf /uninstall`.
 
 ## 5b. Parolasız koltuklar için ayrı bağlantı noktası (Windows Server)
 

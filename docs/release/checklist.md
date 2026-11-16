@@ -157,7 +157,7 @@ Routes (check prices / eligibility on the day; HYPOTHESIS where marked):
 ## 5. Driver packages — [drivers] [decision]
 
 None ships today; the installer stages only Microsoft-signed packages. Per driver
-(`seat-input-filter`, `seat-idd`, `seat-storage-filter`):
+(`seat-input-filter`, `seat-idd`, `seat-storage-filter`, `seat-wfp`):
 
 1. [ ] Maintainer OK for the driver (the storage minifilter is an exception to
        `docs/agents/rules.md`, §6 below).
@@ -200,7 +200,7 @@ SDV is no longer in the WDK (not in builds after 26017; WDK 10.0.28000 says so o
 CI job: see [sdv.md](sdv.md).
 
 - [ ] SDV clean (no defects, at least one rule passed, **no timeouts / spaceouts**; "not
-      applicable" rules documented) for `seat-input-filter` (KMDF rules) and
+      applicable" rules documented) for `seat-input-filter` and `seat-wfp` (KMDF rules) and
       `seat-storage-filter` (WDM rules) on x64 — `ci.yml` job `sdv` (manual / tag runs).
       `run-sdv.ps1` exits 1 on any of these; `-AllowTimeouts` is for a local look only and
       never ticks this box. The `sdv` job is **advisory for the CI artifacts**: it is not in

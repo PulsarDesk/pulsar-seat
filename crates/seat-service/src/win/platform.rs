@@ -429,7 +429,19 @@ pub(crate) fn admin_member_sids() -> Vec<String> {
 /// publish clears whatever a previous run left in the volatile key).
 static KIOSK_MAP: std::sync::Mutex<Option<Vec<seat_shim_core::KioskSeatEntry>>> = std::sync::Mutex::new(None);
 
+/// Source-IP callout (`drivers/seat-wfp`): one control handle per service run, kept open
+/// while the service runs (the driver drops its map when the handle closes: fail open
+/// after a crash), and the publisher that sends the map only when it changed.
+static WFP: std::sync::LazyLock<(seat_compat::wfp::win::WinWfp, seat_compat::wfp::Publisher)> =
+    std::sync::LazyLock::new(|| (seat_compat::wfp::win::WinWfp::new(), seat_compat::wfp::Publisher::new()));
+
 impl Platform for WinPlatform {
+    fn publish_source_ip_map(&self, seats: &[seat_compat::wfp::SessionSeat]) -> crate::platform::SourceIpPublish {
+        let (map, dropped_paths) = seat_compat::wfp::build_seats(seats, seat_compat::wfp::win::dos_device);
+        let (ctl, publisher) = &*WFP;
+        crate::platform::SourceIpPublish { enforcement: publisher.publish(ctl, &map), dropped_paths }
+    }
+
     fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
         use seat_shim_core::kiosk::{KioskMapWriter, kiosk_map_diff};
         let w = seat_shim_core::win::RegKioskMap;
@@ -900,12 +912,13 @@ impl Platform for WinPlatform {
     }
 
     fn driver_status(&self, driver: DriverId) -> DriverStatus {
-        use seat_core::consts::{IDD_INTERFACE_GUID, INPUT_FILTER_SERVICE, STORAGE_FILTER_SERVICE};
+        use seat_core::consts::{IDD_INTERFACE_GUID, INPUT_FILTER_SERVICE, STORAGE_FILTER_SERVICE, WFP_CALLOUT_SERVICE};
         // Kernel drivers: their service key (made by the INF's AddService). The IddCx
         // driver runs under WUDFRd, so its device interface is the sign of an install.
         let present = match driver {
             DriverId::KbdMouFilter | DriverId::HidFilter => service_key_exists(INPUT_FILTER_SERVICE),
             DriverId::StorageMinifilter => service_key_exists(STORAGE_FILTER_SERVICE),
+            DriverId::SourceIpCallout => service_key_exists(WFP_CALLOUT_SERVICE),
             DriverId::Idd => !crate::win::pnp::interfaces(IDD_INTERFACE_GUID).is_empty(),
         };
         if !present {
@@ -920,6 +933,14 @@ impl Platform for WinPlatform {
                 seat_input::win::probe_filter_version().map(|v| (v.major, v.minor, v.build))
             }
             DriverId::StorageMinifilter => seat_media::probe_minifilter_version(),
+            // Through the service's own (exclusive) handle; the probe opens it if needed.
+            DriverId::SourceIpCallout => {
+                use seat_compat::wfp::WfpControl;
+                WFP.0
+                    .version()
+                    .map(|v| (v.major, v.minor, v.build))
+                    .map_err(|e| BackendError::new(ErrorKind::Driver, "wfp_probe_failed", e.to_string()))
+            }
             DriverId::Idd => seat_display::win::idd::probe_idd_version(),
         };
         driver_status_from_probe(probe)

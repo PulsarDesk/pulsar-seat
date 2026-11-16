@@ -2805,3 +2805,77 @@ fn kiosk_console_journal_survives_a_crash() {
     assert_eq!(h.p.delegation.lock().unwrap()[&sid], (None, None));
     assert!(crate::kiosk_console::load(&path).is_none());
 }
+
+/// Source IP per seat with the WFP callout (net-wfp): the signed-in seat's session goes
+/// into the driver's map with its NT program list; `get_backends` reports the driver and
+/// the source-IP state; without the driver the report says `environment` and why; a seat
+/// that shares its session is left out (spec 80 §11.3).
+#[test]
+fn source_ip_map_reaches_the_driver() {
+    use seat_compat::wfp::{SF_BIND, SF_CONNECT, WfpControl};
+    use seat_proto::SourceIpEnforcement;
+    let mut c = two_seat_config();
+    c.seats[1].ip_binding = Some(seat_core::config::IpBinding { address: "192.168.1.52".into(), rule: seat_core::config::IpRule::OnlyListed });
+    c.settings.ip_programs = vec![
+        seat_core::config::IpProgram { title: "Oyun".into(), path: r"C:\Games\Lan".into(), enabled: true },
+        seat_core::config::IpProgram { title: "Ağ".into(), path: r"Z:\Net\x.exe".into(), enabled: true },
+        seat_core::config::IpProgram { title: "Kapalı".into(), path: r"C:\Off".into(), enabled: false },
+    ];
+    let h = harness_with(c, None);
+    // Driver not loaded: the fallback only.
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    h.s.apply_ownership();
+    let ResponseBody::Backends(r) = call(&h, &mut a, RequestBody::GetBackends).unwrap() else { panic!() };
+    let ip = r.source_ip.clone().unwrap();
+    assert_eq!((ip.enforcement, ip.reason.as_deref()), (SourceIpEnforcement::Environment, Some("driver_not_loaded")));
+    assert!(r.drivers.iter().any(|d| d.driver == seat_core::backend::DriverId::SourceIpCallout));
+    // Driver loaded: the next ownership run sends the map.
+    {
+        let mut st = h.p.wfp.state.lock().unwrap();
+        st.loaded = true;
+        st.major = seat_compat::wfp::INTERFACE_MAJOR;
+    }
+    h.s.apply_ownership();
+    let m = h.p.wfp.seats();
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!((m[0].seat, m[0].session_id, m[0].address.to_string()), (2, 10, "192.168.1.52".to_string()));
+    assert_eq!(m[0].paths, vec![r"\device\harddiskvolume3\games\lan".to_string()]);
+    assert_eq!(m[0].flags, SF_BIND | SF_CONNECT);
+    let ResponseBody::Backends(r) = call(&h, &mut a, RequestBody::GetBackends).unwrap() else { panic!() };
+    let ip = r.source_ip.unwrap();
+    assert_eq!(ip.enforcement, SourceIpEnforcement::Driver);
+    assert_eq!(ip.enforced, vec![s(2)]);
+    assert_eq!(ip.dropped_paths, vec![r"Z:\Net\x.exe".to_string()]);
+    // Unchanged: nothing sent again.
+    let calls = h.p.wfp.set_calls();
+    h.s.apply_ownership();
+    assert_eq!(h.p.wfp.set_calls(), calls);
+    // Multiseat off: the map is emptied.
+    h.s.lock().config.settings.enabled = false;
+    h.s.apply_ownership();
+    assert!(h.p.wfp.seats().is_empty());
+    assert_eq!(h.p.wfp.stats().unwrap().seat_count, 0);
+}
+
+/// Seats that share a session are never put into the map (the driver works per session).
+#[test]
+fn source_ip_entries_skip_shared_sessions() {
+    let mut c = two_seat_config();
+    c.seats.push(seat_core::config::SeatConfig::new(s(3)));
+    for (i, a) in [(0, "192.168.1.51"), (1, "192.168.1.52"), (2, "192.168.1.53")] {
+        c.seats[i].ip_binding = Some(seat_core::config::IpBinding { address: a.into(), rule: seat_core::config::IpRule::AllPrograms });
+    }
+    // Seats 1 and 3 in console session 1 (kiosk shell), seat 2 in session 10.
+    let (e, shared) = crate::service::source_ip_entries(&[(s(1), 1), (s(2), 10), (s(3), 1)], &c);
+    assert_eq!(e.iter().map(|x| (x.address.seat, x.session_id)).collect::<Vec<_>>(), vec![(s(2), 10)]);
+    assert_eq!(shared, vec![s(1), s(3)]);
+    // Session 0 is never a seat session; a seat without an address is skipped silently.
+    c.seats[1].ip_binding = None;
+    let (e, shared) = crate::service::source_ip_entries(&[(s(2), 10), (s(3), 0)], &c);
+    assert!(e.is_empty());
+    assert_eq!(shared, vec![s(3)]);
+}
