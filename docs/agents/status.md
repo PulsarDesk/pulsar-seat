@@ -1690,7 +1690,14 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       answered LogonUI of the new console session, so the hand-over to seat 3 was never
       "pending" and its one-time logon (armed 16 ms later) was never taken. A new hand-over
       now supersedes an older switch record; regression test with a mutation check.
-      Not re-run in the VM (disk full, see below).
+      **VM re-run 2026-11-16 (MSI 2530d7c, SHA-256 1a4b5b5a...4465, PE 0xAA64): PASS.**
+      Seat 2's lock screen links ok; `switch_seat 1` (no password) preselects pstest; right
+      after, `switch_seat 3`: the new logon screen answered `pending`, then the seat tile
+      with auto-logon, accepted - seat 3's user holds the console. Other direction (console
+      locked): `switch_seat 3` then at once `switch_seat 2`: the logon screen preselects
+      seat 2's tile ("Koltuk 2", no stored password by design for `switch_seat` to a running
+      seat), not seat 3's. (Without the lock, `switch_seat` is refused with
+      `console_in_use`, as designed.)
     - **Driver Verifier under HVCI: PASS.** From `testsigning-hvci` (VBS 2 / HVCI 2):
       input filter + minifilter under standard flags, reboot, kmdf_filter isolation
       (keys never reached seat 1), 400-file I/O, minifilter unload / reload: no violation,
