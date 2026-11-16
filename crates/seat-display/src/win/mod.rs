@@ -11,6 +11,7 @@ pub mod idd;
 pub mod overlay;
 pub mod presenter;
 pub mod registry;
+pub mod swdevice;
 pub mod winsec;
 
 use crate::console::{Console, ConsoleCommand};
@@ -77,6 +78,20 @@ pub(crate) fn luid_u64(l: windows::Win32::Foundation::LUID) -> u64 {
 
 pub(crate) fn luid_from(v: u64) -> windows::Win32::Foundation::LUID {
     windows::Win32::Foundation::LUID { LowPart: v as u32, HighPart: (v >> 32) as i32 }
+}
+
+/// QueryPerformanceCounter value and frequency (ticks per second): the clock the IddCx
+/// driver stamps frames with (latency hooks).
+pub fn qpc_now() -> (u64, u64) {
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    let mut t = 0i64;
+    let mut f = 0i64;
+    // SAFETY: plain out-parameters.
+    unsafe {
+        let _ = QueryPerformanceCounter(&mut t);
+        let _ = QueryPerformanceFrequency(&mut f);
+    }
+    (t.max(0) as u64, f.max(0) as u64)
 }
 
 /// Session id of this process (0 = services session).

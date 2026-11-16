@@ -20,6 +20,7 @@
 
 use super::{os_err, wide};
 use crate::binding::{IddControl, IddMonitor};
+use crate::idd_adapters::{pick_adapter, AdapterPick, AdapterState};
 use crate::idd_proto::*;
 use seat_core::backend::display::{CursorState, FrameRef, FrameSink};
 use seat_core::backend::{Availability, BackendError, BackendResult, DriverId, ErrorKind};
@@ -109,26 +110,101 @@ pub fn probe_idd_version() -> BackendResult<(u16, u16, u32)> {
 
 /// Service-side driver client. The frame-reader SID and cursor mode travel with each
 /// [`IddMonitor`] request (per seat), never as process-global state.
+///
+/// One IddCx adapter per render GPU (driver minor 3, [`crate::idd_adapters`]): every add
+/// lists the adapters (one control interface each), picks the one bound to the monitor's
+/// GPU ([`pick_adapter`]) and, when none fits, creates one more software devnode
+/// `SWD\PulsarSeatIdd\gpuN` (hardware id `PulsarSeatIdd_Adapter`, same INF and driver).
+/// Those devnodes live as long as this client (the default `SwDeviceCreate` lifetime:
+/// closing the handle removes them), so a service stop leaves only the installer's root
+/// devnode behind. Removes go to the adapter that took the monitor.
 #[derive(Default)]
-pub struct WinIdd;
+pub struct WinIdd {
+    state: std::sync::Mutex<IddState>,
+}
+
+#[derive(Default)]
+struct IddState {
+    /// (seat, connector) to the control interface path of the adapter that holds it.
+    routes: std::collections::HashMap<(u8, u32), String>,
+    /// Software adapters this client created (closed on drop: devnode removed).
+    sw: Vec<super::swdevice::SwDevice>,
+}
+
+/// How long a new adapter devnode may take to start and report ready.
+const ADAPTER_START: Duration = Duration::from_secs(15);
 
 impl WinIdd {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     fn open(&self) -> BackendResult<Ctl> {
-        let g = IDD_CONTROL.lock().unwrap_or_else(|p| p.into_inner());
         let guid = parse_guid(IDD_INTERFACE_GUID).expect("constant GUID");
         let path = interface_paths(&guid)
             .into_iter()
             .next()
             .ok_or_else(|| BackendError::new(ErrorKind::Driver, "driver_not_installed", "Pulsar IddCx control interface not present"))?;
-        let w = wide(&path);
+        self.open_path(&path)
+    }
+
+    fn open_path(&self, path: &str) -> BackendResult<Ctl> {
+        let g = IDD_CONTROL.lock().unwrap_or_else(|p| p.into_inner());
+        let w = wide(path);
         unsafe {
             CreateFileW(PCWSTR(w.as_ptr()), (GENERIC_READ | GENERIC_WRITE).0, FILE_SHARE_NONE, None, OPEN_EXISTING, FILE_FLAGS_AND_ATTRIBUTES(0), None)
                 .map(|h| Ctl { h: Handle(h), _g: g })
                 .map_err(|e| super::win_err("driver_open", "CreateFileW(idd)", &e).with_driver_kind())
+        }
+    }
+
+    /// State of the adapter behind `path` (version checked first).
+    fn query(&self, path: &str) -> BackendResult<AdapterState> {
+        let h = self.open_path(path)?;
+        let v = self.version(&h)?;
+        if v.major != DRIVER_INTERFACE_MAJOR || v.major != PSIDD_INTERFACE_MAJOR {
+            return Err(BackendError::new(ErrorKind::Driver, "driver_version_mismatch", format!("idd interface {}", v.major)));
+        }
+        if v.minor < 3 {
+            // One adapter, no binding: treat it as ready (an add answers NOT_READY otherwise).
+            return Ok(AdapterState { path: path.to_string(), minor: v.minor, flags: PSIDD_ADAPTER_READY, render_luid: 0, monitors: 0 });
+        }
+        let info = self.ioctl::<(), PsiddAdapterInfo>(&h, IOCTL_PSIDD_GET_ADAPTER_INFO, None)?;
+        Ok(AdapterState { path: path.to_string(), minor: v.minor, flags: info.flags, render_luid: info.render_luid, monitors: info.monitor_count })
+    }
+
+    /// Every adapter whose control interface answers (others are logged and skipped).
+    fn list(&self) -> Vec<AdapterState> {
+        let guid = parse_guid(IDD_INTERFACE_GUID).expect("constant GUID");
+        interface_paths(&guid)
+            .into_iter()
+            .filter_map(|p| match self.query(&p) {
+                Ok(a) => Some(a),
+                Err(e) => {
+                    log::debug!("idd: adapter {p}: {e}");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Create one more adapter devnode and wait until its control interface answers and
+    /// the adapter is ready (`before` = the adapters listed before).
+    fn create_adapter(&self, st: &mut IddState, before: &[AdapterState]) -> BackendResult<()> {
+        let taken: Vec<String> = st.sw.iter().map(|d| d.instance.clone()).collect();
+        let instance = crate::idd_adapters::next_instance(&taken);
+        log::info!("idd: creating IddCx adapter {PSIDD_SW_ENUMERATOR}\\{instance} for another render GPU");
+        let dev = super::swdevice::SwDevice::create(PSIDD_SW_ENUMERATOR, &instance, &[PSIDD_HWID_LOCAL_ADAPTER], "Pulsar Seat sanal ekran (ek GPU)", ADAPTER_START)?;
+        st.sw.push(dev);
+        let deadline = std::time::Instant::now() + ADAPTER_START;
+        loop {
+            if self.list().iter().any(|a| a.ready() && !before.iter().any(|b| b.path == a.path)) {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(BackendError::new(ErrorKind::Timeout, "idd_adapter_start", "new IddCx adapter did not become ready"));
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 
@@ -155,14 +231,6 @@ impl WinIdd {
         self.ioctl::<(), PsiddVersion>(h, IOCTL_PSIDD_GET_VERSION, None)
     }
 
-    fn checked(&self) -> BackendResult<(Ctl, PsiddVersion)> {
-        let h = self.open()?;
-        let v = self.version(&h)?;
-        if v.major != DRIVER_INTERFACE_MAJOR || v.major != PSIDD_INTERFACE_MAJOR {
-            return Err(BackendError::new(ErrorKind::Driver, "driver_version_mismatch", format!("idd interface {}", v.major)));
-        }
-        Ok((h, v))
-    }
 }
 
 trait DriverKind {
@@ -185,7 +253,11 @@ pub(crate) fn add_request(m: &IddMonitor<'_>, minor: u16) -> BackendResult<Psidd
         req.modes[i] = PsiddMode { width: d.width, height: d.height, refresh_mhz: d.refresh_mhz };
         req.mode_count = i as u32 + 1;
     }
+    if m.hdr && minor >= 3 {
+        req.flags |= PSIDD_ADD_FLAG_HDR;
+    }
     if m.software_cursor {
+
         if minor < 1 {
             // A minor-0 driver ignores the field and would still set up a hardware cursor.
             log::warn!("idd: driver interface minor {minor} has no software-cursor flag; using the hardware cursor");
@@ -206,7 +278,14 @@ pub(crate) fn add_request(m: &IddMonitor<'_>, minor: u16) -> BackendResult<Psidd
     Ok(req)
 }
 
+/// Win32 error of a refused add on an adapter bound to another GPU (`STATUS_DEVICE_BUSY`).
+const ERROR_BUSY_HRESULT: u32 = 0x8007_00AA;
+
 impl IddControl for WinIdd {
+    fn adapters(&self) -> Vec<AdapterState> {
+        self.list()
+    }
+
     fn availability(&self) -> Availability {
         let guid = parse_guid(IDD_INTERFACE_GUID).expect("constant GUID");
         if interface_paths(&guid).is_empty() {
@@ -222,19 +301,91 @@ impl IddControl for WinIdd {
     /// `driver_ioctl` with `STATUS_OBJECT_NAME_COLLISION` when the slot is still in use or
     /// a seat host still holds the previous frame section: close the readers and retry.
     fn add_monitor(&self, m: &IddMonitor<'_>) -> BackendResult<()> {
-        let (h, v) = self.checked()?;
-        let req = add_request(m, v.minor)?;
-        self.ioctl::<PsiddAddMonitor, u32>(&h, IOCTL_PSIDD_ADD_MONITOR, Some(&req)).map(|_| ())
+        let mut st = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        // At most: one try, one adapter created, one retry after a refusal.
+        for attempt in 0..3 {
+            let list = self.list();
+            if list.is_empty() && st.sw.is_empty() {
+                return Err(BackendError::new(ErrorKind::Driver, "driver_not_installed", "Pulsar IddCx control interface not present"));
+            }
+            match pick_adapter(&list, m.render_luid) {
+                AdapterPick::Existing(i) => {
+                    let a = &list[i];
+                    let mut mon = m.clone();
+                    if mon.hdr && !a.fp16() {
+                        log::warn!("idd: seat {} output {}: HDR asked for, but the adapter has no IddCx 1.10 (FP16); SDR", m.seat, m.connector);
+                        mon.hdr = false;
+                    }
+                    let req = add_request(&mon, a.minor)?;
+                    let h = self.open_path(&a.path)?;
+                    match self.ioctl::<PsiddAddMonitor, u32>(&h, IOCTL_PSIDD_ADD_MONITOR, Some(&req)) {
+                        Ok(_) => {
+                            st.routes.insert((m.seat.get(), m.connector), a.path.clone());
+                            return Ok(());
+                        }
+                        // Bound to another GPU meanwhile (or stale state): look again.
+                        Err(e) if e.win32 == Some(ERROR_BUSY_HRESULT) && attempt < 2 => {
+                            log::info!("idd: adapter {} is bound to another GPU; picking again", a.path);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                AdapterPick::Create => self.create_adapter(&mut st, &list)?,
+                AdapterPick::Full => {
+                    return Err(BackendError::new(
+                        ErrorKind::NotReady,
+                        "idd_adapters_full",
+                        format!("every one of the {PSIDD_MAX_ADAPTERS} IddCx adapters is bound to another GPU"),
+                    ));
+                }
+            }
+        }
+        Err(BackendError::new(ErrorKind::NotReady, "idd_adapter_busy", "no IddCx adapter took the monitor"))
     }
 
     fn remove_monitor(&self, seat: SeatNumber, connector: u32) -> BackendResult<()> {
-        let (h, _) = self.checked()?;
+        let mut st = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let req = PsiddMonitorRef { seat: seat.get() as u32, connector };
-        self.ioctl::<PsiddMonitorRef, u32>(&h, IOCTL_PSIDD_REMOVE_MONITOR, Some(&req)).map(|_| ())
+        let routed = st.routes.remove(&(seat.get(), connector));
+        let guid = parse_guid(IDD_INTERFACE_GUID).expect("constant GUID");
+        // The adapter that took it first; else every adapter (a service restart lost the
+        // routes): the others answer STATUS_NOT_FOUND.
+        let mut paths: Vec<String> = routed.into_iter().collect();
+        for p in interface_paths(&guid) {
+            if !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+        if paths.is_empty() {
+            return Err(BackendError::new(ErrorKind::Driver, "driver_not_installed", "Pulsar IddCx control interface not present"));
+        }
+        let mut first_err = None;
+        for p in &paths {
+            let r = self.open_path(p).and_then(|h| {
+                let v = self.version(&h)?;
+                if v.major != PSIDD_INTERFACE_MAJOR {
+                    return Err(BackendError::new(ErrorKind::Driver, "driver_version_mismatch", format!("idd interface {}", v.major)));
+                }
+                self.ioctl::<PsiddMonitorRef, u32>(&h, IOCTL_PSIDD_REMOVE_MONITOR, Some(&req))
+            });
+            match r {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        Err(first_err.expect("at least one path"))
     }
 }
 
+
+/// Frames between two latency log lines of [`pump`].
+pub const LATENCY_LOG_EVERY: u64 = 600;
+
 /// Seat-host reader of one virtual monitor's frame section.
+
 pub struct IddFrameReader {
     // Field order = drop order: unmap the view before closing the mapping.
     view: View,
@@ -252,7 +403,42 @@ unsafe impl Send for IddFrameReader {}
 pub struct IddFrame {
     pub width: u32,
     pub height: u32,
+    /// Tight rows (`width * bytes per pixel of format`).
     pub data: Vec<u8>,
+    /// `PSIDD_FORMAT_*` (minor 3; 0 = BGRA8).
+    pub format: u32,
+    /// `DXGI_COLOR_SPACE_TYPE` (minor 3; 0 = sRGB).
+    pub color_space: u32,
+    /// SDR white level of the session in nits (80 when unknown).
+    pub sdr_white_nits: f32,
+    pub hdr10: Option<[u16; 12]>,
+    /// Driver timestamps (QPC ticks; 0 = not stamped, driver before minor 3).
+    pub acquire_qpc: u64,
+    pub written_qpc: u64,
+}
+
+impl IddFrame {
+    /// The frame as an HDR frame reference when it is not plain BGRA8 / sRGB.
+    pub fn hdr_ref(&self, output: usize) -> Option<seat_core::backend::hdr::HdrFrameRef<'_>> {
+        use seat_core::backend::hdr::{Hdr10Metadata, HdrColorSpace, HdrFrameRef, HdrPixelFormat};
+        let format = match self.format {
+            PSIDD_FORMAT_RGBA16F => HdrPixelFormat::Rgba16Float,
+            PSIDD_FORMAT_RGB10A2 => HdrPixelFormat::Rgb10A2,
+            _ => return None,
+        };
+        Some(HdrFrameRef {
+            output,
+            width: self.width,
+            height: self.height,
+            stride: self.width * format.bytes_per_pixel(),
+            format,
+            color_space: HdrColorSpace::from_dxgi(self.color_space).unwrap_or(HdrColorSpace::ScRgbLinear),
+            sdr_white_nits: self.sdr_white_nits,
+            hdr10: self.hdr10.map(Hdr10Metadata),
+            data: &self.data,
+            dirty: &[],
+        })
+    }
 }
 
 /// What changed since the last [`IddFrameReader::next`]: a frame, the cursor, or both.
@@ -338,7 +524,7 @@ impl IddFrameReader {
             }
             let need = frame_fits(&h, self.view_size)?;
             debug_assert!(need <= h.frame_capacity);
-            let row = h.width as usize * 4;
+            let row = h.width as usize * format_bpp(h.format).unwrap_or(4) as usize;
             let mut data = vec![0u8; row * h.height as usize];
             unsafe {
                 let base = self.base().add(h.frame_offset as usize);
@@ -351,7 +537,17 @@ impl IddFrameReader {
                 continue; // torn
             }
             self.last_seq = s1;
-            return Some(IddFrame { width: h.width, height: h.height, data });
+            return Some(IddFrame {
+                width: h.width,
+                height: h.height,
+                data,
+                format: h.format,
+                color_space: h.color_space,
+                sdr_white_nits: sdr_white_nits(h.sdr_white_level),
+                hdr10: (h.hdr10_valid != 0).then_some(h.hdr10),
+                acquire_qpc: h.acquire_qpc,
+                written_qpc: h.written_qpc,
+            });
         }
         None
     }
@@ -417,11 +613,31 @@ impl IddFrameReader {
 
 /// Copy frames and cursor updates of `reader` (RDP-less seats) into `sink` output
 /// `output` until `stop`. Cursor-only updates call `sink.cursor` without a `present`.
+///
+/// HDR frames (FP16 / 10-bit, driver minor 3) go to `FrameSink::present_hdr` (HDR10
+/// scan-out where the presenter has it, else tone-mapped). Latency hooks: driver acquire
+/// to section written, and section written to the sink's return, logged every
+/// [`LATENCY_LOG_EVERY`] frames.
 pub fn pump(reader: &mut IddFrameReader, sink: &mut dyn FrameSink, output: usize, stop: &AtomicBool) -> BackendResult<()> {
+    let mut copy = seat_core::latency::LatencyStats::new();
+    let mut present = seat_core::latency::LatencyStats::new();
     while !stop.load(Ordering::Relaxed) {
         let Some(u) = reader.next(Duration::from_millis(250)) else { continue };
         if let Some(f) = &u.frame {
-            sink.present(&FrameRef { output, width: f.width, height: f.height, stride: f.width * 4, data: &f.data, dirty: &[] })?;
+            match f.hdr_ref(output) {
+                Some(h) => sink.present_hdr(&h)?,
+                None => sink.present(&FrameRef { output, width: f.width, height: f.height, stride: f.width * 4, data: &f.data, dirty: &[] })?,
+            }
+            let (now, freq) = super::qpc_now();
+            if let Some(d) = seat_core::latency::ticks_to_duration(f.acquire_qpc, f.written_qpc, freq) {
+                copy.record(d);
+            }
+            if let Some(d) = seat_core::latency::ticks_to_duration(f.written_qpc, now, freq) {
+                present.record(d);
+            }
+            if present.count() > 0 && present.count().is_multiple_of(LATENCY_LOG_EVERY) {
+                log::info!("idd: output {output} latency: driver copy {} | to presented {}", copy.summary(), present.summary());
+            }
         }
         if let Some(mut c) = u.cursor {
             c.output = output;
@@ -457,6 +673,7 @@ mod tests {
             render_luid: 7,
             reader_sid: Some("S-1-5-21-1-2-3-1001"),
             software_cursor: true,
+            hdr: false,
         };
         let r = add_request(&m, 1).unwrap();
         assert_eq!((r.seat, r.connector, r.render_luid), (3, 1, 7));
@@ -465,7 +682,31 @@ mod tests {
         assert_eq!(r.flags, PSIDD_ADD_FLAG_SOFTWARE_CURSOR);
         assert_eq!(String::from_utf16_lossy(&r.reader_sid[..19]), "S-1-5-21-1-2-3-1001");
         assert_eq!(add_request(&m, 0).unwrap().flags, 0);
-        let bad = IddMonitor { reader_sid: Some("S-1-5;(A;;GA;;;WD)"), ..m };
+        let bad = IddMonitor { reader_sid: Some("S-1-5;(A;;GA;;;WD)"), ..m.clone() };
         assert!(add_request(&bad, 1).is_err());
+        // HDR flag only for a minor-3 driver.
+        let hdr = IddMonitor { hdr: true, ..m };
+        assert_eq!(add_request(&hdr, 3).unwrap().flags, PSIDD_ADD_FLAG_SOFTWARE_CURSOR | PSIDD_ADD_FLAG_HDR);
+        assert_eq!(add_request(&hdr, 2).unwrap().flags, PSIDD_ADD_FLAG_SOFTWARE_CURSOR);
+    }
+
+    #[test]
+    fn hdr_frames_become_hdr_refs() {
+        let f = IddFrame {
+            width: 2,
+            height: 1,
+            data: vec![0; 16],
+            format: PSIDD_FORMAT_RGBA16F,
+            color_space: DXGI_CS_SCRGB_LINEAR,
+            sdr_white_nits: 200.0,
+            hdr10: Some([1; 12]),
+            acquire_qpc: 0,
+            written_qpc: 0,
+        };
+        let h = f.hdr_ref(3).unwrap();
+        assert_eq!((h.output, h.stride, h.sdr_white_nits), (3, 16, 200.0));
+        assert!(h.is_valid() && h.hdr10.is_some());
+        let sdr = IddFrame { format: PSIDD_FORMAT_BGRA8, data: vec![0; 8], ..f };
+        assert!(sdr.hdr_ref(0).is_none(), "BGRA8 frames stay on the SDR path");
     }
 }

@@ -111,6 +111,14 @@ pub struct OutputPlacement {
     /// (spec 40 §6.5). Added 2026-11-13.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_mode: bool,
+    /// HDR asked for (`AssignmentOptions::hdr`): the presenter scans out HDR10 when the
+    /// target supports it and the seat's frames are HDR. Added 2026-11-17.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hdr: bool,
+    /// Variable refresh asked for (`AssignmentOptions::vrr`): frames are scanned out as
+    /// they arrive with tearing allowed instead of on a fixed vblank. Added 2026-11-17.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vrr: bool,
 }
 
 impl SeatOutputs {
@@ -139,6 +147,10 @@ pub struct SeatDisplayPrefs {
     /// Administrators only (hosts with the SYSTEM Low token read them anyway). Not from the
     /// configuration: the service fills it in. Added 2026-11-13 (integrate).
     pub frame_reader_sid: Option<String>,
+    /// Monitors with `AssignmentOptions::hdr`. Added 2026-11-17.
+    pub hdr: Vec<DeviceKey>,
+    /// Monitors with `AssignmentOptions::vrr`. Added 2026-11-17.
+    pub vrr: Vec<DeviceKey>,
 }
 
 impl SeatDisplayPrefs {
@@ -151,6 +163,12 @@ impl SeatDisplayPrefs {
         for d in config.devices.iter().filter(mine) {
             if d.options.software_cursor {
                 p.software_cursor.push(d.key.clone());
+            }
+            if d.options.hdr {
+                p.hdr.push(d.key.clone());
+            }
+            if d.options.vrr {
+                p.vrr.push(d.key.clone());
             }
             if !d.options.outputs.is_empty() && (d.options.outputs.len() == 1 || config.settings.outputs.allow_clone) {
                 p.outputs.push((d.key.clone(), d.options.outputs.clone()));
@@ -276,6 +294,17 @@ pub trait FrameSink: Send {
     /// (MS-RDPEGFX flow control). Default 0 (never behind).
     fn backlog(&self) -> u32 {
         0
+    }
+
+    // ---- HDR / wide colour (added 2026-11-17, optional) ----
+
+    /// Show an HDR / wide-colour frame (FP16 scRGB or 10-bit HDR10 from the `pulsar_idd`
+    /// virtual monitor of a seat with `OutputPlacement::hdr`). Default: tone-mapped to
+    /// SDR ([`super::hdr::to_bgra8`]) and shown with [`FrameSink::present`]. Presenters
+    /// that scan out HDR10 override it.
+    fn present_hdr(&mut self, frame: &super::hdr::HdrFrameRef<'_>) -> BackendResult<()> {
+        let data = super::hdr::to_bgra8(frame).ok_or_else(|| BackendError::new(super::ErrorKind::Internal, "bad_frame", "HDR frame buffer smaller than its size"))?;
+        self.present(&FrameRef { output: frame.output, width: frame.width, height: frame.height, stride: frame.width * 4, data: &data, dirty: frame.dirty })
     }
 }
 

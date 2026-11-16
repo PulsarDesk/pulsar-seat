@@ -8,6 +8,10 @@
  * crates/seat-display/src/remote/ioctl.rs PULSAR_IDD_HARDWARE_ID. */
 #define PSIDD_HWID_LOCAL  L"Root\\PulsarSeatIdd"
 #define PSIDD_HWID_REMOTE L"PulsarSplit_IndirectDisplay"
+/* Local role, one further adapter per render GPU: software devnodes the seat service
+ * creates (SwDeviceCreate, enumerator PulsarSeatIdd; interface minor 3). Also
+ * crates/seat-display/src/idd_proto.rs PSIDD_HWID_LOCAL_ADAPTER. */
+#define PSIDD_HWID_LOCAL_ADAPTER L"PulsarSeatIdd_Adapter"
 
 typedef enum _PSIDD_ROLE {
     PsiddRoleUnknown = 0,

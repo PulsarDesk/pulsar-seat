@@ -14,6 +14,7 @@
 //! | [`console`] | how the session-0 service reaches the console (helper process protocol) |
 //! | [`topology`] | pure: which targets leave / rejoin the console desktop, journal, CCD path plan |
 //! | [`binding`] | the `DisplayBinding` for all four kinds |
+//! | [`idd_adapters`] | pure: one IddCx adapter per render GPU (which adapter takes a monitor) |
 //! | [`idd_proto`] | wire contract with `drivers/seat-idd` |
 //! | [`kinds`] | one display trait over both kinds, backend ids and status |
 //! | [`remote`] | remote kind: backends, modes, HDR rules, frame header, IOCTL buffers (`remote::win`, `remote::fake`) |
@@ -24,6 +25,7 @@
 
 pub mod binding;
 pub mod console;
+pub mod idd_adapters;
 pub mod idd_proto;
 pub mod kinds;
 pub mod model;

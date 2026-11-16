@@ -13,6 +13,13 @@
  * CPU copy through shared memory is the documented fallback of spec 40 §6.3.4; passing a
  * shared GPU texture to the presenter is open question 2. Built unsigned, never loaded,
  * untested on hardware.
+ *
+ * Minor 3 (IddCx 1.10 at run time): frames come from IddCxSwapChainReleaseAndAcquireBuffer2
+ * with their colour space, SDR white level and HDR10 metadata. An HDR monitor
+ * (PSIDD_ADD_FLAG_HDR) gets FP16 / 10-bit pixels as they are (its section holds 8 bytes per
+ * pixel); any other monitor that receives an FP16 surface gets a BGRA8 conversion (linear
+ * scRGB to sRGB through a 64 K entry table, clipped to [0, 1]), so SDR readers never see
+ * FP16. Every frame carries QPC timestamps for latency measurement.
  */
 #include "driver.h"
 
@@ -69,6 +76,13 @@ static BOOL BuildSa(SECURITY_ATTRIBUTES *sa, const uint16_t *readerSid, const WC
     return ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sa->lpSecurityDescriptor, NULL);
 }
 
+/* Bytes per pixel a monitor's section is sized for: 8 for HDR monitors on a 1.10 adapter
+ * (FP16), else 4. */
+static uint32_t SectionBpp(const PSIDD_MONITOR *m)
+{
+    return (m->Has110 && (m->Flags & PSIDD_ADD_FLAG_HDR) != 0) ? 8u : 4u;
+}
+
 NTSTATUS PsiddCreateSection(PSIDD_MONITOR *m, const uint16_t *readerSid)
 {
     WCHAR name[128];
@@ -87,7 +101,7 @@ NTSTATUS PsiddCreateSection(PSIDD_MONITOR *m, const uint16_t *readerSid)
             maxPixels = p;
         }
     }
-    size = PSIDD_FRAME_OFFSET + maxPixels * 4;
+    size = PSIDD_FRAME_OFFSET + maxPixels * SectionBpp(m);
 
     if (!BuildSa(&sa, readerSid, L"GR")) {
         return STATUS_INVALID_PARAMETER;
@@ -201,15 +215,118 @@ static HRESULT CreateDeviceOnLuid(LUID luid, ID3D11Device **dev, ID3D11DeviceCon
     return hr;
 }
 
-static void WriteFrame(PSIDD_MONITOR *m, ID3D11DeviceContext *ctx, ID3D11Texture2D *staging, UINT w, UINT h)
+/* IEEE half (bits) to float. */
+static float HalfToFloat(uint16_t h)
+{
+    uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1fu;
+    uint32_t man = h & 0x3ffu;
+    uint32_t bits;
+    float f;
+    if (exp == 0) {
+        /* subnormal / zero: man * 2^-24 */
+        f = (float)man * (1.0f / 16777216.0f);
+        return sign ? -f : f;
+    }
+    if (exp == 31) {
+        bits = sign | 0x7f800000u | (man << 13);
+    } else {
+        bits = sign | ((exp + 112u) << 23) | (man << 13);
+    }
+    memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+/* Linear scRGB (1.0 = SDR white) to an 8-bit sRGB code, clipped. Table built once. */
+static uint8_t g_HalfToSrgb[65536];
+static INIT_ONCE g_HalfToSrgbOnce = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK BuildHalfToSrgb(PINIT_ONCE once, PVOID param, PVOID *ctx)
+{
+    UNREFERENCED_PARAMETER(once);
+    UNREFERENCED_PARAMETER(param);
+    UNREFERENCED_PARAMETER(ctx);
+    for (uint32_t i = 0; i < 65536u; i++) {
+        float v = HalfToFloat((uint16_t)i);
+        float e;
+        if (!(v > 0.0f)) {
+            v = 0.0f; /* negatives and NaN */
+        }
+        if (v > 1.0f) {
+            v = 1.0f;
+        }
+        e = v <= 0.0031308f ? v * 12.92f : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f;
+        g_HalfToSrgb[i] = (uint8_t)(e * 255.0f + 0.5f);
+    }
+    return TRUE;
+}
+
+/* Section format code of a surface format; FALSE = not supported (frame dropped). */
+static BOOL FormatCode(DXGI_FORMAT f, uint32_t *code, uint32_t *bpp)
+{
+    switch (f) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+        *code = PSIDD_FORMAT_BGRA8;
+        *bpp = 4;
+        return TRUE;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        *code = PSIDD_FORMAT_RGBA16F;
+        *bpp = 8;
+        return TRUE;
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        *code = PSIDD_FORMAT_RGB10A2;
+        *bpp = 4;
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/* Per-frame metadata from IDDCX_METADATA2 (zero / defaults down-level). */
+typedef struct _PSIDD_FRAME_META {
+    uint32_t ColorSpace;
+    uint32_t SdrWhiteLevel;
+    BOOL Hdr10Valid;
+    uint16_t Hdr10[12];
+    uint64_t AcquireQpc;
+    uint64_t PresentQpc;
+    uint32_t FrameNumber;
+} PSIDD_FRAME_META;
+
+static uint64_t Qpc(void)
+{
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (uint64_t)t.QuadPart;
+}
+
+static void WriteFrame(PSIDD_MONITOR *m, ID3D11DeviceContext *ctx, ID3D11Texture2D *staging, UINT w, UINT h, DXGI_FORMAT fmt,
+                       const PSIDD_FRAME_META *meta)
 {
     D3D11_MAPPED_SUBRESOURCE map;
     PSIDD_FRAME_HEADER *hd = m->Header;
     UINT y;
-    uint64_t need = (uint64_t)w * h * 4;
+    uint32_t code = 0, srcBpp = 4, outBpp, outCode;
+    BOOL toSdr;
+    uint64_t need;
 
-    if (hd == NULL || need > hd->FrameCapacity) {
+    if (hd == NULL || !FormatCode(fmt, &code, &srcBpp)) {
+        return;
+    }
+    /* SDR monitors (4-byte sections) never get FP16: convert to BGRA8. A 10-bit surface on
+     * an SDR monitor is dropped (not expected: the OS sends 10-bit only to HDR targets). */
+    toSdr = code == PSIDD_FORMAT_RGBA16F && SectionBpp(m) < 8;
+    if (code == PSIDD_FORMAT_RGB10A2 && SectionBpp(m) < 8) {
+        return;
+    }
+    outBpp = toSdr ? 4u : srcBpp;
+    outCode = toSdr ? PSIDD_FORMAT_BGRA8 : code;
+    need = (uint64_t)w * h * outBpp;
+    if (need > hd->FrameCapacity) {
         return; /* mode larger than announced: drop (the service re-adds with new modes) */
+    }
+    if (toSdr) {
+        InitOnceExecuteOnce(&g_HalfToSrgbOnce, BuildHalfToSrgb, NULL, NULL);
     }
     if (FAILED(ctx->Map(staging, 0, D3D11_MAP_READ, 0, &map))) {
         return;
@@ -217,12 +334,32 @@ static void WriteFrame(PSIDD_MONITOR *m, ID3D11DeviceContext *ctx, ID3D11Texture
     InterlockedIncrement64((volatile LONG64 *)&hd->Seq); /* odd: writing */
     MemoryBarrier();
     for (y = 0; y < h; y++) {
-        memcpy(m->Frame + (size_t)y * w * 4, (const uint8_t *)map.pData + (size_t)y * map.RowPitch, (size_t)w * 4);
+        const uint8_t *src = (const uint8_t *)map.pData + (size_t)y * map.RowPitch;
+        uint8_t *dst = m->Frame + (size_t)y * w * outBpp;
+        if (toSdr) {
+            const uint16_t *px = (const uint16_t *)src;
+            for (UINT x = 0; x < w; x++) {
+                dst[x * 4 + 0] = g_HalfToSrgb[px[x * 4 + 2]]; /* B */
+                dst[x * 4 + 1] = g_HalfToSrgb[px[x * 4 + 1]]; /* G */
+                dst[x * 4 + 2] = g_HalfToSrgb[px[x * 4 + 0]]; /* R */
+                dst[x * 4 + 3] = 255;
+            }
+        } else {
+            memcpy(dst, src, (size_t)w * outBpp);
+        }
     }
     hd->Width = w;
     hd->Height = h;
-    hd->Stride = w * 4;
-    hd->Format = 0;
+    hd->Stride = w * outBpp;
+    hd->Format = outCode;
+    hd->ColorSpace = toSdr ? 0u : meta->ColorSpace;
+    hd->SdrWhiteLevel = meta->SdrWhiteLevel;
+    hd->Hdr10Valid = (!toSdr && meta->Hdr10Valid) ? 1u : 0u;
+    memcpy((void *)hd->Hdr10, meta->Hdr10, sizeof(hd->Hdr10));
+    hd->AcquireQpc = meta->AcquireQpc;
+    hd->PresentQpc = meta->PresentQpc;
+    hd->FrameNumber = meta->FrameNumber;
+    hd->WrittenQpc = Qpc();
     /* IddCx delivers the surface in scan-out orientation (the OS rotates while composing;
      * HYPOTHESIS, unverified on hardware), so the presenter never rotates IDD frames. */
     hd->Rotation = 0;
@@ -297,6 +434,9 @@ static DWORD WINAPI SwapChainThread(LPVOID param)
     UINT lastShapeId = 0;
     BYTE *shape = (BYTE *)HeapAlloc(GetProcessHeap(), 0, PSIDD_CURSOR_CAPACITY);
     HRESULT hr;
+    /* HDR10 metadata of the last frame that sent NEW metadata (UNCHANGED reuses it). */
+    uint16_t lastHdr[12] = { 0 };
+    BOOL lastHdrValid = FALSE;
 
     if (shape == NULL) {
         return 1;
@@ -340,9 +480,62 @@ static DWORD WINAPI SwapChainThread(LPVOID param)
         m->Header->Connected = 1;
     }
     for (;;) {
-        IDARG_OUT_RELEASEANDACQUIREBUFFER buf;
-        RtlZeroMemory(&buf, sizeof(buf));
-        hr = IddCxSwapChainReleaseAndAcquireBuffer(m->SwapChain, &buf);
+        IDXGIResource *surface = NULL;
+        PSIDD_FRAME_META meta;
+        RtlZeroMemory(&meta, sizeof(meta));
+        if (m->Has110) {
+            /* 1.10: colour space, SDR white level and HDR10 metadata per frame (minor 3). */
+            IDARG_IN_RELEASEANDACQUIREBUFFER2 in2;
+            IDARG_OUT_RELEASEANDACQUIREBUFFER2 out2;
+            RtlZeroMemory(&in2, sizeof(in2));
+            RtlZeroMemory(&out2, sizeof(out2));
+            in2.Size = sizeof(in2);
+            in2.AcquireSystemMemoryBuffer = FALSE;
+            hr = IddCxSwapChainReleaseAndAcquireBuffer2(m->SwapChain, &in2, &out2);
+            if (SUCCEEDED(hr) && hr != E_PENDING) {
+                const IDDCX_METADATA2 *md = &out2.MetaData;
+                surface = md->pSurface;
+                meta.AcquireQpc = Qpc();
+                meta.PresentQpc = md->PresentDisplayQPCTime;
+                meta.FrameNumber = md->PresentationFrameNumber;
+                meta.ColorSpace = (uint32_t)md->SurfaceColorSpace;
+                meta.SdrWhiteLevel = md->SdrWhiteLevel;
+                if ((md->ValidFlags & IDDCX_METADATA2_VALID_FLAGS_HDR10METADATA) != 0) {
+                    const IDDCX_HDR10_FRAME_METADATA *fm = &md->Hdr10FrameMetaData;
+                    if (fm->Type == IDDCX_HDR10_FRAME_METADATA_TYPE_NEW) {
+                        const IDDCX_HDR10_METADATA *h = &fm->NewMetaData;
+                        const uint16_t v[12] = { h->RedPrimary[0], h->RedPrimary[1], h->GreenPrimary[0], h->GreenPrimary[1],
+                                                 h->BluePrimary[0], h->BluePrimary[1], h->WhitePoint[0], h->WhitePoint[1],
+                                                 h->MaxMasteringLuminance, h->MinMasteringLuminance, h->MaxContentLightLevel,
+                                                 h->MaxFrameAverageLightLevel };
+                        memcpy(lastHdr, v, sizeof(lastHdr));
+                        lastHdrValid = TRUE;
+                    } else if (fm->Type == IDDCX_HDR10_FRAME_METADATA_TYPE_DEFAULT) {
+                        lastHdrValid = FALSE; /* the monitor default below */
+                    }
+                    /* UNCHANGED: keep the last one */
+                }
+                if (lastHdrValid) {
+                    memcpy(meta.Hdr10, lastHdr, sizeof(meta.Hdr10));
+                    meta.Hdr10Valid = TRUE;
+                } else if (m->DefaultHdrValid) {
+                    /* Written by SetDefaultHdrMetaData under the slot's SwapLock, which the
+                     * assign path holds only around start / stop: a torn read here can at
+                     * worst mix two metadata blocks for one frame. */
+                    memcpy(meta.Hdr10, (const void *)m->DefaultHdr, sizeof(meta.Hdr10));
+                    meta.Hdr10Valid = TRUE;
+                }
+            }
+        } else {
+            IDARG_OUT_RELEASEANDACQUIREBUFFER buf;
+            RtlZeroMemory(&buf, sizeof(buf));
+            hr = IddCxSwapChainReleaseAndAcquireBuffer(m->SwapChain, &buf);
+            if (SUCCEEDED(hr) && hr != E_PENDING) {
+                surface = buf.MetaData.pSurface;
+                meta.AcquireQpc = Qpc();
+                meta.FrameNumber = buf.MetaData.PresentationFrameNumber;
+            }
+        }
         if (hr == E_PENDING) {
             HANDLE waits[3] = { m->NextSurface, m->CursorEvent, m->StopEvent };
             DWORD r = WaitForMultipleObjects(3, waits, FALSE, PSIDD_SWAPCHAIN_WAIT_MS);
@@ -357,9 +550,9 @@ static DWORD WINAPI SwapChainThread(LPVOID param)
         if (FAILED(hr)) {
             break; /* swap chain abandoned: OS assigns a new one */
         }
-        if (buf.MetaData.pSurface != NULL) {
+        if (surface != NULL) {
             ID3D11Texture2D *tex = NULL;
-            if (SUCCEEDED(buf.MetaData.pSurface->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&tex))) {
+            if (SUCCEEDED(surface->QueryInterface(__uuidof(ID3D11Texture2D), (void **)&tex))) {
                 D3D11_TEXTURE2D_DESC d;
                 tex->GetDesc(&d);
                 if (staging == NULL || sdesc.Width != d.Width || sdesc.Height != d.Height || sdesc.Format != d.Format) {
@@ -378,14 +571,14 @@ static DWORD WINAPI SwapChainThread(LPVOID param)
                     sdesc.SampleDesc.Quality = 0;
                     dev->CreateTexture2D(&sdesc, NULL, &staging);
                 }
-                if (staging != NULL && d.Format == DXGI_FORMAT_B8G8R8A8_UNORM) {
+                if (staging != NULL) {
                     ctx->CopyResource(staging, tex);
-                    WriteFrame(m, ctx, staging, d.Width, d.Height);
+                    WriteFrame(m, ctx, staging, d.Width, d.Height, d.Format, &meta);
                 }
                 tex->Release();
             }
             /* The surface reference is ours until the next ReleaseAndAcquireBuffer. */
-            buf.MetaData.pSurface->Release();
+            surface->Release();
         }
         if (FAILED(IddCxSwapChainFinishedProcessingFrame(m->SwapChain))) {
             break; /* swap chain lost: the OS assigns a new one */

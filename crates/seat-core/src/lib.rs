@@ -27,6 +27,7 @@ pub mod consts;
 pub mod device;
 pub mod error;
 pub mod ids;
+pub mod latency;
 pub mod pnp;
 pub mod remote;
 pub mod secret;

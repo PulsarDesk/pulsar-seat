@@ -3,8 +3,9 @@
  * One IddCx driver, two roles (drivers/README.md, merged 2026-11-14 so the driver is
  * signed once):
  *
- * - local:  root devnode Root\PulsarSeatIdd, virtual monitors per local seat, control
- *           interface IDD_INTERFACE_GUID (driver.cpp, swapchain.cpp, seat_idd_ioctl.h);
+ * - local:  root devnode Root\PulsarSeatIdd plus one software devnode PulsarSeatIdd_Adapter
+ *           per further render GPU, virtual monitors per local seat, control interface
+ *           IDD_INTERFACE_GUID (driver.cpp, swapchain.cpp, seat_idd_ioctl.h);
  * - remote: remote-session device PulsarSplit_IndirectDisplay created by a Remote Desktop
  *           protocol stack, one monitor per remote seat session, control interface
  *           {B5FCB55F-1E09-4C81-A58F-0362792CFE99} (remote/, PulsarIddShared.h).
@@ -37,7 +38,7 @@ PSIDD_ROLE PsiddRoleOfHardwareIds(const WCHAR *multiSz, size_t cch)
         size_t len = 0;
         while (i + len < cch && id[len] != 0) len++;
         if (i + len >= cch) break; /* not terminated inside the buffer */
-        if (HwidEquals(id, PSIDD_HWID_LOCAL)) return PsiddRoleLocal;
+        if (HwidEquals(id, PSIDD_HWID_LOCAL) || HwidEquals(id, PSIDD_HWID_LOCAL_ADAPTER)) return PsiddRoleLocal;
         if (HwidEquals(id, PSIDD_HWID_REMOTE)) return PsiddRoleRemote;
         i += len + 1;
     }

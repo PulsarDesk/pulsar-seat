@@ -554,6 +554,17 @@ pub struct AssignmentOptions {
     /// 2026-11-13 (additive).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<u32>,
+    /// Monitors of seats 2..N: offer HDR / SDR wide colour on the seat's virtual monitor
+    /// (IddCx 1.10) and scan it out in HDR10 when the physical monitor supports it
+    /// (spec 40 §6.6). Off = SDR. Seat 1 uses Windows' own HDR setting. Added 2026-11-17
+    /// (additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hdr: bool,
+    /// Monitors of seats 2..N: variable refresh through the presenter: frames are scanned
+    /// out as they arrive (tearing allowed, so a VRR panel adapts), not paced to a fixed
+    /// vblank (spec 40 §6.6). Added 2026-11-17 (additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vrr: bool,
 }
 
 impl AssignmentOptions {

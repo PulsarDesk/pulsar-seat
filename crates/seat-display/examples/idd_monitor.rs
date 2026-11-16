@@ -31,7 +31,7 @@ fn main() {
     let modes = [DisplayMode { width: 1920, height: 1080, refresh_mhz: 60_000, rotation: 0 }];
     let add = |seat: u8, connector: u32| {
         let seat = SeatNumber::new(seat).expect("seat 1..16");
-        let m = IddMonitor { seat, connector, edid: &edid, modes: &modes, render_luid: 0, reader_sid: None, software_cursor: false };
+        let m = IddMonitor { seat, connector, edid: &edid, modes: &modes, render_luid: 0, reader_sid: None, software_cursor: false, hdr: false };
         let r = idd.add_monitor(&m);
         println!("add seat {seat} connector {connector}: {}", r.as_ref().map_or_else(|e| format!("error {} ({})", e.reason, e.message), |_| "ok".into()));
         r.is_ok().then_some((seat, connector))
