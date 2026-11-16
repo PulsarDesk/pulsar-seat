@@ -653,6 +653,6 @@ mod tests {
         assert_eq!(drag_rect(s, ht::LEFT, 1000, 0), Rect { x: 500 - MIN_DRAG_W as i32, y: 100, width: MIN_DRAG_W, height: 300 });
         assert_eq!(drag_rect(s, ht::BOTTOM, 0, -1000), Rect { x: 100, y: 100, width: 400, height: MIN_DRAG_H });
         assert_eq!(drag_rect(s, ht::CLOSE, 5, 5), s);
-        let _ = KioskShellApp { title: String::new(), command: String::new(), args: vec![], autostart: false, monitor: 0 };
+        let _ = KioskShellApp::desktop("", "");
     }
 }

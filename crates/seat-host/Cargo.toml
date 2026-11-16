@@ -49,6 +49,8 @@ windows = { version = "0.62.2", features = [
 # Pipe client (src/pipe.rs) and the session agent's tasks (src/agent.rs): flat Win32 APIs.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
+    # Hotkey guard attributing mode (src/kiosk/guard_win.rs): parent chain of a raw-input device.
+    "Win32_Devices_DeviceAndDriverInstallation",
     # Kiosk shell (src/kiosk/win.rs): GDI painting, DWM cloak check, app job, DPI mode.
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",

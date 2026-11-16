@@ -14,6 +14,10 @@
 //! seat 1's normal desktop, so it is left alone and kiosk console apps keep opening in
 //! the user's chosen terminal (a documented limit). Never the machine default.
 //!
+//! Per-seat kiosk users (2026-11-17): seats 2+ now run as their own user. Pulsar's own
+//! kiosk accounts (`PulsarKiosk<NN>`) are kiosk-only, so their hive gets conhost while the
+//! shell runs (no journal); a seat's configured account (a person's) is left alone.
+//!
 //! Applied before kiosk shells start (seat 1 kiosk sync, every desktops seat start) and on
 //! every tick; restored on the tick after it is no longer wanted (disable, other backend,
 //! config, other console user), at service shutdown and at uninstall. The previous values
@@ -84,8 +88,30 @@ impl Service {
         self.platform.session_user(console).map(|u| u.sid)
     }
 
+    /// Pulsar's own kiosk accounts (per-seat kiosk users, 2026-11-17) are kiosk-only users:
+    /// their console apps always open in conhost, set in their hive while it is loaded (the
+    /// shell's lifetime), nothing journaled or restored (the account goes with the seat).
+    /// A seat's configured account is a person's account and is left alone, like the
+    /// console user with `seat1_desktop = true`.
+    fn sync_kiosk_seat_users(&self) {
+        if self.is_stopping() || self.backends().session.kind() != SessionBackendKind::Desktops {
+            return;
+        }
+        for u in self.backends().session.kiosk_users().into_iter().filter(|u| u.pulsar_account) {
+            match self.platform.console_delegation(&u.user_sid) {
+                Ok((c, t)) if c.as_deref() == Some(CONHOST) && t.as_deref() == Some(CONHOST) => {}
+                Ok(_) => match self.platform.set_console_delegation(&u.user_sid, Some(CONHOST), Some(CONHOST)) {
+                    Ok(()) => log::info(&format!("kiosk console: seat {} user's console apps open in conhost", u.seat)),
+                    Err(e) => log::debug(&format!("kiosk console: seat {}: {e}", u.seat)),
+                },
+                Err(e) => log::debug(&format!("kiosk console: seat {}: {e}", u.seat)),
+            }
+        }
+    }
+
     /// Apply or restore the console user's default-terminal setting (see module doc).
     pub(crate) fn sync_kiosk_console(&self) {
+        self.sync_kiosk_seat_users();
         let path = journal_path(&self.data_dir);
         let want = self.kiosk_console_wanted();
         let saved = load(&path);

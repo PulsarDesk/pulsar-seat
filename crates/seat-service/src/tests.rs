@@ -2601,6 +2601,8 @@ fn seat1_kiosk_config(seat1_desktop: bool) -> Config {
         args: Vec::new(),
         autostart: true,
         monitor: 0,
+        app_id: None,
+        fullscreen: false,
     };
     c.seats[0].local = Some(seat_core::config::LocalSeat {
         kiosk_shell: Some(seat_core::config::KioskShell { apps: vec![app], idle_reset_minutes: 0 }),

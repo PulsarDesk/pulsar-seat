@@ -286,6 +286,30 @@ pub struct AclRequest {
     pub clipboard: bool,
     /// Grant only: the window-station ACE includes `WINSTA_EXITWINDOWS`.
     pub exit_windows: bool,
+    /// Grant only (`--kiosk`): the interactive user's masks of a kiosk seat logon
+    /// (`crate::kiosk_account::KIOSK_WINSTA_ACCESS` / `KIOSK_DESKTOP_ACCESS`).
+    pub kiosk: bool,
+}
+
+impl AclRequest {
+    /// `(window station, desktop)` masks of a grant.
+    pub fn masks(&self) -> (u32, u32) {
+        if self.kiosk {
+            (crate::kiosk_account::KIOSK_WINSTA_ACCESS, crate::kiosk_account::KIOSK_DESKTOP_ACCESS)
+        } else {
+            (winsta_mask(self.clipboard, self.exit_windows), DESKTOP_ACCESS)
+        }
+    }
+}
+
+/// Arguments of a kiosk seat logon's grant / revoke (`--kiosk` on a grant); `None` for a
+/// malformed SID.
+pub fn kiosk_desktop_acl_args(op: AclOp, sid: &str) -> Option<Vec<String>> {
+    let mut v = desktop_acl_args(op, sid, false, false)?;
+    if op == AclOp::Grant {
+        v.push(crate::kiosk_account::KIOSK_ACL_FLAG.into());
+    }
+    Some(v)
 }
 
 /// Arguments of the helper; `None` for a malformed SID. `clipboard` is ignored for a revoke
@@ -316,16 +340,17 @@ pub fn parse_desktop_acl_args(args: &[String]) -> Option<Result<AclRequest, Stri
         };
         // Optional flags after the SID, in this order: --clipboard, --exit-windows.
         let flags: Vec<&str> = rest.iter().skip(3).map(String::as_str).collect();
-        let (clipboard, exit_windows) = match flags.as_slice() {
-            [] => (false, false),
+        let (clipboard, exit_windows, kiosk) = match flags.as_slice() {
+            [] => (false, false, false),
             _ if op != AclOp::Grant => return Err("unexpected argument after --sid".to_string()),
-            [CLIPBOARD_FLAG] => (true, false),
-            [EXIT_WINDOWS_FLAG] => (false, true),
-            [CLIPBOARD_FLAG, EXIT_WINDOWS_FLAG] => (true, true),
+            [CLIPBOARD_FLAG] => (true, false, false),
+            [EXIT_WINDOWS_FLAG] => (false, true, false),
+            [CLIPBOARD_FLAG, EXIT_WINDOWS_FLAG] => (true, true, false),
+            [crate::kiosk_account::KIOSK_ACL_FLAG] => (false, false, true),
             _ => return Err("unexpected argument after --sid".to_string()),
         };
         match (rest.get(1).map(String::as_str), rest.get(2)) {
-            (Some("--sid"), Some(sid)) if is_sid_string(sid) => Ok(AclRequest { op, sid: sid.clone(), clipboard, exit_windows }),
+            (Some("--sid"), Some(sid)) if is_sid_string(sid) => Ok(AclRequest { op, sid: sid.clone(), clipboard, exit_windows, kiosk }),
             _ => Err("expected --sid S-1-…".to_string()),
         }
     })();
@@ -656,7 +681,17 @@ mod tests {
 
     #[test]
     fn helper_args_round_trip() {
-        let req = |clipboard| AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard, exit_windows: false };
+        let req = |clipboard| AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard, exit_windows: false, kiosk: false };
+        // A kiosk seat logon's grant: --kiosk alone, full interactive-user masks.
+        let mut k = a(&["host.exe"]);
+        k.extend(kiosk_desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42").unwrap());
+        let parsed = parse_desktop_acl_args(&k).unwrap().unwrap();
+        assert!(parsed.kiosk && !parsed.clipboard);
+        assert_eq!(parsed.masks(), (crate::kiosk_account::KIOSK_WINSTA_ACCESS, crate::kiosk_account::KIOSK_DESKTOP_ACCESS));
+        assert_eq!(req(false).masks(), (WINSTA_ACCESS, DESKTOP_ACCESS));
+        assert_eq!(kiosk_desktop_acl_args(AclOp::Revoke, "S-1-5-5-0-42").unwrap().len(), 4);
+        assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "grant", "--sid", "S-1-5-5-0-1", "--kiosk", "--clipboard"])).unwrap().is_err());
+        assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "revoke", "--sid", "S-1-5-5-0-1", "--kiosk"])).unwrap().is_err());
         for clip in [false, true] {
             let mut full = a(&["host.exe"]);
             full.extend(desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42", clip, false).unwrap());
@@ -670,7 +705,7 @@ mod tests {
             full.extend(desktop_acl_args(AclOp::Grant, "S-1-5-5-0-42", clip, exit).unwrap());
             assert_eq!(
                 parse_desktop_acl_args(&full),
-                Some(Ok(AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard: clip, exit_windows: exit }))
+                Some(Ok(AclRequest { op: AclOp::Grant, sid: "S-1-5-5-0-42".into(), clipboard: clip, exit_windows: exit, kiosk: false }))
             );
         }
         assert!(parse_desktop_acl_args(&a(&["x", "--desktop-acl", "grant", "--sid", "S-1-5-5-0-1", "--exit-windows", "--clipboard"])).unwrap().is_err());

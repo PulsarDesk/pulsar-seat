@@ -105,11 +105,47 @@ unsafe extern "system" fn get_raw_input_buffer(data: *mut c_void, size: *mut u32
     }
 }
 
+static RAW_REGISTER: Hook = Hook::new();
+type RegisterFn = unsafe extern "system" fn(*const windows_sys::Win32::UI::Input::RAWINPUTDEVICE, u32, u32) -> windows_sys::core::BOOL;
+
+/// Kiosk role only (parity 2026-11-17): registrations get `RIDEV_INPUTSINK`
+/// (`seat_shim_core::kiosk_cursor::kiosk_raw_flags`), so a game of a kiosk seat, which is
+/// never the foreground window, still gets its seat's raw input. Seat-1 apps are unchanged.
+unsafe extern "system" fn register_raw_input_devices(
+    devs: *const windows_sys::Win32::UI::Input::RAWINPUTDEVICE,
+    n: u32,
+    size: u32,
+) -> windows_sys::core::BOOL {
+    use windows_sys::Win32::UI::Input::RAWINPUTDEVICE;
+    // SAFETY: trampoline has RegisterRawInputDevices's signature.
+    let f: RegisterFn = unsafe { std::mem::transmute(RAW_REGISTER.trampoline()) };
+    let kiosk = super::live().is_some_and(|(role, p, _, _)| p.raw_input_data && matches!(role, seat_shim_core::decide::Role::Kiosk { .. }));
+    if !kiosk || devs.is_null() || n == 0 || n > 64 || size as usize != size_of::<RAWINPUTDEVICE>() {
+        // SAFETY: the caller's arguments, unchanged.
+        return unsafe { f(devs, n, size) };
+    }
+    // SAFETY: the caller passed `n` records of this size.
+    let mut copy: Vec<RAWINPUTDEVICE> = unsafe { std::slice::from_raw_parts(devs, n as usize) }.to_vec();
+    for d in copy.iter_mut() {
+        d.dwFlags = seat_shim_core::kiosk_cursor::kiosk_raw_flags(d.dwFlags, !d.hwndTarget.is_null());
+    }
+    // SAFETY: our copy, same count and size.
+    let r = unsafe { f(copy.as_ptr(), n, size) };
+    if r == 0 {
+        // Refused with the added flag (e.g. a window of another thread): the original call.
+        // SAFETY: the caller's arguments, unchanged.
+        return unsafe { f(devs, n, size) };
+    }
+    r
+}
+
 /// # Safety
 /// Init path only.
 pub unsafe fn install() -> bool {
     // SAFETY: detours match the targets' signatures.
     unsafe {
+        // Best effort: the background registration is not needed for the data filter.
+        let _ = hook(&RAW_REGISTER, "user32.dll", "RegisterRawInputDevices", register_raw_input_devices as *const ());
         let data = hook(&RAW_DATA, "user32.dll", "GetRawInputData", get_raw_input_data as *const ());
         #[cfg(target_pointer_width = "64")]
         let data = data & hook(&RAW_BUFFER, "user32.dll", "GetRawInputBuffer", get_raw_input_buffer as *const ());

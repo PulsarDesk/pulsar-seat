@@ -121,7 +121,7 @@ fn main() {
     if let Some(parsed) = kiosk::guard::parse_guard_args(&args) {
         let code = match parsed {
             #[cfg(windows)]
-            Ok(seat) => kiosk::guard_win::run(seat),
+            Ok(seat) => kiosk::guard_win::run(seat, kiosk::guard::parse_guard_mode(&args)),
             #[cfg(not(windows))]
             Ok(_) => 1,
             Err(e) => {

@@ -162,7 +162,11 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
         secrets,
         run_store: RunStore::new(&opts.data_dir.join(RUN_DIR)),
         platform,
-        factory: Arc::new(wiring::PackageFactory::system(opts.data_dir.clone())),
+        factory: Arc::new(wiring::PackageFactory::system(opts.data_dir.clone()).with_kiosk_logons(if opts.console {
+            None
+        } else {
+            Some(Arc::new(crate::win::kiosk_logon::WinKioskLogons::new(&opts.data_dir)) as Arc<dyn seat_session::kiosk_account::SeatLogons>)
+        })),
         clock: Arc::new(SystemClock),
         spawner: Arc::new(ThreadSpawner),
         data_dir: opts.data_dir.clone(),
@@ -206,6 +210,11 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
                 }
             }
             None => platform_for_hosts.set_seat_provisioner(None),
+        }
+        // Pulsar's kiosk accounts of seats that are no longer kiosk seats go, with their
+        // profiles (2026-11-17).
+        for e in crate::win::host_account::prune_kiosk(&service.kiosk_account_seats()) {
+            log::warn(&format!("kiosk account cleanup: {e}"));
         }
         match crate::win::host_account::ensure_shared(group.as_deref()) {
             Ok(a) => {

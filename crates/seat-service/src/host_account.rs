@@ -179,6 +179,38 @@ pub fn ensure_seat(ops: &dyn AccountOps, seat: SeatNumber, group_sid: &str) -> R
 /// Create or maintain the host account `name` whose password lives in the LSA private data
 /// `secret`; with `group_sid` also a member of the host group (see module doc).
 pub fn ensure_account(ops: &dyn AccountOps, name: &str, secret: &str, group_sid: Option<&str>) -> Result<HostAccount, String> {
+    ensure_account_as(ops, name, secret, group_sid, &HOST_PROFILE)
+}
+
+/// What kind of account [`ensure_account_as`] maintains.
+#[derive(Debug, Clone, Copy)]
+pub struct AccountProfile {
+    pub full_name: &'static str,
+    pub comment: &'static str,
+    pub grant: &'static [&'static str],
+    pub deny: &'static [&'static str],
+}
+
+/// The seat hosts' accounts (batch logon only).
+pub const HOST_PROFILE: AccountProfile = AccountProfile { full_name: ACCOUNT_FULL_NAME, comment: ACCOUNT_COMMENT, grant: GRANT_RIGHTS, deny: DENY_RIGHTS };
+
+/// The kiosk seats' accounts (`seat_session::kiosk_account`: interactive logon only).
+pub const KIOSK_PROFILE: AccountProfile = AccountProfile {
+    full_name: seat_session::kiosk_account::KIOSK_FULL_NAME,
+    comment: seat_session::kiosk_account::KIOSK_COMMENT,
+    grant: seat_session::kiosk_account::KIOSK_GRANT_RIGHTS,
+    deny: seat_session::kiosk_account::KIOSK_DENY_RIGHTS,
+};
+
+/// The Pulsar kiosk account of `seat` (`PulsarKiosk<NN>`, created or maintained, password
+/// rotated, `Users` only, no host group). The password goes to its own LSA secret.
+pub fn ensure_kiosk(ops: &dyn AccountOps, seat: SeatNumber) -> Result<HostAccount, String> {
+    use seat_session::kiosk_account::{kiosk_account_name, kiosk_password_secret};
+    ensure_account_as(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat), None, &KIOSK_PROFILE)
+}
+
+/// [`ensure_account`] for any [`AccountProfile`].
+pub fn ensure_account_as(ops: &dyn AccountOps, name: &str, secret: &str, group_sid: Option<&str>, profile: &AccountProfile) -> Result<HostAccount, String> {
     let bytes = ops.random32()?;
     let password = Secret::new(password_from_random(&bytes).to_string());
     drop(bytes);
@@ -191,7 +223,7 @@ pub fn ensure_account(ops: &dyn AccountOps, name: &str, secret: &str, group_sid:
             (sid, false)
         }
         Lookup::Missing => {
-            ops.create(name, &password, ACCOUNT_FULL_NAME, ACCOUNT_COMMENT)?;
+            ops.create(name, &password, profile.full_name, profile.comment)?;
             match ops.lookup(name) {
                 Ok(Lookup::User(sid)) => (sid, true),
                 other => {
@@ -217,10 +249,11 @@ pub fn ensure_account(ops: &dyn AccountOps, name: &str, secret: &str, group_sid:
             // Without it the host could not open the control pipe (one ACE for the group).
             ops.add_to_group(GROUP_NAME, &sid).map_err(|e| format!("{name}: not added to {GROUP_NAME}: {e}"))?;
         }
-        ops.add_rights(&sid, GRANT_RIGHTS)?;
-        ops.add_rights(&sid, DENY_RIGHTS)?;
+        ops.add_rights(&sid, profile.grant)?;
+        ops.add_rights(&sid, profile.deny)?;
         if let Err(e) = ops.hide_from_logon(name, true) {
-            // Cosmetic only: the account cannot log on interactively anyway.
+            // Cosmetic only: a host account cannot log on interactively anyway, and a
+            // kiosk account's password is random (nobody can type it).
             crate::log::warn(&format!("{name}: not hidden from the logon screen: {e}"));
         }
         if !created {
@@ -284,7 +317,32 @@ pub fn remove(ops: &dyn AccountOps) -> Vec<String> {
 /// account, logon-screen entry, secret. A name Pulsar did not create is left alone.
 /// Returns the errors (Turkish).
 pub fn remove_seat_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String> {
-    let name = seat_account_name(seat);
+    remove_named(ops, &seat_account_name(seat), &seat_password_secret(seat))
+}
+
+/// Remove `seat`'s Pulsar kiosk account (seat no longer a kiosk seat, uninstall), with its
+/// profile. Returns the errors (Turkish).
+pub fn remove_kiosk_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String> {
+    use seat_session::kiosk_account::{kiosk_account_name, kiosk_password_secret};
+    remove_named(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat))
+}
+
+/// Service start: remove the kiosk accounts of seats not in `keep`. Returns the errors.
+pub fn prune_kiosk(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
+    use seat_session::kiosk_account::{kiosk_account_name, kiosk_account_seats};
+    let mut errors = Vec::new();
+    for seat in kiosk_account_seats().filter(|s| !keep.contains(s)) {
+        match ops.lookup(&kiosk_account_name(seat)) {
+            Ok(Lookup::User(_)) => errors.extend(remove_kiosk_account(ops, seat)),
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{}: {e}", kiosk_account_name(seat))),
+        }
+    }
+    errors
+}
+
+fn remove_named(ops: &dyn AccountOps, name: &str, secret: &str) -> Vec<String> {
+    let name = name.to_string();
     let mut errors = Vec::new();
     match ops.lookup(&name) {
         Ok(Lookup::User(sid)) => {
@@ -311,7 +369,7 @@ pub fn remove_seat_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String
             return errors;
         }
     }
-    if let Err(e) = ops.store_password(&seat_password_secret(seat), None) {
+    if let Err(e) = ops.store_password(secret, None) {
         errors.push(format!("{name} parolası (LSA) silinemedi: {e}"));
     }
     errors
@@ -341,6 +399,7 @@ pub fn remove_all(ops: &dyn AccountOps) -> Vec<String> {
             errors.extend(remove_seat_account(ops, seat));
         }
     }
+    errors.extend(prune_kiosk(ops, &[]));
     match ops.group_lookup(GROUP_NAME) {
         Ok(GroupLookup::Ours(_)) => {
             if let Err(e) = ops.delete_group(GROUP_NAME) {
@@ -399,7 +458,7 @@ mod tests {
             Ok(if l.len() > 1 { l.remove(0) } else { l[0].clone() })
         }
         fn create(&self, n: &str, p: &Secret, full: &str, _c: &str) -> Result<(), String> {
-            assert!(seat_session::host_account::is_host_account_name(n), "{n}");
+            assert!(seat_session::host_account::is_host_account_name(n) || seat_session::kiosk_account::is_kiosk_account_name(n), "{n}");
             assert!(!full.is_empty());
             self.passwords.lock().unwrap().push(p.expose().to_string());
             self.call("create")
@@ -536,6 +595,39 @@ mod tests {
         let errs = remove_all(&m);
         assert!(!m.calls().contains(&"delete_group".to_string()));
         assert_eq!(errs.len(), 1);
+        // Kiosk accounts go at uninstall too, profile included.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Missing]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarKiosk03".into(), Lookup::User(SID.into()));
+        assert!(remove_all(&m).is_empty());
+        assert!(m.calls().contains(&"delete_profile".to_string()));
+        assert_eq!(*m.secrets.lock().unwrap().last().unwrap(), "-L$PulsarSeat.KioskAccount.03");
+    }
+
+    #[test]
+    fn kiosk_accounts_are_interactive_only_and_pruned() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing, Lookup::User(SID.into())]), groups: vec![USERS_SID.into()], ..Default::default() };
+        let a = ensure_kiosk(&m, s(4)).unwrap();
+        assert_eq!(a.name, "PulsarKiosk04");
+        let calls = m.calls();
+        assert!(calls.contains(&"rights:SeInteractiveLogonRight".to_string()), "{calls:?}");
+        assert!(calls.iter().any(|c| c.starts_with("rights:SeDenyRemoteInteractiveLogonRight") && c.contains("SeDenyBatchLogonRight")), "{calls:?}");
+        assert!(!calls.contains(&"add_to_group".to_string()), "never in the host group");
+        assert!(calls.contains(&"hide".to_string()));
+        assert_eq!(*m.secrets.lock().unwrap(), ["+L$PulsarSeat.KioskAccount.04"]);
+        // An administrator or a foreign user of that name is refused untouched.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), groups: vec![ADMINISTRATORS_SID.into()], ..Default::default() };
+        assert!(ensure_kiosk(&m, s(4)).is_err());
+        assert!(!m.calls().contains(&"set_password".to_string()));
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Foreign]), ..Default::default() };
+        assert!(ensure_kiosk(&m, s(4)).is_err());
+        // Prune: only unkept seats, only ours.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarKiosk02".into(), Lookup::User(SID.into()));
+        m.named.lock().unwrap().insert("PulsarKiosk06".into(), Lookup::User("S-1-5-21-1-2-3-1066".into()));
+        m.named.lock().unwrap().insert("PulsarKiosk07".into(), Lookup::Foreign);
+        assert!(prune_kiosk(&m, &[s(2)]).is_empty());
+        assert_eq!(m.calls().iter().filter(|c| *c == "delete").count(), 1);
+        assert_eq!(*m.secrets.lock().unwrap(), ["-L$PulsarSeat.KioskAccount.06"]);
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! | --- | --- |
 //! | [`seatmap`] | authoritative session -> seat map (`HKLM\SOFTWARE\PulsarSplit\Runtime\Seats`) |
 //! | [`kiosk`] | local kiosk seat -> device map (`HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats`), round 4 |
+//! | [`kiosk_cursor`] | a kiosk seat's own cursor position for its apps (named section), parity 2026-11-17 |
 //! | [`decide`] | role of a process, device classification, HID access, focus filter, masking, HKCU redirect, hook plan |
 //! | [`steam`] | per-seat Steam IPC name: launch arguments, environment, command-line patch |
 //! | [`guard`] | crash guard (fault counter per target) |
@@ -31,6 +32,7 @@ pub mod health;
 pub mod install;
 pub mod journal;
 pub mod kiosk;
+pub mod kiosk_cursor;
 pub mod launch;
 pub mod regval;
 pub mod sdb;

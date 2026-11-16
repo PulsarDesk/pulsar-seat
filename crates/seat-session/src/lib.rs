@@ -38,6 +38,7 @@ pub mod error;
 pub mod host_account;
 pub mod journal;
 pub mod kiosk;
+pub mod kiosk_account;
 pub mod launch;
 pub mod listener;
 pub mod loopback_listener;

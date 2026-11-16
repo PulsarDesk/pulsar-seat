@@ -882,8 +882,17 @@ impl Shell {
     fn on_tick(&mut self) {
         self.tick += 1;
         let now = self.now();
+        let filter_on = self.filter == Some(true);
         if let Some(g) = self.guard.as_mut() {
-            g.tick(now);
+            // With the input filter the kiosk devices never reach the console session, so
+            // the attributing helper would only delay seat 1's hotkeys: not run then.
+            if g.mode == seat_input::hotkey_guard::GuardMode::Attribute && filter_on {
+                if g.is_up() {
+                    g.stop();
+                }
+            } else {
+                g.tick(now);
+            }
         }
         if self.policy == FocusPolicy::SinkLeader {
             self.keep_focus();
@@ -1396,14 +1405,15 @@ pub fn run(args: ShellArgs) -> i32 {
 /// job, so the service's stop ends it too; the pipe closing ends it as well.
 struct GuardHelper {
     seat: SeatNumber,
+    mode: seat_input::hotkey_guard::GuardMode,
     child: Option<std::process::Child>,
     stdin: Option<std::process::ChildStdin>,
     sup: Supervisor,
 }
 
 impl GuardHelper {
-    fn new(seat: SeatNumber) -> Self {
-        Self { seat, child: None, stdin: None, sup: Supervisor::default() }
+    fn new(seat: SeatNumber, mode: seat_input::hotkey_guard::GuardMode) -> Self {
+        Self { seat, mode, child: None, stdin: None, sup: Supervisor::default() }
     }
 
     fn is_up(&self) -> bool {
@@ -1447,7 +1457,7 @@ impl GuardHelper {
         let exe = std::env::current_exe();
         let spawned = exe.and_then(|exe| {
             std::process::Command::new(exe)
-                .args(guard_args(self.seat))
+                .args(guard_args(self.seat, self.mode))
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::inherit())
@@ -1548,8 +1558,9 @@ fn run_shell(args: ShellArgs) -> i32 {
     let seat = args.seat;
     // SAFETY: our thread's layout.
     let hkl = unsafe { GetKeyboardLayout(0) };
-    // Hotkey guard helper (round 4): only when seat 1 is not the console user's desktop.
-    let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop).then(|| GuardHelper::new(args.seat));
+    // Hotkey guard helper (round 4; since 2026-11-17 also with a seat-1 desktop, attributing).
+    let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop)
+        .then(|| GuardHelper::new(args.seat, seat_input::hotkey_guard::mode(args.plan.seat1_desktop)));
     let shell = Shell {
         router: KioskRouter::new(SeatArea::new(monitors.clone())),
         args,

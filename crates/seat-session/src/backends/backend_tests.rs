@@ -583,7 +583,7 @@ fn desktops_kiosk_shell_seats() {
     let b = create_backend_with(SessionBackendKind::Desktops, w.deps(), opts);
     let mut settings = GlobalSettings::default();
     let shell = KioskShell {
-        apps: vec![KioskShellApp { title: "Not".into(), command: r"C:\Windows\notepad.exe".into(), args: vec![], autostart: true, monitor: 0 }],
+        apps: vec![KioskShellApp { autostart: true, ..KioskShellApp::desktop("Not", r"C:\Windows\notepad.exe") }],
         idle_reset_minutes: 5,
     };
     let mut s2 = seat_cfg(2, None);
@@ -620,6 +620,70 @@ fn desktops_kiosk_shell_seats() {
     assert!(!b.probe().unwrap().notes.contains(&"kiosk_audio_shared".to_string()));
 }
 
+/// Per-seat users (2026-11-17): seats 2+ run as their own user, seat 1 and `shared` as the
+/// console user; a failed logon falls back; the logon lives as long as the shell.
+#[test]
+fn desktops_kiosk_shells_run_as_their_seat_users() {
+    use crate::fake::FakeSeatLogons;
+    use crate::kiosk_account::KioskIdentity;
+    use seat_core::config::{KioskAccountMode, KioskShell, KioskShellApp, SeatAccount};
+    use std::sync::atomic::Ordering;
+    let w = FakeWorld::client();
+    let logons = Arc::new(FakeSeatLogons::default());
+    let opts = DesktopsOptions { install_dir: r"C:\P".into(), logons: Some(logons.clone()), ..DesktopsOptions::default() };
+    let b = create_backend_with(SessionBackendKind::Desktops, w.deps(), opts);
+    let shell = KioskShell { apps: vec![KioskShellApp::desktop("Not", r"C:\Windows\notepad.exe")], idle_reset_minutes: 0 };
+    let mut settings = GlobalSettings::default();
+    settings.kiosk.seat1_desktop = false;
+    let mut s2 = seat_cfg(2, None);
+    s2.local_mut().unwrap().kiosk_shell = Some(shell.clone());
+    let mut s3 = seat_cfg(3, None);
+    s3.local_mut().unwrap().kiosk_shell = Some(shell.clone());
+    s3.account = SeatAccount::Local { user: "ayse".into() };
+    logons.passwords.lock().unwrap().push(seat(3));
+    let mut s1 = seat_cfg(1, None);
+    s1.local_mut().unwrap().kiosk_shell = Some(shell);
+    for s in [&s1, &s2, &s3] {
+        b.start(&req(s, &settings, None)).unwrap();
+    }
+    let made = logons.made.lock().unwrap().clone();
+    assert_eq!(made, vec![(seat(2), 1, KioskIdentity::Auto { seat: seat(2) }), (seat(3), 1, KioskIdentity::Configured { domain: ".".into(), user: "ayse".into() })]);
+    let pids = w.launcher.alive_pids();
+    assert_eq!(pids.len(), 3);
+    // Seat 1 kept the console user's token; seats 2 and 3 got theirs.
+    assert_eq!(*w.launcher.tokens.lock().unwrap(), vec![(pids[1], 7002), (pids[2], 7003)]);
+    assert_eq!(*logons.bound.lock().unwrap(), vec![(seat(2), pids[1]), (seat(3), pids[2])]);
+    use seat_core::backend::session::KioskUser;
+    assert_eq!(
+        b.kiosk_users(),
+        vec![
+            KioskUser { seat: seat(2), user_sid: "S-1-5-21-9-9-9-1002".into(), pulsar_account: true },
+            KioskUser { seat: seat(3), user_sid: "S-1-5-21-9-9-9-1003".into(), pulsar_account: false },
+        ]
+    );
+    assert!(b.probe().unwrap().notes.contains(&"kiosk_per_seat_accounts".to_string()));
+    assert!(!b.probe().unwrap().notes.contains(&"no_per_user_isolation".to_string()));
+    // Stop: the logon (profile, grant) goes with the shell.
+    b.log_off(seat(2), 1).unwrap();
+    assert_eq!(logons.live.load(Ordering::SeqCst), 1);
+    // The shell died: the restart replaces the old logon, never two at once.
+    w.launcher.exit(pids[2]);
+    b.start(&req(&s3, &settings, None)).unwrap();
+    assert_eq!(logons.live.load(Ordering::SeqCst), 1);
+    // A refused logon: the console user, and the probe says so.
+    logons.fail.store(true, Ordering::SeqCst);
+    b.start(&req(&s2, &settings, None)).unwrap();
+    assert_eq!(w.launcher.tokens.lock().unwrap().len(), 3, "the fallback launch has no seat token");
+    assert!(b.probe().unwrap().notes.contains(&"kiosk_account_fallback".to_string()));
+    assert_eq!(b.kiosk_users().len(), 1);
+    // `shared`: no logon at all.
+    logons.fail.store(false, Ordering::SeqCst);
+    b.log_off(seat(2), 1).unwrap();
+    settings.kiosk.accounts = KioskAccountMode::Shared;
+    b.start(&req(&s2, &settings, None)).unwrap();
+    assert_eq!(logons.made.lock().unwrap().len(), 3);
+}
+
 /// Two concurrent starts of the same kiosk shell seat launch one shell (VM 2026-11-15:
 /// disable + enable started two seat-1 shells).
 #[test]
@@ -633,7 +697,7 @@ fn desktops_concurrent_starts_launch_one_shell() {
     settings.kiosk.seat1_desktop = false;
     let mut s1 = seat_cfg(1, None);
     s1.local_mut().unwrap().kiosk_shell = Some(KioskShell {
-        apps: vec![KioskShellApp { title: "Not".into(), command: r"C:\Windows\notepad.exe".into(), args: vec![], autostart: true, monitor: 0 }],
+        apps: vec![KioskShellApp { autostart: true, ..KioskShellApp::desktop("Not", r"C:\Windows\notepad.exe") }],
         idle_reset_minutes: 0,
     });
     std::thread::scope(|sc| {
@@ -667,7 +731,7 @@ fn desktops_kiosk_shell_stop_watch_and_release() {
         }
     }
     let shell = KioskShell {
-        apps: vec![KioskShellApp { title: "Not".into(), command: r"C:\Windows\notepad.exe".into(), args: vec![], autostart: false, monitor: 0 }],
+        apps: vec![KioskShellApp::desktop("Not", r"C:\Windows\notepad.exe")],
         idle_reset_minutes: 0,
     };
     let mut settings = GlobalSettings::default();

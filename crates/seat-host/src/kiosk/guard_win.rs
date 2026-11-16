@@ -91,7 +91,8 @@ unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: L
         // SAFETY: plain state queries.
         let (ctrl, shift) = unsafe { (GetAsyncKeyState(VK_CONTROL as i32) < 0, GetAsyncKeyState(VK_SHIFT as i32) < 0) };
         let n = HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let block = blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift });
+        let guarded = blocks(k.vkCode, Mods { alt: k.flags & LLKHF_ALTDOWN != 0, ctrl, shift });
+        let block = if ATTRIBUTE.load(std::sync::atomic::Ordering::Relaxed) { attribute_key(k, guarded) } else { guarded };
         // Detail only for the guarded / modifier keys (never letters, digits or other
         // keys that could be typed text, e.g. a password into a kiosk app).
         let system_key = matches!(k.vkCode, 0x09 | 0x10..=0x12 | 0x1B | 0x5B | 0x5C | 0xA0..=0xA5);
@@ -109,6 +110,283 @@ unsafe extern "system" fn hotkey_guard_proc(code: i32, wparam: WPARAM, lparam: L
     }
     // SAFETY: pass on to the next hook.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
+// ------------------------------------------------------------------ attributing mode
+//
+// `seat1_desktop = true` (parity 2026-11-17): the console desktop is seat 1's, so only the
+// kiosk keyboards' hotkeys (and, when raw input arrives before the hook, every key and
+// mouse button of a kiosk device) may be kept from it. A raw-input thread of this helper
+// (message-only window, `RIDEV_INPUTSINK`, keyboards and mice) tells devices apart with
+// the kiosk map; `seat_input::hotkey_guard::Attributor` matches its records with the hook
+// calls; held-back seat-1 keys are injected again with `REPLAY_TAG`. HYPOTHESIS: the
+// order of raw input and low-level hooks, the timing, and whether a helper that owns a
+// raw-input registration still gets its low-level hooks called (it never owns the
+// foreground in this mode) are untested on hardware.
+
+/// The helper attributes (`--attribute`).
+static ATTRIBUTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ATTR: std::sync::Mutex<Option<seat_input::hotkey_guard::Attributor>> = std::sync::Mutex::new(None);
+static MOUSE_ATTR: std::sync::Mutex<Option<seat_input::hotkey_guard::MouseAttributor>> = std::sync::Mutex::new(None);
+/// Keys and clicks of kiosk devices kept from seat 1, and seat-1 keys re-injected.
+static KIOSK_BLOCKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static REPLAYED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    guard_clock_us() / 1000
+}
+
+/// Keyboard hook decision in the attributing mode; `true` = swallow.
+fn attribute_key(k: &windows_sys::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT, guarded: bool) -> bool {
+    use seat_input::hotkey_guard::{HookKey, HookVerdict, REPLAY_TAG};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP};
+    // Our own replays and any other injected key (no device to attribute) pass.
+    if k.flags & LLKHF_INJECTED != 0 || k.dwExtraInfo == REPLAY_TAG {
+        return false;
+    }
+    let key = HookKey { vk: k.vkCode, sc: k.scanCode as u16, e0: k.flags & LLKHF_EXTENDED != 0, up: k.flags & LLKHF_UP != 0, at_ms: now_ms() };
+    // Never wait for the lock in the hook: a busy attributor passes the key on.
+    let v = match ATTR.try_lock() {
+        Ok(mut g) => g.get_or_insert_with(Default::default).on_hook(key, guarded),
+        Err(_) => HookVerdict::Pass,
+    };
+    v == HookVerdict::Swallow
+}
+
+/// `WH_MOUSE_LL` procedure of the attributing mode: clicks and wheel of kiosk mice.
+unsafe extern "system" fn mouse_guard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    use seat_input::hotkey_guard::{HookVerdict, mouse_flag};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CallNextHookEx, HC_ACTION, LLMHF_INJECTED, MSLLHOOKSTRUCT};
+    if code == HC_ACTION as i32 && lparam != 0 {
+        // SAFETY: for HC_ACTION, lparam points to an MSLLHOOKSTRUCT.
+        let m = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        let flag = mouse_flag(wparam as u32, (m.mouseData >> 16) as u16);
+        if flag != 0 && m.flags & LLMHF_INJECTED == 0 {
+            let v = match MOUSE_ATTR.try_lock() {
+                Ok(mut g) => g.get_or_insert_with(Default::default).on_hook(flag, now_ms()),
+                Err(_) => HookVerdict::Pass,
+            };
+            if v == HookVerdict::Swallow {
+                KIOSK_BLOCKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return 1;
+            }
+        }
+    }
+    // SAFETY: pass on to the next hook.
+    unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
+}
+
+/// Injects held-back seat-1 keys again (tagged, so the hook passes them).
+fn replay(keys: &[seat_input::hotkey_guard::Resolution]) {
+    use seat_input::hotkey_guard::{REPLAY_TAG, Resolution};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, SendInput,
+    };
+    let inputs: Vec<INPUT> = keys
+        .iter()
+        .filter_map(|r| match r {
+            Resolution::Replay(k) => Some(*k),
+            Resolution::Drop(_) => {
+                KIOSK_BLOCKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+        })
+        .map(|k| {
+            let flags = (if k.up { KEYEVENTF_KEYUP } else { 0 }) | (if k.e0 { KEYEVENTF_EXTENDEDKEY } else { 0 });
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: k.vk as u16, wScan: k.sc, dwFlags: flags, time: 0, dwExtraInfo: REPLAY_TAG } },
+            }
+        })
+        .collect();
+    if inputs.is_empty() {
+        return;
+    }
+    // SAFETY: valid INPUT records of the stated size.
+    let n = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    REPLAYED.fetch_add(u64::from(n), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Device handle -> "a kiosk seat's device", from the kiosk map (`seat_shim_core::kiosk`).
+struct Devices {
+    map: Vec<seat_shim_core::KioskSeatEntry>,
+    cache: std::collections::HashMap<usize, bool>,
+}
+
+impl Devices {
+    fn reload(&mut self) {
+        use seat_shim_core::KioskMapReader;
+        let map = seat_shim_core::win::RegKioskMap.read_all().unwrap_or_default();
+        if map != self.map {
+            self.map = map;
+            self.cache.clear();
+        }
+    }
+
+    fn is_kiosk(&mut self, h: usize) -> bool {
+        if h == 0 {
+            return false;
+        }
+        if let Some(k) = self.cache.get(&h) {
+            return *k;
+        }
+        let chain = device_chain(h);
+        let k = seat_shim_core::kiosk::kiosk_owner(chain.iter().map(String::as_str), &self.map).is_some();
+        if self.cache.len() > 256 {
+            self.cache.clear();
+        }
+        self.cache.insert(h, k);
+        k
+    }
+}
+
+/// Instance ids of a raw-input device and its parents (child first).
+fn device_chain(h: usize) -> Vec<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        CM_Get_Device_IDW, CM_Get_Parent, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CR_SUCCESS,
+    };
+    use windows_sys::Win32::UI::Input::{GetRawInputDeviceInfoW, RIDI_DEVICENAME};
+    let mut len = 0u32;
+    // SAFETY: size query.
+    unsafe { GetRawInputDeviceInfoW(h as _, RIDI_DEVICENAME, std::ptr::null_mut(), &mut len) };
+    if len == 0 || len > 1024 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u16; len as usize];
+    // SAFETY: buffer of `len` characters.
+    if unsafe { GetRawInputDeviceInfoW(h as _, RIDI_DEVICENAME, buf.as_mut_ptr().cast(), &mut len) } == u32::MAX {
+        return Vec::new();
+    }
+    let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+    let path = String::from_utf16_lossy(&buf[..end]);
+    let Some(id) = seat_shim_core::decide::interface_path_to_instance_id(&path) else { return Vec::new() };
+    let mut chain = vec![id.clone()];
+    let w: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut dev = 0u32;
+    // SAFETY: NUL-terminated id.
+    if unsafe { CM_Locate_DevNodeW(&mut dev, w.as_ptr(), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
+        return chain;
+    }
+    for _ in 0..16 {
+        let mut parent = 0u32;
+        // SAFETY: plain out parameter.
+        if unsafe { CM_Get_Parent(&mut parent, dev, 0) } != CR_SUCCESS {
+            break;
+        }
+        let mut idbuf = [0u16; 512];
+        // SAFETY: buffer of the stated length.
+        if unsafe { CM_Get_Device_IDW(parent, idbuf.as_mut_ptr(), idbuf.len() as u32, 0) } != CR_SUCCESS {
+            break;
+        }
+        let end = idbuf.iter().position(|c| *c == 0).unwrap_or(idbuf.len());
+        chain.push(String::from_utf16_lossy(&idbuf[..end]));
+        dev = parent;
+    }
+    chain
+}
+
+thread_local! {
+    static DEVICES: std::cell::RefCell<Devices> = std::cell::RefCell::new(Devices { map: Vec::new(), cache: Default::default() });
+}
+
+const TIMER_TICK: usize = 1;
+const TIMER_MAP: usize = 2;
+
+unsafe extern "system" fn raw_wndproc(h: windows_sys::Win32::Foundation::HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    use seat_input::hotkey_guard::RawKey;
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_INPUT, WM_TIMER};
+    match msg {
+        WM_INPUT => {
+            // SAFETY: plain-old-data buffer of the stated size.
+            let mut ri: RAWINPUT = unsafe { std::mem::zeroed() };
+            let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+            // SAFETY: buffer of `size` bytes.
+            let n = unsafe { GetRawInputData(l as HRAWINPUT, RID_INPUT, (&mut ri as *mut RAWINPUT).cast(), &mut size, std::mem::size_of::<RAWINPUTHEADER>() as u32) };
+            if n != u32::MAX && n as usize >= std::mem::size_of::<RAWINPUTHEADER>() {
+                let at = now_ms();
+                let kiosk = DEVICES.with(|d| d.borrow_mut().is_kiosk(ri.header.hDevice as usize));
+                if ri.header.dwType == RIM_TYPEKEYBOARD {
+                    // SAFETY: keyboard record.
+                    let k = unsafe { ri.data.keyboard };
+                    let raw = RawKey { sc: k.MakeCode, e0: k.Flags & 2 != 0, up: k.Flags & 1 != 0, kiosk, at_ms: at };
+                    let out = ATTR.lock().map(|mut g| g.get_or_insert_with(Default::default).on_raw(raw)).unwrap_or_default();
+                    replay(&out);
+                } else if ri.header.dwType == RIM_TYPEMOUSE {
+                    // SAFETY: mouse record.
+                    let flags = unsafe { ri.data.mouse.Anonymous.Anonymous.usButtonFlags };
+                    if let Ok(mut g) = MOUSE_ATTR.lock() {
+                        g.get_or_insert_with(Default::default).on_raw(flags, kiosk, at);
+                    }
+                }
+            }
+            // SAFETY: default handling (cleans up the raw input buffer).
+            unsafe { DefWindowProcW(h, msg, w, l) }
+        }
+        WM_TIMER if w == TIMER_TICK => {
+            let out = ATTR.lock().map(|mut g| g.get_or_insert_with(Default::default).on_tick(now_ms())).unwrap_or_default();
+            replay(&out);
+            0
+        }
+        WM_TIMER if w == TIMER_MAP => {
+            DEVICES.with(|d| d.borrow_mut().reload());
+            0
+        }
+        // SAFETY: default handling.
+        _ => unsafe { DefWindowProcW(h, msg, w, l) },
+    }
+}
+
+/// Raw-input thread of the attributing mode (message-only window, keyboards and mice with
+/// `RIDEV_INPUTSINK`). `false` when the window or the registration failed (the helper then
+/// guards nothing, as before this mode existed).
+fn start_attributor() -> bool {
+    use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_INPUTSINK, RegisterRawInputDevices};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG, RegisterClassW, SetTimer, WNDCLASSW,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("hotkey-guard-raw".into()).spawn(move || {
+        let name: Vec<u16> = "PulsarSeat.HotkeyGuardRaw".encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: class with our window procedure; message-only window on this thread.
+        let hwnd = unsafe {
+            let wc = WNDCLASSW { lpfnWndProc: Some(raw_wndproc), hInstance: GetModuleHandleW(std::ptr::null()), lpszClassName: name.as_ptr(), ..std::mem::zeroed() };
+            RegisterClassW(&wc);
+            CreateWindowExW(0, name.as_ptr(), name.as_ptr(), 0, 0, 0, 0, 0, HWND_MESSAGE, std::ptr::null_mut(), wc.hInstance, std::ptr::null())
+        };
+        if hwnd.is_null() {
+            let _ = tx.send(false);
+            return;
+        }
+        let devs = [
+            RAWINPUTDEVICE { usUsagePage: 1, usUsage: 6, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+            RAWINPUTDEVICE { usUsagePage: 1, usUsage: 2, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd },
+        ];
+        // SAFETY: two valid records.
+        let ok = unsafe { RegisterRawInputDevices(devs.as_ptr(), devs.len() as u32, std::mem::size_of::<RAWINPUTDEVICE>() as u32) } != 0;
+        if !ok {
+            glog!("raw input not registered: {}", std::io::Error::last_os_error());
+            let _ = tx.send(false);
+            return;
+        }
+        DEVICES.with(|d| d.borrow_mut().reload());
+        // SAFETY: timers of our window.
+        unsafe {
+            SetTimer(hwnd, TIMER_TICK, 10, None);
+            SetTimer(hwnd, TIMER_MAP, 2000, None);
+        }
+        let _ = tx.send(true);
+        // SAFETY: standard message loop of this thread.
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                DispatchMessageW(&msg);
+            }
+        }
+    });
+    spawned.is_ok() && rx.recv().unwrap_or(false)
 }
 
 /// Runs the `WH_KEYBOARD_LL` hook on its own thread with its own message loop (a low-level
@@ -140,7 +418,17 @@ fn start_hotkey_guard() -> Option<u32> {
                 let _ = tx.send(None);
                 return;
             }
-            // SAFETY: plain call.
+            // Attributing mode: the mouse hook for kiosk mice's clicks, on this same thread.
+            let attribute = ATTRIBUTE.load(std::sync::atomic::Ordering::Relaxed);
+            let mut mh = if attribute {
+                // SAFETY: as above.
+                unsafe { SetWindowsHookExW(windows_sys::Win32::UI::WindowsAndMessaging::WH_MOUSE_LL, Some(mouse_guard_proc), GetModuleHandleW(std::ptr::null()), 0) }
+            } else {
+                std::ptr::null_mut()
+            };
+            if attribute && mh.is_null() {
+                glog!("mouse hook not installed (clicks of kiosk mice still reach seat 1): {}", std::io::Error::last_os_error());
+            }
             // SAFETY: plain call.
             let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
             let _ = tx.send(Some(tid));
@@ -157,6 +445,10 @@ fn start_hotkey_guard() -> Option<u32> {
                             // The shell starts a new helper (back-off).
                             std::process::exit(4);
                         }
+                        if !mh.is_null() {
+                            UnhookWindowsHookEx(mh);
+                            mh = SetWindowsHookExW(windows_sys::Win32::UI::WindowsAndMessaging::WH_MOUSE_LL, Some(mouse_guard_proc), GetModuleHandleW(std::ptr::null()), 0);
+                        }
                         REINSTALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         send_warmup();
                         continue;
@@ -168,6 +460,9 @@ fn start_hotkey_guard() -> Option<u32> {
                     DispatchMessageW(&msg);
                 }
                 UnhookWindowsHookEx(h);
+                if !mh.is_null() {
+                    UnhookWindowsHookEx(mh);
+                }
             }
         })
         .ok()?;
@@ -180,6 +475,7 @@ fn logger() {
     use std::sync::atomic::Ordering::Relaxed;
     let mut warm_last = (0u64, 0u64, 0u64);
     let mut diag_last = (0u64, 0u64, 0u64);
+    let mut attr_last = (0u64, 0u64);
     let mut tick = 0u64;
     loop {
         let stop = STOP.load(Relaxed);
@@ -201,9 +497,11 @@ fn logger() {
         }
         if tick % 40 == 0 || stop {
             let now = (HOOK_EVENTS.load(Relaxed), HOOK_BLOCKED.load(Relaxed), REINSTALLS.load(Relaxed));
-            if now != diag_last {
+            let attr = (KIOSK_BLOCKED.load(Relaxed), REPLAYED.load(Relaxed));
+            if now != diag_last || (attr != attr_last) {
                 diag_last = now;
-                glog!("counters: hook events {} blocked {} re-installs {}", now.0, now.1, now.2);
+                attr_last = attr;
+                glog!("counters: hook events {} blocked {} re-installs {} kiosk-device input kept from seat 1 {} replayed {}", now.0, now.1, now.2, attr.0, attr.1);
             }
         }
         if stop {
@@ -215,17 +513,31 @@ fn logger() {
 }
 
 /// Runs the helper; returns the process exit code.
-pub fn run(seat: SeatNumber) -> i32 {
+pub fn run(seat: SeatNumber, mode: seat_input::hotkey_guard::GuardMode) -> i32 {
     use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
     let mut session = 0u32;
     // SAFETY: no arguments / out pointer valid.
     let pid = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcessId() };
     // SAFETY: out pointer valid.
     unsafe { windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId(pid, &mut session) };
+    let attribute = mode == seat_input::hotkey_guard::GuardMode::Attribute;
+    if attribute {
+        // Without the raw-input thread nothing can be attributed: swallowing would take the
+        // hotkeys from seat 1's user, so the helper ends (the shell retries with back-off).
+        if !start_attributor() {
+            glog!("attributing mode not started (no raw input); nothing is guarded");
+            return 3;
+        }
+        ATTRIBUTE.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let Some(tid) = start_hotkey_guard() else {
         return 3;
     };
-    glog!("start: seat {seat} pid {pid} session {session} integrity 0x{:x} (no raw input)", super::win::integrity_rid().unwrap_or(0));
+    glog!(
+        "start: seat {seat} pid {pid} session {session} integrity 0x{:x} ({})",
+        super::win::integrity_rid().unwrap_or(0),
+        if attribute { "attributing: raw input on its own thread, kiosk devices only" } else { "no raw input" }
+    );
     let log = std::thread::Builder::new().name("hotkey-guard-log".into()).spawn(logger).ok();
     // Commands from the shell until it closes the pipe (it ended) or says quit.
     let mut stdin = std::io::stdin().lock();

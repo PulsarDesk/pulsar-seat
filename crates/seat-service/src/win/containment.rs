@@ -265,11 +265,17 @@ pub(crate) fn session_exists(session_id: u32) -> bool {
 /// Run `helper --desktop-acl <op> --sid <sid> [--clipboard]` as SYSTEM (no privileges,
 /// System integrity) in `session_id` and wait for exit code 0.
 fn run_acl_helper(helper: &Path, session_id: u32, op: AclOp, sid: &str, clipboard: bool, exit_windows: bool) -> Result<(), String> {
+    let args = desktop_acl_args(op, sid, clipboard, exit_windows).ok_or_else(|| format!("bad SID {sid:?}"))?;
+    run_acl_helper_args(helper, session_id, &args)
+}
+
+/// Run the `--desktop-acl` helper with ready-made arguments (kiosk seat logons:
+/// `seat_session::host_account::kiosk_desktop_acl_args`).
+pub(crate) fn run_acl_helper_args(helper: &Path, session_id: u32, args: &[String]) -> Result<(), String> {
     use seat_session::win::process::{SYSTEM_ONLY_SDDL, SpawnSpec, spawn};
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, GetExitCodeProcess, TerminateProcess, WaitForSingleObject};
-    let args = desktop_acl_args(op, sid, clipboard, exit_windows).ok_or_else(|| format!("bad SID {sid:?}"))?;
     let cmd = seat_session::launch::command_line(helper, &args).map_err(|e| e.to_string())?;
     let token = seat_session::win::launch::restricted_system_token_in_session(session_id).map_err(|e| e.to_string())?;
     let sp = spawn(&SpawnSpec {

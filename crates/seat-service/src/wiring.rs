@@ -57,11 +57,20 @@ pub struct PackageFactory {
     /// `%ProgramData%\Pulsar Seat` (journals of the session and gate packages).
     pub data_dir: PathBuf,
     cache: Mutex<Cache>,
+    /// Per-seat users of kiosk shells (desktops backend; `None` in console dev mode, where
+    /// no account is created).
+    kiosk_logons: Option<Arc<dyn seat_session::kiosk_account::SeatLogons>>,
 }
 
 impl PackageFactory {
     pub fn new(pnp: Arc<dyn PnpTree>, data_dir: PathBuf) -> Self {
-        Self { pnp, data_dir, cache: Mutex::default() }
+        Self { pnp, data_dir, cache: Mutex::default(), kiosk_logons: None }
+    }
+
+    /// With per-seat kiosk users (the service, not the console dev mode).
+    pub fn with_kiosk_logons(mut self, logons: Option<Arc<dyn seat_session::kiosk_account::SeatLogons>>) -> Self {
+        self.kiosk_logons = logons;
+        self
     }
 
     /// Production factory: the media package's PnP tree.
@@ -115,7 +124,7 @@ impl BackendFactory for PackageFactory {
         if let Some((_, b)) = lock(&self.cache).session.iter().find(|(k, _)| *k == (kind, topology)) {
             return Some(b.clone());
         }
-        let b = build_session(kind, &self.data_dir)?;
+        let b = build_session(kind, &self.data_dir, self.kiosk_logons.clone())?;
         lock(&self.cache).session.push(((kind, topology), b.clone()));
         Some(b)
     }
@@ -183,12 +192,21 @@ impl BackendFactory for PackageFactory {
 }
 
 #[cfg(windows)]
-fn build_session(kind: SessionBackendKind, data_dir: &std::path::Path) -> Option<Arc<dyn SessionBackend>> {
-    Some(seat_session::create_backend(kind, seat_session::SessionDeps::system(data_dir)))
+fn build_session(
+    kind: SessionBackendKind,
+    data_dir: &std::path::Path,
+    logons: Option<Arc<dyn seat_session::kiosk_account::SeatLogons>>,
+) -> Option<Arc<dyn SessionBackend>> {
+    let opts = seat_session::DesktopsOptions { logons, ..seat_session::DesktopsOptions::platform() };
+    Some(seat_session::create_backend_with(kind, seat_session::SessionDeps::system(data_dir), opts))
 }
 
 #[cfg(not(windows))]
-fn build_session(_kind: SessionBackendKind, _data_dir: &std::path::Path) -> Option<Arc<dyn SessionBackend>> {
+fn build_session(
+    _kind: SessionBackendKind,
+    _data_dir: &std::path::Path,
+    _logons: Option<Arc<dyn seat_session::kiosk_account::SeatLogons>>,
+) -> Option<Arc<dyn SessionBackend>> {
     None
 }
 
