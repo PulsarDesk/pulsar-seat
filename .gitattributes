@@ -10,3 +10,7 @@
 *.sys binary
 *.dll binary
 *.exe binary
+
+# Vendored third-party sources are pinned by SHA-256 (shim/module/build.rs): keep them byte-exact
+# (upstream disasm.cpp has two CRLF lines).
+shim/third_party/** -text
