@@ -11,6 +11,7 @@ import {
   MAX_SEATS,
   SHARED_MASK,
   MAX_IP_PROGRAMS,
+  MAX_PAD_IGNORE_DEVICES,
   DEFAULT_SEAT_REDIRECT,
   type AssignmentOptions,
   type Config,
@@ -270,6 +271,36 @@ export function setVirtualPads(c: Config, n: SeatNumber, on: boolean): Config {
     if (on) l.virtual_pads = true;
     else delete l.virtual_pads;
   });
+}
+
+/** `0xVVVV/0xPPPP` (also without `0x`, any case), as `seat_core::validate::is_vid_pid`. */
+export function isVidPid(s: string): boolean {
+  const parts = s.trim().split('/');
+  if (parts.length !== 2) return false;
+  return parts.every((p) => /^(0x)?[0-9a-f]{4}$/i.test(p.trim()));
+}
+
+/** Parses a comma / space separated id list as typed in the seat table. */
+export function parsePadIgnoreList(text: string): string[] {
+  return text
+    .split(/[\s,;]+/)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+}
+
+/** SDL ignore list of a seat (empty = field removed, as the service writes it). */
+export function setPadIgnoreDevices(c: Config, n: SeatNumber, ids: string[]): Config {
+  return editSeat(c, n, (s) => {
+    if (ids.length) s.pad_ignore_devices = ids;
+    else delete s.pad_ignore_devices;
+  });
+}
+
+/** Physical pad scoping (`settings.input.pad_device_scope`). */
+export function setPadDeviceScope(c: Config, on: boolean): Config {
+  const next = structuredClone(c);
+  next.settings.input.pad_device_scope = on;
+  return next;
 }
 
 export function setCpuSets(c: Config, n: SeatNumber, ids: number[], hard: boolean): Config {
@@ -891,6 +922,14 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
       const k = `${d.toLowerCase()}\\${s.account.user.toLowerCase()}`;
       if (users.has(k)) out.push(issue('error', code, { seat: s.number }));
       users.add(k);
+    }
+  }
+
+  // SDL ignore lists (2026-11-17), same rules as seat-core.
+  for (const s of c.seats) {
+    const l = s.pad_ignore_devices ?? [];
+    if (l.length > MAX_PAD_IGNORE_DEVICES || l.some((x) => !isVidPid(x))) {
+      out.push(issue('error', 'invalid_pad_ignore_device', { seat: s.number, field: 'pad_ignore_devices' }));
     }
   }
 

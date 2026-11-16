@@ -350,6 +350,9 @@ struct Shell {
     start: Instant,
     layout: Layout,
     router: KioskRouter,
+    /// Synthetic pen device for `KioskAction::Pen` (None: the system refused one; the pen
+    /// then emulates the left button as before).
+    pen: Option<super::pen_win::SyntheticPen>,
     idle: IdleReset,
     keys: WinKeys,
     homes: Vec<HWND>,
@@ -849,6 +852,13 @@ impl Shell {
                 }
                 KioskAction::Shell(ShellInput::Key { .. }) => {}
                 KioskAction::Home => self.show_home(),
+                KioskAction::Pen(p) => {
+                    if let Some(pen) = self.pen.as_mut()
+                        && let Err(e) = pen.inject(&p)
+                    {
+                        klog!("pen injection failed: Win32 error {e}");
+                    }
+                }
             }
         }
     }
@@ -1550,8 +1560,15 @@ fn run_shell(args: ShellArgs) -> i32 {
     let hkl = unsafe { GetKeyboardLayout(0) };
     // Hotkey guard helper (round 4): only when seat 1 is not the console user's desktop.
     let guard = seat_input::hotkey_guard::wanted(args.plan.seat1_desktop).then(|| GuardHelper::new(args.seat));
+    let pen = super::pen_win::SyntheticPen::create();
+    if pen.is_none() {
+        klog!("no synthetic pen device: pens emulate the mouse");
+    }
+    let mut router = KioskRouter::new(SeatArea::new(monitors.clone()));
+    router.set_pen_injection(pen.is_some());
     let shell = Shell {
-        router: KioskRouter::new(SeatArea::new(monitors.clone())),
+        router,
+        pen,
         args,
         policy,
         start,

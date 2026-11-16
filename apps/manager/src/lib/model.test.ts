@@ -315,3 +315,21 @@ describe('virtual pads', () => {
     expect(demoConfig().seats.find((s) => s.number === 2)!.local?.virtual_pads).toBeUndefined();
   });
 });
+
+describe('pad ignore lists and pad scoping', () => {
+  it('parses, stores and validates SDL ignore lists like seat-core', async () => {
+    const { isVidPid, parsePadIgnoreList, setPadIgnoreDevices, setPadDeviceScope, localIssues } = await import('./model.ts');
+    expect(isVidPid('0x045E/0x0B09') && isVidPid('045e/0b09') && isVidPid(' 0X054C / 0x0CE6 ')).toBe(true);
+    expect(isVidPid('45e/b09') || isVidPid('0x045E') || isVidPid('0x045G/0x0B09')).toBe(false);
+    expect(parsePadIgnoreList('0x045E/0x0B09, 0x054C/0x0CE6;  ')).toEqual(['0x045E/0x0B09', '0x054C/0x0CE6']);
+    let c = setPadIgnoreDevices(demoConfig(), 2, ['0x045E/0x0B09']);
+    expect(c.seats.find((s) => s.number === 2)!.pad_ignore_devices).toEqual(['0x045E/0x0B09']);
+    expect(localIssues(c, null).map((i) => i.code)).not.toContain('invalid_pad_ignore_device');
+    c = setPadIgnoreDevices(c, 2, ['nope']);
+    expect(localIssues(c, null).map((i) => i.code)).toContain('invalid_pad_ignore_device');
+    c = setPadIgnoreDevices(c, 2, []);
+    expect(c.seats.find((s) => s.number === 2)!).not.toHaveProperty('pad_ignore_devices');
+    expect(setPadDeviceScope(demoConfig(), false).settings.input.pad_device_scope).toBe(false);
+    expect(demoConfig().settings.input.pad_device_scope).toBe(true);
+  });
+});

@@ -6,7 +6,7 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Child, CM_Get_Device_IDW, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW, CM_Get_Parent,
     CM_Get_Sibling, CM_Locate_DevNodeW, CM_Query_And_Remove_SubTreeW, CM_Set_DevNode_PropertyW,
     CM_Uninstall_DevNode, SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList, SetupDiOpenDeviceInfoW,
-    SetupDiSetDeviceRegistryPropertyW, CM_GETIDLIST_FILTER_NONE, CM_LOCATE_DEVNODE_NORMAL, CM_LOCATE_DEVNODE_PHANTOM,
+    SetupDiGetDeviceRegistryPropertyW, SetupDiSetDeviceRegistryPropertyW, CM_GETIDLIST_FILTER_NONE, CM_LOCATE_DEVNODE_NORMAL, CM_LOCATE_DEVNODE_PHANTOM,
     CM_REMOVE_NO_RESTART, CR_BUFFER_SMALL, CR_SUCCESS, SPDRP_SECURITY_SDS, SP_DEVINFO_DATA,
 };
 use windows_sys::Win32::Devices::Properties::DEVPROP_TYPE_UINT32;
@@ -172,6 +172,138 @@ impl DeviceTree for CmDeviceTree {
     }
 }
 
+// ---- physical pad nodes (seat_input::pad_scope, 2026-11-17) ----
+//
+// The functions below act on any device node (physical pads included), so they are not
+// part of [`DeviceTree`] (whose `remove` only ever touches our own markers). The service
+// uses them only for the HID collection and parent of a pad that `pad_scope` journaled.
+
+/// Instance id of a node's parent (present nodes only).
+pub fn parent_instance(instance_id: &str) -> Option<String> {
+    locate(instance_id, false).ok().and_then(parent_of)
+}
+
+/// Opens one node in a fresh SetupAPI set and runs `f`; the set is destroyed afterwards.
+fn with_devinfo<T>(instance_id: &str, f: impl FnOnce(isize, &mut SP_DEVINFO_DATA) -> Result<T, PadError>) -> Result<T, PadError> {
+    // SAFETY: SetupAPI calls with valid buffers; the set is destroyed on every path.
+    unsafe {
+        let set = SetupDiCreateDeviceInfoList(std::ptr::null(), std::ptr::null_mut());
+        if set == -1 {
+            return Err(PadError::os("SetupDiCreateDeviceInfoList", last_error()));
+        }
+        let id = wide(instance_id);
+        let mut data = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+        let r = if SetupDiOpenDeviceInfoW(set, id.as_ptr(), std::ptr::null_mut(), 0, &mut data) == 0 {
+            Err(PadError::os("SetupDiOpenDeviceInfoW", last_error()))
+        } else {
+            f(set, &mut data)
+        };
+        SetupDiDestroyDeviceInfoList(set);
+        r
+    }
+}
+
+/// The node's own security descriptor (`SPDRP_SECURITY_SDS`), `None` when it has none.
+pub fn security_sds(instance_id: &str) -> Result<Option<String>, PadError> {
+    with_devinfo(instance_id, |set, data| {
+        let mut buf = vec![0u16; 2048];
+        let mut ty = 0u32;
+        let mut need = 0u32;
+        // SAFETY: buffer of the given byte size.
+        let ok = unsafe {
+            SetupDiGetDeviceRegistryPropertyW(set, data, SPDRP_SECURITY_SDS, &mut ty, buf.as_mut_ptr().cast(), (buf.len() * 2) as u32, &mut need)
+        };
+        if ok == 0 {
+            let e = last_error();
+            // ERROR_INVALID_DATA (13): the node has no own descriptor.
+            return if e == 13 { Ok(None) } else { Err(PadError::os("SetupDiGetDeviceRegistryPropertyW", e)) };
+        }
+        Ok(Some(from_wide(&buf)).filter(|s| !s.is_empty()))
+    })
+}
+
+/// Sets (`Some`) or deletes (`None`) the node's own security descriptor.
+pub fn set_security_sds(instance_id: &str, sddl: Option<&str>) -> Result<(), PadError> {
+    with_devinfo(instance_id, |set, data| {
+        let s = sddl.map(wide);
+        let (ptr, len) = match &s {
+            Some(w) => (w.as_ptr() as *const u8, (w.len() * 2) as u32),
+            // Documented: a null buffer with size 0 deletes the property.
+            None => (std::ptr::null(), 0),
+        };
+        // SAFETY: valid set / data; buffer of `len` bytes or null.
+        if unsafe { SetupDiSetDeviceRegistryPropertyW(set, data, SPDRP_SECURITY_SDS, ptr, len) } == 0 {
+            return Err(PadError::os("SetupDiSetDeviceRegistryPropertyW", last_error()));
+        }
+        Ok(())
+    })
+}
+
+/// `DEVPKEY_Device_SessionId` of a node, `None` when unset.
+pub fn session_id_of(instance_id: &str) -> Result<Option<u32>, PadError> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{CM_Get_DevNode_PropertyW, CR_NO_SUCH_VALUE};
+    let dn = locate(instance_id, false)?;
+    let key = session_key();
+    let mut ty = 0u32;
+    let mut v = [0u8; 4];
+    let mut size = 4u32;
+    // SAFETY: valid devnode, key and 4-byte buffer.
+    let r = unsafe { CM_Get_DevNode_PropertyW(dn, &key, &mut ty, v.as_mut_ptr(), &mut size, 0) };
+    if r == CR_NO_SUCH_VALUE {
+        return Ok(None);
+    }
+    cr("CM_Get_DevNode_PropertyW", r)?;
+    Ok((ty == DEVPROP_TYPE_UINT32 && size == 4).then(|| u32::from_le_bytes(v)))
+}
+
+/// Sets (`Some`) or deletes (`None`) `DEVPKEY_Device_SessionId` of a node.
+pub fn set_session_id_of(instance_id: &str, session_id: Option<u32>) -> Result<(), PadError> {
+    use windows_sys::Win32::Devices::Properties::DEVPROP_TYPE_EMPTY;
+    let dn = locate(instance_id, false)?;
+    let key = session_key();
+    let r = match session_id {
+        Some(s) => {
+            let v = s.to_le_bytes();
+            // SAFETY: valid devnode, key and 4-byte buffer.
+            unsafe { CM_Set_DevNode_PropertyW(dn, &key, DEVPROP_TYPE_UINT32, v.as_ptr(), 4, 0) }
+        }
+        // SAFETY: documented delete: type EMPTY, no buffer.
+        None => unsafe { CM_Set_DevNode_PropertyW(dn, &key, DEVPROP_TYPE_EMPTY, std::ptr::null(), 0, 0) },
+    };
+    cr("CM_Set_DevNode_PropertyW", r)
+}
+
+/// Restarts a node so changed properties (its security descriptor) apply: the documented
+/// `DIF_PROPERTYCHANGE` / `DICS_PROPCHANGE` class-installer call (what Device Manager does
+/// after a property change). HYPOTHESIS: never run on a physical pad.
+pub fn property_change_restart(instance_id: &str) -> Result<(), PadError> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        DICS_FLAG_GLOBAL, DICS_PROPCHANGE, DIF_PROPERTYCHANGE, SP_CLASSINSTALL_HEADER, SP_PROPCHANGE_PARAMS,
+        SetupDiCallClassInstaller, SetupDiSetClassInstallParamsW,
+    };
+    with_devinfo(instance_id, |set, data| {
+        let params = SP_PROPCHANGE_PARAMS {
+            ClassInstallHeader: SP_CLASSINSTALL_HEADER {
+                cbSize: std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as u32,
+                InstallFunction: DIF_PROPERTYCHANGE,
+            },
+            StateChange: DICS_PROPCHANGE,
+            Scope: DICS_FLAG_GLOBAL,
+            HwProfile: 0,
+        };
+        // SAFETY: valid set / data; params of the documented size.
+        unsafe {
+            if SetupDiSetClassInstallParamsW(set, data, &params.ClassInstallHeader, std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as u32) == 0 {
+                return Err(PadError::os("SetupDiSetClassInstallParamsW", last_error()));
+            }
+            if SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, data) == 0 {
+                return Err(PadError::os("SetupDiCallClassInstaller", last_error()));
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Counts device-interface arrivals of every class (HID, XUSB, ...) through
 /// `CM_Register_Notification`, so the pad manager secures new pad children at once
 /// instead of waiting for its next periodic pass (`PadManager::set_arrival_counter`).
@@ -255,6 +387,15 @@ mod tests {
     }
 
     /// Registers and unregisters a notification (no system state changes).
+    #[test]
+    fn physical_node_reads_are_read_only() {
+        // An instance id that does not exist: every read fails or is empty, nothing changes.
+        let id = r"ROOT\PULSAR_NO_SUCH_NODE\0000";
+        assert!(parent_instance(id).is_none());
+        assert!(session_id_of(id).is_err());
+        assert!(security_sds(id).is_err());
+    }
+
     #[test]
     fn arrival_watch_registers() {
         let w = DeviceArrivalWatch::start().unwrap();

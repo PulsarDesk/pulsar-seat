@@ -1598,13 +1598,55 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
   (`forward_physical`: raw when the wire kind equals the physical kind, else parsed into a
   state). Feedback: `LocalFeedbackRouter` is the `PadManager`'s sink; same kind = the
   game's output report unchanged (adaptive triggers included), other kind = rumble +
-  lightbar rebuilt into the physical pad's report; Bluetooth pads get no feedback yet
-  (CRC). Only PlayStation pads are read; Xbox / generic HID pads are reported
-  `Unsupported`. The hub shuts down first in `stop_with`. Limits: ViGEm only if already
+  lightbar rebuilt into the physical pad's report; Bluetooth pads get it rewrapped with
+  its CRC (2026-11-17). Every HID pad is read since 2026-11-17 (see the next bullet). The
+  hub shuts down first in `stop_with`. Limits: ViGEm only if already
   installed; DualSense via usbip-win2; the own pad driver is unsigned and only used on
-  explicit preference. The physical pad stays visible to every session without the
-  (unsigned) HID filter. HYPOTHESIS: every Windows path behind the hub (nothing ran on
-  hardware). Details: `crates/seat-pads/README.md`. The
+  explicit preference. Since 2026-11-17 the physical pad is scoped to its seat
+  through its device nodes (next bullet). HYPOTHESIS: every Windows path behind the hub
+  (nothing ran on hardware). Details: `crates/seat-pads/README.md`.
+- **Pads and pen parity (2026-11-17, package pads-pen; HYPOTHESIS end to end).**
+  - *Reading.* `RoutedPad::layout`: PlayStation (public layouts, USB + Bluetooth), Switch
+    Pro (`seat_pads::switch_pro`, init sequence at open), every other HID pad through its
+    report descriptor (`HidP_*` value / button caps in `seat_input::win::hid`, mapped by
+    `seat_pads::generic`: XInput-compatible view of Xbox pads with the combined Z
+    trigger, Xbox Bluetooth view, standard view). `RoutedPad::bus` from the unit's bus.
+  - *Feedback.* `LocalFeedbackRouter` per layout: PlayStation USB / Bluetooth
+    (`seat_pads::bt`: 0x31 / 0x11 with CRC-32, seed 0xA2), Switch Pro rumble 0x10 +
+    player lights, Xbox Bluetooth 0x03 (rumble + impulse triggers). Xbox USB and generic
+    HID pads have no documented HID output report: no feedback.
+  - *Scoping* (`seat_input::pad_scope`, `crate::pad_runtime`, setting
+    `input.pad_device_scope`, default on). Owner of each physical pad: the local seat it is
+    routed to alone (session + user), else, while remote seats run, the console user;
+    only while a second session exists. Nodes: the HID collection and its parent.
+    Original SDDL and session id are journaled (`<data>\pads\scope.json`) **before** a
+    change; restore at service start, stop and when the setting goes off. Device calls:
+    `seat_pads::win::devtree` (`SPDRP_SECURITY_SDS`, `DEVPKEY_Device_SessionId`,
+    `DIF_PROPERTYCHANGE`). This is the "physical console pad scoping" of spec/remote 60
+    for processes without the shim.
+  - *XInput per seat.* `crate::local_pads::local_seat_map` publishes shim seat map
+    entries for local seats with their own session (seat id `5053454c-4f43-4100-8000-<n>`,
+    `PadInstances` = routed HID units + pad parents), written by `pad_runtime` to the same
+    volatile map (keys are session ids, so no clash with remote entries; republished every
+    30 s because the remote engine clears the map at its start). Shim x64 / x86 only.
+  - *SDL hints.* `SeatConfig::pad_ignore_devices` (both kinds, `0xVVVV/0xPPPP`, validation
+    `invalid_pad_ignore_device`) plus, for local seats, the ids of physical pads routed
+    elsewhere that no pad of the seat shares, as `SDL_GAMECONTROLLER_IGNORE_DEVICES` and
+    `SDL_JOYSTICK_IGNORE_DEVICES` in every process the service starts in the seat (startup
+    apps, launcher apps, remote autostart / client-launched apps).
+  - *Controller audio (remote).* Shared-memory protocol 2 media section per pad
+    (`seat_pads::media`, contract in `docs/split/agents/pulsar-host-backend.md` §5):
+    speaker / headset / haptics PCM out, microphone PCM in; `pad.attach.media`. Remote
+    seats' DualSense pads get the audio interfaces only with `RemoteSettings::pad_audio`
+    (default off). Sunshine seats stay HID-only (Moonlight has no controller audio).
+  - *Pen.* `RawContact` / wire `PenInfo` (tilt X / Y, rotation from twist or azimuth,
+    barrel, eraser, invert; HID digitizer usages 0x3D, 0x3E, 0x41, 0x3F, 0x44 / 0x5A,
+    0x45, 0x3C). Hosted seats: MS-RDPEI `RDPINPUT_PEN_CONTACT` optional fields
+    (`seat_rdp::input`); hosted digitizers are no longer marked not routable. Kiosk
+    seats: `KioskAction::Pen` over the seat's own app windows (capture from pen down),
+    injected by the shell as `PT_PEN` (`seat-host/src/kiosk/pen_win.rs`,
+    `CreateSyntheticPointerDevice` / `InjectSyntheticPointerInput`); without a synthetic
+    device the pen keeps emulating the left button. The
   per-process shim (`shim/`, x64 / x86) stays remote-only. Its registry key
   `HKLM\SOFTWARE\PulsarSplit\Shim` and its health pipe keep their names, because `shim/`
   depends on them.

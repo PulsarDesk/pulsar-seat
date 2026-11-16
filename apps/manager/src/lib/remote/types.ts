@@ -23,6 +23,9 @@ export interface GlobalSettings {
   pad_backend: PadBackendId | null;
   bluetooth_console_only: boolean;
   display_backend: DisplayBackendKind | null;
+  /** DualSense speaker / microphone interfaces for remote seats' pads (controller audio
+   *  through the pad media section). Absent (older service) = off. Added 2026-11-17. */
+  pad_audio?: boolean;
 }
 
 export interface HdrLuminance {

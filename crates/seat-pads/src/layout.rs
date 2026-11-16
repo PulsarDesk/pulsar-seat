@@ -48,6 +48,43 @@ pub const SOURCE_WRITE_REPORT: u8 = 0;
 pub const SOURCE_SET_OUTPUT_REPORT: u8 = 1;
 pub const SOURCE_SET_FEATURE: u8 = 2;
 
+// ---- media section (protocol 2, Pulsar addition 2026-11-17; `crate::media`) ----
+/// Shared-memory protocol that adds the media section (`<base>_Media`).
+pub const PROTOCOL_MEDIA: u32 = 2;
+pub const MEDIA_MAGIC: u32 = 0x444D_5050; // "PPMD"
+pub const MEDIA_OFF_MAGIC: usize = 0;
+pub const MEDIA_OFF_VERSION: usize = 4;
+pub const MEDIA_OFF_HEADER_SIZE: usize = 6;
+pub const MEDIA_OFF_RATE: usize = 8;
+pub const MEDIA_OFF_OUT_CHANNELS: usize = 12;
+pub const MEDIA_OFF_IN_CHANNELS: usize = 14;
+pub const MEDIA_OFF_OUT_CAP: usize = 16;
+pub const MEDIA_OFF_OUT_WRITE: usize = 20;
+pub const MEDIA_OFF_OUT_READ: usize = 24;
+pub const MEDIA_OFF_OUT_DROPPED: usize = 28;
+pub const MEDIA_OFF_IN_CAP: usize = 32;
+pub const MEDIA_OFF_IN_WRITE: usize = 36;
+pub const MEDIA_OFF_IN_READ: usize = 40;
+pub const MEDIA_OFF_IN_DROPPED: usize = 44;
+pub const MEDIA_OFF_FLAGS: usize = 48;
+pub const MEDIA_OFF_DATA: usize = 64;
+/// Sample rate of both rings (Hz), interleaved signed 16-bit little-endian.
+pub const MEDIA_RATE: u32 = 48_000;
+/// Speaker / haptics channels (DualSense: speaker L / R, haptics L / R).
+pub const MEDIA_OUT_CHANNELS: u16 = 4;
+/// Microphone channels.
+pub const MEDIA_IN_CHANNELS: u16 = 2;
+/// Out ring bytes (about 170 ms of 4-channel audio).
+pub const MEDIA_OUT_CAP: usize = 65_536;
+/// In ring bytes (about 170 ms of 2-channel audio).
+pub const MEDIA_IN_CAP: usize = 32_768;
+pub const MEDIA_SECTION_SIZE: usize = 131_072;
+/// Media header flags.
+pub const MEDIA_FLAG_SPEAKER: u32 = 1;
+pub const MEDIA_FLAG_MIC: u32 = 2;
+pub const SUFFIX_MEDIA: &str = "_Media";
+pub const SUFFIX_MEDIA_EVT: &str = "_MediaEvt";
+
 // ---- object names (base = Global\PulsarSplit_Pad_<seat32>_<slot>) ----
 pub const CHANNEL_PREFIX: &str = "Global\\PulsarSplit_Pad_";
 pub const SUFFIX_IN: &str = "_In";
@@ -152,4 +189,7 @@ const _: () = {
     assert!(OUT_OFF_ENTRIES + (OUT_ENTRY_COUNT as usize) * (OUT_ENTRY_SIZE as usize) <= SECTION_SIZE);
     assert!(ENTRY_OFF_PAYLOAD + ENTRY_PAYLOAD_MAX == OUT_ENTRY_SIZE as usize);
     assert!(DS5_OUTPUT_LEN <= ENTRY_PAYLOAD_MAX);
+    assert!(MEDIA_OFF_DATA + MEDIA_OUT_CAP + MEDIA_IN_CAP <= MEDIA_SECTION_SIZE);
+    assert!(MEDIA_OUT_CAP % (MEDIA_OUT_CHANNELS as usize * 2) == 0);
+    assert!(MEDIA_IN_CAP % (MEDIA_IN_CHANNELS as usize * 2) == 0);
 };

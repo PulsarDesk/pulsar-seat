@@ -209,6 +209,10 @@
       />
       {t.settings.bluetoothConsoleOnly}
     </label>
+    <label class="toggle">
+      <input type="checkbox" checked={settings.pad_audio ?? false} onchange={(e) => save({ pad_audio: e.currentTarget.checked })} />
+      {t.settings.padAudio}
+    </label>
 
     <h2>{t.seat.display}</h2>
     <label class="field">

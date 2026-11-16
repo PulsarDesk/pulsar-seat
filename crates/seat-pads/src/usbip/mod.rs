@@ -314,6 +314,11 @@ impl VirtualPad for UsbipPad {
             Err(PadError::Invalid("not a DualSense input report".into()))
         }
     }
+    fn submit_mic(&mut self, pcm: &[u8]) -> Result<(), PadError> {
+        self.check()?;
+        self.slot.push_mic(pcm);
+        Ok(())
+    }
     fn remove(self: Box<Self>) -> Result<(), PadError> {
         let r = self.tool.detach(self.port);
         self.server.remove(&self.busid);

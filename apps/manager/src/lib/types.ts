@@ -197,6 +197,9 @@ export interface SeatConfig {
   /** Programs started in the seat session after sign-in, in the seat's job (spec 80 §11.2).
    *  Absolute paths only (the service skips anything else). Added 2026-11-13. */
   startup_apps?: KioskApp[];
+  /** USB ids (`0xVVVV/0xPPPP`) SDL games of this seat ignore (`SDL_GAMECONTROLLER_IGNORE_DEVICES`
+   *  for the processes the service starts). Absent = none. Added 2026-11-17, both kinds. */
+  pad_ignore_devices?: string[];
   /** Physical-seat part; set exactly when `kind` is `local`. */
   local?: LocalSeat;
   /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. Edited
@@ -214,8 +217,9 @@ export interface LocalSeat {
   /** Clipboard / drive / smart-card redirection of the seat session (IronRDP backend,
    *  spec 70). Absent = all off. Added 2026-11-13. */
   redirect?: SeatRedirect;
-  /** Seat-owned virtual pads for the PlayStation pads routed to this seat alone
-   *  (`seat_input::local_pads`). Absent = off. Added 2026-11-14. */
+  /** Seat-owned virtual pads for the pads routed to this seat alone (PlayStation, Switch
+   *  Pro, Xbox and generic HID pads since 2026-11-17; `seat_input::local_pads`). Absent =
+   *  off. Added 2026-11-14. */
   virtual_pads?: boolean;
 }
 
@@ -438,7 +442,13 @@ export interface InputSettings {
   unfiltered_hid_usages: [number, number][];
   gap_buffer_ms: number;
   gap_buffer_packets: number;
+  /** Physical pads open only for their seat's user (and, while remote seats run, the
+   *  others only for the console user). Absent (older service) = on. Added 2026-11-17. */
+  pad_device_scope?: boolean;
 }
+
+/** Most entries of `SeatConfig.pad_ignore_devices` (`seat_core::config::MAX_PAD_IGNORE_DEVICES`). */
+export const MAX_PAD_IGNORE_DEVICES = 64;
 
 export type DeviceClassTarget = 'disk_drive' | 'cdrom' | 'volume' | 'ports';
 

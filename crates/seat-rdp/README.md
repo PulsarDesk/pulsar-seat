@@ -91,7 +91,7 @@ does not work against a real Server build (untested, see below).
   - Pacing: with EGFX the session presents at each completed frame (EndFrame); bitmap
     updates at most every 8 ms and when the socket goes quiet.
 - `input`: keys, pointer, wheel and X buttons go out as fast-path events. Relative motion
-  goes out as `TS_FP_RELPOINTER_EVENT`. Touch and pen go out as MS-RDPEI frames.
+  goes out as `TS_FP_RELPOINTER_EVENT`. Touch and pen go out as MS-RDPEI frames. Pen contacts carry the optional `RDPINPUT_PEN_CONTACT` fields when the pen reports them (2026-11-17): `penFlags` (barrel, eraser, inverted), `rotation` (0..359), `tiltX` / `tiltY` (-90..90, each on its own), `pressure` (0..1024). HYPOTHESIS: never sent to a real RDP server.
 - `audio`: PCM only. rdpsnd goes to a `PlaybackSink`. `AUDIO_INPUT` comes from a
   `CaptureSource`. The host connects both to `seat_media::bridge::AudioBridge`, by
   endpoint id.

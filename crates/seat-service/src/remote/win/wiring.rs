@@ -316,7 +316,13 @@ fn pads(
         Arc::new(seat_pads::UsbipDs5Backend::new(
             Arc::new(tool),
             Arc::new(WinConsoleSession),
-            seat_pads::usbip::UsbipConfig { host_salt: salt, ..Default::default() },
+            seat_pads::usbip::UsbipConfig {
+                host_salt: salt,
+                // Controller audio for remote seats' DualSense pads only when the operator
+                // turned it on (`pad_audio`); console-owned pads always get it.
+                audio: if global.pad_audio { seat_pads::usbip::AudioPolicy::Always } else { seat_pads::usbip::AudioPolicy::ConsoleOnly },
+                ..Default::default()
+            },
             auth,
         )),
         Arc::new(seat_pads::PulsarPadBackend::new(Arc::new(WinSwDevice), salt)),

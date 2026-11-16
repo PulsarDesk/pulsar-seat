@@ -21,7 +21,7 @@
 //! The sink remembers what it pressed, so [`InputSink::release_all`] leaves nothing stuck.
 
 use crate::convert::consumer_scan;
-use seat_core::backend::input::{InputPacket, InputSink, TouchContact, buttons, key_flags};
+use seat_core::backend::input::{InputPacket, InputSink, PenInfo, TouchContact, buttons, key_flags};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_core::device::Rect;
 use std::collections::BTreeSet;
@@ -71,6 +71,9 @@ pub struct RdpContact {
     pub pen: bool,
     /// Pen pressure 0..=1024.
     pub pressure: u16,
+    /// Pen only: tilt, rotation and the pen buttons (MS-RDPEI `RDPINPUT_PEN_CONTACT`
+    /// optional fields `penFlags`, `rotation`, `tiltX`, `tiltY`).
+    pub pen_info: Option<PenInfo>,
 }
 
 /// What the seat host's RDP client sends.
@@ -231,7 +234,15 @@ impl<C: RdpInputChannel> RdpInputSink<C> {
             } else {
                 self.touch_down.remove(&(c.id, c.pen));
             }
-            let rc = RdpContact { id: c.id, x, y, flags, pen: c.pen, pressure: if c.pen { c.pressure } else { 0 } };
+            let rc = RdpContact {
+                id: c.id,
+                x,
+                y,
+                flags,
+                pen: c.pen,
+                pressure: if c.pen { c.pressure } else { 0 },
+                pen_info: if c.pen { c.pen_info } else { None },
+            };
             if c.pen { pen.push(rc) } else { touch.push(rc) }
         }
         if !touch.is_empty() {
@@ -337,7 +348,7 @@ impl<C: RdpInputChannel> RdpInputSink<C> {
             let (x, y) = self.pos;
             let (pen, touch): (Vec<RdpContact>, Vec<RdpContact>) = std::mem::take(&mut self.touch_down)
                 .into_iter()
-                .map(|(id, pen)| RdpContact { id, x, y, flags: contact_flags::CANCELED | contact_flags::UP, pen, pressure: 0 })
+                .map(|(id, pen)| RdpContact { id, x, y, flags: contact_flags::CANCELED | contact_flags::UP, pen, pressure: 0, pen_info: None })
                 .partition(|c| c.pen);
             if !touch.is_empty() {
                 ev.push(RdpInputEvent::Touch { contacts: touch });
@@ -485,7 +496,7 @@ mod tests {
 
     #[test]
     fn touch_native_and_emulated() {
-        let c = |phase: &str| TouchContact { id: 4, x: 32768, y: 32768, phase: phase.into(), pressure: 0, pen: false };
+        let c = |phase: &str| TouchContact { id: 4, x: 32768, y: 32768, phase: phase.into(), pressure: 0, pen: false, pen_info: None };
         let (mut s, _) = sink(true);
         let ev = s.translate(&[InputPacket::Touch { o: 0, contacts: vec![c("down")] }]);
         let RdpInputEvent::Touch { contacts } = &ev[0] else { panic!() };
@@ -503,7 +514,7 @@ mod tests {
 
     #[test]
     fn pen_frames_are_separate() {
-        let p = |phase: &str| TouchContact { id: 7, x: 0, y: 0, phase: phase.into(), pressure: 512, pen: true };
+        let p = |phase: &str| TouchContact { id: 7, x: 0, y: 0, phase: phase.into(), pressure: 512, pen: true, pen_info: None };
         // Touch-capable channel without pen frames: the pen is emulated.
         let (mut s, _) = sink_pen(true, false);
         let ev = s.translate(&[InputPacket::Touch { o: 0, contacts: vec![p("down")] }]);
@@ -514,6 +525,12 @@ mod tests {
         let ev = s.translate(&[InputPacket::Touch { o: 0, contacts: vec![p("down")] }]);
         let [RdpInputEvent::Pen { contacts }] = ev.as_slice() else { panic!("{ev:?}") };
         assert_eq!((contacts[0].pressure, contacts[0].pen), (512, true));
+        assert_eq!(contacts[0].pen_info, None);
+        let info = PenInfo { tilt_x: Some(10), tilt_y: Some(-5), rotation: None, barrel: true, eraser: false, inverted: false };
+        let tilted = TouchContact { pen_info: Some(info), ..p("update") };
+        let ev = s.translate(&[InputPacket::Touch { o: 0, contacts: vec![tilted] }]);
+        let [RdpInputEvent::Pen { contacts }] = ev.as_slice() else { panic!("{ev:?}") };
+        assert_eq!(contacts[0].pen_info, Some(info));
         let rel = s.release_events();
         assert!(matches!(&rel[0], RdpInputEvent::Pen { contacts } if contacts[0].flags & contact_flags::CANCELED != 0));
     }

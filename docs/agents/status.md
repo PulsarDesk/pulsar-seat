@@ -1725,3 +1725,38 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     (faf13c7). Manager: remote seat rows and seat page say "Başlatılamaz: eşzamanlı oturum
     yok" up front when the chosen or running session backend has no concurrent sessions
     (a06d140).
+  - 2026-11-17 (parity round, package pads-pen; branch of this worktree; untested on
+    hardware, every runtime path HYPOTHESIS):
+    - **Local seats read every HID pad**: PlayStation and Switch Pro (`seat_pads::switch_pro`,
+      init at open) by their public layouts, Xbox HID collections and generic HID
+      joysticks / gamepads through their own report descriptor (`HidP_*` value and button
+      caps, `seat_pads::generic` profiles). `Unsupported` only when a descriptor cannot be
+      read.
+    - **Bluetooth feedback**: DualSense 0x31 / DualShock 4 0x11 with CRC-32 (`seat_pads::bt`),
+      Xbox Bluetooth 0x03 (rumble + impulse triggers), Switch Pro rumble 0x10 + player
+      lights; output reports zero-padded to `OutputReportByteLength`.
+    - **Physical pad scoping** (`seat_input::pad_scope`, `seat-service/src/pad_runtime.rs`,
+      setting `input.pad_device_scope`, default on, manager "Fiziksel oyun kollarını koltuğa
+      kilitle"): device SDDL (owner user) + session id on the HID collection and its parent,
+      journaled before every change, restored at start / stop / setting off. Owner = the
+      local seat a pad is routed to, else the console user while remote seats run (spec/remote
+      60 console pad scoping without the shim). **XInput per seat**: local seats with their
+      own session are in the shim seat map with their pads (and parents) as `PadInstances`.
+    - **SDL hints**: `SeatConfig::pad_ignore_devices` (manager column "SDL’nin yok sayacağı
+      kollar") plus the ids of pads routed elsewhere, as `SDL_GAMECONTROLLER_IGNORE_DEVICES`
+      / `SDL_JOYSTICK_IGNORE_DEVICES` for every process the service starts in a seat.
+    - **Controller audio (remote)**: protocol 2 media section per pad (`seat_pads::media`;
+      contract `docs/split/agents/pulsar-host-backend.md` §5), `pad.attach.media`, usbip
+      DualSense mic fed from it, speaker / haptics PCM into it; remote DualSense audio
+      interfaces only with `RemoteSettings::pad_audio` (default off). Sunshine stays
+      HID-only (Moonlight has no controller audio). Needs a pulsar-desktop change to use it.
+    - **Pen**: tilt X / Y, rotation, barrel, eraser, invert from HID (`PenInfo` on the wire)
+      into MS-RDPEI pen contacts (hosted seats; hosted digitizers are routable now) and into
+      kiosk seats as `PT_PEN` injection (`seat-host/src/kiosk/pen_win.rs`).
+    - Gates (2026-11-17): cargo test --workspace 1663 passed (baseline 1629), clippy
+      -D warnings aarch64 + x86_64 clean, manager 200 tests (199) / check / build, shim
+      tests + x64 / x86 check, installer scripts 51, split-pad driver ARM64 + x64 clean
+      (it includes `seat-pads/src/layout.rs`). No test deleted; one test changed on purpose
+      (`hub_other_kind_parses_input_and_rebuilds_feedback`: Bluetooth now gets feedback).
+    - Open: hardware tests of every item above; pulsar-desktop media support; Xbox USB
+      rumble (XInput only) and generic HID force feedback (PID page) are not done.

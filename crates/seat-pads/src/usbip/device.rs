@@ -43,7 +43,13 @@ pub struct Ds5Device {
     pending_in: VecDeque<u32>,
     scheduled: Vec<(u64, RetSubmit)>,
     mic_next_due: u64,
+    /// Microphone PCM from the client (media section), played into the mic iso-IN
+    /// endpoint; silence when empty. At most [`MIC_BUFFER_MAX`] bytes.
+    mic: VecDeque<u8>,
 }
+
+/// Microphone buffer limit: 200 ms of 2-channel 48 kHz s16le; older audio is dropped.
+pub const MIC_BUFFER_MAX: usize = d::MIC_BYTES_PER_MS * 200;
 
 fn neutral_input() -> [u8; layout::DS_INPUT_LEN] {
     let mut r = [0u8; layout::DS_INPUT_LEN];
@@ -73,6 +79,7 @@ impl Ds5Device {
             pending_in: VecDeque::new(),
             scheduled: Vec::new(),
             mic_next_due: 0,
+            mic: VecDeque::new(),
         }
     }
 
@@ -82,6 +89,21 @@ impl Ds5Device {
 
     pub fn configured(&self) -> bool {
         self.configuration != 0
+    }
+
+    /// Microphone PCM from the client; the oldest audio goes when the buffer is full.
+    pub fn push_mic(&mut self, pcm: &[u8]) {
+        self.mic.extend(pcm.iter().copied());
+        if self.mic.len() > MIC_BUFFER_MAX {
+            // Keep the newest MIC_BUFFER_MAX bytes (a whole number of 4-byte frames).
+            let drop = self.mic.len() - (MIC_BUFFER_MAX - MIC_BUFFER_MAX % 4);
+            self.mic.drain(..drop);
+        }
+    }
+
+    /// Buffered microphone bytes (tests, diagnostics).
+    pub fn mic_buffered(&self) -> usize {
+        self.mic.len()
     }
 
     /// New input report from the stream server (64 bytes, id 0x01).
@@ -143,7 +165,7 @@ impl Ds5Device {
                 vec![RetSubmit::stall(c.seqnum)]
             }
             (2, DIR_IN) if self.layout.audio && c.is_iso() => {
-                let r = Self::iso_in_silence(&c);
+                let r = Self::iso_in_mic(&c, &mut self.mic);
                 let due = self.mic_next_due.max(now_ms) + c.iso.len() as u64;
                 self.mic_next_due = due;
                 self.scheduled.push((due, r));
@@ -178,13 +200,19 @@ impl Ds5Device {
         (r, pcm)
     }
 
-    fn iso_in_silence(c: &CmdSubmit) -> RetSubmit {
+    /// One mic iso-IN URB: each packet gets one millisecond of the client's microphone
+    /// (silence when the buffer runs dry).
+    fn iso_in_mic(c: &CmdSubmit, mic: &mut VecDeque<u8>) -> RetSubmit {
         let mut iso = Vec::with_capacity(c.iso.len());
         let mut total = 0usize;
+        let mut data = Vec::new();
         for p in &c.iso {
             let n = (p.length as usize).min(d::MIC_BYTES_PER_MS);
             iso.push(IsoPacket { offset: p.offset, length: p.length, actual_length: n as u32, status: 0 });
             total += n;
+            let take = n.min(mic.len());
+            data.extend(mic.drain(..take));
+            data.resize(total, 0);
         }
         RetSubmit {
             seqnum: c.seqnum,
@@ -193,7 +221,7 @@ impl Ds5Device {
             start_frame: c.start_frame,
             number_of_packets: c.iso.len() as i32,
             error_count: 0,
-            data: vec![0u8; total],
+            data,
             iso,
         }
     }
@@ -469,6 +497,28 @@ mod tests {
         assert_eq!(d.unlink(2), -104);
         assert_eq!(d.unlink(2), 0);
         assert_eq!(d.unlink(99), 0);
+    }
+
+    #[test]
+    fn mic_iso_in_plays_client_audio() {
+        let mut d = dev(true);
+        let pk = |o, l| IsoPacket { offset: o, length: l, actual_length: 0, status: 0 };
+        let n = d::MIC_BYTES_PER_MS;
+        // 1.5 ms of client audio: the first packet is full, the second half audio, half
+        // silence.
+        let pcm: Vec<u8> = (0..(n + n / 2)).map(|i| (i % 250) as u8 + 1).collect();
+        d.push_mic(&pcm);
+        assert_eq!(d.mic_buffered(), pcm.len());
+        d.submit(ep(3, 2, DIR_IN, vec![], vec![pk(0, 196), pk(196, 196)]), 10);
+        let r = d.poll(12);
+        assert_eq!(r[0].data.len(), 2 * n);
+        assert_eq!(&r[0].data[..pcm.len()], &pcm[..]);
+        assert!(r[0].data[pcm.len()..].iter().all(|b| *b == 0));
+        assert_eq!(d.mic_buffered(), 0);
+        // Bounded: old audio goes first, whole frames.
+        d.push_mic(&vec![1u8; MIC_BUFFER_MAX + 10]);
+        assert!(d.mic_buffered() <= MIC_BUFFER_MAX);
+        assert_eq!(d.mic_buffered() % 4, 0);
     }
 
     #[test]

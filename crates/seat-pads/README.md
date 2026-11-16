@@ -12,6 +12,13 @@ seat gets a virtual pad from this crate:
 
 - `mirror_kind`: PlayStation pads keep their kind (DS4 / DualSense / Edge by USB id);
   everything else becomes an Xbox One pad.
+- Every HID pad is read since 2026-11-17 (`RoutedPad::layout`): PlayStation by its public
+  report layout (USB and Bluetooth), Switch Pro by `switch_pro` (reports 0x30 / 0x3F; init
+  sequence written at open: USB 0x80 handshake, full report mode, IMU, vibration, player
+  light), everything else (Xbox HID collections, generic joysticks / gamepads) through its
+  own report descriptor (Windows `HidP_*` in `seat_input::win::pad_io`, mapped by
+  `generic`: XInput-compatible view with the combined Z trigger, Xbox Bluetooth view,
+  standard DirectInput-style view).
 - `plan`: the same `mapping::resolve` rules as remote seats. ViGEm and usbip-win2 are used
   only when installed. PulsarPad is used only when the seat prefers it.
 - `LocalPads::attach` creates the pad with the seat's session id and user SID.
@@ -26,10 +33,10 @@ Design limits:
 | ViGEmBus | **only if already installed**; never installed or bundled by us (X360 / DS4) |
 | DualSense | usbip-win2 (signed, must be installed) + our loopback USB/IP DualSense server |
 | Own pad driver (`drivers/split-pad`) | **unsigned**; only on explicit preference, never default |
-| Physical pad | stays visible to every session unless the HID visibility filter runs (unsigned, not loaded); XInput pads are always shared. A game in another seat can still read the physical pad. |
+| Physical pad | scoped to its seat since 2026-11-17 (`seat_input::pad_scope`, setting `input.pad_device_scope`, default on): device SDDL with the seat user's SID + `DEVPKEY_Device_SessionId` on the HID collection **and its parent** (where the XUSB interface of Xbox pads lives), property-change restart, journaled in `<data>\pads\scope.json` and restored at stop / next start / setting off. In shimmed processes (x64 / x86) the local seat map entry lists the pad and its parent as the seat's `PadInstances`, so XInput / HID opens follow the seat there too. Without either (ARM64 apps, the shared GameInput service in session 0) a pad can still be shared: HYPOTHESIS. |
 | Which pad a game picks | HYPOTHESIS: many games take the first XInput slot, which may be the physical pad |
-| Service wiring (round 4) | `LocalPadHub` on the service's one `PadManager` (shared with remote seats): device SDDL with the seat user's SID + device session id, ownership registry, orphan cleanup at start / stop, one reader thread per physical pad. Only PlayStation pads (DS4 / DualSense / Edge, USB or Bluetooth) are read; Xbox / generic HID pads are reported `Unsupported`. |
-| Feedback to the physical pad | `LocalFeedbackRouter`: same kind = output report unchanged (rumble, lightbar, player LEDs, adaptive triggers); other kind (DualSense behind ViGEm X360) = rumble + lightbar rebuilt; Bluetooth pads: none yet (output report CRC, open) |
+| Service wiring (round 4) | `LocalPadHub` on the service's one `PadManager` (shared with remote seats): device SDDL with the seat user's SID + device session id, ownership registry, orphan cleanup at start / stop, one reader thread per physical pad. Every HID pad is read (2026-11-17); `Unsupported` only when the pad's report descriptor cannot be read. |
+| Feedback to the physical pad | `LocalFeedbackRouter`: PlayStation same kind = output report unchanged, other kind = rumble / lightbar / player LEDs / triggers rebuilt; Bluetooth PlayStation pads get the report rewrapped as 0x31 / 0x11 with its CRC-32 (`bt`); Switch Pro: rumble (0x10) and player lights; Xbox on Bluetooth: rumble + impulse triggers (0x03). Xbox on USB (rumble only through XInput) and generic HID pads: none (no documented HID output report). |
 | Default | per seat **off** (`LocalSeat::virtual_pads`, manager "Sanal oyun kolu"): every usable backend needs a driver install (ViGEmBus / usbip-win2) that Pulsar Seat never does |
 | Per-process HID shim (`seat-shim-core`, `shim/`) | remote kind only for now; x64 / x86 only, so off on ARM64 |
 
@@ -82,7 +89,20 @@ pass on ViGEm / usbip-win2 devices and every pad's behaviour in games.
   of seat logons through the SCM, and journals each change (`journal\pads.jsonl`) for
   `restore_all()`. No DLL is replaced and no ACL is changed.
 - **Wire messages** (`control.rs`): `PadWanted`, `PadAttach`, `PadDenied`, `PadReleased`
-  and `PadDetach`, copied field for field from spec 60 §3.5.
+  and `PadDetach`, copied field for field from spec 60 §3.5. `PadAttach.media` is a
+  Pulsar addition (2026-11-17, absent = false).
+- **Media section** (`media.rs`, shared-memory protocol 2, 2026-11-17): `<base>_Media`
+  + `<base>_MediaEvt` per pad, two SPSC PCM rings (out = speaker / headset / haptics,
+  4 ch 48 kHz s16le; in = client microphone, 2 ch). `ManagerSink::haptics_pcm` fills the
+  out ring; `PadManager::pump` moves the in ring into `VirtualPad::submit_mic` (usbip
+  DualSense: its mic iso-IN endpoint plays it, silence when empty, 200 ms buffer). Layout
+  in `docs/split/agents/pulsar-host-backend.md` §5. Remote seats' DualSense pads get the
+  audio interfaces only with `RemoteSettings::pad_audio` (default off). Sunshine seats
+  stay HID-only (Moonlight has no controller audio).
+- **Physical pads of local seats**: `generic.rs`, `switch_pro.rs`, `bt.rs` (pure) and
+  `win::devtree::{parent_instance, security_sds, set_security_sds, session_id_of,
+  set_session_id_of, property_change_restart}` (any node; only for nodes `pad_scope`
+  journaled).
 
 ## Contract deviations (for the integrator)
 
@@ -137,6 +157,14 @@ The tests use fakes only (`fake.rs`, feature `fake`):
   side over a real loopback socket.
 
 ## Untested (needs hardware / installed drivers / signing)
+
+- **2026-11-17 additions (HYPOTHESIS, nothing ran on hardware):** the generic HID
+  decoding of real Xbox / generic pads (button order per firmware, combined-trigger
+  direction), Switch Pro init / rumble amplitude encoding / stick calibration (no SPI
+  factory calibration read), every Bluetooth output report (DS4 0x11 / DS5 0x31 with
+  CRC, Xbox 0x03, Switch 0x10) and the zero padding to `OutputReportByteLength`, the
+  physical-node scoping (property-change restart of physical pads, effect on XUSB
+  interfaces), the media section with any stream server, and the usbip mic path.
 
 - **ViGEmBus**: IOCTL layouts were taken from the public ViGEmClient headers (MIT) and
   checked against them on 2026-11-12. They were never run against a real bus. Not verified:

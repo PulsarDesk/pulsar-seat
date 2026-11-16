@@ -16,9 +16,9 @@ use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
-    HIDP_CAPS, HIDP_LINK_COLLECTION_NODE, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, HidD_FreePreparsedData, HidD_GetPreparsedData,
-    HidP_GetCaps, HidP_GetLinkCollectionNodes, HidP_GetSpecificValueCaps, HidP_GetUsageValue, HidP_GetUsages, HidP_Input,
-    PHIDP_PREPARSED_DATA,
+    HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_LINK_COLLECTION_NODE, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, HidD_FreePreparsedData,
+    HidD_GetPreparsedData, HidP_GetButtonCaps, HidP_GetCaps, HidP_GetLinkCollectionNodes, HidP_GetSpecificValueCaps,
+    HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_Input, PHIDP_PREPARSED_DATA,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, ERROR_SHARING_VIOLATION, GENERIC_READ,
@@ -68,7 +68,33 @@ pub struct HidDevice {
     pub usage: u16,
     /// `HIDP_CAPS.InputReportByteLength` (report id included).
     pub input_len: u16,
+    /// `HIDP_CAPS.OutputReportByteLength` (report id included; 0 = no output report).
+    pub output_len: u16,
     contacts: Vec<Contact>,
+    /// Pen collections (0x0D/0x02): the optional pen usages per contact link.
+    pen: Vec<PenCaps>,
+}
+
+/// Optional pen usages of one contact link (HID digitizer page): tilt X 0x3D, tilt Y 0x3E,
+/// twist 0x41 (rotation), azimuth 0x3F (fallback for rotation).
+#[derive(Debug, Clone, Default)]
+struct PenCaps {
+    link: u16,
+    tilt_x: Option<Range>,
+    tilt_y: Option<Range>,
+    twist: Option<Range>,
+    azimuth: Option<Range>,
+}
+
+/// One input value usage of a collection (`HIDP_VALUE_CAPS`, ranges expanded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValueCap {
+    pub page: u16,
+    pub usage: u16,
+    pub link: u16,
+    pub min: i32,
+    pub max: i32,
+    pub bits: u16,
 }
 
 // SAFETY: the preparsed data is read-only after creation; HidP_* calls on it only read.
@@ -86,7 +112,7 @@ impl HidDevice {
     }
 
     /// From an open collection handle (`HidD_GetPreparsedData`).
-    fn from_handle(h: HANDLE) -> Option<Self> {
+    pub(crate) fn from_handle(h: HANDLE) -> Option<Self> {
         let mut p: PHIDP_PREPARSED_DATA = 0;
         // SAFETY: valid handle, out pointer.
         if !unsafe { HidD_GetPreparsedData(h, &mut p) } || p == 0 {
@@ -96,7 +122,7 @@ impl HidDevice {
     }
 
     fn with(pp: Preparsed) -> Option<Self> {
-        let mut dev = Self { pp, page: 0, usage: 0, input_len: 0, contacts: Vec::new() };
+        let mut dev = Self { pp, page: 0, usage: 0, input_len: 0, output_len: 0, contacts: Vec::new(), pen: Vec::new() };
         let mut caps = HIDP_CAPS::default();
         // SAFETY: valid preparsed data and out struct.
         if unsafe { HidP_GetCaps(dev.ptr(), &mut caps) } != HIDP_STATUS_SUCCESS {
@@ -105,8 +131,22 @@ impl HidDevice {
         dev.page = caps.UsagePage;
         dev.usage = caps.Usage;
         dev.input_len = caps.InputReportByteLength;
+        dev.output_len = caps.OutputReportByteLength;
         if dev.page == 0x0D {
             dev.contacts = dev.find_contacts(caps.NumberLinkCollectionNodes);
+            if dev.usage == 0x02 {
+                dev.pen = dev
+                    .contacts
+                    .iter()
+                    .map(|c| PenCaps {
+                        link: c.link,
+                        tilt_x: dev.range(0x0D, c.link, 0x3D),
+                        tilt_y: dev.range(0x0D, c.link, 0x3E),
+                        twist: dev.range(0x0D, c.link, 0x41),
+                        azimuth: dev.range(0x0D, c.link, 0x3F),
+                    })
+                    .collect();
+            }
         }
         Some(dev)
     }
@@ -181,6 +221,62 @@ impl HidDevice {
         (st == HIDP_STATUS_SUCCESS).then_some(v)
     }
 
+    /// Every input value usage (ranges expanded, at most 64), for game pads
+    /// (`seat_pads::generic` layouts).
+    pub fn value_caps(&self) -> Vec<ValueCap> {
+        let mut caps = vec![HIDP_VALUE_CAPS::default(); 64];
+        let mut n = caps.len() as u16;
+        // SAFETY: array of `n` caps.
+        if unsafe { HidP_GetValueCaps(HidP_Input, caps.as_mut_ptr(), &mut n, self.ptr()) } != HIDP_STATUS_SUCCESS {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for c in caps.iter().take(usize::from(n)) {
+            // SAFETY: the union member is chosen by `IsRange`, as documented.
+            let (lo, hi) = unsafe {
+                if c.IsRange { (c.Anonymous.Range.UsageMin, c.Anonymous.Range.UsageMax) } else { (c.Anonymous.NotRange.Usage, c.Anonymous.NotRange.Usage) }
+            };
+            for usage in lo..=hi.min(lo.saturating_add(63)) {
+                if out.len() >= 64 {
+                    break;
+                }
+                out.push(ValueCap { page: c.UsagePage, usage, link: c.LinkCollection, min: c.LogicalMin, max: c.LogicalMax, bits: c.BitSize });
+            }
+        }
+        out
+    }
+
+    /// Highest usage of `page` among the input buttons (button page 0x09: the button
+    /// count); 0 when there is none.
+    pub fn button_max(&self, page: u16) -> u16 {
+        let mut caps = vec![HIDP_BUTTON_CAPS::default(); 32];
+        let mut n = caps.len() as u16;
+        // SAFETY: array of `n` caps.
+        if unsafe { HidP_GetButtonCaps(HidP_Input, caps.as_mut_ptr(), &mut n, self.ptr()) } != HIDP_STATUS_SUCCESS {
+            return 0;
+        }
+        caps.iter()
+            .take(usize::from(n))
+            .filter(|c| c.UsagePage == page)
+            // SAFETY: the union member is chosen by `IsRange`, as documented.
+            .map(|c| unsafe { if c.IsRange { c.Anonymous.Range.UsageMax } else { c.Anonymous.NotRange.Usage } })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Pressed usages of `page` in one report (all link collections).
+    pub fn pressed(&self, page: u16, report: &[u8]) -> Vec<u16> {
+        let mut rep = report.to_vec();
+        self.usages(page, 0, &mut rep)
+    }
+
+    /// Logical value of one value usage in one report (sign-extended for signed ranges).
+    pub fn logical(&self, cap: &ValueCap, report: &[u8]) -> Option<i32> {
+        let v = self.value(cap.page, cap.link, cap.usage, report)?;
+        let r = Range { min: i64::from(cap.min), max: i64::from(cap.max), bits: cap.bits };
+        i32::try_from(Self::signed(v, r)).ok()
+    }
+
     /// Sign-extend a logical value by its field size when the range is signed.
     fn signed(v: u32, r: Range) -> i64 {
         if r.min < 0 { sign_extend(v, r.bits) } else { i64::from(v) }
@@ -198,14 +294,32 @@ impl HidDevice {
                 _ => 0,
             };
             let tip = buttons.contains(&0x42);
-            contacts.push(RawContact {
+            let mut contact = RawContact {
                 id,
                 tip,
                 in_range: buttons.contains(&0x32) || tip,
                 x: normalize(Self::signed(xv, c.x), c.x.min, c.x.max),
                 y: normalize(Self::signed(yv, c.y), c.y.min, c.y.max),
                 pressure,
-            });
+                ..RawContact::default()
+            };
+            if pen {
+                // Barrel 0x44, eraser 0x45, invert 0x3C, secondary barrel 0x5A.
+                contact.barrel = buttons.contains(&0x44) || buttons.contains(&0x5A);
+                contact.eraser = buttons.contains(&0x45);
+                contact.inverted = buttons.contains(&0x3C);
+                if let Some(pc) = self.pen.iter().find(|p| p.link == c.link) {
+                    let read = |r: Option<Range>, usage: u16| r.and_then(|r| self.value(0x0D, c.link, usage, rep).map(|v| (Self::signed(v, r), r)));
+                    if let Some((v, r)) = read(pc.tilt_x, 0x3D) {
+                        contact.tilt_x = Some(tilt_degrees(v, r));
+                    }
+                    if let Some((v, r)) = read(pc.tilt_y, 0x3E) {
+                        contact.tilt_y = Some(tilt_degrees(v, r));
+                    }
+                    contact.rotation = read(pc.twist, 0x41).or_else(|| read(pc.azimuth, 0x3F)).map(|(v, r)| rotation_degrees(v, r));
+                }
+            }
+            contacts.push(contact);
         }
         contacts
     }
@@ -229,6 +343,26 @@ impl HidDevice {
             _ => None,
         }
     }
+}
+
+/// Tilt value -> degrees -90..=90. The usage is specified in degrees (unit exponent
+/// usually 0 or -2); we map the logical range linearly onto -90..=90, which matches pens
+/// that report -90..90 (or -9000..9000) and is a sane fallback otherwise (HYPOTHESIS).
+fn tilt_degrees(v: i64, r: Range) -> i16 {
+    let span = r.max - r.min;
+    if span <= 0 {
+        return 0;
+    }
+    (((v.clamp(r.min, r.max) - r.min) * 180 / span) - 90) as i16
+}
+
+/// Twist / azimuth value -> degrees 0..=359 over the logical range (one full turn).
+fn rotation_degrees(v: i64, r: Range) -> u16 {
+    let span = r.max - r.min + 1;
+    if span <= 0 {
+        return 0;
+    }
+    (((v.clamp(r.min, r.max) - r.min) * 360 / span) % 360) as u16
 }
 
 fn hid_error(reason: &str, what: &str) -> BackendError {

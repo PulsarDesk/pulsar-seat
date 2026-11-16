@@ -438,6 +438,8 @@ pub enum FakePadCall {
     Created(PadId, PadKind),
     Submit(PadId, PadState),
     Report(PadId, Vec<u8>),
+    /// Microphone PCM (media section protocol 2).
+    Mic(PadId, Vec<u8>),
     Removed(PadId),
 }
 
@@ -554,6 +556,10 @@ impl VirtualPad for FakePad {
     }
     fn submit(&mut self, s: &PadState) -> Result<(), PadError> {
         self.calls.lock().unwrap().push(FakePadCall::Submit(self.id.clone(), *s));
+        Ok(())
+    }
+    fn submit_mic(&mut self, pcm: &[u8]) -> Result<(), PadError> {
+        self.calls.lock().unwrap().push(FakePadCall::Mic(self.id.clone(), pcm.to_vec()));
         Ok(())
     }
     fn submit_report(&mut self, report: &[u8]) -> Result<(), PadError> {

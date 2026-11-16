@@ -172,7 +172,7 @@ export function demoConfig(): Config {
         experimental_ack: 0,
         loopback_listener: { enabled: true, port: 33389, extra_accounts: [] }
       },
-      input: { switch_hotkey_scan: 0x58, allow_system_buttons: false, unfiltered_hid_usages: [[0x59, 0]], gap_buffer_ms: 1000, gap_buffer_packets: 256 },
+      input: { switch_hotkey_scan: 0x58, allow_system_buttons: false, unfiltered_hid_usages: [[0x59, 0]], gap_buffer_ms: 1000, gap_buffer_packets: 256, pad_device_scope: true },
       devices: { admins_bypass: true, class_default_descriptors: false },
       tweaks: { lock_screen_image: false, hide_fast_user_switching: false, exclude_driver_updates: false, touchpad_palm_check: null },
       updates: { check: false, weekly: false }

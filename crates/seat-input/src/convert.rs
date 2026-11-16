@@ -12,7 +12,7 @@
 //! combination and the secure attention sequence (Ctrl+Alt+Del → [`InputPacket::Sas`]).
 //! Everything here is pure and unit-tested; no Windows calls.
 
-use seat_core::backend::input::{InputPacket, TouchContact, buttons, key_flags};
+use seat_core::backend::input::{InputPacket, PenInfo, TouchContact, buttons, key_flags};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Set-1 scan codes used by the trackers.
@@ -49,7 +49,7 @@ pub mod button_flags {
 }
 
 /// One contact of a digitizer report (touch screen finger or pen), normalized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RawContact {
     pub id: u32,
     /// Tip switch (touching the surface).
@@ -61,6 +61,30 @@ pub struct RawContact {
     pub y: u16,
     /// 0..=1024.
     pub pressure: u16,
+    /// Pen only (`None` = the pen does not report it): tilt in degrees -90..=90,
+    /// rotation (twist / azimuth) in degrees 0..=359.
+    pub tilt_x: Option<i16>,
+    pub tilt_y: Option<i16>,
+    pub rotation: Option<u16>,
+    /// Pen buttons: barrel (side) switch, eraser switch, invert (eraser end in range).
+    pub barrel: bool,
+    pub eraser: bool,
+    pub inverted: bool,
+}
+
+impl RawContact {
+    /// The pen fields as the wire's [`PenInfo`] (`None` when nothing is reported).
+    pub fn pen_info(&self) -> Option<PenInfo> {
+        let p = PenInfo {
+            tilt_x: self.tilt_x,
+            tilt_y: self.tilt_y,
+            rotation: self.rotation,
+            barrel: self.barrel,
+            eraser: self.eraser,
+            inverted: self.inverted,
+        };
+        (!p.is_empty()).then_some(p)
+    }
 }
 
 /// One input event of one unit, as read from raw input or from the kernel filter.
@@ -424,6 +448,7 @@ impl TouchTracker {
                 phase: phase.into(),
                 pressure: if pen { c.pressure.min(1024) } else { 0 },
                 pen,
+                pen_info: if pen { c.pen_info() } else { None },
             });
         }
         // Pens report the contact every frame; touch screens may stop reporting a lifted
@@ -433,7 +458,7 @@ impl TouchTracker {
             let gone: Vec<u32> = self.down.keys().copied().filter(|id| !seen.contains(id)).collect();
             for id in gone {
                 let (x, y) = self.down.remove(&id).unwrap_or_default();
-                out.push(TouchContact { id, x, y, phase: "up".into(), pressure: 0, pen });
+                out.push(TouchContact { id, x, y, phase: "up".into(), pressure: 0, pen, pen_info: None });
             }
         }
         out
@@ -442,7 +467,7 @@ impl TouchTracker {
     pub fn release_all(&mut self, pen: bool) -> Vec<TouchContact> {
         std::mem::take(&mut self.down)
             .into_iter()
-            .map(|(id, (x, y))| TouchContact { id, x, y, phase: "up".into(), pressure: 0, pen })
+            .map(|(id, (x, y))| TouchContact { id, x, y, phase: "up".into(), pressure: 0, pen, pen_info: None })
             .collect()
     }
 }
@@ -704,7 +729,7 @@ mod tests {
     #[test]
     fn touch_phases() {
         let mut t = TouchTracker::default();
-        let c = |id, tip, x| RawContact { id, tip, in_range: true, x, y: 10, pressure: 500 };
+        let c = |id, tip, x| RawContact { id, tip, in_range: true, x, y: 10, pressure: 500, ..RawContact::default() };
         let f = t.frame(&[c(1, true, 5)], false);
         assert_eq!(f[0].phase, "down");
         let f = t.frame(&[c(1, true, 6), c(2, true, 7)], false);
@@ -721,6 +746,14 @@ mod tests {
         t.frame(&[c(9, true, 1)], true);
         let f = t.frame(&[], true);
         assert_eq!(f[0].phase, "up");
+        // Pen fields travel with pen contacts only.
+        let tilted = RawContact { tilt_x: Some(-20), rotation: Some(45), eraser: true, ..c(3, true, 2) };
+        let f = t.frame(&[tilted], true);
+        let info = f[0].pen_info.unwrap();
+        assert_eq!((info.tilt_x, info.tilt_y, info.rotation, info.eraser, info.barrel), (Some(-20), None, Some(45), true, false));
+        let f = t.frame(&[tilted], false);
+        assert_eq!(f[0].pen_info, None, "touch contacts carry no pen fields");
+        assert_eq!(c(4, true, 1).pen_info(), None);
     }
 
     #[test]
@@ -738,7 +771,7 @@ mod tests {
 
     #[test]
     fn touchpad_is_relative() {
-        let c = |id, tip, x, y| RawContact { id, tip, in_range: tip, x, y, pressure: 0 };
+        let c = |id, tip, x, y| RawContact { id, tip, in_range: tip, x, y, pressure: 0, ..RawContact::default() };
         let mut p = UnitProcessor::new(UnitOptions::default());
         assert!(p.process(&RawUnitEvent::Touchpad { contacts: vec![c(1, true, 1000, 1000)], button: false }, 0).is_empty());
         let o = p.process(&RawUnitEvent::Touchpad { contacts: vec![c(1, true, 1000 + 240, 1000 - 48)], button: false }, 0);

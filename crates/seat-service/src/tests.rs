@@ -2555,6 +2555,55 @@ fn local_pad_targets_follow_routing_session_and_the_seat_switch() {
     h.s.lock().config.seats[1].local_mut().unwrap().virtual_pads = false;
     assert!(h.s.local_pad_targets().is_empty());
 }
+
+#[test]
+fn pad_scope_seat_map_and_sdl_hints_follow_routing() {
+    let mut c = two_seat_config();
+    c.seats[1].pad_ignore_devices = vec!["0x1234/0x5678".into()];
+    let h = harness_with(c, None);
+    let mut pad1 = ds5_dev("pad;1", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
+    pad1.instance_id = Some(r"HID\VID_054C&PID_0CE6&MI_03\8&1&0&0000".into());
+    let mut pad2 = ds5_dev("pad;2", r"\\?\HID#VID_057E&PID_2009#8&2&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
+    pad2.instance_id = Some(r"HID\VID_057E&PID_2009\8&2&0&0000".into());
+    if let seat_core::device::DeviceDetails::Input(i) = &mut pad2.details {
+        (i.vendor_id, i.product_id) = (0x057E, 0x2009);
+    }
+    *h.f.input.devices.lock().unwrap() = vec![input_dev("kbd;1", DeviceKind::Keyboard, KBD1), pad1, pad2];
+    h.s.boot();
+    h.s.lock().input_overrides.insert(k("pad;2"), s(2).mask());
+    let parent = |id: &str| Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or("")));
+    // Only the console session: nobody else could open the pads, nothing scoped.
+    assert_eq!(h.s.pad_scope_plan(false, &parent).unwrap(), vec![]);
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let want = h.s.pad_scope_plan(false, &parent).unwrap();
+    let seat2: Vec<_> = want.iter().filter(|w| w.owner.session_id == 10).collect();
+    assert_eq!(seat2.len(), 2, "the Switch Pad's collection and parent: {want:?}");
+    assert!(seat2.iter().any(|w| w.instance_id.starts_with(r"USB\PARENT_OF_")));
+    // Remote seats running: every pad has an owner (seat 2's, or seat 1 / the console).
+    let want = h.s.pad_scope_plan(true, &parent).unwrap();
+    assert_eq!(want.len(), 4, "{want:?}");
+    assert_eq!(want.iter().filter(|w| w.owner.session_id == 1).count(), 2);
+    // Setting off: plan None (the runtime restores everything).
+    h.s.lock().config.settings.input.pad_device_scope = false;
+    assert!(h.s.pad_scope_plan(true, &parent).is_none());
+    // Shim seat map: seat 2 has its own session; its pad and the pad's parent are listed.
+    let map = h.s.local_seat_map(&parent);
+    assert_eq!(map.len(), 1, "{map:?}");
+    assert_eq!(map[0].session_id, 10);
+    assert_eq!(map[0].seat_id, seat_input::local_pads::local_seat_pad_id(2));
+    assert!(map[0].pad_instance_prefixes.contains(&r"HID\VID_057E&PID_2009\8&2&0&0000".to_string()));
+    assert!(map[0].pad_instance_prefixes.iter().any(|p| p.starts_with(r"USB\PARENT_OF_")));
+    // SDL hints: seat 2 ignores its configured id and the DualSense routed elsewhere, but
+    // not its own Switch Pad.
+    let env = h.s.pad_sdl_env(s(2));
+    let v = &env.iter().find(|(n, _)| n == "SDL_GAMECONTROLLER_IGNORE_DEVICES").unwrap().1;
+    assert_eq!(v, "0x054C/0x0CE6,0x1234/0x5678");
+    let env1 = h.s.pad_sdl_env(s(1));
+    assert!(env1.iter().any(|(_, v)| v == "0x057E/0x2009"));
+}
 #[test]
 fn pulsar_pairing_events_reach_admins_on_the_stream_topic_only() {
     use seat_proto::{Event, StreamEvent};

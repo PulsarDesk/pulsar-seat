@@ -79,6 +79,7 @@ impl RemoteSeat {
             stream: self.stream.clone(),
             stream_backend: self.stream_backend,
             last_mode: self.last_mode,
+            pad_ignore_devices: seat.pad_ignore_devices.clone(),
         }
     }
 
@@ -106,6 +107,7 @@ impl RemoteSeatRecord {
         let mut s = SeatConfig::new_remote(number, RemoteSeat::from_record(self));
         s.name = self.name.clone();
         s.autostart = self.start_with_service;
+        s.pad_ignore_devices = self.pad_ignore_devices.clone();
         s.account =
             if self.user_name.is_empty() { SeatAccount::LogonScreen } else { SeatAccount::Local { user: self.user_name.clone() } };
         s

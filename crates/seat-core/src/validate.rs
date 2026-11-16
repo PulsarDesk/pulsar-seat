@@ -64,6 +64,9 @@ pub enum IssueCode {
     /// Per-seat source address is not a usable IPv4 unicast address (spec 10 §7.4).
     /// Added 2026-11-13.
     InvalidIpAddress,
+    /// A `pad_ignore_devices` entry is not `0xVVVV/0xPPPP`, or the list is longer than
+    /// [`crate::config::MAX_PAD_IGNORE_DEVICES`]. Added 2026-11-17, error.
+    InvalidPadIgnoreDevice,
     /// Two seats got the same source address (warning).
     DuplicateIpAddress,
     /// The shared program list is longer than [`crate::config::MAX_IP_PROGRAMS`]; the
@@ -256,6 +259,7 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
         out.push(Issue::new(Severity::Error, IssueCode::HideFsuWithFastUserSwitch).field("settings.tweaks.hide_fast_user_switching"));
     }
     ip_checks(config, &mut out);
+    pad_ignore_checks(config, &mut out);
     kiosk_checks(config, &mut out);
     kind_checks(config, &mut out);
     for d in &config.devices {
@@ -398,6 +402,27 @@ fn kind_checks(config: &Config, out: &mut Vec<Issue>) {
     if !config.settings.backends.session.hosts_remote_seats() {
         for (n, _) in &remote {
             out.push(Issue::new(Severity::Warning, IssueCode::SessionUnavailable).seat(*n).field("settings.backends.session"));
+        }
+    }
+}
+
+/// `0xVVVV/0xPPPP` (also without `0x`, any case): four hex digits each.
+pub fn is_vid_pid(s: &str) -> bool {
+    let Some((v, p)) = s.trim().split_once('/') else { return false };
+    let ok = |x: &str| {
+        let x = x.trim();
+        let x = x.strip_prefix("0x").or_else(|| x.strip_prefix("0X")).unwrap_or(x);
+        x.len() == 4 && x.chars().all(|c| c.is_ascii_hexdigit())
+    };
+    ok(v) && ok(p)
+}
+
+/// SDL ignore lists per seat (2026-11-17).
+fn pad_ignore_checks(config: &Config, out: &mut Vec<Issue>) {
+    for s in &config.seats {
+        let l = &s.pad_ignore_devices;
+        if l.len() > crate::config::MAX_PAD_IGNORE_DEVICES || l.iter().any(|e| !is_vid_pid(e)) {
+            out.push(Issue::new(Severity::Error, IssueCode::InvalidPadIgnoreDevice).seat(s.number).field("pad_ignore_devices"));
         }
     }
 }
@@ -552,6 +577,23 @@ mod tests {
         assert_eq!(codes(&validate(&c, None)), vec![IssueCode::CloneNotAllowed]);
         c.settings.outputs.allow_clone = true;
         assert!(validate(&c, None).is_empty());
+    }
+
+    #[test]
+    fn pad_ignore_lists() {
+        assert!(is_vid_pid("0x045E/0x0B09") && is_vid_pid("045e/0b09") && is_vid_pid(" 0X054C / 0x0CE6 "));
+        assert!(!is_vid_pid("45e/b09") && !is_vid_pid("0x045E") && !is_vid_pid("0x045G/0x0B09"));
+        let mut c = Config::default();
+        c.seats[0].pad_ignore_devices = vec!["0x045E/0x0B09".into()];
+        assert!(validate(&c, None).is_empty());
+        c.seats[0].pad_ignore_devices.push("nope".into());
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::InvalidPadIgnoreDevice]);
+        c.seats[0].pad_ignore_devices = vec!["0x045E/0x0B09".into(); crate::config::MAX_PAD_IGNORE_DEVICES + 1];
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::InvalidPadIgnoreDevice]);
+        // Additive: absent in JSON, defaults on read.
+        let j = serde_json::to_value(Config::default()).unwrap();
+        assert!(j["seats"][0].get("pad_ignore_devices").is_none());
+        assert_eq!(j["settings"]["input"]["pad_device_scope"], true);
     }
 
     #[test]

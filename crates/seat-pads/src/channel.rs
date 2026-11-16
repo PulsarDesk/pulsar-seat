@@ -25,6 +25,22 @@ pub trait PadChannel: Send {
     fn input_event(&self) -> Option<isize> {
         None
     }
+    /// Media section (protocol 2): appends speaker / haptics PCM for the stream server.
+    /// `Ok(false)` when the channel has no media section or the block was dropped.
+    fn push_media_out(&mut self, _pcm: &[u8]) -> Result<bool, PadError> {
+        Ok(false)
+    }
+    /// Media section: microphone PCM the stream server wrote (at most `max` bytes, whole
+    /// frames).
+    fn read_media_in(&mut self, _max: usize) -> Result<Vec<u8>, PadError> {
+        Ok(Vec::new())
+    }
+    /// Media section: header flags (`layout::MEDIA_FLAG_*`).
+    fn set_media_flags(&mut self, _flags: u32) {}
+    /// The channel has the protocol 2 media section.
+    fn has_media(&self) -> bool {
+        false
+    }
 }
 
 pub trait ChannelFactory: Send + Sync {
@@ -53,6 +69,8 @@ pub struct ShmChannel<V: ShmView> {
     last_seq: u32,
     reader: OutputReader,
     qpc: Box<dyn Fn() -> u64 + Send>,
+    /// Protocol 2 media section and its event (set after each out write).
+    media: Option<(V, Box<dyn Signal>)>,
 }
 
 impl<V: ShmView> ShmChannel<V> {
@@ -71,7 +89,14 @@ impl<V: ShmView> ShmChannel<V> {
         shm::init_input(&input, kind_value);
         shm::init_output(&output);
         let reader = OutputReader::at_current(&output);
-        ShmChannel { base: base.to_string(), input, output, out_event, in_event, in_event_raw, last_seq: 0, reader, qpc }
+        ShmChannel { base: base.to_string(), input, output, out_event, in_event, in_event_raw, last_seq: 0, reader, qpc, media: None }
+    }
+
+    /// Adds the protocol 2 media section (initialised here).
+    pub fn with_media(mut self, media: V, event: Box<dyn Signal>) -> Result<Self, PadError> {
+        crate::media::init_media(&media).map_err(|e| PadError::Invalid(format!("media section: {e}")))?;
+        self.media = Some((media, event));
+        Ok(self)
     }
 }
 
@@ -115,6 +140,26 @@ impl<V: ShmView> PadChannel for ShmChannel<V> {
     fn input_event(&self) -> Option<isize> {
         self.in_event_raw
     }
+    fn push_media_out(&mut self, pcm: &[u8]) -> Result<bool, PadError> {
+        let Some((m, ev)) = &self.media else { return Ok(false) };
+        let ok = crate::media::write_ring(m, crate::media::Ring::Out, pcm);
+        if ok {
+            ev.set();
+        }
+        Ok(ok)
+    }
+    fn read_media_in(&mut self, max: usize) -> Result<Vec<u8>, PadError> {
+        let Some((m, _)) = &self.media else { return Ok(Vec::new()) };
+        Ok(crate::media::read_ring(m, crate::media::Ring::In, max, usize::from(layout::MEDIA_IN_CHANNELS) * 2))
+    }
+    fn set_media_flags(&mut self, flags: u32) {
+        if let Some((m, _)) = &self.media {
+            crate::media::set_flags(m, flags);
+        }
+    }
+    fn has_media(&self) -> bool {
+        self.media.is_some()
+    }
 }
 
 /// Heap sections registered by name, so tests can play stream server / driver.
@@ -124,11 +169,16 @@ pub type MemSections = (Arc<shm::MemShm>, Arc<shm::MemShm>);
 #[derive(Default, Clone)]
 pub struct MemChannelFactory {
     pub sections: Arc<Mutex<BTreeMap<String, MemSections>>>,
+    /// Protocol 2 media sections by base name.
+    pub media: Arc<Mutex<BTreeMap<String, Arc<shm::MemShm>>>>,
 }
 
 impl MemChannelFactory {
     pub fn sections_of(&self, base: &str) -> Option<MemSections> {
         self.sections.lock().unwrap().get(base).cloned()
+    }
+    pub fn media_of(&self, base: &str) -> Option<Arc<shm::MemShm>> {
+        self.media.lock().unwrap().get(base).cloned()
     }
 }
 
@@ -139,7 +189,9 @@ impl ChannelFactory for MemChannelFactory {
         }
         let i = shm::MemShm::new(layout::SECTION_SIZE);
         let o = shm::MemShm::new(layout::SECTION_SIZE);
+        let m = shm::MemShm::new(layout::MEDIA_SECTION_SIZE);
         self.sections.lock().unwrap().insert(base.to_string(), (i.clone(), o.clone()));
+        self.media.lock().unwrap().insert(base.to_string(), m.clone());
         Ok(Box::new(ShmChannel::create(
             base,
             kind_value,
@@ -149,7 +201,8 @@ impl ChannelFactory for MemChannelFactory {
             Box::new(NoSignal),
             None,
             Box::new(|| 0),
-        )))
+        )
+        .with_media(m, Box::new(NoSignal))?))
     }
 }
 
@@ -177,5 +230,14 @@ mod tests {
         let e = ch.read_output().unwrap();
         assert_eq!(e.len(), 2);
         assert!(f.create(&"x".repeat(200), 0).is_err());
+        // Protocol 2 media: out for the stream server, in from it.
+        let m = f.media_of("Global\\PulsarSplit_Pad_X_00").unwrap();
+        crate::media::validate_media(&*m).unwrap();
+        assert!(ch.push_media_out(&[1; 16]).unwrap());
+        assert_eq!(crate::media::read_ring(&*m, crate::media::Ring::Out, 64, 8), vec![1; 16]);
+        assert!(crate::media::write_ring(&*m, crate::media::Ring::In, &[2; 8]));
+        assert_eq!(ch.read_media_in(1024).unwrap(), vec![2; 8]);
+        ch.set_media_flags(layout::MEDIA_FLAG_SPEAKER);
+        assert_eq!(crate::media::flags(&*m), layout::MEDIA_FLAG_SPEAKER);
     }
 }

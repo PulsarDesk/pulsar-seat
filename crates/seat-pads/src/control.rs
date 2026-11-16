@@ -27,6 +27,11 @@ pub struct PadAttach {
     pub kind: PadKind,
     pub channel: String,
     pub protocol: u32,
+    /// Pulsar addition (2026-11-17, additive): the channel also has the protocol 2 media
+    /// section `<channel>_Media` (controller speaker / haptics / microphone PCM,
+    /// `seat_pads::media`). Absent = false; protocol 1 stream servers ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub media: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +102,7 @@ mod tests {
             kind: PadKind::XOne,
             channel: "Global\\PulsarSplit_Pad_X_02".into(),
             protocol: 1,
+            media: false,
         };
         let j = serde_json::to_string(&a).unwrap();
         assert!(j.contains(r#""kind":"xone""#), "{j}");

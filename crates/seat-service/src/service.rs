@@ -834,22 +834,10 @@ impl Service {
             }
             Err(e) => log::error_id(eventid::OWNERSHIP_FAILED, &format!("input routes: {e}")),
         }
-        // Touch screens and pens (HID digitizer page 0x0D) on a seat-host seat: the seat
-        // host's RDP control has no touch / pen input API, so their packets are dropped
-        // (seat-host `translate_input`). Show them as not routable until a client with
-        // RDPEI support exists (spec 50 §4.1.4).
-        {
-            let st = self.lock();
-            for r in &routes {
-                let hosted = r.mask.single().is_some_and(|s| !s.is_console() || dedicated);
-                let digitizer = st.inventory.get(&r.key).is_some_and(|e| {
-                    matches!(&e.device.details, seat_core::device::DeviceDetails::Input(i) if i.usage_page == 0x0d)
-                });
-                if hosted && digitizer {
-                    iso.insert(r.key.clone(), IsolationStatus::NotSupported);
-                }
-            }
-        }
+        // Touch screens and pens (HID digitizer page 0x0D) on a seat-host seat are routed
+        // since 2026-11-17: the default IronRDP host sends them as MS-RDPEI touch / pen
+        // frames (pressure, tilt, rotation, barrel, eraser, invert), or emulates the
+        // pointer when the server has no RDPEI channel (host note `touch_emulated_as_mouse`).
         let audio_masks: Vec<(DeviceKey, seat_core::SeatMask)> =
             eff.iter().filter(|e| matches!(e.kind, DeviceKind::AudioRender | DeviceKind::AudioCapture)).map(|e| (e.key.clone(), e.mask)).collect();
         self.factory.set_audio_masks(b.audio.kind(), audio_masks);

@@ -29,6 +29,7 @@ use crate::channel::{ChannelFactory, PadChannel};
 use crate::control::{DenyCode, DetachReason, PadAttach, PadDenied, PadDetach, PadWanted, ReleaseReason};
 use crate::error::PadError;
 use crate::ids;
+use crate::layout;
 use crate::mapping::{self, Resolved};
 use crate::owners::{plan_orphans, rfc3339, DeviceTree, OwnerStore, PadOwner, ProcessProbe};
 use crate::reports::{self, Counters};
@@ -45,6 +46,8 @@ pub const DETACH_TIMEOUT_MS: u64 = 2_000;
 pub const SECURE_INTERVAL_MS: u64 = 250;
 /// A pad whose device node is still unknown after this is logged as a warning.
 pub const INSTANCE_WARN_MS: u64 = 5_000;
+/// Microphone bytes moved per pump pass (20 ms of 2-channel 48 kHz s16le).
+pub const MIC_PER_PUMP: usize = 48 * 2 * 2 * 20;
 
 #[derive(Debug, Clone)]
 pub struct PadManagerConfig {
@@ -182,6 +185,16 @@ impl FeedbackSink for ManagerSink {
         self.upstream.raw_output(pad, source, report);
     }
     fn haptics_pcm(&self, pad: &PadId, channels: u8, rate_hz: u32, pcm: &[u8]) {
+        // Protocol 2: the stream server reads the pad's speaker / haptics audio from the
+        // media section (only 4-channel 48 kHz blocks: the ring's fixed format).
+        if channels as u16 == layout::MEDIA_OUT_CHANNELS && rate_hz == layout::MEDIA_RATE {
+            if let Ok(mut ch) = self.channel.lock() {
+                ch.set_media_flags(layout::MEDIA_FLAG_SPEAKER);
+                if let Err(e) = ch.push_media_out(pcm) {
+                    log::debug!("pad {pad}: media write failed: {e}");
+                }
+            }
+        }
         self.upstream.haptics_pcm(pad, channels, rate_hz, pcm);
     }
 }
@@ -295,6 +308,8 @@ impl PadManager {
             kind: lp.wire,
             channel: lp.channel_name.clone(),
             protocol: crate::layout::PROTOCOL,
+            // Controller audio exists only on the DualSense kinds (usbip-win2 composite).
+            media: lp.wire.is_playstation() && lp.wire != PadKind::Ds4 && lp.channel.lock().is_ok_and(|c| c.has_media()),
         }
     }
 
@@ -826,6 +841,13 @@ impl PadManager {
                     Err(e) => log::debug!("pad {}: output read: {e}", lp.pad_id),
                 }
                 continue;
+            }
+            // Protocol 2: the client's microphone, at most 20 ms per pass.
+            let mic = ch.read_media_in(MIC_PER_PUMP).unwrap_or_default();
+            if !mic.is_empty() {
+                if let Err(e) = lp.pad.submit_mic(&mic) {
+                    log::debug!("pad {}: mic: {e}", lp.pad_id);
+                }
             }
             match ch.read_input() {
                 Ok(Some(snap)) => {

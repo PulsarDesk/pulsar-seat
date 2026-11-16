@@ -113,11 +113,48 @@ pub struct TouchContact {
     pub y: u16,
     /// `down`, `update`, `up`, `hover` (pen).
     pub phase: String,
-    /// Pen only: pressure 0..=1024, tilt in degrees, eraser.
+    /// Pen only: pressure 0..=1024 (tilt, rotation and the pen buttons are in
+    /// [`TouchContact::pen_info`]).
     #[serde(default)]
     pub pressure: u16,
     #[serde(default)]
     pub pen: bool,
+    /// Pen only: tilt, rotation, barrel / eraser / inverted (MS-RDPEI pen fields,
+    /// `POINTER_PEN_INFO`). Additive 2026-11-17; absent = none of them reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pen_info: Option<PenInfo>,
+}
+
+/// Optional pen state of one pen contact (HID digitizer usages tilt X 0x3D, tilt Y 0x3E,
+/// twist 0x41 / azimuth 0x3F, barrel switch 0x44, eraser 0x45, invert 0x3C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PenInfo {
+    /// Degrees, -90..=90 (+ = to the right).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tilt_x: Option<i16>,
+    /// Degrees, -90..=90 (+ = towards the user).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tilt_y: Option<i16>,
+    /// Clockwise rotation in degrees, 0..=359.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<u16>,
+    /// Barrel (side) button held.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub barrel: bool,
+    /// Eraser end in use (eraser switch).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub eraser: bool,
+    /// Pen turned around (eraser end in range, invert usage).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inverted: bool,
+}
+
+impl PenInfo {
+    /// Nothing reported (no field worth sending).
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Per-unit activity (identify by touch, spec 10 §3.1).

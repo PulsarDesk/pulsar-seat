@@ -34,6 +34,8 @@ mod inventory;
 mod listener;
 mod local_pads;
 mod log;
+#[cfg(windows)]
+mod pad_runtime;
 mod loopback_plan;
 mod platform;
 mod remote;

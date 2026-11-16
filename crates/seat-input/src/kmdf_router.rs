@@ -941,7 +941,7 @@ mod tests {
         e.r.apply_routes(&[InputRoute { key: touch.clone(), mask: s(2).mask() }]).unwrap();
         assert_eq!(*e.hid.opened.lock().unwrap(), vec![ut::TOUCH_PATH.to_ascii_lowercase()]);
         let dev = e.hid.dev(ut::TOUCH_PATH);
-        let c = RawContact { id: 1, tip: true, in_range: true, x: 100, y: 200, pressure: 0 };
+        let c = RawContact { id: 1, tip: true, in_range: true, x: 100, y: 200, pressure: 0, ..RawContact::default() };
         dev.push(RawUnitEvent::Digitizer { contacts: vec![c], pen: false });
         wait_for(|| !got.lock().unwrap().is_empty());
         {
