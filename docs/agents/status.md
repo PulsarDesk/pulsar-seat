@@ -1716,3 +1716,12 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       **PausedCritical** (Hyper-V paused it on the full disk) and could not be restored to
       clean-logged-on. (3) x64 MSI rebuild and a VM re-run of U1 with 3e1003d once space is
       free.
+  - 2026-11-16 (morning, done): disk freed: 21 worktrees of another session removed (the
+    user allowed removing unneeded ones; the run went on after the user stopped it). The
+    branches were kept; the owning session confirmed nothing was lost. VM restored to clean-logged-on and Off.
+    x64 MSI rebuilt from the clean tree faf13c7 (includes a06d140): SHA-256
+    `401ea47039a9dccf25ea1e9ffe6f2c84312277afbfaa6efadd1ce831cc6a1726`, payload clean
+    outside and inside; stale 0.1.1 line dropped from SHA256SUMS.txt. U1 re-run: PASS
+    (faf13c7). Manager: remote seat rows and seat page say "Başlatılamaz: eşzamanlı oturum
+    yok" up front when the chosen or running session backend has no concurrent sessions
+    (a06d140).
