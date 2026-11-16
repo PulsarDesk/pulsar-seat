@@ -1796,3 +1796,14 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   TCP and UDP; WFP app ids of programs on network shares (`\device\mup\…`); dual-stack
   sockets classified at the V4 layers; the SID-string SDDL accepted by
   `WdfControlDeviceInitAllocate`; `pnputil /install` not starting the primitive service.
+- 2026-11-17 (integrate net-wfp): cherry-picked `worktree-wf_b025704c-d7f-5` (639c02c) onto
+  main as 5599a16. Only conflicts: the status.md and journal.md entries of the arm64 and
+  net-wfp rounds (both kept; the net-wfp status entry is now a top-level bullet). No code
+  conflicts; the MSI driver fragment is generic per staged package, so seat-wfp needs no WiX
+  change. All crate sources were touched before the gate runs (shared target dir hazard).
+  - Gates on main: cargo 1646 passed / 6 ignored (1629 + 2 arm64 workspace tests + 15
+    net-wfp; the arm64 entry's "1634" also counted shim tests), clippy aarch64 + x86_64
+    clean, shim 11 tests + check x86_64 / i686 / aarch64, manager 200 / check / build,
+    installer scripts 54, `build-drivers.ps1 -Projects seat-wfp` ARM64 + x64 Release + Debug
+    clean (PE 0xAA64 / 0x8664). No test deleted. Open HYPOTHESIS items as in the net-wfp
+    entry above (VM test plan in drivers/seat-wfp/README.md).
