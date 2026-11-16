@@ -22,10 +22,27 @@
 //! (each at its own mode, scaled). Mode follow (spec 40 §6.5): an output with
 //! `follow_mode` re-acquires its target at the seat session's resolution once that is
 //! stable and the target has that exact mode (otherwise it keeps scaling).
+//! HDR (spec 40 §6.6, added 2026-11-17): an output with `OutputPlacement::hdr` acquires
+//! an FP16 source mode whose HDR10 wire format (RGB 4:4:4, 10 bit, BT.2020, ST 2084) the
+//! target supports, sets that wire format on the path and scans out FP16 scRGB primaries
+//! (`R16G16B16A16Float` / `RgbFullG10NoneP709`, the format DWM composes HDR in). HDR
+//! frames (`present_hdr`) are uploaded as scRGB, SDR frames converted at the session's
+//! SDR white; the cursor and labels are blended in linear light. Without such a mode the
+//! output runs SDR and HDR frames are tone-mapped (`seat_core::backend::hdr::to_bgra8`).
+//! VRR (spec 40 §6.6): an output with `OutputPlacement::vrr` takes the highest refresh
+//! of its size and scans every frame out as it arrives with sync interval 0 and
+//! `DisplayScanoutOptions::AllowTearing`, so a variable-refresh panel follows the seat's
+//! frame rate instead of a fixed vblank (cursor-only scan-outs stay paced). HDCP: never
+//! (indirect displays do not carry protected content; documented limitation).
+//!
 //! Everything here is **untested on hardware** (HYPOTHESIS per GPU driver, spec 40 q4).
 
 use super::presenter::{premultiply, PresenterEvent, PresenterListener, WindowPresenter};
-use crate::model::{blend_cursor_region, closest_mode, pick_follow_mode, rotate_bgra, rotated, scale_nearest, ModeFollower, TargetInfo, MODE_FOLLOW_SETTLE};
+use crate::model::{
+    blend_cursor_region, blend_cursor_region_f16, closest_mode, pick_follow_mode, pick_presenter_mode, rotate_px, rotated, scale_nearest_px, ModeFollower,
+    TargetInfo, MODE_FOLLOW_SETTLE,
+};
+use seat_core::backend::hdr::{bgra8_to_scrgb_f16, to_bgra8, to_scrgb_f16, HdrFrameRef};
 use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, SeatOutputs};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_core::device::{DisplayMode, Presentation, Rect};
@@ -142,6 +159,28 @@ fn scanout_rotation(r: u16) -> u16 {
     }
 }
 
+/// Per-output scan-out options from the placement (spec 40 §6.6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct OutOpts {
+    hdr: bool,
+    vrr: bool,
+}
+
+/// SDR white of HDR scan-outs until the session reports its own (Windows' default SDR
+/// content brightness is around 200 nits; HYPOTHESIS).
+const DEFAULT_SDR_WHITE_NITS: f32 = 200.0;
+
+/// HDR10 wire format: RGB 4:4:4, 10 bits, BT.2020, ST 2084, HDR10 static metadata.
+fn hdr10_wire() -> windows_core::Result<DisplayWireFormat> {
+    DisplayWireFormat::CreateInstance(
+        DisplayWireFormatPixelEncoding::Rgb444,
+        10,
+        DisplayWireFormatColorSpace::BT2020,
+        DisplayWireFormatEotf::HdrSmpte2084,
+        DisplayWireFormatHdrMetadata::Hdr10,
+    )
+}
+
 /// One acquired special-purpose target.
 struct DcTarget {
     manager: DisplayManager,
@@ -173,10 +212,18 @@ struct DcTarget {
     /// Every mode of the path (native orientation) and the picked refresh rate.
     modes: Vec<DisplayMode>,
     refresh_mhz: u32,
+    /// What the placement asked for (kept across re-acquisitions).
+    opts: OutOpts,
+    /// HDR10 scan-out active: primaries and `last` are FP16 scRGB (8 bytes per pixel).
+    hdr: bool,
+    /// Bytes per pixel of `last` and the primaries (4 or 8).
+    bpp: usize,
+    /// SDR white of the seat session (from its HDR frames).
+    sdr_white_nits: f32,
 }
 
 impl DcTarget {
-    fn open(luid: u64, target_id: u32, want: Option<DisplayMode>) -> BackendResult<Self> {
+    fn open(luid: u64, target_id: u32, want: Option<DisplayMode>, opts: OutOpts) -> BackendResult<Self> {
         init_winrt();
         let e = |what: &'static str| move |err: windows_core::Error| dc_err("display_core_acquire_failed", what, &err);
         let manager = DisplayManager::Create(DisplayManagerOptions::None).map_err(e("DisplayManager::Create"))?;
@@ -195,13 +242,20 @@ impl DcTarget {
         let path = state.ConnectTarget(&target).map_err(e("ConnectTarget"))?;
         // Mode sync (spec 40 §6.5): every mode, then the one closest to the seat's mode.
         let mut infos = Vec::new();
+        // HDR (spec 40 §6.6): which modes take an FP16 source and the HDR10 wire format.
+        let wire = if opts.hdr { hdr10_wire().ok() } else { None };
+        let mut caps = Vec::new();
         for m in path.FindModes(DisplayModeQueryOptions::None).map_err(e("FindModes"))? {
             let sz = m.TargetResolution().map_err(e("TargetResolution"))?;
             let rate = m.PresentationRate().ok().map_or(0, |r| {
                 let v = r.VerticalSyncRate;
                 if v.Denominator == 0 { 0 } else { (v.Numerator as u64 * 1000 / v.Denominator as u64) as u32 }
             });
-            infos.push((m, DisplayMode { width: sz.Width.max(0) as u32, height: sz.Height.max(0) as u32, refresh_mhz: rate, rotation: 0 }));
+            let fp16 = m.SourcePixelFormat().ok() == Some(DirectXPixelFormat::R16G16B16A16Float);
+            let hdr_ok = fp16 && wire.as_ref().is_some_and(|w| m.IsWireFormatSupported(w).unwrap_or(false));
+            let d = DisplayMode { width: sz.Width.max(0) as u32, height: sz.Height.max(0) as u32, refresh_mhz: rate, rotation: 0 };
+            caps.push((d, fp16, hdr_ok));
+            infos.push((m, d));
         }
         let pick = match want {
             Some(w) => {
@@ -221,9 +275,25 @@ impl DcTarget {
                     .unwrap_or(0)
             }
         };
+        // HDR / VRR variant of the picked mode; an SDR scan-out avoids FP16 source modes.
+        let (mut idx, hdr) = pick_presenter_mode(&caps, idx, opts.hdr, opts.vrr);
+        if !hdr && caps.get(idx).is_some_and(|c| c.1) {
+            let d = caps[idx].0;
+            if let Some(j) = caps.iter().position(|c| c.0 == d && !c.1) {
+                idx = j;
+            }
+        }
+        if opts.hdr && !hdr {
+            log::info!("display core: target {target_id}: no FP16 + HDR10 mode; scanning out SDR (HDR frames are tone-mapped)");
+        }
         let modes: Vec<DisplayMode> = infos.iter().map(|(_, d)| *d).collect();
         let (mode, picked) = infos.into_iter().nth(idx).ok_or_else(|| BackendError::new(ErrorKind::NotReady, "no_mode", "no display mode"))?;
         path.ApplyPropertiesFromMode(&mode).map_err(e("ApplyPropertiesFromMode"))?;
+        if hdr {
+            if let Some(w) = &wire {
+                path.SetWireFormat(w).map_err(e("SetWireFormat"))?;
+            }
+        }
         let _ = path.SetScaling(DisplayPathScaling::AspectRatioStretched);
         let applied = state.TryApply(DisplayStateApplyOptions::None).map_err(e("TryApply"))?;
         if applied.Status().map_err(e("Status"))? != DisplayStateOperationStatus::Success {
@@ -236,15 +306,13 @@ impl DcTarget {
         let (lw, lh) = rotated(&DisplayMode { width, height, refresh_mhz: 0, rotation });
         let device = manager.CreateDisplayDevice(&target.Adapter().map_err(e("Adapter"))?).map_err(e("CreateDisplayDevice"))?;
         let source = device.CreateScanoutSource(&target).map_err(e("CreateScanoutSource"))?;
-        let desc = DisplayPrimaryDescription::CreateInstance(
-            width,
-            height,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            DirectXColorSpace::RgbFullG22NoneP709,
-            false,
-            Direct3DMultisampleDescription { Count: 1, Quality: 0 },
-        )
-        .map_err(e("DisplayPrimaryDescription"))?;
+        let (fmt, cs) = if hdr {
+            (DirectXPixelFormat::R16G16B16A16Float, DirectXColorSpace::RgbFullG10NoneP709)
+        } else {
+            (DirectXPixelFormat::B8G8R8A8UIntNormalized, DirectXColorSpace::RgbFullG22NoneP709)
+        };
+        let desc = DisplayPrimaryDescription::CreateInstance(width, height, fmt, cs, false, Direct3DMultisampleDescription { Count: 1, Quality: 0 })
+            .map_err(e("DisplayPrimaryDescription"))?;
         let mut surfaces = Vec::with_capacity(SURFACES);
         for _ in 0..SURFACES {
             surfaces.push(device.CreatePrimary(&target, &desc).map_err(e("CreatePrimary"))?);
@@ -274,6 +342,13 @@ impl DcTarget {
             }
         };
         let hz = if picked.refresh_mhz >= 1000 { picked.refresh_mhz } else { 60_000 };
+        let bpp = if hdr { 8 } else { 4 };
+        log::info!(
+            "display core: target {target_id} {width}x{height} @ {} mHz{}{}",
+            picked.refresh_mhz,
+            if hdr { ", HDR10" } else { "" },
+            if opts.vrr { ", variable refresh (tearing allowed)" } else { "" }
+        );
         Ok(Self {
             manager,
             target,
@@ -290,18 +365,58 @@ impl DcTarget {
             lw,
             lh,
             rotation,
-            last: vec![0; (lw * lh * 4) as usize],
+            last: vec![0; lw as usize * lh as usize * bpp],
             interval: Duration::from_micros(1_000_000_000 / hz as u64),
             last_show: None,
             overlay: None,
             blanked: false,
             modes,
             refresh_mhz: picked.refresh_mhz,
+            opts,
+            hdr,
+            bpp,
+            sdr_white_nits: DEFAULT_SDR_WHITE_NITS,
         })
     }
 
-    /// Copy a seat frame into `last` (scaled with letterbox when the size differs).
+    /// Copy `px` (tight rows of `bpp` bytes per pixel, `w`×`h`, already in this target's
+    /// pixel format) into `last`, scaled with letterbox when the size differs.
+    fn store_px(&mut self, px: &[u8], w: u32, h: u32) {
+        let (tw, th) = (self.lw, self.lh);
+        if w == tw && h == th && px.len() >= self.last.len() {
+            let n = self.last.len();
+            self.last.copy_from_slice(&px[..n]);
+        } else {
+            self.last = scale_nearest_px(px, w, h, w * self.bpp as u32, tw, th, self.bpp);
+        }
+    }
+
+    /// An HDR frame: scRGB on an HDR10 scan-out, tone-mapped SDR otherwise.
+    fn store_hdr(&mut self, frame: &HdrFrameRef<'_>) {
+        if self.hdr {
+            self.sdr_white_nits = frame.sdr_white_nits.max(1.0);
+            if let Some(px) = to_scrgb_f16(frame) {
+                self.store_px(&px, frame.width, frame.height);
+            }
+        } else if let Some(px) = to_bgra8(frame) {
+            self.store_px(&px, frame.width, frame.height);
+        }
+    }
+
+    /// Copy a seat frame into `last` (scaled with letterbox when the size differs). An
+    /// HDR10 scan-out converts the SDR frame to scRGB at the session's SDR white.
     fn store(&mut self, frame: &FrameRef<'_>) {
+        if self.hdr {
+            let row = frame.width as usize * 4;
+            let mut tight = Vec::with_capacity(row * frame.height as usize);
+            for y in 0..frame.height as usize {
+                let s = y * frame.stride as usize;
+                tight.extend_from_slice(&frame.data[s..s + row]);
+            }
+            let px = bgra8_to_scrgb_f16(&tight, self.sdr_white_nits);
+            self.store_px(&px, frame.width, frame.height);
+            return;
+        }
         let (tw, th) = (self.lw, self.lh);
         if frame.width == tw && frame.height == th {
             let row = (tw * 4) as usize;
@@ -310,8 +425,14 @@ impl DcTarget {
                 self.last[y * row..(y + 1) * row].copy_from_slice(&frame.data[s..s + row]);
             }
         } else {
-            self.last = scale_nearest(frame.data, frame.width, frame.height, frame.stride, tw, th);
+            self.last = scale_nearest_px(frame.data, frame.width, frame.height, frame.stride, tw, th, 4);
         }
+    }
+
+    /// Our own BGRA8 frame (message, blank screen) into `last`, converted on an HDR10
+    /// scan-out.
+    fn store_bgra(&mut self, bgra: Vec<u8>) {
+        self.last = if self.hdr { bgra8_to_scrgb_f16(&bgra, self.sdr_white_nits) } else { bgra };
     }
 
     /// Compose `last` + cursor + identify label (or black when blanked), rotate it into
@@ -324,21 +445,31 @@ impl DcTarget {
         if !self.blanked {
             if let Some((c, pm)) = cursor {
                 if c.visible && c.width > 0 {
-                    blend_cursor(&mut f, self.lw, self.lh, c, pm);
+                    if self.hdr {
+                        if cursor_shape_ok(c, pm) {
+                            blend_cursor_region_f16(&mut f, &Rect { x: 0, y: 0, width: self.lw, height: self.lh }, c, pm, self.sdr_white_nits);
+                        }
+                    } else {
+                        blend_cursor(&mut f, self.lw, self.lh, c, pm);
+                    }
                 }
             }
             if let Some((label, until)) = &self.overlay {
                 if Instant::now() < *until {
-                    draw_label(&mut f, self.lw, self.lh, label);
+                    if self.hdr {
+                        draw_label_f16(&mut f, self.lw, self.lh, label, self.sdr_white_nits);
+                    } else {
+                        draw_label(&mut f, self.lw, self.lh, label);
+                    }
                 } else {
                     self.overlay = None;
                 }
             }
         }
-        let data = if self.rotation == 0 { f } else { rotate_bgra(&f, self.lw, self.lh, scanout_rotation(self.rotation)).0 };
+        let data = if self.rotation == 0 { f } else { rotate_px(&f, self.lw, self.lh, scanout_rotation(self.rotation), self.bpp).0 };
         let tex = &self.textures[self.back];
         unsafe {
-            self.ctx.UpdateSubresource(tex, 0, None, data.as_ptr() as *const _, self.width * 4, 0);
+            self.ctx.UpdateSubresource(tex, 0, None, data.as_ptr() as *const _, self.width * self.bpp as u32, 0);
         }
         let e = |what: &'static str| move |err: windows_core::Error| dc_err("display_core_present", what, &err);
         let wait = match &mut self.sync {
@@ -354,10 +485,16 @@ impl DcTarget {
         unsafe {
             self.ctx.Flush();
         }
-        let scanout = self
-            .device
-            .CreateSimpleScanout(&self.source, &self.surfaces[self.back], 0, 1)
-            .map_err(e("CreateSimpleScanout"))?;
+        let scanout = if self.opts.vrr {
+            // VRR: no vblank wait; tearing allowed so the panel's variable refresh follows
+            // the frame rate (HYPOTHESIS per GPU driver).
+            let none: windows_collections::IIterable<windows::Graphics::RectInt32> = Vec::<windows::Graphics::RectInt32>::new().into();
+            self.device
+                .CreateSimpleScanoutWithDirtyRectsAndOptions(&self.source, &self.surfaces[self.back], 0, 0, &none, DisplayScanoutOptions::AllowTearing)
+                .map_err(e("CreateSimpleScanoutWithDirtyRectsAndOptions"))?
+        } else {
+            self.device.CreateSimpleScanout(&self.source, &self.surfaces[self.back], 0, 1).map_err(e("CreateSimpleScanout"))?
+        };
         let task = self.pool.CreateTask().map_err(e("CreateTask"))?;
         task.SetScanout(&scanout).map_err(e("SetScanout"))?;
         if let Some((fence, v)) = wait {
@@ -438,6 +575,18 @@ fn draw_label(frame: &mut [u8], w: u32, h: u32, label: &str) {
     }
 }
 
+/// [`draw_label`] on an FP16 scRGB frame (8 bytes per pixel).
+fn draw_label_f16(frame: &mut [u8], w: u32, h: u32, label: &str, sdr_white_nits: f32) {
+    let side = (h / 4).clamp(64, 512).min(w).min(h);
+    let margin = (side / 8).min(w - side).min(h - side);
+    let img = bgra8_to_scrgb_f16(&render_message(side, side, label), sdr_white_nits);
+    for y in 0..side as usize {
+        let d = ((y + margin as usize) * w as usize + margin as usize) * 8;
+        let s = y * side as usize * 8;
+        frame[d..d + side as usize * 8].copy_from_slice(&img[s..s + side as usize * 8]);
+    }
+}
+
 /// Validate a frame like `WindowPresenter::present` does.
 fn frame_ok(frame: &FrameRef<'_>) -> bool {
     let row = frame.width as usize * 4;
@@ -455,8 +604,9 @@ enum Slot {
     Dc(Box<DcTarget>),
     /// Presenter target not acquired (yet) or lost (unplugged, stale, adapter reset,
     /// resume): frames are dropped and acquisition is retried every [`RETRY`].
-    Lost { luid: u64, target_id: u32, want: Option<DisplayMode>, last_try: Instant },
+    Lost { luid: u64, target_id: u32, want: Option<DisplayMode>, last_try: Instant, opts: OutOpts },
 }
+
 
 /// Seat-host presenter for `display_core` / `pulsar_idd`: Display Core scan-out for
 /// `presenter` outputs, window presenter for `fallback` outputs.
@@ -537,9 +687,10 @@ impl HybridPresenter {
         let luid = target_luid(&t.target).unwrap_or(0);
         let target_id = t.target.AdapterRelativeId().unwrap_or(0);
         let old = DisplayMode { width: t.width, height: t.height, refresh_mhz: t.refresh_mhz, rotation: rot };
+        let opts = t.opts;
         // Release before acquiring again.
-        self.slots[i] = Slot::Lost { luid, target_id, want: Some(old), last_try: Instant::now() };
-        match DcTarget::open(luid, target_id, Some(m)) {
+        self.slots[i] = Slot::Lost { luid, target_id, want: Some(old), last_try: Instant::now(), opts };
+        match DcTarget::open(luid, target_id, Some(m), opts) {
             Ok(nt) => {
                 log::info!("display core: output {i} now {}x{} @ {} mHz (seat session resolution)", m.width, m.height, m.refresh_mhz);
                 let cur = (nt.lw, nt.lh);
@@ -550,7 +701,7 @@ impl HybridPresenter {
             }
             Err(e) => {
                 log::warn!("display core: output {i}: mode {}x{} failed ({e}); keeping the previous mode", m.width, m.height);
-                match DcTarget::open(luid, target_id, Some(old)) {
+                match DcTarget::open(luid, target_id, Some(old), opts) {
                     Ok(nt) => self.slots[i] = Slot::Dc(Box::new(nt)),
                     Err(e) => {
                         log::warn!("display core: output {i} lost after a mode change: {e}");
@@ -563,14 +714,14 @@ impl HybridPresenter {
 
     /// Retry a lost output when its retry time has come. True when it is acquired now.
     fn revive(&mut self, i: usize) -> bool {
-        let Some(Slot::Lost { luid, target_id, want, last_try }) = self.slots.get(i) else {
+        let Some(Slot::Lost { luid, target_id, want, last_try, opts }) = self.slots.get(i) else {
             return matches!(self.slots.get(i), Some(Slot::Dc(_)));
         };
         if last_try.elapsed() < RETRY {
             return false;
         }
-        let (luid, target_id, want) = (*luid, *target_id, *want);
-        match DcTarget::open(luid, target_id, want) {
+        let (luid, target_id, want, opts) = (*luid, *target_id, *want, *opts);
+        match DcTarget::open(luid, target_id, want, opts) {
             Ok(t) => {
                 log::info!("display core: output {i} acquired again");
                 if let Some(Some(f)) = self.followers.get_mut(i) {
@@ -582,7 +733,7 @@ impl HybridPresenter {
             }
             Err(e) => {
                 log::debug!("display core: output {i} still unavailable: {e}");
-                self.slots[i] = Slot::Lost { luid, target_id, want, last_try: Instant::now() };
+                self.slots[i] = Slot::Lost { luid, target_id, want, last_try: Instant::now(), opts };
                 false
             }
         }
@@ -595,8 +746,9 @@ impl HybridPresenter {
         let luid = target_luid(&t.target).unwrap_or(0);
         let target_id = t.target.AdapterRelativeId().unwrap_or(0);
         let want = Some(DisplayMode { width: t.width, height: t.height, refresh_mhz: 0, rotation: t.rotation });
+        let opts = t.opts;
         // Dropping the DcTarget releases the target.
-        self.slots[i] = Slot::Lost { luid, target_id, want, last_try: Instant::now() };
+        self.slots[i] = Slot::Lost { luid, target_id, want, last_try: Instant::now(), opts };
         self.emit(i, false);
     }
 
@@ -652,11 +804,12 @@ impl FrameSink for HybridPresenter {
         let mut lost = Vec::new();
         for (i, o) in outputs.outputs.iter().enumerate() {
             if o.presentation == Presentation::Presenter {
-                match DcTarget::open(o.adapter_luid, o.target_id, o.mode) {
+                let opts = OutOpts { hdr: o.hdr, vrr: o.vrr };
+                match DcTarget::open(o.adapter_luid, o.target_id, o.mode, opts) {
                     Ok(t) => self.slots.push(Slot::Dc(Box::new(t))),
                     Err(e) => {
                         log::warn!("display core: output {} not acquired: {e}", o.key);
-                        self.slots.push(Slot::Lost { luid: o.adapter_luid, target_id: o.target_id, want: o.mode, last_try: Instant::now() });
+                        self.slots.push(Slot::Lost { luid: o.adapter_luid, target_id: o.target_id, want: o.mode, last_try: Instant::now(), opts });
                         lost.push(i);
                     }
                 }
@@ -717,8 +870,38 @@ impl FrameSink for HybridPresenter {
         Ok(())
     }
 
+    /// HDR frames: scRGB on HDR10 outputs, tone-mapped elsewhere (window outputs and SDR
+    /// targets), see the module docs.
+    fn present_hdr(&mut self, frame: &HdrFrameRef<'_>) -> BackendResult<()> {
+        if !frame.is_valid() {
+            return Err(BackendError::new(ErrorKind::Internal, "bad_frame", "HDR frame buffer smaller than its size"));
+        }
+        let targets = self.showing(frame.output);
+        let any_window = targets.is_empty() || targets.iter().any(|&i| matches!(self.slots.get(i), Some(Slot::Window)));
+        let dc: Vec<usize> = targets.into_iter().filter(|&i| !matches!(self.slots.get(i), Some(Slot::Window))).collect();
+        let now = Instant::now();
+        for i in dc {
+            if !self.revive(i) {
+                continue;
+            }
+            let want = self.followers.get_mut(i).and_then(|f| f.as_mut()).and_then(|f| f.observe((frame.width, frame.height), now));
+            if let Some(size) = want {
+                self.follow(i, size);
+            }
+            if let Some(Slot::Dc(t)) = self.slots.get_mut(i) {
+                t.store_hdr(frame);
+            }
+            self.show(i);
+        }
+        if any_window {
+            self.window.present_hdr(frame)?;
+        }
+        Ok(())
+    }
+
     fn cursor(&mut self, c: &CursorState) -> BackendResult<()> {
         if !c.shape.is_empty() {
+
             self.cursor_pm = premultiply(&c.shape);
         }
         let old_out = self.cursor.output;
@@ -755,7 +938,7 @@ impl FrameSink for HybridPresenter {
     fn blank(&mut self, message: &str) -> BackendResult<()> {
         for i in 0..self.slots.len() {
             if let Some(Slot::Dc(t)) = self.slots.get_mut(i) {
-                t.last = render_message(t.lw, t.lh, message);
+                t.store_bgra(render_message(t.lw, t.lh, message));
                 // Message frames never carry the seat's cursor.
                 if let Err(e) = t.show(None) {
                     self.lose(i, &e);

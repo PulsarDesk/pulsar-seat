@@ -226,6 +226,50 @@ pub struct LocalSeat {
     /// session, so a game in this seat may see both pads.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub virtual_pads: bool,
+    /// Which GPU the seat user's chosen apps prefer (spec 40 §6.4; added 2026-11-17,
+    /// additive): the service writes the per-user graphics preference Windows Settings
+    /// writes (`HKCU\Software\Microsoft\DirectX\UserGpuPreferences`) into the seat user's
+    /// hive at each logon, journaled and undone on disable. A preference, not isolation:
+    /// apps still see every GPU.
+    #[serde(skip_serializing_if = "GpuPreference::is_default")]
+    pub gpu_preference: GpuPreference,
+}
+
+/// Per-seat GPU preference (see [`LocalSeat::gpu_preference`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GpuPreference {
+    pub mode: GpuPreferenceMode,
+    /// Full paths of the programs (`C:\Games\x\game.exe`), at most [`MAX_GPU_PREF_APPS`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub apps: Vec<String>,
+}
+
+impl GpuPreference {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// Most programs per seat in [`GpuPreference::apps`].
+pub const MAX_GPU_PREF_APPS: usize = 64;
+
+/// What [`GpuPreference::apps`] prefer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuPreferenceMode {
+    /// Nothing written (Windows decides).
+    #[default]
+    Off,
+    /// The GPU that drives the seat's monitors: written as "high performance" or "power
+    /// saving", whichever Windows ranks that GPU as (`IDXGIFactory6::
+    /// EnumAdapterByGpuPreference`). Nothing is written when both are the same GPU, or
+    /// when the seat's GPU is neither (a third GPU: no documented value names it).
+    SeatGpu,
+    /// `GpuPreference=2;` (Windows' high-performance GPU).
+    HighPerformance,
+    /// `GpuPreference=1;` (Windows' power-saving GPU).
+    PowerSaving,
 }
 
 impl LocalSeat {

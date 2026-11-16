@@ -21,6 +21,13 @@
 //!   through a small staging copy, is blended on the CPU and written into the back
 //!   buffer), so the frame texture stays clean.
 //!
+//! - VRR (`OutputPlacement::vrr`, spec 40 §6.6, added 2026-11-17): where DXGI reports
+//!   `DXGI_FEATURE_PRESENT_ALLOW_TEARING`, the chain is created with
+//!   `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` and presents with sync interval 0 +
+//!   `DXGI_PRESENT_ALLOW_TEARING`: on a borderless window that covers the monitor this is
+//!   the documented windowed variable-refresh path, so a VRR panel follows the seat's frame
+//!   rate. Without the feature the chain stays vblank-paced.
+//!
 //! Untested on hardware (GPU frames: HYPOTHESIS that cross-device keyed-mutex sharing
 //! works on the target drivers).
 
@@ -67,15 +74,33 @@ pub struct FlipChain {
     /// Adapter the device runs on (`HighPart << 32 | LowPart`).
     luid: u64,
     opened: Vec<Opened>,
+    /// Variable refresh: tearing presents (sync interval 0).
+    tearing: bool,
 }
 
-fn flags() -> DXGI_SWAP_CHAIN_FLAG {
-    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+fn flags(tearing: bool) -> DXGI_SWAP_CHAIN_FLAG {
+    if tearing {
+        DXGI_SWAP_CHAIN_FLAG(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0)
+    } else {
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
+    }
+}
+
+/// `DXGI_FEATURE_PRESENT_ALLOW_TEARING` of a factory (false when unknown).
+fn tearing_supported(factory: &IDXGIFactory2) -> bool {
+    let Ok(f5) = factory.cast::<IDXGIFactory5>() else { return false };
+    let mut allow = windows_core::BOOL(0);
+    // SAFETY: the out buffer is a BOOL of the size passed.
+    unsafe {
+        f5.CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &mut allow as *mut _ as *mut _, std::mem::size_of_val(&allow) as u32).is_ok()
+            && allow.as_bool()
+    }
 }
 
 impl FlipChain {
-    /// Swap chain for `hwnd` (client `w`×`h`) on the adapter `luid` (0 = default).
-    pub fn new(hwnd: HWND, luid: u64, w: u32, h: u32) -> BackendResult<Self> {
+    /// Swap chain for `hwnd` (client `w`×`h`) on the adapter `luid` (0 = default); `vrr`
+    /// asks for tearing presents where DXGI supports them (see the module docs).
+    pub fn new(hwnd: HWND, luid: u64, w: u32, h: u32, vrr: bool) -> BackendResult<Self> {
         let e = |what: &'static str| move |err: windows_core::Error| win_err("flip_presenter", what, &err);
         let (dev, ctx) = match super::dcore::d3d_for_luid(luid) {
             Ok(d) => d,
@@ -88,6 +113,10 @@ impl FlipChain {
             let dxgi_dev: IDXGIDevice = dev.cast().map_err(e("IDXGIDevice"))?;
             let adapter = dxgi_dev.GetAdapter().map_err(e("GetAdapter"))?;
             let factory: IDXGIFactory2 = adapter.GetParent().map_err(e("IDXGIFactory2"))?;
+            let tearing = vrr && tearing_supported(&factory);
+            if vrr && !tearing {
+                log::info!("flip: variable refresh asked for, but DXGI has no tearing support here; vblank-paced");
+            }
             let desc = DXGI_SWAP_CHAIN_DESC1 {
                 Width: w.max(1),
                 Height: h.max(1),
@@ -99,7 +128,7 @@ impl FlipChain {
                 Scaling: DXGI_SCALING_STRETCH,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                 AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                Flags: flags().0 as u32,
+                Flags: flags(tearing).0 as u32,
             };
             let chain1 = factory.CreateSwapChainForHwnd(&dev, hwnd, &desc, None, None).map_err(e("CreateSwapChainForHwnd"))?;
             let _ = factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
@@ -110,7 +139,7 @@ impl FlipChain {
                 return Err(BackendError::new(ErrorKind::Os, "flip_presenter", "no frame latency waitable object"));
             }
             let luid = adapter.GetDesc().map(|d| super::luid_u64(d.AdapterLuid)).unwrap_or(0);
-            Ok(Self { ctx, dev, chain, waitable, buf: (w.max(1), h.max(1)), content: None, luid, opened: Vec::new() })
+            Ok(Self { ctx, dev, chain, waitable, buf: (w.max(1), h.max(1)), content: None, luid, opened: Vec::new(), tearing })
         }
     }
 
@@ -280,7 +309,7 @@ impl FlipChain {
         let (bw, bh, ox, oy) = if cw == 0 { (ww.max(1), wh.max(1), 0, 0) } else { flip_buffer(cw, ch, ww, wh) };
         unsafe {
             if self.buf != (bw, bh) {
-                self.chain.ResizeBuffers(0, bw, bh, DXGI_FORMAT_UNKNOWN, flags()).map_err(e("ResizeBuffers"))?;
+                self.chain.ResizeBuffers(0, bw, bh, DXGI_FORMAT_UNKNOWN, flags(self.tearing)).map_err(e("ResizeBuffers"))?;
                 self.buf = (bw, bh);
             }
             let back: ID3D11Texture2D = self.chain.GetBuffer(0).map_err(e("GetBuffer"))?;
@@ -307,7 +336,8 @@ impl FlipChain {
             }
             drop(rtv);
             drop(back);
-            let hr = self.chain.Present(1, DXGI_PRESENT(0));
+            let hr = if self.tearing { self.chain.Present(0, DXGI_PRESENT_ALLOW_TEARING) } else { self.chain.Present(1, DXGI_PRESENT(0)) };
+
             if hr.is_err() {
                 return Err(BackendError::new(ErrorKind::Os, "flip_presenter", format!("Present failed: {hr:?}")).with_win32(hr.0 as u32));
             }

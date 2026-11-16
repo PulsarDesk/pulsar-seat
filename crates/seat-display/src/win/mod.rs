@@ -94,6 +94,27 @@ pub fn qpc_now() -> (u64, u64) {
     (t.max(0) as u64, f.max(0) as u64)
 }
 
+/// The hardware adapters Windows ranks as (high performance, minimum power), as LUIDs
+/// (`IDXGIFactory6::EnumAdapterByGpuPreference`, index 0 of each order; software adapters
+/// skipped). Used to translate a seat's "its own GPU" preference into the documented
+/// `GpuPreference` numbers (spec 40 §6.4). `(None, None)` when DXGI cannot tell.
+pub fn gpu_ranks() -> (Option<u64>, Option<u64>) {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory6, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_GPU_PREFERENCE, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+        DXGI_GPU_PREFERENCE_MINIMUM_POWER,
+    };
+    let Ok(f) = (unsafe { CreateDXGIFactory1::<IDXGIFactory6>() }) else { return (None, None) };
+    let first = |p: DXGI_GPU_PREFERENCE| -> Option<u64> {
+        (0..8u32).find_map(|i| {
+            // SAFETY: COM calls on a live factory; the adapter is released on drop.
+            let a: IDXGIAdapter1 = unsafe { f.EnumAdapterByGpuPreference(i, p) }.ok()?;
+            let d = unsafe { a.GetDesc1() }.ok()?;
+            ((d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) == 0).then(|| luid_u64(d.AdapterLuid))
+        })
+    };
+    (first(DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE), first(DXGI_GPU_PREFERENCE_MINIMUM_POWER))
+}
+
 /// Session id of this process (0 = services session).
 pub fn current_session_id() -> u32 {
     use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;

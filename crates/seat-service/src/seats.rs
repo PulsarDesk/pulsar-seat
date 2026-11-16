@@ -983,7 +983,32 @@ impl Service {
         }
     }
 
+    /// Per-seat GPU preference (spec 40 §6.4): translate the seat's setting into the
+    /// `GpuPreference` number Windows understands (the seat's GPU ranked by Windows as high
+    /// performance or power saving) and let the platform write the seat user's values,
+    /// journaled. An unexpressible "seat GPU" (single GPU, third GPU, no monitor yet) writes
+    /// nothing and undoes earlier values of this user; it is logged and reported.
+    pub(crate) fn sync_seat_gpu_preference(&self, seat: SeatNumber, sid: &str, pref: &seat_core::config::GpuPreference, seat_luid: Option<u64>) {
+        use seat_core::config::GpuPreferenceMode;
+        let (high, low) = if pref.mode == GpuPreferenceMode::SeatGpu { self.platform.gpu_ranks() } else { (None, None) };
+        let value = match seat_compat::gpu_pref::resolve(pref.mode, seat_luid, high, low) {
+            Ok(v) => v,
+            Err(reason) => {
+                log::warn(&format!("seat {seat}: GPU preference not applied: {reason}"));
+                self.notice("gpu_preference_unavailable", Some(seat), reason.to_string());
+                None
+            }
+        };
+        let value = value.filter(|_| !pref.apps.is_empty());
+        match self.platform.sync_gpu_preference(sid, &pref.apps, value) {
+            Ok(s) if !s.is_empty() => log::info(&format!("seat {seat}: GPU preference: {s}")),
+            Ok(_) => {}
+            Err(e) => log::warn(&format!("seat {seat}: GPU preference: {e}")),
+        }
+    }
+
     /// A seat's user signed in: last user, same-account policy, agent, gate re-plan.
+
     pub(crate) fn on_seat_logon(&self, seat: SeatNumber, session_id: u32, user: SessionUser) {
         let agent_needed = {
             let mut st = self.lock();
@@ -1063,6 +1088,14 @@ impl Service {
             };
             (job, addr, apps)
         };
+        // Per-seat GPU preference (spec 40 §6.4) in the seat user's hive, journaled.
+        let (gpu_pref, gpu_luid) = {
+            let st = self.lock();
+            let pref = st.config.seat(seat).map(|c| c.local_settings().gpu_preference.clone()).unwrap_or_default();
+            let luid = st.seats.get(&seat).and_then(|s| s.outputs.as_ref()).and_then(|o| o.outputs.first()).map(|p| p.adapter_luid);
+            (pref, luid)
+        };
+        self.sync_seat_gpu_preference(seat, &user.sid, &gpu_pref, gpu_luid);
         if agent_needed {
             let exe = self.platform.install_dir().join(AGENT_EXE);
             let spec = LaunchSpec {
