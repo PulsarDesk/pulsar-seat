@@ -1725,3 +1725,31 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     (faf13c7). Manager: remote seat rows and seat page say "Başlatılamaz: eşzamanlı oturum
     yok" up front when the chosen or running session backend has no concurrent sessions
     (a06d140).
+  - **2026-11-17 parity round, package display-gpu (branch of this worktree).** Built,
+    unit-tested, nothing ran on hardware (every runtime claim below is HYPOTHESIS):
+    - **One IddCx adapter per render GPU** (seat-idd interface minor 3): adapters bind to a
+      render LUID, `GET_ADAPTER_INFO`, `STATUS_DEVICE_BUSY` for another GPU; the service
+      creates `SWD\PulsarSeatIdd\gpuN` software devnodes (`PulsarSeatIdd_Adapter`) and
+      routes each virtual monitor to its GPU's adapter (`seat_display::idd_adapters`,
+      `win::swdevice`, `win::idd::WinIdd`). The old "multi-GPU unsupported" warning is gone.
+    - **HDR / VRR for seats 2..N:** per-monitor `hdr` / `vrr` options (manager "Görüntü
+      çıkışları"); local IddCx role with IddCx 1.10 callbacks, FP16 / 10-bit frames +
+      HDR10 metadata; Display Core HDR10 scan-out (FP16 scRGB primaries, HDR10 wire
+      format) and tearing presents for VRR; flip chain VRR (tearing); SDR fallbacks
+      tone-mapped. HDCP documented as not available (troubleshooting, READMEs).
+    - **Per-seat GPU preference:** `local.gpu_preference` → seat user's
+      `UserGpuPreferences` at logon, journaled (`Change::UserGpuPreference`), undone on
+      disable / reset / uninstall; manager column "Ekran kartı tercihi".
+    - **EGFX:** AVC444 / AVC444v2 composed on the GPU (compute + pixel shaders; model
+      tested against IronRDP, HLSL tested on WARP), vendor async hardware H.264 MFT first
+      with fallback ladder (dev box has none: fallback path ran), latency percentiles.
+    - Gates: cargo test --workspace, clippy aarch64 + x86_64, manager test (201) / check /
+      build, bun test installer/scripts, build-drivers seat-idd ARM64 + x64 clean.
+      Shared target dir note: worktrees share artifact hashes in `target\wf` (cargo hashes
+      path deps relative to the workspace), so this round built with
+      `RUSTFLAGS=-C target-feature=+crt-static -C metadata=wfdisplaygpu` to keep its own
+      artifacts.
+    - Open (hardware): extra adapter devnodes start next to the root one; one render GPU
+      per IddCx adapter honoured; FP16 frames / HDR10 scan-out on real panels; VRR through
+      tearing presents on Display Core targets; NV12 slice copies for the AVC444 shaders
+      on x64 GPUs / Adreno; vendor async MFT behaviour (x64 GPUs).

@@ -385,7 +385,6 @@ impl IddControl for WinIdd {
 pub const LATENCY_LOG_EVERY: u64 = 600;
 
 /// Seat-host reader of one virtual monitor's frame section.
-
 pub struct IddFrameReader {
     // Field order = drop order: unmap the view before closing the mapping.
     view: View,
@@ -635,7 +634,7 @@ pub fn pump(reader: &mut IddFrameReader, sink: &mut dyn FrameSink, output: usize
             if let Some(d) = seat_core::latency::ticks_to_duration(f.written_qpc, now, freq) {
                 present.record(d);
             }
-            if present.count() > 0 && present.count().is_multiple_of(LATENCY_LOG_EVERY) {
+            if present.count() > 0 && present.count() % LATENCY_LOG_EVERY == 0 {
                 log::info!("idd: output {output} latency: driver copy {} | to presented {}", copy.summary(), present.summary());
             }
         }

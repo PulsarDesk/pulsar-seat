@@ -11,11 +11,23 @@ Adlar (hepsi Pulsar Seat'e aittir):
 | --- | --- | --- | --- |
 | Klavye / fare / HID süzgeci | `PulsarSeatInput` | `seat-input-filter.inf` | `seatinput.sys` |
 | USB depolama kapısı (minifilter) | `PulsarSeatStorageGate` | `seat-storage-filter.inf` | `pulsarseatstoragegate.sys` |
-| Sanal ekran (IddCx) | aygıt `Root\PulsarSeatIdd` | `seat-idd.inf` | `seat-idd.dll` |
+| Sanal ekran (IddCx) | aygıt `Root\PulsarSeatIdd` (ek ekran kartı başına bir `SWD\PulsarSeatIdd\gpuN`; hizmet durunca kaybolur) | `seat-idd.inf` | `seat-idd.dll` |
 | Pulsar Seat hizmeti | `PulsarSeat` | — | `pulsar-seat-service.exe` |
 | Oturum açma bileşeni (kimlik sağlayıcı + süzgeç) | — | — | `pulsar-seat-credprov.dll` |
 
 Sürücü deposundaki adı Windows `oem<N>.inf` olarak verir (`N` her bilgisayarda farklıdır).
+
+Bilinen sınırlar (görüntü):
+
+- Kopya korumalı (HDCP) görüntü 2. ve sonraki koltuklarda gösterilmez (ör. bazı film
+  uygulamaları siyah ekran gösterir). Bu bir arıza değildir; bu koltukların ekranı sanal
+  ekran ve Pulsar Seat'in kendi gösterimi üzerinden gelir.
+- HDR ve değişken yenileme (VRR) yalnızca ekrandan "Görüntü çıkışları" penceresinde
+  açılırsa ve ekran destekliyorsa çalışır. Koltuğun ekranı masaüstünden çıkarılmamışsa
+  (yedek gösterim) HDR yoktur, görüntü SDR olarak gösterilir.
+- Ekran kartı tercihi Windows'un grafik ayarlarındaki kaydı kullanır; koltuk kullanıcısı
+  oturum açınca yazılır, Pulsar Seat kapatılınca geri alınır. Kullanıcı aynı programı
+  Windows ayarlarında değiştirirse onun seçimi korunur.
 
 ## 1. Windows açılıyor: önce Pulsar Seat'i kapatın
 

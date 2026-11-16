@@ -766,6 +766,53 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   whose owner is gone; a host of another account cannot, so that mode stays until logoff
   or reboot) and Display Core re-acquires the
   target at that mode (previous mode restored on failure). Otherwise it scales.
+- *One IddCx adapter per render GPU (2026-11-17, driver interface minor 3).*
+  `IddCxAdapterSetRenderAdapter` is adapter-wide, so each render GPU gets its own adapter:
+  the installer's `Root\PulsarSeatIdd` plus software devnodes `SWD\PulsarSeatIdd\gpuN`
+  (hardware id `PulsarSeatIdd_Adapter`, same INF and DLL) that `win::idd::WinIdd`
+  creates with `SwDeviceCreate` when no adapter fits (lifetime = the client's handle: a
+  service stop removes them). The driver binds an adapter to the GPU of its first
+  monitor (or `SET_RENDER_ADAPTER`), reports it with `IOCTL_PSIDD_GET_ADAPTER_INFO`
+  (`{size, flags READY|BOUND|FP16, render_luid, monitor_count, iddcx_version}`) and
+  refuses a monitor of another GPU with `STATUS_DEVICE_BUSY` while it still has monitors;
+  an empty adapter is re-bound. Adapter choice is pure (`idd_adapters::pick_adapter`:
+  bound to the GPU, else an empty unbound one, else an empty one, else create, at most
+  `PSIDD_MAX_ADAPTERS` = 8); removes go to the adapter that took the monitor (else every
+  adapter, after a service restart). The driver keeps a registry of device contexts
+  (several local devnodes may share a host process) instead of the old single global.
+- *HDR / VRR for seats 2..N (2026-11-17).* Per monitor `AssignmentOptions::{hdr, vrr}`
+  (additive, off by default) reach `OutputPlacement::{hdr, vrr}` through
+  `SeatDisplayPrefs` (never for seat 1: Windows' own settings apply there). `pulsar_idd`:
+  with IddCx 1.10 at run time the adapter sets `CAN_PROCESS_FP16`; a monitor added with
+  `PSIDD_ADD_FLAG_HDR` reports `HIGH_COLOR_SPACE | WIDE_COLOR_SPACE` target caps and 8 + 10
+  bit modes (`ParseMonitorDescription2` / `QueryTargetModes2`), takes its frames from
+  `ReleaseAndAcquireBuffer2` and publishes FP16 / 10-bit pixels with the DXGI colour space,
+  SDR white level and HDR10 metadata (frame header minor 3, `PSIDD_FORMAT_*`, section sized
+  8 bytes per pixel); SDR monitors that get an FP16 surface receive a BGRA8 conversion.
+  `IddFrameReader` yields `HdrFrameRef`s (`seat_core::backend::hdr`), `FrameSink::
+  present_hdr` (default: tone-mapped to SDR, SDR white = display white, highlights clip).
+  Display Core targets with `hdr` pick an FP16 source mode with an HDR10 wire format
+  (`model::pick_presenter_mode`), set the wire format and scan out scRGB primaries;
+  `vrr` takes the highest refresh of the size and presents with sync interval 0 +
+  `AllowTearing`. The flip-model window presenter does VRR through
+  `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` / `Present(0, ALLOW_TEARING)` where DXGI reports
+  the feature; it stays SDR (HDR frames tone-mapped). HDCP: indirect displays and our
+  presenter never carry protected content; documented limitation (troubleshooting).
+  HYPOTHESIS throughout (no hardware run).
+- *Per-seat GPU preference (2026-11-17).* `LocalSeat::gpu_preference {mode: off |
+  seat_gpu | high_performance | power_saving, apps}`: at each seat logon the service
+  writes `HKU\<sid>\Software\Microsoft\DirectX\UserGpuPreferences\<exe>` =
+  `GpuPreference=N;` (other pairs kept) through `seat_compat::gpu_pref::sync_user`, every
+  value journaled first (`Change::UserGpuPreference`), programs that left the list undone,
+  all undone on disable / reset / uninstall. `seat_gpu` = 2 or 1 depending on how Windows
+  ranks the GPU of the seat's first monitor (`win::gpu_ranks`, `EnumAdapterByGpuPreference`);
+  a single GPU or a third GPU writes nothing (notice `gpu_preference_unavailable`). A
+  preference, not enumeration isolation (spec 40 §6.4). Validation
+  `invalid_gpu_preference` (absolute `.exe` paths, at most 64).
+- *Latency hooks (2026-11-17).* `seat_core::latency::LatencyStats` (p50 / p95 / p99 /
+  max over the last 512 samples): the IddCx frame header carries QPC stamps (acquired,
+  OS present, written) and `win::idd::pump` logs driver-copy and to-presented latency
+  every 600 frames; `GfxStats` carries H.264 decode and change-to-present latency.
 
 ### 4.3 Input (`InputRouter` service-side, `InputSink` host-side; seat-input)
 
@@ -1067,6 +1114,19 @@ monitor's same-container hub keeps a seat the monitor is not on.
     `host_get_assignment`); host refusals go to the service (`host_redirect_refusal`) and
     to `SeatRuntime.redirect_refusals` (last 10). The manager shows both (Durum tab) and
     edits the policy per seat (Temel tab, column "Yönlendirme").
+- *AVC444 on the GPU path, vendor MFTs (2026-11-17).* AVC444 / AVC444v2 surfaces stay
+  on the zero-copy path when the compositor has the AVC444 shaders
+  (`GpuCompositor::supports_avc444`): promotion only at an IDR with both views covering
+  the whole surface; AVC420 and AVC444 on one GPU surface demote it. Each view is copied
+  into a shader-readable NV12 texture and merged by a compute shader into an `R32_UINT`
+  4:4:4 picture; a pixel shader converts the painted rectangles (reverse chroma filter +
+  MS-RDPEGFX transform) into the surface texture (`gpu::avc444`, rules in
+  `gpu::avc444_model`, tested against IronRDP; HLSL compiled at run time with the in-box
+  `d3dcompiler_47.dll`, tested on WARP). H.264 decoder ladder: the GPU vendor's
+  asynchronous hardware MFT (`MFTEnumEx` HARDWARE | ASYNCMFT, `MF_TRANSFORM_ASYNC_UNLOCK`,
+  event-driven), then Microsoft's MFT with D3D11, then the CPU; failures step down one
+  level (`h264::next_decoder`); `PULSAR_SEAT_H264_DECODER=microsoft|software`.
+  `DecoderKind::HardwareVendor`.
 - Untested on hardware.
 
 ## 5. IPC contract (seat-proto)

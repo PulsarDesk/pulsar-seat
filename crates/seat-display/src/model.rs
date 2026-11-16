@@ -804,7 +804,6 @@ pub fn pick_presenter_mode(modes: &[(DisplayMode, bool, bool)], wanted: usize, h
 }
 
 /// Screen area of a cursor in frame coordinates (`None` when hidden).
-
 pub fn cursor_rect(c: &CursorState) -> Option<Rect> {
     (c.visible && c.width > 0 && c.height > 0).then(|| Rect { x: c.x - c.hotspot_x as i32, y: c.y - c.hotspot_y as i32, width: c.width, height: c.height })
 }

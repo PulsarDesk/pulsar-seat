@@ -553,7 +553,7 @@ mod tests {
                 }
                 shaders.convert(&device, &ctx, &pic, &target, &[Rect::new(0, 0, w, h)]).unwrap();
                 let got = read_bgra(&device, &ctx, &target, w, h);
-                let want: Vec<u8> = model.to_rgba(&Rect::new(0, 0, w, h)).chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+                let want: Vec<u8> = model.to_rgba(&Rect::new(0, 0, w, h)).as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
                 assert_eq!(got, want, "v2={v2} step {step}");
             }
         }

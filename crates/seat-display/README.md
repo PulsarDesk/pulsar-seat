@@ -23,6 +23,16 @@ except for the remote `SET_SEAT_CONFIG` v2 (256 bytes, frame reader SID; the rem
 objects grant SYSTEM plus that SID only, no LOCAL SERVICE any more).
 `DisplayBackendId::own_iddcx` marks the two backends on it.
 
+**Local `pulsar_idd`, interface minor 3 (2026-11-17):** one IddCx adapter per render GPU
+(`src/idd_adapters.rs` picks the adapter, `win/swdevice.rs` creates the extra
+`SWD\PulsarSeatIdd\gpuN` devnodes, `win/idd.rs` routes adds / removes), HDR frames
+(FP16 / 10-bit with colour space, SDR white and HDR10 metadata; `IddFrame::hdr_ref`,
+`FrameSink::present_hdr`), QPC latency stamps (`pump` logs them). Display Core outputs
+with `hdr` scan out HDR10 (FP16 scRGB primaries) where the target has such a mode, `vrr`
+outputs present with tearing allowed (Display Core and the flip chain). `win::gpu_ranks`
+tells the service which GPU Windows ranks high performance / minimum power (per-seat GPU
+preference). All HYPOTHESIS until a hardware run.
+
 **GPU frames (round 4, local `window_presenter`):** a flip-chain output that is not a clone
 source and not a Display Core target takes `FrameSink::present_gpu` frames (the RDP
 client's shared keyed-mutex BGRA texture on the same adapter; `win/flip.rs`

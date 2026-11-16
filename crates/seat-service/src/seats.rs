@@ -1008,7 +1008,6 @@ impl Service {
     }
 
     /// A seat's user signed in: last user, same-account policy, agent, gate re-plan.
-
     pub(crate) fn on_seat_logon(&self, seat: SeatNumber, session_id: u32, user: SessionUser) {
         let agent_needed = {
             let mut st = self.lock();

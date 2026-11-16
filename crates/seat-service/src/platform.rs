@@ -296,6 +296,8 @@ pub mod mock {
     /// Scriptable platform: sessions with users, processes that live until killed.
     /// `(DelegationConsole, DelegationTerminal)` of one user.
     pub type Delegation = (Option<String>, Option<String>);
+    /// One `sync_gpu_preference` call: (sid, apps, pref).
+    pub type GpuPrefCall = (String, Vec<String>, Option<u32>);
 
     #[derive(Default)]
     pub struct MockPlatform {
@@ -335,7 +337,7 @@ pub mod mock {
         /// `gpu_ranks` answer.
         pub gpu_ranks: Mutex<(Option<u64>, Option<u64>)>,
         /// `sync_gpu_preference` calls: (sid, apps, pref).
-        pub gpu_prefs: Mutex<Vec<(String, Vec<String>, Option<u32>)>>,
+        pub gpu_prefs: Mutex<Vec<GpuPrefCall>>,
         pub gpu_pref_reverts: AtomicU32,
         next_pid: AtomicU32,
     }

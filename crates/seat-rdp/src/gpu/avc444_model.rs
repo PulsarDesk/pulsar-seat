@@ -113,7 +113,7 @@ impl Planes444 {
             }
             (view.luma(x, ur), view.luma(x, ur + MACROBLOCK / 2))
         } else {
-            if x % 2 == 0 || y / 2 >= view.chroma_h() || x / 2 >= view.chroma_w() {
+            if x.is_multiple_of(2) || y / 2 >= view.chroma_h() || x / 2 >= view.chroma_w() {
                 return;
             }
             (view.cu(x / 2, y / 2), view.cv(x / 2, y / 2))
@@ -136,10 +136,10 @@ impl Planes444 {
                 changed = true;
             }
         }
-        if y % 2 == 1 && x % 2 == 0 && y / 2 < view.chroma_h() {
+        if y % 2 == 1 && x.is_multiple_of(2) && y / 2 < view.chroma_h() {
             let (a, b) = (x / 4, quarter + x / 4);
             if a < view.chroma_w() && b < view.chroma_w() {
-                if x % 4 == 0 {
+                if x.is_multiple_of(4) {
                     u = view.cu(a, y / 2);
                     v = view.cu(b, y / 2);
                 } else {
@@ -184,7 +184,7 @@ impl Planes444 {
     /// `ps_convert`: one output pixel (R, G, B, A).
     pub fn convert_px(&self, x: u32, y: u32) -> [u8; 4] {
         let (ly, mut u, mut v) = unpack(self.at(x, y));
-        if x % 2 == 0 && y % 2 == 0 {
+        if x.is_multiple_of(2) && y.is_multiple_of(2) {
             let (_, ur, vr) = unpack(self.at(x + 1, y));
             let (_, ub, vb) = unpack(self.at(x, y + 1));
             let (_, ud, vd) = unpack(self.at(x + 1, y + 1));

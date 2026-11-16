@@ -666,6 +666,7 @@ impl Mft {
     }
 
     /// The vendor decoder's friendly name (`None` for Microsoft's MFT).
+    #[cfg(test)]
     pub(crate) fn vendor_name(&self) -> Option<&str> {
         self.vendor.as_deref()
     }
