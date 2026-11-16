@@ -217,6 +217,18 @@ export interface LocalSeat {
   /** Seat-owned virtual pads for the PlayStation pads routed to this seat alone
    *  (`seat_input::local_pads`). Absent = off. Added 2026-11-14. */
   virtual_pads?: boolean;
+  /** Programs that prefer a GPU (`UserGpuPreferences` of the seat user, spec 40 §6.4).
+   *  Absent = off. Added 2026-11-17. */
+  gpu_preference?: GpuPreference;
+}
+
+export type GpuPreferenceMode = 'off' | 'seat_gpu' | 'high_performance' | 'power_saving';
+
+/** `seat_core::config::GpuPreference`. */
+export interface GpuPreference {
+  mode: GpuPreferenceMode;
+  /** Full `.exe` paths, at most 64. */
+  apps?: string[];
 }
 
 /** Remote seat part (`seat_core::remote::RemoteSeat`). Every field has a service default
@@ -376,6 +388,11 @@ export interface AssignmentOptions {
   picture?: string;
   /** Monitors: CCD target ids feeding this monitor (spec 10 §7.5); more than one = clone. */
   outputs?: number[];
+  /** Monitors of seats 2..N: HDR / wide colour on the seat's virtual monitor and HDR10
+   *  scan-out where the monitor supports it (spec 40 §6.6). Added 2026-11-17. */
+  hdr?: boolean;
+  /** Monitors of seats 2..N: variable refresh through the presenter. Added 2026-11-17. */
+  vrr?: boolean;
 }
 
 export interface DeviceAssignment {

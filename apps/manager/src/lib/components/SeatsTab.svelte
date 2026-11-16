@@ -35,6 +35,7 @@
     seatOneFirstMonitorAdvice,
     setDeviceMask,
     setKeyMask,
+    setDisplayOption,
     setSoftwareCursor,
     type CanvasItem,
     type DropTarget
@@ -498,6 +499,9 @@
           const o = n.devices.find((a) => a.key === m.device.key)?.options;
           if (JSON.stringify(o?.outputs ?? []) !== JSON.stringify(m.outputs)) n = setMonitorOutputs(n, m.device, m.outputs, mask);
           if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
+          if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
+          if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
+
         }
         return n;
       });

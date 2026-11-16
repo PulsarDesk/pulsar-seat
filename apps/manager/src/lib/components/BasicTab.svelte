@@ -6,8 +6,9 @@
   import StartupAppsDialog from './StartupAppsDialog.svelte';
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
+  import GpuPreferenceDialog from './GpuPreferenceDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
+  import { addSeat, clone, kioskAudio, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setGpuPreference, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
@@ -17,7 +18,7 @@
   }
   let { store }: Props = $props();
 
-  let dialog = $state<{ kind: 'name' | 'account' | 'apps' | 'kiosk' | 'redirect'; seat: SeatNumber } | null>(null);
+  let dialog = $state<{ kind: 'name' | 'account' | 'apps' | 'kiosk' | 'redirect' | 'gpu'; seat: SeatNumber } | null>(null);
 
   function redirectSummary(c: Config, n: SeatNumber): string {
     if (n === 1) return t.none;
@@ -64,6 +65,7 @@
           <th>{t.basic.colWallpaper}</th>
           <th>{t.basic.colVirtualPads}</th>
           <th>{t.basic.colApps}</th>
+          <th>{t.basic.colGpu}</th>
           <th>{t.redirect.column}</th>
           {#if kioskMode}<th>{t.kiosk.column}</th>{/if}
           <th>{t.basic.colState}</th>
@@ -115,6 +117,13 @@
             <td>
               <button type="button" class="link" aria-label={`${s.number}. ${t.basic.colApps}`} onclick={() => (dialog = { kind: 'apps', seat: s.number })}>
                 {s.startup_apps?.length ? t.basic.appsCount(s.startup_apps.length) : t.basic.appsNone}
+              </button>
+            </td>
+            <td>
+              <button type="button" class="link" aria-label={`${s.number}. ${t.basic.colGpu}`} onclick={() => (dialog = { kind: 'gpu', seat: s.number })}>
+                {localOf(s).gpu_preference && localOf(s).gpu_preference!.mode !== 'off'
+                  ? t.gpuPref.count(localOf(s).gpu_preference!.apps?.length ?? 0)
+                  : t.gpuPref.off}
               </button>
             </td>
             <td>
@@ -280,7 +289,19 @@
     }}
     onCancel={() => (dialog = null)}
   />
+{:else if dialog?.kind === 'gpu' && draft}
+  {@const n = dialog.seat}
+  <GpuPreferenceDialog
+    seat={n}
+    pref={localOf(draft.seats.find((s) => s.number === n)!).gpu_preference}
+    onSave={(p) => {
+      store.edit((c) => setGpuPreference(c, n, p));
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
 {:else if dialog?.kind === 'redirect' && draft}
+
   {@const n = dialog.seat}
   <RedirectDialog
     seat={n}
