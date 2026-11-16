@@ -59,7 +59,7 @@ static SEAT_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 use super::guard::{GuardCmd, Supervisor, SupervisorStep, guard_args};
 use seat_core::SeatNumber;
 use super::{
-    AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SHIM_LAUNCHER, SeatDevices, ShellArgs, ShellCommand,
+    AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SeatDevices, ShellArgs, ShellCommand,
     attach_action, drag_rect, filter_active, audio_notice, focus_policy, idle_text, kiosk_env_value, notices, place,
     seat_devices, tr,
 };
@@ -1327,7 +1327,8 @@ fn watch_stop(seat: seat_core::SeatNumber, tid: u32) {
 }
 
 /// The shim launcher when the operator turned per-process isolation on (our AppHelp
-/// database is registered) and the x64 shim is installed next to this binary.
+/// database is registered) and the shim of this build's architecture is installed next to
+/// this binary (`shim\x64\` or `shim\arm64\`).
 fn shim_launcher() -> Option<std::path::PathBuf> {
     let key = format!(
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\InstalledSDB\{}",
@@ -1335,7 +1336,7 @@ fn shim_launcher() -> Option<std::path::PathBuf> {
     );
     seat_shim_core::win::read_value(&key, "DatabasePath")?;
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let p = dir.join(SHIM_LAUNCHER);
+    let p = dir.join(super::shim_launcher_rel());
     p.is_file().then_some(p)
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Runtime of the module (Windows x86 / x64 only).
+//! Runtime of the module (Windows x86, x64 and native ARM64).
 //!
 //! Life cycle:
 //! 1. `DllMain(PROCESS_ATTACH)` only disables thread notifications and starts a thread
@@ -16,6 +16,7 @@
 //!    The refresh runs outside every lock; a hook reached from inside the refresh (our own
 //!    registry / API calls) sees `None` and passes through, so it can never deadlock.
 
+mod backend;
 mod device;
 mod fault;
 mod focus;

@@ -46,7 +46,7 @@ when you add a doc.
 | Pulsar Split history before the merge (superseded, not updated) | [docs/split/README.md](docs/split/README.md) |
 | Manager (both kinds; remote pages in `src/lib/remote/`) | [apps/manager/README.md](apps/manager/README.md) |
 | Credential provider + filter | [credprov/README.md](credprov/README.md) |
-| Per-process HID shim (own x64 / x86 workspace) | [shim/README.md](shim/README.md) |
+| Per-process HID shim (own x64 / x86 / ARM64 workspace, Detours on ARM64) | [shim/README.md](shim/README.md) |
 | Package READMEs (build, test, untested parts, notices) | `crates/*/README.md`, `drivers/*/README.md` |
 | VM test harness (pipe client, Hyper-V helpers) | [tools/vm/README.md](tools/vm/README.md) |
 | Test machine access (local only) | `docs/local/README.md` |

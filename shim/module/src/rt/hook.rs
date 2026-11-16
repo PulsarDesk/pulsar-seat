@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Detour helper over `retour::RawDetour` (BSD-2-Clause).
+//! Detour helper over the inline-hook backend ([`super::backend`]: `retour` on x86 / x64,
+//! Microsoft Detours on native ARM64).
 //!
 //! Targets in a module that is not loaded yet (review fix 2026-11-12):
 //! - launcher path (`PulsarSplitInit`, not under the loader lock): the module is loaded
@@ -73,23 +74,21 @@ fn load_system(module: &str) -> HMODULE {
     unsafe { LoadLibraryExW(m.as_ptr(), std::ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) }
 }
 
-/// Creates and enables the detour at `target`.
+/// Creates and enables the detour at `target` (backend: [`super::backend`]).
 ///
 /// # Safety
 /// `detour` must have exactly the target's signature and calling convention.
 unsafe fn patch(slot: &'static Hook, target: usize, name: &str, detour: *const (), freeze: bool) -> Result<(), String> {
     // Allocation (trampoline, relocation) happens here, before any thread is suspended.
     // SAFETY: target is a function entry from an export table; detour matches it.
-    let d = unsafe { retour::RawDetour::new(target as *const (), detour) }.map_err(|e| format!("{name}: {e}"))?;
+    let d = unsafe { super::backend::Prepared::new(target, detour) }.map_err(|e| format!("{name}: {e}"))?;
     // Published before the jump is written, so a call racing with the patch finds it.
-    slot.tramp.store(d.trampoline() as *const () as usize, Ordering::Release);
+    slot.tramp.store(d.trampoline(), Ordering::Release);
     // SAFETY: patches the target prologue with the other threads suspended.
     let r = super::threads::with_others_frozen(target, freeze, || unsafe { d.enable() });
     match r {
         Some(Ok(())) => {
             slot.pending.store(false, Ordering::Release);
-            // The detour must live as long as the process (the module is pinned).
-            std::mem::forget(d);
             Ok(())
         }
         Some(Err(e)) => {

@@ -34,8 +34,9 @@
         - the pinned third-party payload below remote\ (drivers.json, drivers\<id>\,
           stream-server.json, stream-server\: Sunshine per arch), generated as
           ComponentGroup PulsarSeatRemotePayload by installer/scripts/bundle-config.ts;
-        - the per-process shim (x64 package only): shim\x64\, shim\x86\ (ComponentGroup
-          PulsarSeatShim, empty in the ARM64 package);
+        - the per-process shim (ComponentGroup PulsarSeatShim): shim\x64\, shim\x86\ in both
+          packages, plus shim\arm64\ (native ARM64 module, launcher, shimctl) in the ARM64
+          package (parity-arm64 2026-11-17);
         - deferred custom actions `remote-setup install` (fresh install) and
           `remote-setup reconcile` (every install / upgrade / repair) after `install`:
           remote data folders, a leftover PulsarSplit service (stopped and deleted),
@@ -293,12 +294,34 @@
         </Directory>
       </Directory>
 
-<?if $(sys.BUILDARCH) = "x64" ?>
-      <!-- Per-process shim of the remote kind (shim/ workspace), x64 + x86 only: never in the
-           ARM64 package. Copied here, never to System32; the service installs it only when
-           the operator turns isolation on (seat-shim-core). File names stay pulsar-split-*
-           because shim/ and its registry keys use them. -->
+      <!-- Per-process shim of the remote kind and of kiosk seats (shim/ workspace). Copied
+           here, never to System32; the service installs it only when the operator turns
+           isolation on (seat-shim-core). File names stay pulsar-split-* because shim/ and its
+           registry keys use them. x64 package: shim\x64\ (+ shimctl) and shim\x86\. ARM64
+           package: shim\arm64\ (native module with the Detours backend, the launcher the
+           service calls, shimctl), shim\x64\ for x64 apps under emulation and shim\x86\. -->
       <Directory Id="PulsarSeatShimDir" Name="shim">
+<?if $(sys.BUILDARCH) = "arm64" ?>
+        <Directory Id="PulsarSeatShimArm64Dir" Name="arm64">
+          <Component Id="PulsarSeatShimArm64Component" Guid="{3C0E6B27-8F41-4A5D-9E13-B7A2C64D18F5}" Win64="yes">
+            <File Id="PulsarSeatShimArm64Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\arm64\PulsarSplitShim.dll" />
+            <File Id="PulsarSeatShimArm64LaunchExe" Name="pulsar-split-launch.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\arm64\pulsar-split-launch.exe" />
+            <File Id="PulsarSeatShimArm64ctlExe" Name="pulsar-split-shimctl.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\arm64\pulsar-split-shimctl.exe" />
+          </Component>
+        </Directory>
+        <Directory Id="PulsarSeatShimX64Dir" Name="x64">
+          <!-- x64 apps under emulation; no x64 shimctl here (the ARM64 one serves the PC). -->
+          <Component Id="PulsarSeatShimX64EmuComponent" Guid="{A7D25F90-1B6C-4E38-8C4F-2E95D0B7A361}" Win64="yes">
+            <File Id="PulsarSeatShimX64Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x64\PulsarSplitShim.dll" />
+            <File Id="PulsarSeatShimLaunchExe" Name="pulsar-split-launch.exe"
+                  Source="$(env.PULSAR_SEAT_BIN)\shim\x64\pulsar-split-launch.exe" />
+          </Component>
+        </Directory>
+<?else ?>
         <Directory Id="PulsarSeatShimX64Dir" Name="x64">
           <Component Id="PulsarSeatShimX64Component" Guid="{68094D7D-AAAB-4930-959C-902EF4F36708}" Win64="yes">
             <File Id="PulsarSeatShimX64Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
@@ -309,6 +332,7 @@
                   Source="$(env.PULSAR_SEAT_BIN)\shim\x64\pulsar-split-shimctl.exe" />
           </Component>
         </Directory>
+<?endif ?>
         <Directory Id="PulsarSeatShimX86Dir" Name="x86">
           <Component Id="PulsarSeatShimX86Component" Guid="{4D6EA0C5-94F7-4180-9A30-E765F3167E26}" Win64="yes">
             <File Id="PulsarSeatShimX86Dll" Name="PulsarSplitShim.dll" KeyPath="yes"
@@ -318,15 +342,17 @@
           </Component>
         </Directory>
       </Directory>
-<?endif ?>
     </DirectoryRef>
 
-    <!-- Referenced from tauri-bundle.json in both packages; empty in the ARM64 one. -->
+    <!-- Referenced from tauri-bundle.json in both packages. -->
     <ComponentGroup Id="PulsarSeatShim">
-<?if $(sys.BUILDARCH) = "x64" ?>
+<?if $(sys.BUILDARCH) = "arm64" ?>
+      <ComponentRef Id="PulsarSeatShimArm64Component" />
+      <ComponentRef Id="PulsarSeatShimX64EmuComponent" />
+<?else ?>
       <ComponentRef Id="PulsarSeatShimX64Component" />
-      <ComponentRef Id="PulsarSeatShimX86Component" />
 <?endif ?>
+      <ComponentRef Id="PulsarSeatShimX86Component" />
     </ComponentGroup>
 
     <!-- ================================================================ custom actions -->

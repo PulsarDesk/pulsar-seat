@@ -1491,13 +1491,13 @@ export const rt = {
     processPatching: 'İşlem yamalamayı etkinleştir',
     steamIsolation: 'Steam’i koltuklara ayır',
     isolationNote:
-      'HID yalıtımı ve Steam ayrımı yeni başlatılan koltuklarda geçerli olur. İşlem yamalama, Pulsar Seat modülünü seçtiğiniz uygulamalara yükler (yalnızca x64 bilgisayarlar).',
+      'HID yalıtımı ve Steam ayrımı yeni başlatılan koltuklarda geçerli olur. İşlem yamalama, Pulsar Seat modülünü seçtiğiniz uygulamalara yükler (x64 ve ARM64 bilgisayarlar; ARM64’te x64 uygulamalar da).',
     antiCheat:
       'Uyarı: Hile önleme yazılımı kullanan bazı oyunlar, işlemlere yüklenen modülü ya da uzak oturum gizlemeyi sorun olarak görebilir.',
     isolationState: 'Yalıtım durumu',
     installed: 'Modül kurulu',
     notInstalled: 'Modül kurulu değil (yalnızca aygıt güvenliği)',
-    unsupportedArch: 'Bu bilgisayarda işlem yamalama modülü yok (ARM64 desteklenmiyor).',
+    unsupportedArch: 'Bu bilgisayarda bu mimari için işlem yamalama modülü kurulu değil.',
     killSwitch: 'Acil kapatma açık: modül hiçbir işlemde kanca kurmuyor.',
     foreign: (s: string) => `Başka bir ürünün yamalama veritabanı bulundu (${s}). Önce o ürünün işlem yamalamasını kapatın.`,
     targets: 'Modülün yükleneceği uygulamalar (dosya adı)',

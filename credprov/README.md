@@ -14,8 +14,8 @@ loaded by LogonUI on any machine). Unsigned.
 
 | File | What |
 | --- | --- |
-| `credprov.vcxproj` | the DLL, ARM64 + x64, Release + Debug, v145 toolset, SDK 10.0.28000, static CRT, CFG, Spectre, `/W4 /WX` |
-| `credprov-selftest.vcxproj` | console self-test of the same sources (never shipped) |
+| `credprov.vcxproj` | the DLL, ARM64 (built as ARM64X: `BuildAsX`, with an ARM64EC configuration as its other half) + x64, Release + Debug, v145 toolset, SDK 10.0.28000, static CRT, CFG, Spectre, `/W4 /WX` |
+| `credprov-selftest.vcxproj` | console self-test of the same sources (never shipped); ARM64, ARM64EC, x64 |
 | `src/dll.cpp` | `DllGetClassObject`, `DllCanUnloadNow`, class factory, `InLogonUI()` (no `DllRegisterServer`) |
 | `src/provider.*` | provider, the two tile kinds, the filter, `ApplyFilter`, `SeatTileWillExist` / `FilterHides`, `Notifier` (poll + `CredentialsChanged`), Turkish link text |
 | `src/pipe.*` | service pipe client (`\\.\pipe\PulsarSeat.Control`), one connection per call |
@@ -116,11 +116,26 @@ keys offline: [docs/troubleshooting.md](../docs/troubleshooting.md) §7.
 
 ## Architectures
 
-One native DLL per installer architecture: ARM64 (LogonUI on ARM64 is a native ARM64
-process) and x64. **No ARM64X**: the provider refuses `CPUS_CREDUI`, so it is never needed
-inside an emulated x64 app's CredUI. HYPOTHESIS: an x64 process on ARM64 that enumerates
-credential providers (it sees the same 64-bit registry) fails to load the ARM64 DLL and
-skips it.
+One DLL per installer architecture: x64, and **ARM64X** in the ARM64 package (parity-arm64,
+2026-11-17). The ARM64 half serves the native LogonUI; the ARM64EC half lets x64 processes
+under emulation (CredUI hosts, any x64 app that enumerates credential providers: it sees the
+same 64-bit registry keys) load the DLL instead of failing on an ARM64-only image. Inside
+such a process the provider stays inert as everywhere outside LogonUI (`InLogonUI()` false,
+`CPUS_CREDUI` refused with `E_NOTIMPL`), so CredUI shows the system tiles only.
+
+- Built by `BuildAsX` in the ARM64 configuration (MSBuild builds the ARM64EC configuration
+  as the other half and links `/MACHINE:ARM64X`). Needs the ARM64EC MSVC tools and Spectre
+  libraries (VS 18 component ids in `ci.yml`).
+- `build-credprov.ps1` checks machine 0xAA64 **and** CHPE (hybrid) metadata in the load
+  config, and runs the self-test as ARM64 and as ARM64EC (both natively on an ARM64 host).
+  `-NoArm64X` builds a plain ARM64 DLL (toolchain without ARM64EC; test builds only).
+- The service still checks only the PE machine (`check_dll`: an ARM64X image carries
+  0xAA64).
+- Verified 2026-11-17 on the ARM64 dev box: Release + Debug ARM64X link, `dumpbin
+  /headers` = "AA64 machine (ARM64) (ARM64X)", exports `DllCanUnloadNow` /
+  `DllGetClassObject`, self-tests ARM64 / ARM64EC / x64 "0 failed". HYPOTHESIS: an emulated
+  x64 CredUI host loads the EC half and calls nothing but `DllGetClassObject` /
+  `DllCanUnloadNow` (never loaded by any host here).
 
 ## Build
 
@@ -129,8 +144,9 @@ powershell -ExecutionPolicy Bypass -File installer\scripts\build-credprov.ps1
 powershell -ExecutionPolicy Bypass -File installer\scripts\build-credprov.ps1 -Platforms ARM64 -OutDir target\payload\arm64
 ```
 
-Builds both projects, checks the PE machine (0xAA64 / 0x8664), runs the self-test (x64 under
-emulation on an ARM64 host). CI: job `credprov` in `.github/workflows/ci.yml` (native
+Builds both projects, checks the PE machine (0xAA64 / 0x8664) and, for ARM64, the ARM64X
+hybrid metadata, runs the self-test (ARM64, ARM64EC and x64 under emulation on an ARM64
+host). CI: job `credprov` in `.github/workflows/ci.yml` (native
 runner per architecture); locally `installer\scripts\ci-local.ps1 -CredProv` (or
 `-Payload`). `build-installer.ps1` calls it and puts the DLL into the
 payload. Outputs go to `credprov\build\` (gitignored). No `/INTEGRITYCHECK`: it would make

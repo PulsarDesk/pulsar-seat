@@ -16,7 +16,7 @@
 //                                     <install>\remote\ by the generated PulsarSeatRemote.wxs
 //
 // The generated fragments always define their component groups, so the groups always
-// resolve. The shim group (`PulsarSeatShim`, x64 package only) is static in
+// resolve. The shim group (`PulsarSeatShim`, both packages; arm64 adds shim\arm64) is static in
 // wix/PulsarSeat.wxs and referenced from tauri-bundle.json.
 //
 // The drivers folder is filled by build-installer.ps1 only with -SignedDrivers, and only

@@ -99,6 +99,13 @@ try {
         Run cargo clippy --locked --manifest-path shim/Cargo.toml --target x86_64-pc-windows-msvc --all-targets '--' -D warnings
         Run cargo check --locked --manifest-path shim/Cargo.toml --target i686-pc-windows-msvc --all-targets
     }
+    # ARM64 module (Detours backend, parity-arm64): only an ARM64 host runs its tests.
+    if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+        Gate "shim test + clippy (arm64)" {
+            Run cargo test --locked --manifest-path shim/Cargo.toml --target aarch64-pc-windows-msvc
+            Run cargo clippy --locked --manifest-path shim/Cargo.toml --target aarch64-pc-windows-msvc --all-targets '--' -D warnings
+        }
+    }
 
     if ($Release) {
         Gate "release key list (tag gate)" {

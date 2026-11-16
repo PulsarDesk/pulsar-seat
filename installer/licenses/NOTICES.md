@@ -47,5 +47,27 @@ repository at the pinned tag.
 | IronRDP (Devolutions) | connector 0.12, session 0.13 | MIT OR Apache-2.0 | compiled into `pulsar-seat-host.exe` (its `--headless-hold` mode replaced `pulsar-split-rdp-helper.exe` at merge step 7) | `IronRDP-MIT.txt`, `IronRDP-Apache-2.0.txt` | https://github.com/Devolutions/IronRDP |
 | DXVK | per manifest | zlib | **not shipped**; downloaded on operator request per game (remote spec 50 §10.2) | `DXVK-zlib.txt` | https://github.com/doitsujin/dxvk |
 
-The per-process shim (`shim\x64\`, `shim\x86\`, x64 package only) is our own GPL-3.0-only
-code.
+The per-process shim (`shim\x64\`, `shim\x86\`, and `shim\arm64\` in the ARM64 package) is
+our own GPL-3.0-only code. Its ARM64 build links **Microsoft Detours** (commit
+`1dbd4ea281d73d478aa8d09a8b83fbd265f715f7`, <https://github.com/microsoft/Detours>) under
+the MIT licence:
+
+> Copyright (c) Microsoft Corporation.
+>
+> MIT License
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this
+> software and associated documentation files (the "Software"), to deal in the Software
+> without restriction, including without limitation the rights to use, copy, modify,
+> merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+> persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+> INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+> PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+> FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+> OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.

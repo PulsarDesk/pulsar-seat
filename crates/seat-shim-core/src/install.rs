@@ -29,6 +29,9 @@ pub struct ShimTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModulePaths {
+    /// The module copied to `System32`: the native 64-bit build of this PC (x64 on x64 PCs,
+    /// ARM64 on ARM64 PCs, `launch::system32_module`). The name stays `x64` for the journal
+    /// and shimctl compatibility.
     pub x64: PathBuf,
     pub x86: Option<PathBuf>,
 }

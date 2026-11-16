@@ -5,7 +5,7 @@
 #   2. the app API helper DLL for every app architecture the PC can run
 #   3. optional: signed driver packages (-SignedDrivers <dir>), staged only when every
 #      catalog verifies and is signed by the Microsoft hardware publisher
-#   3b. remote seat kind (merge step 10): the shim (x64 package only) and the pinned
+#   3b. remote seat kind (merge step 10): the shim (both packages; arm64 adds shim\arm64) and the pinned
 #      third-party payload (fetch-deps.ts: drivers + Sunshine per arch) under remote\
 #   4. PE-machine / payload gate (check-payload.ts)
 #   5. bundle config + generated driver and remote-payload fragments (bundle-config.ts)
@@ -169,7 +169,9 @@ if (-not $SkipCargo) {
 # already be in the payload folder.
 if (-not $SkipCargo) {
     Invoke-Checked "credential provider ($Arch)" {
-        & (Join-Path $PSScriptRoot "build-credprov.ps1") -Platforms @($(if ($Arch -eq "arm64") { "ARM64" } else { "x64" })) -OutDir $payload
+        # ARM64: an ARM64X DLL (also loadable by x64 processes under emulation); -NoArm64ec
+        # test builds (no ARM64EC toolchain) get a plain ARM64 one (check-payload warns).
+        & (Join-Path $PSScriptRoot "build-credprov.ps1") -Platforms @($(if ($Arch -eq "arm64") { "ARM64" } else { "x64" })) -OutDir $payload -NoArm64X:$NoArm64ec
     }
 }
 if ($SignedCredProv) {
@@ -182,36 +184,43 @@ foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-a
     if (-not (Test-Path (Join-Path $payload $n))) { throw "payload is missing $n ($payload)" }
 }
 
-# Remote seat kind (merge step 10). Per-process shim: x64 package only (shim/ is an own
-# x64 / x86 workspace); the ARM64 package carries none (check-payload refuses it there).
+# Per-process shim (remote seats, kiosk seats; shim/ is an own workspace). x64 package:
+# shim\x64 (+ shimctl) and shim\x86. ARM64 package (parity-arm64): shim\arm64 (native module
+# with the Detours backend, the launcher the service calls, shimctl), shim\x64 (x64 apps
+# under emulation, no shimctl) and shim\x86. check-payload.ts checks every folder's machine.
 $shimDir = Join-Path $payload "shim"
 $shimTarget = Join-Path $CargoTargetDir "shim"
-if ($Arch -eq "x64") {
-    if (-not $SkipCargo) {
-        $oldFlags = $env:RUSTFLAGS
-        $env:RUSTFLAGS = "-C target-feature=+crt-static"
-        try {
-            foreach ($t in "x86_64-pc-windows-msvc", "i686-pc-windows-msvc") {
-                # Own sub-folder (like the API helper): Tauri's MSI bundler picks up every DLL
-                # next to the manager exe in <target>\<triple>\release.
-                Invoke-Checked "shim ($t)" { cargo build --locked --release --manifest-path (Join-Path $repo "shim\Cargo.toml") --target $t --target-dir $shimTarget }
-            }
-        } finally {
-            $env:RUSTFLAGS = $oldFlags
+$shimTriples = [ordered]@{ x64 = "x86_64-pc-windows-msvc"; x86 = "i686-pc-windows-msvc" }
+if ($Arch -eq "arm64") { $shimTriples = [ordered]@{ arm64 = "aarch64-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc"; x86 = "i686-pc-windows-msvc" } }
+# The folder that carries shimctl: the package's own architecture.
+$shimNative = if ($Arch -eq "arm64") { "arm64" } else { "x64" }
+if (-not $SkipCargo) {
+    $oldFlags = $env:RUSTFLAGS
+    $env:RUSTFLAGS = "-C target-feature=+crt-static"
+    try {
+        foreach ($t in $shimTriples.Values) {
+            # Own sub-folder (like the API helper): Tauri's MSI bundler picks up every DLL
+            # next to the manager exe in <target>\<triple>\release.
+            Invoke-Checked "shim ($t)" { cargo build --locked --release --manifest-path (Join-Path $repo "shim\Cargo.toml") --target $t --target-dir $shimTarget }
         }
-        if (Test-Path $shimDir) { Remove-Item -Recurse -Force $shimDir }
-        New-Item -ItemType Directory -Force (Join-Path $shimDir "x64"), (Join-Path $shimDir "x86") | Out-Null
-        $r64 = Join-Path $shimTarget "x86_64-pc-windows-msvc\release"
-        $r32 = Join-Path $shimTarget "i686-pc-windows-msvc\release"
-        Copy-Item (Join-Path $r64 "PulsarSplitShim.dll"), (Join-Path $r64 "pulsar-split-launch.exe"), (Join-Path $r64 "pulsar-split-shimctl.exe") (Join-Path $shimDir "x64") -Force
-        Copy-Item (Join-Path $r32 "PulsarSplitShim.dll") (Join-Path $shimDir "x86") -Force
-        Copy-Item (Join-Path $r32 "pulsar-split-launch.exe") (Join-Path $shimDir "x86\pulsar-split-launch32.exe") -Force
+    } finally {
+        $env:RUSTFLAGS = $oldFlags
     }
-    foreach ($n in "x64\PulsarSplitShim.dll", "x64\pulsar-split-launch.exe", "x64\pulsar-split-shimctl.exe", "x86\PulsarSplitShim.dll", "x86\pulsar-split-launch32.exe") {
-        if (-not (Test-Path (Join-Path $shimDir $n))) { throw "payload is missing shim\$n ($payload)" }
+    if (Test-Path $shimDir) { Remove-Item -Recurse -Force $shimDir }
+    foreach ($f in $shimTriples.Keys) {
+        $d = Join-Path $shimDir $f
+        $r = Join-Path $shimTarget "$($shimTriples[$f])\release"
+        New-Item -ItemType Directory -Force $d | Out-Null
+        Copy-Item (Join-Path $r "PulsarSplitShim.dll") $d -Force
+        $launcher = if ($f -eq "x86") { "pulsar-split-launch32.exe" } else { "pulsar-split-launch.exe" }
+        Copy-Item (Join-Path $r "pulsar-split-launch.exe") (Join-Path $d $launcher) -Force
+        if ($f -eq $shimNative) { Copy-Item (Join-Path $r "pulsar-split-shimctl.exe") $d -Force }
     }
-} elseif (Test-Path $shimDir) {
-    Remove-Item -Recurse -Force $shimDir
+}
+$shimFiles = @("$shimNative\pulsar-split-shimctl.exe", "x86\PulsarSplitShim.dll", "x86\pulsar-split-launch32.exe")
+foreach ($f in $shimTriples.Keys) { if ($f -ne "x86") { $shimFiles += "$f\PulsarSplitShim.dll", "$f\pulsar-split-launch.exe" } }
+foreach ($n in $shimFiles) {
+    if (-not (Test-Path (Join-Path $shimDir $n))) { throw "payload is missing shim\$n ($payload)" }
 }
 # Pinned third-party payload (drivers.json, drivers\, stream-server.json, stream-server\):
 # downloaded and hash-checked by fetch-deps.ts (cached under target\installer-deps\cache),

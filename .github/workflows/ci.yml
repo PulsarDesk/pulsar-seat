@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Pulsar Seat CI: Rust (native ARM64 + x64 runners), bun (both managers + installer
-# scripts), the remote kind's shim/ workspace (x64 + x86 only),
+# scripts), the per-process shim/ workspace (x64 + x86 job, ARM64 job with Detours),
 # drivers (WDK 10.0.28000 / msbuild, ARM64 + x64, never signed or loaded), and on tags /
 # manual runs the MSI installers (Tauri bundler + the WiX 3.14 it downloads itself).
 #
@@ -189,9 +189,9 @@ jobs:
       - name: Workflow lint (this file)
         run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml
 
-  # Per-process HID shim of the remote seat kind (shim/, own workspace): x64 + x86 only,
-  # so it runs on the x64 runner (shim/README.md). Its release DLLs / exes go into the x64
-  # MSI only (artifact shim-x64, laid out as the payload's shim folder).
+  # Per-process HID shim (shim/, own workspace), x64 + x86 part on the x64 runner
+  # (shim/README.md). Its release DLLs / exes go into the x64 MSI (artifact shim-x64, laid
+  # out as the payload's shim folder); the ARM64 MSI's comes from job shim-arm64.
   shim:
     name: shim (x64 + x86)
     runs-on: windows-2025
@@ -225,6 +225,45 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: shim-x64
+          path: target/payload-shim
+
+  # The ARM64 MSI's shim (parity-arm64): the native ARM64 module (vendored Microsoft
+  # Detours, built by shim/module/build.rs with MSVC), plus x64 (apps under emulation) and
+  # x86 builds. Tests run natively, including the real Detours hook test.
+  shim-arm64:
+    name: shim (arm64 + x64 + x86)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc, x86_64-pc-windows-msvc, i686-pc-windows-msvc
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shim
+      - name: Test + clippy (arm64)
+        working-directory: shim
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo test --locked --target aarch64-pc-windows-msvc
+          cargo clippy --locked --target aarch64-pc-windows-msvc --all-targets -- -D warnings
+      - name: Release build for the ARM64 MSI (static CRT from .cargo/config.toml)
+        working-directory: shim
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release --target aarch64-pc-windows-msvc
+          cargo build --locked --release --target x86_64-pc-windows-msvc
+          cargo build --locked --release --target i686-pc-windows-msvc
+          $out = "../target/payload-shim/shim"
+          New-Item -ItemType Directory -Force "$out/arm64", "$out/x64", "$out/x86" | Out-Null
+          Copy-Item target/aarch64-pc-windows-msvc/release/PulsarSplitShim.dll, target/aarch64-pc-windows-msvc/release/pulsar-split-launch.exe, target/aarch64-pc-windows-msvc/release/pulsar-split-shimctl.exe "$out/arm64"
+          Copy-Item target/x86_64-pc-windows-msvc/release/PulsarSplitShim.dll, target/x86_64-pc-windows-msvc/release/pulsar-split-launch.exe "$out/x64"
+          Copy-Item target/i686-pc-windows-msvc/release/PulsarSplitShim.dll "$out/x86"
+          Copy-Item target/i686-pc-windows-msvc/release/pulsar-split-launch.exe "$out/x86/pulsar-split-launch32.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shim-arm64
           path: target/payload-shim
 
   drivers:
@@ -292,6 +331,8 @@ jobs:
   # Credential provider DLL (credprov/, C++, msbuild v145 + SDK 10.0.28000): built and
   # self-tested on its native runner (the self-test runs where the DLL's architecture runs),
   # PE machine checked, never registered. The installers job puts it into the payload.
+  # ARM64 is an ARM64X DLL (needs the ARM64EC MSVC tools + Spectre libraries; HYPOTHESIS:
+  # the component ids below match VS 18, checked only against the local install).
   # HYPOTHESIS: winget and the VS 18 Build Tools installer work on windows-11-arm as on
   # windows-2025 (not run yet).
   credprov:
@@ -317,7 +358,8 @@ jobs:
         shell: pwsh
         run: |
           $vs = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools " +
-                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 " +
+                "--add Microsoft.VisualStudio.Component.VC.Tools.ARM64EC --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64EC.Spectre"
           winget install --id Microsoft.VisualStudio.BuildTools --exact --version 18.11.3 --accept-package-agreements --accept-source-agreements --disable-interactivity --override $vs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           winget install --id Microsoft.WindowsSDK.10.0.28000 --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
@@ -393,7 +435,7 @@ jobs:
   installers:
     name: installers (${{ matrix.arch }})
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.installers)
-    needs: [rust, bun, credprov, shim]
+    needs: [rust, bun, credprov, shim, shim-arm64]
     strategy:
       fail-fast: false
       matrix:
@@ -440,11 +482,10 @@ jobs:
         with:
           name: credprov-unsigned-${{ matrix.arch }}
           path: target/payload/${{ matrix.arch }}
-      # Remote kind's per-process shim: x64 package only (the ARM64 one carries none).
+      # Per-process shim: shim-x64 (x64 + x86) or shim-arm64 (arm64 + x64 + x86).
       - uses: actions/download-artifact@v4
-        if: matrix.arch == 'x64'
         with:
-          name: shim-x64
+          name: shim-${{ matrix.arch }}
           path: target/payload/${{ matrix.arch }}
       - run: bun install --frozen-lockfile
       # Licence texts of every Rust crate in the shipped binaries (MIT / Apache-2.0 /

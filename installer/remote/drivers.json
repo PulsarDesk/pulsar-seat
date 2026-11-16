@@ -27,7 +27,7 @@
     "min_build": 22000,
     "default_selected": false,
     "archive": "zip",
-    "notes": "Not selected by default: upstream says ARM64 on 24H2+ may need test-signing (OQ 24). Enable only after the Memory-Integrity-on check on the ARM64 laptop."
+    "notes": "Decision 2026-11-17 (parity-arm64, docs/agents/architecture.md 'VDD on ARM64'): not selected by default. Facts: signed by SignPath Foundation (public CA), not by the Microsoft hardware publisher; upstream says ARM64 on 24H2+ may need test-signing (OQ 24), which the rules forbid. ARM64 remote seats default to the RDP session display; the operator can opt in with PULSARDRIVERS=vdd. Flip to true only after the Memory-Integrity-on + Secure-Boot-on check on the ARM64 laptop passes (test in seat-setup drivers.rs)."
   },
   {
     "id": "usbip-win2",

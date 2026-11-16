@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   authenticodeHashes,
   checkArm64ec,
+  checkArm64x,
   checkBlocklist,
   hasHybridMetadata,
   checkDirs,
@@ -241,6 +242,37 @@ describe("arm64ec helper", () => {
   });
 });
 
+describe("arm64x credential provider (parity-arm64)", () => {
+  test("ARM64 machine plus hybrid metadata", () => {
+    expect(checkArm64x("c.dll", pe64lc(0xaa64, 0x180001000n), true)).toBeNull();
+    expect(checkArm64x("c.dll", pe64lc(0xaa64, 0n), true)).toMatchObject({ rule: "not_arm64x", severity: "error" });
+    expect(checkArm64x("c.dll", pe64lc(0xaa64, 0n), false)?.severity).toBe("warning");
+    // ARM64EC alone (x64 machine) is not enough: native LogonUI needs the ARM64 half.
+    expect(checkArm64x("c.dll", pe64lc(0x8664, 0x1000n), true)?.rule).toBe("not_arm64x");
+  });
+
+  test("checkDirs: ARM64 package only, not with --machine-only", () => {
+    const d = mkdtempSync(join(tmpdir(), "pulsar-seat-x-"));
+    try {
+      writeFileSync(join(d, "pulsar-seat-credprov.dll"), pe64lc(0xaa64, 0n));
+      expect(checkDirs([d], "arm64", { release: false }).map((x) => `${x.rule}:${x.severity}`)).toEqual(["not_arm64x:warning"]);
+      expect(checkDirs([d], "arm64", { machineOnly: true })).toEqual([]);
+      writeFileSync(join(d, "pulsar-seat-credprov.dll"), pe64lc(0xaa64, 0x2000n));
+      expect(checkDirs([d], "arm64", {})).toEqual([]);
+      writeFileSync(join(d, "pulsar-seat-credprov.dll"), pe64lc(0x8664, 0n));
+      expect(checkDirs([d], "x64", {})).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  test("the real ARM64X build passes when present", () => {
+    const f = join(import.meta.dir, "..", "..", "credprov", "build", "ARM64", "Release", "pulsar-seat-credprov.dll");
+    if (!existsSync(f)) return;
+    expect(checkArm64x(f, new Uint8Array(readFileSync(f)), true)).toBeNull();
+  });
+});
+
 describe("vulnerable driver block rules", () => {
   /** PE32+ image with an optional header, a fake checksum and a certificate table. */
   function pe64(checksum: number, cert: number[]): Uint8Array {
@@ -393,17 +425,23 @@ describe("remote kind payload", () => {
     expect(remoteDriverFile("drivers/vdd/a.inf")).toBeNull();
   });
 
-  test("machines: shim x64 package only, installer stubs may be x86", () => {
+  test("machines: shim folders per package, installer stubs may be x86", () => {
     expect(allowedMachines("shim/x64/PulsarSplitShim.dll", "x64")).toEqual([0x8664]);
     expect(allowedMachines("shim/x86/PulsarSplitShim.dll", "x64")).toEqual([0x014c]);
-    expect(typeof allowedMachines("shim/x64/PulsarSplitShim.dll", "arm64")).toBe("string");
+    // parity-arm64: the ARM64 package carries arm64 + x64 (emulated apps) + x86.
+    expect(allowedMachines("shim/arm64/PulsarSplitShim.dll", "arm64")).toEqual([0xaa64]);
+    expect(allowedMachines("shim/x64/PulsarSplitShim.dll", "arm64")).toEqual([0x8664]);
+    expect(allowedMachines("shim/x86/pulsar-split-launch32.exe", "arm64")).toEqual([0x014c]);
     expect(typeof allowedMachines("shim/arm64/a.dll", "x64")).toBe("string");
+    expect(typeof allowedMachines("shim/arm64ec/a.dll", "arm64")).toBe("string");
+    expect(checkMachine("shim/arm64/l.exe", pe(0x8664), "arm64")?.rule).toBe("wrong_machine");
+    expect(checkMachine("shim/arm64/l.exe", pe(0xaa64), "arm64")).toBeNull();
     expect(allowedMachines("remote/drivers/usbip-win2/USBip-arm64.exe", "arm64")).toEqual([0xaa64, 0x014c]);
     expect(allowedMachines("remote/drivers/vdd/VirtualDisplayDriver/MttVDD.dll", "arm64")).toEqual([0xaa64]);
     expect(allowedMachines("remote/stream-server/sunshine.exe", "x64")).toEqual([0x8664]);
     expect(checkMachine("shim/x86/l.exe", pe(0x014c), "x64")).toBeNull();
     expect(checkMachine("shim/x86/l.exe", pe(0x8664), "x64")?.rule).toBe("wrong_machine");
-    expect(checkMachine("shim/x64/l.exe", pe(0x8664), "arm64")?.rule).toBe("wrong_machine");
+    expect(checkMachine("shim/x64/l.exe", pe(0xaa64), "arm64")?.rule).toBe("wrong_machine");
     expect(checkMachine("remote/stream-server/tools/x.exe", pe(0x014c), "arm64")?.rule).toBe("wrong_machine");
   });
 

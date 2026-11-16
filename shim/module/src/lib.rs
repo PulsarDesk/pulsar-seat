@@ -3,7 +3,8 @@
 //!
 //! Loaded by the launcher (`pulsar-split-launch`) or by AppHelp through our custom shim
 //! database. It exports the two shim-engine entry points `GetHookAPIs` / `NotifyShims`
-//! (returning no shim-engine hooks: we install our own detours with `retour`) and
+//! (returning no shim-engine hooks: we install our own detours with `retour` on x86 / x64
+//! and Microsoft Detours on native ARM64) and
 //! `PulsarSplitInit` (called synchronously by the launcher before the target resumes).
 //!
 //! Every hook calls a pure decision function from `seat_shim_core::decide`; the module
@@ -13,5 +14,5 @@
 
 pub mod filter;
 
-#[cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))]
+#[cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64")))]
 mod rt;

@@ -390,6 +390,21 @@ mod tests {
         assert!(!default_selection(&pkgs, "x64").contains(&"vigembus".to_string()));
     }
 
+    /// parity-arm64 decision (2026-11-17, architecture.md "VDD on ARM64"): the ARM64 VDD
+    /// package stays opt-in until it is shown to load with Memory Integrity and Secure Boot
+    /// on (upstream: ARM64 on 24H2+ may need test-signing, which the rules forbid). x64
+    /// keeps it as the default remote display driver.
+    #[test]
+    fn vdd_default_is_x64_only() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../installer/remote/drivers.json");
+        let pkgs = load_driver_manifest(&path).unwrap();
+        assert!(default_selection(&pkgs, "x64").contains(&"vdd".to_string()));
+        assert!(!default_selection(&pkgs, "arm64").contains(&"vdd".to_string()));
+        assert!(default_selection(&pkgs, "arm64").contains(&"usbip-win2".to_string()));
+        let arm = select(&pkgs, "vdd", "arm64").unwrap();
+        assert!(arm.min_build.is_some_and(|b| b >= 22000), "ARM64 VDD needs Windows 11");
+    }
+
     fn pkg() -> DriverPackage {
         DriverPackage {
             id: "vdd".into(),

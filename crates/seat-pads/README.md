@@ -31,7 +31,7 @@ Design limits:
 | Service wiring (round 4) | `LocalPadHub` on the service's one `PadManager` (shared with remote seats): device SDDL with the seat user's SID + device session id, ownership registry, orphan cleanup at start / stop, one reader thread per physical pad. Only PlayStation pads (DS4 / DualSense / Edge, USB or Bluetooth) are read; Xbox / generic HID pads are reported `Unsupported`. |
 | Feedback to the physical pad | `LocalFeedbackRouter`: same kind = output report unchanged (rumble, lightbar, player LEDs, adaptive triggers); other kind (DualSense behind ViGEm X360) = rumble + lightbar rebuilt; Bluetooth pads: none yet (output report CRC, open) |
 | Default | per seat **off** (`LocalSeat::virtual_pads`, manager "Sanal oyun kolu"): every usable backend needs a driver install (ViGEmBus / usbip-win2) that Pulsar Seat never does |
-| Per-process HID shim (`seat-shim-core`, `shim/`) | remote kind only for now; x64 / x86 only, so off on ARM64 |
+| Per-process HID shim (`seat-shim-core`, `shim/`) | remote kind and kiosk seats; x64 / x86 and native ARM64 (Detours backend, parity-arm64) |
 
 Untested on hardware. `cargo test -p seat-input --features local-pads local_pads` runs the
 bridge and hub tests against a fake backend. `seat-service` enables the feature in its

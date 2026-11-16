@@ -1,4 +1,5 @@
-# Separate workspace (not a root member, docs/split/agents/contracts.md §0.2): x64 + x86 Windows only.
+# Separate workspace (not a root member, docs/split/agents/contracts.md §0.2): Windows x64, x86 and
+# native ARM64 (Detours backend, third_party/detours).
 [workspace]
 resolver = "3"
 members = ["module", "launcher", "shimctl"]

@@ -4,9 +4,10 @@
 //! Starts `<exe>` suspended in the caller's session and token, loads the isolation module
 //! into it with a remote `LoadLibraryW` thread, runs the module's `PulsarSplitInit` with a
 //! second remote thread (hooks are in place before the target's first instruction), then
-//! resumes it. A target of the other bitness is handed to the sibling launcher build
-//! (`..\x86\pulsar-split-launch32.exe` / `..\x64\pulsar-split-launch.exe`); ARM64 targets
-//! start without the module (spec 50 §14; no ARM64 module build, round 4).
+//! resumes it. A target of another architecture is handed to the sibling launcher build
+//! (`..\x86\pulsar-split-launch32.exe`, `..\x64\pulsar-split-launch.exe` or
+//! `..\arm64\pulsar-split-launch.exe`; the ARM64 build uses the Detours backend,
+//! parity-arm64).
 //!
 //! `--attach <pid>` (round 4, local kiosk shell): inject into a process its creator started
 //! suspended; the creator resumes it. Exit codes: `seat_shim_core::launch::attach_exit`.
