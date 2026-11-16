@@ -2,7 +2,7 @@
 // Kiosk seats (spec 35 §5.1 U3): config editing and the local checks that mirror seat-core.
 import { describe, expect, it } from 'vitest';
 import { demoConfig } from './demo.ts';
-import { addSeat, kioskAudio, kioskSeatOneDesktop, localIssues, setKioskSeatOneDesktop, setKioskShell } from './model.ts';
+import { addSeat, isAppUserModelId, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localIssues, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell } from './model.ts';
 import { issueText, noteLabel, t } from './i18n.ts';
 import type { DeviceView } from './types.ts';
 
@@ -48,6 +48,46 @@ describe('kiosk shell config', () => {
     expect(localIssues(c, null).map((i) => i.code)).toContain('invalid_kiosk_shell');
     expect(issueText.invalid_kiosk_shell).toBeTruthy();
     expect(issueText.kiosk_shell_ignored_on_seat_one).toBeTruthy();
+  });
+});
+
+describe('kiosk parity 2026-11-17', () => {
+  it('keeps packaged apps and the full-screen flag', () => {
+    const c = setKioskShell(demoConfig(), 2, {
+      apps: [
+        { title: '', command: '', app_id: ' Microsoft.WindowsCalculator_8wekyb3d8bbwe!App ', autostart: false, monitor: 0 },
+        { title: 'Oyun', command: 'C:\\Games\\g.exe', autostart: true, monitor: 0, fullscreen: true }
+      ],
+      idle_reset_minutes: 0
+    });
+    const k = c.seats.find((s) => s.number === 2)!.local?.kiosk_shell!;
+    expect(k.apps).toEqual([
+      { title: 'App', command: '', app_id: 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', autostart: false, monitor: 0 },
+      { title: 'Oyun', command: 'C:\\Games\\g.exe', autostart: true, monitor: 0, fullscreen: true }
+    ]);
+    expect(localIssues(c, null).map((i) => i.code)).not.toContain('invalid_kiosk_shell');
+    expect(isAppUserModelId('A.B_x!App')).toBe(true);
+    for (const bad of ['NoBang', 'a!', '!b', 'a b!c', 'a!b!c']) expect(isAppUserModelId(bad)).toBe(false);
+    const broken = setKioskShell(demoConfig(), 2, { apps: [{ title: 'x', command: '', app_id: 'bad', autostart: false, monitor: 0 }], idle_reset_minutes: 0 });
+    expect(localIssues(broken, null).map((i) => i.code)).toContain('invalid_kiosk_shell');
+  });
+
+  it('per-seat accounts default on and survive the seat-one toggle', () => {
+    let c = setKioskShell(demoConfig(), 2, { apps: [{ title: 'a', command: 'C:\\a.exe', autostart: false, monitor: 0 }], idle_reset_minutes: 0 });
+    expect(kioskPerSeatAccounts(c)).toBe(true);
+    expect(kioskAccountOf(c, 2, false)).toEqual({ kind: 'auto', user: 'PulsarKiosk02' });
+    expect(kioskAccountOf(c, 3, false)).toBeNull();
+    c.seats.find((s) => s.number === 2)!.account = { kind: 'local', user: 'ayse' };
+    expect(kioskAccountOf(c, 2, true)).toEqual({ kind: 'seat', user: 'ayse' });
+    expect(kioskAccountOf(c, 2, false)).toEqual({ kind: 'auto', user: 'PulsarKiosk02' });
+    c = setKioskPerSeatAccounts(c, false);
+    expect(c.settings.kiosk?.accounts).toBe('shared');
+    expect(kioskAccountOf(c, 2, true)).toEqual({ kind: 'console' });
+    c = setKioskSeatOneDesktop(c, false);
+    expect(c.settings.kiosk).toEqual({ seat1_desktop: false, accounts: 'shared' });
+    expect(t.kiosk.account.auto('PulsarKiosk02')).toContain('PulsarKiosk02');
+    expect(noteLabel('kiosk_account_fallback')).toContain('1. koltuğun kullanıcısıyla');
+    expect(noteLabel('kiosk_per_seat_accounts')).toContain('kendi Windows');
   });
 });
 

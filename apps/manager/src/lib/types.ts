@@ -288,15 +288,26 @@ export interface KioskShellApp {
   autostart: boolean;
   /** Index of the seat monitor (0 = first). */
   monitor: number;
+  /** Packaged (UWP / MSIX) app: its AUMID (`Family!App`); `command` may then be empty.
+   *  Added 2026-11-17. */
+  app_id?: string;
+  /** Exclusive full-screen app (games): gets the real foreground while focused. Added
+   *  2026-11-17. */
+  fullscreen?: boolean;
 }
 
 /** Same as seat-core `MAX_KIOSK_APPS`. */
 export const MAX_KIOSK_APPS = 16;
 
+/** Whose Windows user kiosk seats run as (seat-core `KioskAccountMode`, 2026-11-17). */
+export type KioskAccountMode = 'per_seat' | 'shared';
+
 /** Machine-wide kiosk options. */
 export interface KioskSettings {
   /** Seat 1 stays the normal desktop next to the kiosk seats (default true). */
   seat1_desktop: boolean;
+  /** Missing (older services / configs) = `per_seat`. */
+  accounts?: KioskAccountMode;
 }
 
 export interface KioskApp {

@@ -222,6 +222,9 @@ impl KeyTranslator for WinKeys {
 struct WinQuery<'a> {
     skip: [HWND; 2],
     pids: &'a HashSet<u32>,
+    /// Top-level windows of the seat owned by other processes (frame hosts of packaged
+    /// apps, windows owned by a seat window; `super::track::extra_windows`).
+    extra: &'a HashMap<u64, u32>,
     me: u32,
 }
 
@@ -271,7 +274,7 @@ impl WindowQuery for WinQuery<'_> {
                         let (pid, _) = pid_of(h);
                         let owner = if pid == self.me {
                             HitOwner::Shell
-                        } else if self.pids.contains(&pid) {
+                        } else if self.pids.contains(&pid) || self.extra.contains_key(&(h as u64)) {
                             HitOwner::SeatApp
                         } else {
                             HitOwner::Foreign
@@ -342,6 +345,9 @@ impl WindowQuery for WinQuery<'_> {
         };
         if ok == 0 { seat_input::kiosk::ht::CLIENT } else { res as isize as i32 }
     }
+    fn scroll_bar(&self, top: u64, vertical: bool) -> Option<seat_input::kiosk::ScrollBar> {
+        super::win_track::scroll_bar(top as HWND, vertical)
+    }
 }
 
 struct Shell {
@@ -398,7 +404,25 @@ struct Shell {
     /// Foreground window at the last tick and the windows that already had a warm-up.
     fg_last: isize,
     fg_warmed: HashSet<isize>,
+    /// Processes of the seat outside the job: break-away children, hand-offs (per-seat
+    /// user), packaged apps (parity 2026-11-17, `super::track`).
+    tracker: super::track::Tracker,
+    /// The job's own pids at the last tick (`pids` = these + the tracked ones).
+    job_set: HashSet<u32>,
+    /// Last process snapshot of the session (refreshed every [`TRACK_EVERY`] ticks).
+    procs: Vec<super::track::ProcFacts>,
+    /// Seat windows owned by other processes (frames of packaged apps, owned windows).
+    extra_wins: HashMap<u64, u32>,
+    /// The shell runs as the seat's own Windows user (`seat_session::kiosk_account`).
+    per_seat_user: bool,
+    /// Windows the seat user minimised (never restored by the full-screen rule).
+    user_minimized: HashSet<u64>,
+    /// Seat cursor for the seat's apps (`seat_shim_core::kiosk_cursor`).
+    cursor_pub: Option<super::win_track::CursorSection>,
 }
+
+/// Process / window snapshot interval of the hand-off tracker, in 250 ms ticks.
+const TRACK_EVERY: u64 = 4;
 
 thread_local! {
     static SHELL: RefCell<Option<Shell>> = const { RefCell::new(None) };
@@ -668,6 +692,10 @@ impl Shell {
             return;
         }
         let Some(work) = self.layout.work_rect(app.monitor) else { return };
+        if let Some(aumid) = app.app_id.as_deref() {
+            self.launch_packaged(i, aumid, &app);
+            return;
+        }
         let Ok(cmd) = seat_session::launch::command_line(std::path::Path::new(&app.command), &app.args) else {
             self.error_line = Some(format!("{}: {}", tr::START_FAILED, app.title));
             return;
@@ -744,6 +772,46 @@ impl Shell {
         }
     }
 
+    /// Packaged (UWP / MSIX) app (parity 2026-11-17, best effort): activated by the system
+    /// (`IApplicationActivationManager`), so it is not the shell's child; its pid is tracked
+    /// (`super::track`), an attempt is made to put it into the seat's job (nested jobs; an
+    /// AppContainer's own job may refuse), and its frame window is placed on the seat's
+    /// monitor by the usual placement. Limits (HYPOTHESIS, untested): activation needs the
+    /// user's shell infrastructure, so a per-seat user without Explorer may be refused; the
+    /// shim module is not loaded into packaged apps; a single-instance app already running
+    /// for the same user is reused.
+    fn launch_packaged(&mut self, i: usize, aumid: &str, app: &seat_core::config::KioskShellApp) {
+        let args: Vec<String> = app.args.iter().map(|a| seat_session::launch::quote_arg(a)).collect();
+        match super::win_track::activate_packaged(aumid, &args.join(" ")) {
+            Ok(pid) => {
+                let created = super::win_track::created_of(pid);
+                self.tracker.launched(pid, created);
+                // SAFETY: query + set-quota handle, closed at once; failure only logged.
+                unsafe {
+                    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+                    let h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+                    if !h.is_null() {
+                        if AssignProcessToJobObject(self.job, h) == 0 {
+                            klog!("packaged app {aumid} (pid {pid}) not in the seat's job; tracked by pid");
+                        }
+                        CloseHandle(h);
+                    }
+                }
+                self.pids.insert(pid);
+                self.audio.sync(&self.pids.iter().copied().collect());
+                self.app_of_pid.insert(pid, i);
+                self.pending_focus.push(pid);
+                self.error_line = None;
+                klog!("packaged app {aumid} activated (pid {pid})");
+            }
+            Err(e) => {
+                klog!("packaged app {aumid} not activated: {e}");
+                self.error_line = Some(format!("{}: {}", tr::START_FAILED, app.title));
+            }
+        }
+        redraw(self.bar);
+    }
+
     /// Idle reset / log out: close every app, show the launcher, start the autostart apps.
     fn reset(&mut self) {
         let acts = self.router.reset();
@@ -758,6 +826,12 @@ impl Shell {
             }
         }
         self.job = new_job();
+        // The seat's processes outside the job (break-away, hand-off, packaged) end too.
+        super::win_track::terminate(&self.tracker.outside_job());
+        self.tracker.clear();
+        self.extra_wins.clear();
+        self.user_minimized.clear();
+        self.job_set.clear();
         self.pids.clear();
         self.app_of_pid.clear();
         self.pending_focus.clear();
@@ -783,6 +857,7 @@ impl Shell {
     }
 
     fn focus_app(&mut self, top: u64) {
+        self.user_minimized.remove(&top);
         let h = top as HWND;
         // SAFETY: plain asynchronous call on a window of the seat's job.
         if unsafe { IsIconic(h) } != 0 {
@@ -807,6 +882,10 @@ impl Shell {
                 KioskAction::Cursor { x, y } => {
                     // SAFETY: our window.
                     unsafe { SetWindowPos(self.cursor, hwnd_topmost(), x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW) };
+                    // The seat's apps read it through the module's GetCursorPos.
+                    if let Some(c) = self.cursor_pub.as_mut() {
+                        c.set(x, y);
+                    }
                 }
                 KioskAction::Post { hwnd, msg, wparam, lparam, key_state } => {
                     post(&mut self.modified_threads, hwnd as HWND, msg, wparam, lparam, key_state.as_deref());
@@ -828,6 +907,9 @@ impl Shell {
                 }
                 KioskAction::Caption { top, cmd } => {
                     let h = top as HWND;
+                    if cmd == CaptionCommand::Minimize {
+                        self.user_minimized.insert(top);
+                    }
                     let (code, l) = match cmd {
                         CaptionCommand::Close => (sc::CLOSE, 0),
                         CaptionCommand::Minimize => (sc::MINIMIZE, 0),
@@ -864,7 +946,7 @@ impl Shell {
         self.dirty = true;
         // SAFETY: no arguments.
         let me = unsafe { GetCurrentProcessId() };
-        let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, me };
+        let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, extra: &self.extra_wins, me };
         SEAT_PACKETS.fetch_add(packets.len() as u64, std::sync::atomic::Ordering::Relaxed);
         if self.guard.as_ref().is_some_and(GuardHelper::is_up) && packets.iter().any(|p| matches!(p, InputPacket::Key { sc: 0x5B | 0x5C, f } if f & seat_core::backend::input::key_flags::E0 != 0 && f & seat_core::backend::input::key_flags::UP == 0)) {
             // A Windows key the helper's hook swallows never reaches raw input: the hook was
@@ -898,8 +980,24 @@ impl Shell {
             self.keep_focus();
         }
         self.warm_up_guard();
+        // Scroll-bar auto-repeat (router).
+        let acts = self.router.on_tick(now);
+        self.run_actions(acts);
         if let Some(p) = job_pids(self.job) {
-            self.pids = p;
+            self.job_set = p;
+        }
+        // Hand-offs, break-away children, packaged apps (parity 2026-11-17): a fresh
+        // snapshot every second, the job's pids every tick.
+        // SAFETY: no arguments.
+        let me = unsafe { GetCurrentProcessId() };
+        if self.tick % TRACK_EVERY == 0 {
+            self.procs = super::win_track::processes();
+            let seat_pids = self.tracker.update(&self.job_set, &self.procs, self.per_seat_user, me);
+            let wins = super::win_track::windows();
+            self.extra_wins = super::track::extra_windows(&wins, &seat_pids);
+            self.pids = seat_pids;
+        } else {
+            self.pids = self.tracker.update(&self.job_set, &self.procs, self.per_seat_user, me);
         }
         // New job processes (children too) get the seat's endpoints; gone ones are dropped.
         self.audio.sync(&self.pids.iter().copied().collect());
@@ -955,11 +1053,29 @@ impl Shell {
 
     /// Keeps the seat apps inside the seat, focuses new apps, refreshes the bar list.
     fn place_windows(&mut self) {
-        let wins = windows_of(&self.pids);
+        let mut wins = windows_of(&self.pids);
+        // Frames of packaged apps and windows owned by a seat window (other processes).
+        for w in self.extra_wins.keys() {
+            let h = *w as HWND;
+            // SAFETY: plain queries.
+            if unsafe { IsWindow(h) } != 0 && unsafe { IsWindowVisible(h) } != 0 && !wins.contains(&h) {
+                wins.push(h);
+            }
+        }
         let mut running = Vec::new();
         for h in wins {
-            let (pid, _) = pid_of(h);
+            // A frame window stands for the packaged app it hosts.
+            let pid = self.extra_wins.get(&(h as u64)).copied().unwrap_or_else(|| pid_of(h).0);
             let app = self.app_of_pid.get(&pid).copied();
+            // Exclusive full screen minimises a window that loses the foreground: put it
+            // back unless the seat user minimised it (parity 2026-11-17, best effort).
+            let fullscreen_app = app.and_then(|i| self.args.plan.apps.get(i)).is_some_and(|a| a.fullscreen);
+            // SAFETY: plain query.
+            let minimised = unsafe { IsIconic(h) } != 0;
+            if super::track::restore_fullscreen(minimised, fullscreen_app, self.user_minimized.contains(&(h as u64))) {
+                // SAFETY: asynchronous show call on a seat window.
+                unsafe { ShowWindowAsync(h, SW_SHOWNOACTIVATE) };
+            }
             let mon = app.and_then(|i| self.args.plan.apps.get(i)).map_or(0, |a| a.monitor);
             let dragging = self.drag.is_some_and(|d| d.0 == h as u64);
             // SAFETY: plain query.
@@ -1011,31 +1127,54 @@ impl Shell {
             self.unclip();
             return;
         }
+        // A full-screen app of this seat (parity 2026-11-17) takes the real foreground
+        // instead of the sink, with the cursor clipped onto its window.
+        let game = self.fullscreen_target();
+        let target = game.unwrap_or(self.sink);
         // SAFETY: plain focus calls; the thread attachment is undone at once.
         unsafe {
             let fg = GetForegroundWindow();
-            if fg != self.sink {
+            if fg != target {
                 LockSetForegroundWindow(LSFW_UNLOCK);
                 let (_, fg_tid) = if fg.is_null() { (0, 0) } else { pid_of(fg) };
                 let me = GetCurrentThreadId();
                 let attached = fg_tid != 0 && fg_tid != me && AttachThreadInput(me, fg_tid, 1) != 0;
-                SetForegroundWindow(self.sink);
+                SetForegroundWindow(target);
                 if attached {
                     AttachThreadInput(me, fg_tid, 0);
                 }
             }
-            // Clip and lock only while the sink really is the foreground window.
-            if GetForegroundWindow() == self.sink
-                && let Some((x, y)) = self.layout.sink_point()
+            // Clip and lock only while the target really is the foreground window.
+            let clip = match game {
+                Some(g) => window_rect(g).map(|r| RECT { left: r.x, top: r.y, right: r.x + r.width as i32, bottom: r.y + r.height as i32 }),
+                None => self.layout.sink_point().map(|(x, y)| RECT { left: x, top: y, right: x + 1, bottom: y + 1 }),
+            };
+            if GetForegroundWindow() == target
+                && let Some(r) = clip
             {
                 LockSetForegroundWindow(LSFW_LOCK);
-                let r = RECT { left: x, top: y, right: x + 1, bottom: y + 1 };
                 ClipCursor(&r);
                 self.clipped = true;
             } else {
                 self.unclip();
             }
         }
+    }
+
+    /// The seat's focused window when it belongs to a `fullscreen` app and covers one of the
+    /// seat's monitors (`super::track::covers`); only the focus leader gives it the
+    /// foreground, so at most one exclusive full-screen app runs on the PC at a time.
+    fn fullscreen_target(&self) -> Option<HWND> {
+        let top = self.router.focused_app()?;
+        let h = top as HWND;
+        let pid = self.extra_wins.get(&top).copied().unwrap_or_else(|| pid_of(h).0);
+        let app = self.app_of_pid.get(&pid).and_then(|i| self.args.plan.apps.get(*i))?;
+        // SAFETY: plain queries.
+        if !app.fullscreen || unsafe { IsWindow(h) } == 0 || unsafe { IsIconic(h) } != 0 {
+            return None;
+        }
+        let r = window_rect(h)?;
+        self.layout.monitors.iter().any(|m| super::track::covers(r, *m)).then_some(h)
     }
 
     fn unclip(&mut self) {
@@ -1069,6 +1208,10 @@ impl Shell {
             }
             self.job = std::ptr::null_mut();
         }
+        super::win_track::terminate(&self.tracker.outside_job());
+        self.tracker.clear();
+        // Apps of a later shell must not read this shell's last position.
+        self.cursor_pub = None;
         self.reader = None;
     }
 
@@ -1495,6 +1638,38 @@ impl GuardHelper {
 }
 
 
+/// The session's focus mutex. Since kiosk seats run as different Windows users (2026-11-17)
+/// the mutex is created with a DACL that lets every interactive user wait on and release
+/// it (`SYNCHRONIZE | MUTEX_MODIFY_STATE`), and opened with only those rights, so the shell
+/// of another user can still take the lead when the first one ends.
+fn focus_mutex() -> HANDLE {
+    use windows_sys::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows_sys::Win32::System::Threading::CreateMutexExW;
+    /// `SYNCHRONIZE | MUTEX_MODIFY_STATE`.
+    const ACCESS: u32 = 0x0010_0001;
+    let n = wide(FOCUS_MUTEX);
+    let sddl = wide("D:(A;;GA;;;SY)(A;;GA;;;OW)(A;;0x00100001;;;IU)");
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: valid SDDL; freed below.
+    let have_sd = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) } != 0;
+    let sa = SECURITY_ATTRIBUTES { nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: sd, bInheritHandle: 0 };
+    // SAFETY: named mutex in this session's namespace, not owned at creation.
+    let h = unsafe { CreateMutexExW(if have_sd { &sa } else { std::ptr::null() }, n.as_ptr(), 0, ACCESS) };
+    if have_sd {
+        // SAFETY: allocated by the conversion above.
+        unsafe { LocalFree(sd as HLOCAL) };
+    }
+    if h.is_null() {
+        klog!("focus mutex not opened: {}", std::io::Error::last_os_error());
+        // The old way (same user only).
+        // SAFETY: as above.
+        return unsafe { CreateMutexW(std::ptr::null(), 0, n.as_ptr()) };
+    }
+    h
+}
+
 fn run_shell(args: ShellArgs) -> i32 {
     // SAFETY: process-wide DPI mode before any window exists (physical pixels match the
     // desktop rectangles of the device list).
@@ -1521,13 +1696,7 @@ fn run_shell(args: ShellArgs) -> i32 {
     unsafe { SetLayeredWindowAttributes(cursor, KEY_COLOUR, 255, LWA_COLORKEY) };
 
     let policy = focus_policy(&args.plan);
-    let mutex = if policy == FocusPolicy::SinkLeader {
-        let n = wide(FOCUS_MUTEX);
-        // SAFETY: named mutex in this session's namespace, not owned at creation.
-        unsafe { CreateMutexW(std::ptr::null(), 0, n.as_ptr()) }
-    } else {
-        std::ptr::null_mut()
-    };
+    let mutex = if policy == FocusPolicy::SinkLeader { focus_mutex() } else { std::ptr::null_mut() };
 
     // Raw input: the seat's units only (filled from the first service answer).
     let fwd_tx = tx.clone();
@@ -1601,6 +1770,13 @@ fn run_shell(args: ShellArgs) -> i32 {
         guard,
         fg_last: 0,
         fg_warmed: HashSet::new(),
+        tracker: super::track::Tracker::default(),
+        job_set: HashSet::new(),
+        procs: Vec::new(),
+        extra_wins: HashMap::new(),
+        per_seat_user: super::win_track::is_per_seat_user(),
+        user_minimized: HashSet::new(),
+        cursor_pub: super::win_track::CursorSection::create(u32::from(seat.get())),
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {

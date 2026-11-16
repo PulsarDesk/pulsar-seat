@@ -437,6 +437,13 @@ export function isAbsoluteWindowsPath(p: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(v) || /^\\\\[^\\]+\\[^\\]+/.test(v);
 }
 
+/** Application User Model ID of a packaged app (`Family!App`), same rule as seat-core
+ *  `validate::is_app_user_model_id`. */
+export function isAppUserModelId(s: string): boolean {
+  const v = s.trim();
+  return v.length <= 160 && /^[A-Za-z0-9._-]+![A-Za-z0-9._-]+$/.test(v);
+}
+
 /** Splits an argument line the way the manager shows it back ({@link formatArgs}):
  *  whitespace separates, double quotes group. */
 export function parseArgs(line: string): string[] {
@@ -519,12 +526,16 @@ export function setKioskShell(c: Config, n: SeatNumber, shell: KioskShell | null
   const apps = shell.apps
     .map((a) => {
       const command = a.command.trim();
-      const base = command.split(/[\\/]/).pop()?.replace(/\.exe$/i, '') ?? command;
+      const appId = a.app_id?.trim() ?? '';
+      const fallback = appId ? (appId.split('!').pop() ?? appId) : command;
+      const base = command ? (command.split(/[\\/]/).pop()?.replace(/\.exe$/i, '') ?? command) : fallback;
       const app: KioskShellApp = { title: a.title.trim() || base, command, autostart: a.autostart, monitor: Math.max(0, Math.min(15, Math.trunc(a.monitor) || 0)) };
       if (a.args?.length) app.args = a.args;
+      if (appId) app.app_id = appId;
+      if (a.fullscreen) app.fullscreen = true;
       return app;
     })
-    .filter((a) => a.command !== '')
+    .filter((a) => a.command !== '' || a.app_id !== undefined)
     .slice(0, MAX_KIOSK_APPS);
   const idle = Math.max(0, Math.min(1440, Math.trunc(shell.idle_reset_minutes) || 0));
   l.kiosk_shell = { apps, idle_reset_minutes: idle };
@@ -538,8 +549,33 @@ export function kioskSeatOneDesktop(c: Config): boolean {
 
 export function setKioskSeatOneDesktop(c: Config, on: boolean): Config {
   const out = clone(c);
-  out.settings.kiosk = { seat1_desktop: on };
+  out.settings.kiosk = { ...out.settings.kiosk, seat1_desktop: on };
   return out;
+}
+
+/** Kiosk seats 2+ run as their own Windows user (default; 2026-11-17). */
+export function kioskPerSeatAccounts(c: Config): boolean {
+  return (c.settings.kiosk?.accounts ?? 'per_seat') === 'per_seat';
+}
+
+export function setKioskPerSeatAccounts(c: Config, on: boolean): Config {
+  const out = clone(c);
+  out.settings.kiosk = { seat1_desktop: kioskSeatOneDesktop(c), ...out.settings.kiosk, accounts: on ? 'per_seat' : 'shared' };
+  return out;
+}
+
+/** Whose Windows user a kiosk seat runs as (`null` = not a kiosk shell seat): seat 1 is the
+ *  console user, `shared` too; else the seat's account when a password is stored for it,
+ *  else Pulsar's own `PulsarKiosk<NN>` (seat-session `kiosk_account::identity_for`). */
+export function kioskAccountOf(c: Config, n: SeatNumber, passwordSet: boolean): { kind: 'console' } | { kind: 'seat'; user: string } | { kind: 'auto'; user: string } | null {
+  const s = c.seats.find((x) => x.number === n);
+  if (!s || !localOf(s).kiosk_shell) return null;
+  if (n === 1 || !kioskPerSeatAccounts(c)) return { kind: 'console' };
+  const a = s.account;
+  if (passwordSet && a && a.kind !== 'logon_screen' && a.user.trim() !== '' && !/^PulsarKiosk\d\d$/i.test(a.user)) {
+    return { kind: 'seat', user: a.kind === 'domain' ? `${a.domain}\\${a.user}` : a.user };
+  }
+  return { kind: 'auto', user: `PulsarKiosk${String(n).padStart(2, '0')}` };
 }
 
 /** Audio of a kiosk seat (round 4 kiosk-audio). The shell gives each of the seat's apps
@@ -916,7 +952,11 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
       const n = [...v.trim()].length;
       return n > 0 && n <= max && !/[\u0000-\u001f]/.test(v);
     };
-    const badApp = k.apps.some((a) => !textOk(a.title, 64) || !textOk(a.command, 260));
+    // A packaged app (AUMID) needs no command; a desktop app needs one (2026-11-17).
+    const badApp = k.apps.some((a) => {
+      const target = a.app_id !== undefined ? isAppUserModelId(a.app_id) && (a.command === '' || textOk(a.command, 260)) : textOk(a.command, 260);
+      return !textOk(a.title, 64) || !target;
+    });
     if (k.apps.length > MAX_KIOSK_APPS || badApp || k.idle_reset_minutes > 1440 || k.idle_reset_minutes < 0) {
       out.push(issue('error', 'invalid_kiosk_shell', { seat: s.number, field: 'local.kiosk_shell' }));
     }
