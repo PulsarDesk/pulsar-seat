@@ -29,6 +29,7 @@ import {
   type KioskApp,
   type KioskShell,
   type KioskShellApp,
+  type GpuPreference,
   type LocalSeat,
   MAX_KIOSK_APPS,
   type MaskSource,
@@ -261,6 +262,38 @@ export function setAccount(c: Config, n: SeatNumber, account: SeatAccount): Conf
 
 export function setWallpaper(c: Config, n: SeatNumber, on: boolean): Config {
   return editSeat(c, n, (s) => (s.wallpaper = on));
+}
+
+/** Most programs of a seat's GPU preference (`seat_core::config::MAX_GPU_PREF_APPS`). */
+export const MAX_GPU_PREF_APPS = 64;
+
+/** A program path the service accepts for a GPU preference: absolute, `.exe`, at most
+ *  260 characters, no control characters, no outer blanks (seat-core
+ *  `gpu_preference_checks`). */
+export function gpuPrefAppValid(p: string): boolean {
+  return p.length > 0 && [...p].length <= 260 && p.trim() === p && !/[\u0000-\u001f]/.test(p) && isAbsoluteWindowsPath(p) && p.toLowerCase().endsWith('.exe');
+}
+
+/** Per-seat GPU preference (off with no programs = field removed, as the service writes it). */
+export function setGpuPreference(c: Config, n: SeatNumber, pref: GpuPreference): Config {
+  return editSeat(c, n, (s) => {
+    const l = localMut(s);
+    if (!l) return;
+    const apps = pref.apps?.filter((a) => a.trim() !== '') ?? [];
+    if (pref.mode === 'off' && apps.length === 0) delete l.gpu_preference;
+    else l.gpu_preference = apps.length ? { mode: pref.mode, apps } : { mode: pref.mode };
+  });
+}
+
+/** Set or clear the HDR / VRR option of a monitor (seats 2..N, spec 40 §6.6). */
+export function setDisplayOption(c: Config, d: Device, key: 'hdr' | 'vrr', on: boolean, currentMask: SeatMask): Config {
+  let out = assignmentOf(c, d.key) ? clone(c) : setDeviceMask(c, d, currentMask);
+  out = clone(out);
+  const a = out.devices.find((x) => x.key === d.key)!;
+  a.options = { ...(a.options ?? {}), [key]: on };
+  if (!a.options[key]) delete a.options[key];
+  if (Object.keys(a.options).length === 0) delete a.options;
+  return out;
 }
 
 /** Seat-owned virtual pads of a local seat (off = field removed, as the service writes it). */
@@ -1022,6 +1055,13 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
     }
     if (s.number === 1 && kioskSeatOneDesktop(c)) {
       out.push(issue('warning', 'kiosk_shell_ignored_on_seat_one', { seat: s.number, field: 'local.kiosk_shell' }));
+    }
+  }
+  // GPU preference programs (seat-core `gpu_preference_checks`).
+  for (const s of c.seats) {
+    const apps = localOf(s).gpu_preference?.apps ?? [];
+    if (apps.length > MAX_GPU_PREF_APPS || apps.some((a) => !gpuPrefAppValid(a))) {
+      out.push(issue('error', 'invalid_gpu_preference', { seat: s.number, field: 'local.gpu_preference' }));
     }
   }
   const allowClone = c.settings.outputs?.allow_clone ?? false;

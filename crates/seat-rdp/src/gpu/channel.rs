@@ -28,7 +28,8 @@ use crate::gfx::GfxMetrics;
 use ironrdp_core::{Decode as _, ReadCursor, impl_as_any};
 use ironrdp_dvc::{DvcMessage, DvcProcessor};
 use ironrdp_egfx::client::GraphicsPipelineClient;
-use ironrdp_egfx::pdu::{Avc420BitmapStream, Codec1Type, FrameAcknowledgePdu, GfxPdu, QueueDepth};
+use ironrdp_egfx::pdu::{Avc420BitmapStream, Avc444BitmapStream, Codec1Type, Encoding, FrameAcknowledgePdu, GfxPdu, QueueDepth};
+
 use ironrdp_graphics::zgfx::{Decompressor, wrap_uncompressed};
 use ironrdp_pdu::geometry::ExclusiveRectangle;
 use ironrdp_pdu::{PduResult, decode_cursor, decode_err};
@@ -334,8 +335,7 @@ impl GfxChannel {
             GfxPdu::WireToSurface1(w) => match w.codec_id {
                 Codec1Type::Avc420 => self.avc420(w.surface_id, &w.destination_rectangle, &w.bitmap_data),
                 Codec1Type::Avc444 | Codec1Type::Avc444v2 => {
-                    self.router.avc444(w.surface_id);
-                    Action::Pass
+                    self.avc444(w.surface_id, w.codec_id == Codec1Type::Avc444v2, &w.destination_rectangle, &w.bitmap_data)
                 }
                 _ => {
                     self.router.cpu_paint(w.surface_id, &[rect16(&w.destination_rectangle)]);
@@ -455,6 +455,68 @@ impl GfxChannel {
             }
         };
         self.scratch = scratch;
+        action
+    }
+
+    /// AVC444 / AVC444v2 (added 2026-11-17): on the GPU when the compositor composes it
+    /// (`GpuCompositor::supports_avc444`), else the surface goes back to the CPU path.
+    fn avc444(&mut self, id: u16, v2: bool, dest: &ExclusiveRectangle, bitmap: &[u8]) -> Action {
+        let supported = self.gpu.as_ref().is_some_and(|g| g.supports_avc444());
+        if !supported {
+            self.router.avc444(id, &[], false, false);
+            self.settle();
+            return Action::Pass;
+        }
+        let mut c = ReadCursor::new(bitmap);
+        let Ok(stream) = Avc444BitmapStream::decode(&mut c) else {
+            // Malformed: the client reports it.
+            return Action::Pass;
+        };
+        let rects_of = |s: &Avc420BitmapStream<'_>| -> Vec<Rect> {
+            if s.rectangles.is_empty() { vec![rect16(dest)] } else { s.rectangles.iter().map(rect16).collect() }
+        };
+        let (main, aux) = match stream.encoding {
+            Encoding::LUMA => (Some(&stream.stream1), None),
+            Encoding::CHROMA => (None, Some(&stream.stream1)),
+            _ => (Some(&stream.stream1), stream.stream2.as_ref()),
+        };
+        let mut s1 = std::mem::take(&mut self.scratch);
+        let mut s2 = Vec::new();
+        let main_au: Option<(&[u8], Vec<Rect>)> =
+            main.map(|m| (if crate::h264::annex_b(m.data, &mut s1) { &s1[..] } else { m.data }, rects_of(m)));
+        let aux_au: Option<(&[u8], Vec<Rect>)> =
+            aux.map(|a| (if crate::h264::annex_b(a.data, &mut s2) { &s2[..] } else { a.data }, rects_of(a)));
+        let size = self.router.surface_size(id);
+        let covers = |rs: &[Rect]| size.is_some_and(|(w, h)| rs.iter().any(|r| r.left == 0 && r.top == 0 && r.right >= w && r.bottom >= h));
+        let full_idr = match (&main_au, &aux_au) {
+            (Some((m, mr)), Some((_, ar))) => has_idr(m) && covers(mr) && covers(ar),
+            _ => false,
+        };
+        let all: Vec<Rect> = main_au.iter().chain(aux_au.iter()).flat_map(|(_, r)| r.iter().copied()).collect();
+        let verdict = self.router.avc444(id, &all, full_idr, supported);
+        self.settle();
+        let action = match verdict {
+            Verdict::Cpu => Action::Pass,
+            Verdict::Both | Verdict::Gpu => {
+                let paint = verdict == Verdict::Gpu;
+                let update = super::Avc444Update {
+                    v2,
+                    main: main_au.as_ref().map(|(d, r)| (*d, r.as_slice())),
+                    aux: aux_au.as_ref().map(|(d, r)| (*d, r.as_slice())),
+                };
+                let r = match self.gpu.as_mut() {
+                    Some(g) if matches!(self.router.mode(id), Some(Mode::Seeding | Mode::Gpu)) => g.avc444(id, &update, paint),
+                    _ => Ok(()),
+                };
+                if let Err(e) = r {
+                    self.gpu_error(Some(id), e);
+                }
+                if paint && self.router.mode(id) == Some(Mode::Gpu) { Action::Divert } else { Action::Pass }
+            }
+        };
+        drop(main_au);
+        drop(aux_au);
+        self.scratch = s1;
         action
     }
 

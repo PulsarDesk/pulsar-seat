@@ -750,17 +750,21 @@ fn reset_unfollowed_modes(shared: &Arc<Mutex<Shared>>) {
 
 /// Re-create flip chains lost to a device removal / reset (UI thread).
 fn retry_gpu(shared: &Arc<Mutex<Shared>>) {
-    let todo: Vec<(usize, isize, Rect, u64)> = {
+    let todo: Vec<(usize, isize, Rect, u64, bool)> = {
         let s = lock(shared);
         s.outputs
             .iter()
             .enumerate()
-            .filter_map(|(i, o)| o.as_ref().filter(|o| o.gpu_retry && !o.lost).map(|o| (i, s.hwnds.get(i).copied().unwrap_or(0), o.rect, o.placement.adapter_luid)))
-            .filter(|(_, h, _, _)| *h != 0)
+            .filter_map(|(i, o)| {
+                o.as_ref()
+                    .filter(|o| o.gpu_retry && !o.lost)
+                    .map(|o| (i, s.hwnds.get(i).copied().unwrap_or(0), o.rect, o.placement.adapter_luid, o.placement.vrr))
+            })
+            .filter(|(_, h, _, _, _)| *h != 0)
             .collect()
     };
-    for (i, h, r, luid) in todo {
-        let res = FlipChain::new(HWND(h as *mut _), luid, r.width, r.height);
+    for (i, h, r, luid, vrr) in todo {
+        let res = FlipChain::new(HWND(h as *mut _), luid, r.width, r.height, vrr);
         let mut s = lock(shared);
         let Some(o) = s.outputs.get_mut(i).and_then(|o| o.as_mut()) else { continue };
         match res {
@@ -834,11 +838,17 @@ unsafe fn reconfigure(shared: &Arc<Mutex<Shared>>, hinst: windows::Win32::Founda
     let use_gpu = lock(shared).options.as_ref().is_some_and(|o| o.gpu);
     if use_gpu {
         for (i, &h) in hwnds.iter().enumerate() {
-            let Some((r, luid)) = rects[i].map(|r| (r, lock(shared).outputs[i].as_ref().map_or(0, |o| o.placement.adapter_luid))) else { continue };
+            let Some((r, luid, vrr)) = rects[i].map(|r| {
+                let s = lock(shared);
+                let o = s.outputs[i].as_ref();
+                (r, o.map_or(0, |o| o.placement.adapter_luid), o.is_some_and(|o| o.placement.vrr))
+            }) else {
+                continue;
+            };
             if h == 0 {
                 continue;
             }
-            match FlipChain::new(HWND(h as *mut _), luid, r.width, r.height) {
+            match FlipChain::new(HWND(h as *mut _), luid, r.width, r.height, vrr) {
                 Ok(c) => {
                     let got = c.luid();
                     CHAINS.with(|m| m.borrow_mut().insert(i, c));

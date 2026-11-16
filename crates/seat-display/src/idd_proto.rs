@@ -17,7 +17,17 @@ pub const PSIDD_INTERFACE_MAJOR: u16 = 1;
 /// validation, frame-section name collision check.
 /// Minor 2: the ready event's name ends in the header's random `ready_nonce`
 /// ([`event_name_with_nonce`]), so no user can create it first and block a seat.
-pub const PSIDD_INTERFACE_MINOR: u16 = 2;
+/// Minor 3 (2026-11-17): one adapter per render GPU ([`IOCTL_PSIDD_GET_ADAPTER_INFO`],
+/// bound render LUID, extra adapters as `PulsarSeatIdd_Adapter` software devnodes),
+/// [`PSIDD_ADD_FLAG_HDR`] + FP16 / 10-bit frames with colour space and HDR10 metadata,
+/// frame timestamps (QPC) for latency measurement.
+pub const PSIDD_INTERFACE_MINOR: u16 = 3;
+
+/// Hardware id of the extra local adapters (one per further render GPU; software devnodes
+/// the service creates). Same as `PSIDD_HWID_LOCAL_ADAPTER` in `drivers/seat-idd/src/roles.h`.
+pub const PSIDD_HWID_LOCAL_ADAPTER: &str = "PulsarSeatIdd_Adapter";
+/// `SwDeviceCreate` enumerator of those devnodes (`SWD\PulsarSeatIdd\<instance>`).
+pub const PSIDD_SW_ENUMERATOR: &str = "PulsarSeatIdd";
 
 const FILE_DEVICE_UNKNOWN: u32 = 0x22;
 const METHOD_BUFFERED: u32 = 0;
@@ -31,6 +41,8 @@ pub const IOCTL_PSIDD_GET_VERSION: u32 = ctl_code(0x900);
 pub const IOCTL_PSIDD_ADD_MONITOR: u32 = ctl_code(0x901);
 pub const IOCTL_PSIDD_REMOVE_MONITOR: u32 = ctl_code(0x902);
 pub const IOCTL_PSIDD_SET_RENDER_ADAPTER: u32 = ctl_code(0x903);
+/// Minor 3: out [`PsiddAdapterInfo`].
+pub const IOCTL_PSIDD_GET_ADAPTER_INFO: u32 = ctl_code(0x904);
 
 pub const PSIDD_MAX_EDID: usize = 512;
 pub const PSIDD_MAX_MODES: usize = 16;
@@ -46,6 +58,29 @@ pub const PSIDD_MAX_MODE_DIM: u32 = 16384;
 pub const PSIDD_MAX_REFRESH_MHZ: u32 = 1_000_000;
 /// `PsiddAddMonitor::flags`: no hardware cursor, DWM draws the pointer into the frames.
 pub const PSIDD_ADD_FLAG_SOFTWARE_CURSOR: u32 = 0x1;
+/// `PsiddAddMonitor::flags` (minor 3): offer HDR10 / SDR wide colour (IddCx 1.10 adapter).
+pub const PSIDD_ADD_FLAG_HDR: u32 = 0x2;
+
+/// [`PsiddAdapterInfo::flags`] (minor 3).
+pub const PSIDD_ADAPTER_READY: u32 = 0x1;
+pub const PSIDD_ADAPTER_BOUND: u32 = 0x2;
+pub const PSIDD_ADAPTER_FP16: u32 = 0x4;
+/// Most adapters (devnodes) the service creates: one per render GPU.
+pub const PSIDD_MAX_ADAPTERS: usize = 8;
+
+/// [`PsiddFrameHeader::format`].
+pub const PSIDD_FORMAT_BGRA8: u32 = 0;
+pub const PSIDD_FORMAT_RGBA16F: u32 = 1;
+pub const PSIDD_FORMAT_RGB10A2: u32 = 2;
+
+/// Bytes per pixel of a frame format; `None` for an unknown one.
+pub fn format_bpp(format: u32) -> Option<u32> {
+    match format {
+        PSIDD_FORMAT_BGRA8 | PSIDD_FORMAT_RGB10A2 => Some(4),
+        PSIDD_FORMAT_RGBA16F => Some(8),
+        _ => None,
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -113,6 +148,19 @@ pub struct PsiddRenderAdapter {
     pub luid: u64,
 }
 
+/// Out buffer of [`IOCTL_PSIDD_GET_ADAPTER_INFO`] (minor 3).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PsiddAdapterInfo {
+    pub size: u32,
+    /// `PSIDD_ADAPTER_*`.
+    pub flags: u32,
+    /// Bound render GPU (`HighPart << 32 | LowPart`), 0 = unbound.
+    pub render_luid: u64,
+    pub monitor_count: u32,
+    pub iddcx_version: u32,
+}
+
 pub const PSIDD_FRAME_MAGIC: u32 = 0x5246_5350; // "PSFR"
 pub const PSIDD_FRAME_VERSION: u32 = 1;
 pub const PSIDD_HEADER_SIZE: u32 = 4096;
@@ -160,6 +208,25 @@ pub struct PsiddFrameHeader {
     /// Minor 2: random per add; the ready event's name suffix. All zero = not published
     /// (a driver older than minor 2, or an add that has not finished).
     pub ready_nonce: [u8; PSIDD_READY_NONCE_BYTES],
+    /// Minor 3: `DXGI_COLOR_SPACE_TYPE` of the frame (0 sRGB, 1 scRGB linear, 12 HDR10).
+    pub color_space: u32,
+    /// Minor 3: SDR white level as IddCx delivers it (1000 = 80 nits), 0 = unknown.
+    pub sdr_white_level: u32,
+    /// Minor 3: 1 = `hdr10` is valid.
+    pub hdr10_valid: u32,
+    /// Minor 3: `IDDCX_HDR10_METADATA` order (R, G, B, white x/y in 0.00002 units, max /
+    /// min mastering luminance, MaxCLL, MaxFALL).
+    pub hdr10: [u16; 12],
+    pub reserved3: u32,
+    /// Minor 3: QPC when the driver acquired the frame.
+    pub acquire_qpc: u64,
+    /// Minor 3: the OS's present QPC for the frame (0 down-level).
+    pub present_qpc: u64,
+    /// Minor 3: QPC after the copy into the section.
+    pub written_qpc: u64,
+    /// Minor 3: OS presentation frame number.
+    pub frame_number: u32,
+    pub reserved4: u32,
 }
 
 /// Section name of a seat's virtual monitor.
@@ -214,8 +281,8 @@ pub fn mode_valid(width: u32, height: u32, refresh_mhz: u32) -> bool {
 /// frame_offset)` when `width`×`height` rows of `stride` fit the frame capacity and the
 /// capacity fits the view.
 pub fn frame_fits(h: &PsiddFrameHeader, view_size: u64) -> Option<u64> {
-    let row = (h.width as u64).checked_mul(4)?;
-    if h.width == 0 || h.height == 0 || (h.stride as u64) < row || h.format != 0 {
+    let row = (h.width as u64).checked_mul(format_bpp(h.format)? as u64)?;
+    if h.width == 0 || h.height == 0 || (h.stride as u64) < row {
         return None;
     }
     let need = (h.height as u64 - 1).checked_mul(h.stride as u64)?.checked_add(row)?;
@@ -232,9 +299,24 @@ pub fn cursor_fits(h: &PsiddFrameHeader) -> Option<usize> {
         .then_some(n as usize)
 }
 
-/// Total section size for a largest mode of `w`×`h`.
+/// Total section size for a largest mode of `w`×`h` (SDR monitor, 4 bytes per pixel).
 pub fn section_size(w: u32, h: u32) -> u64 {
     PSIDD_FRAME_OFFSET as u64 + w as u64 * h as u64 * 4
+}
+
+/// Total section size of an HDR monitor (8 bytes per pixel, FP16).
+pub fn section_size_hdr(w: u32, h: u32) -> u64 {
+    PSIDD_FRAME_OFFSET as u64 + w as u64 * h as u64 * 8
+}
+
+/// DXGI colour spaces the header carries (`DXGI_COLOR_SPACE_TYPE` values).
+pub const DXGI_CS_SRGB: u32 = 0;
+pub const DXGI_CS_SCRGB_LINEAR: u32 = 1;
+pub const DXGI_CS_HDR10: u32 = 12;
+
+/// SDR white in nits from the header's `sdr_white_level` (1000 = 80 nits); 80 when unknown.
+pub fn sdr_white_nits(level: u32) -> f32 {
+    if level == 0 { 80.0 } else { level as f32 * 80.0 / 1000.0 }
 }
 
 #[cfg(test)]
@@ -252,6 +334,29 @@ mod tests {
         assert_eq!(define("PSIDD_MAX_EDID"), PSIDD_MAX_EDID);
         assert_eq!(define("PSIDD_MAX_MODES"), PSIDD_MAX_MODES);
         assert_eq!(define("PSIDD_MAX_SID"), PSIDD_MAX_SID);
+        assert_eq!(define("PSIDD_MAX_ADAPTERS"), PSIDD_MAX_ADAPTERS);
+        assert_eq!(define("PSIDD_INTERFACE_MINOR") as u16, PSIDD_INTERFACE_MINOR);
+        let flag = |name: &str| -> u32 {
+            let line = h.lines().find(|l| l.split_whitespace().nth(1) == Some(name)).unwrap_or_else(|| panic!("{name} missing"));
+            let v = line.split_whitespace().nth(2).unwrap().trim_end_matches('u');
+            match v.strip_prefix("0x") {
+                Some(hex) => u32::from_str_radix(hex, 16).unwrap(),
+                None => v.parse().unwrap(),
+            }
+        };
+        assert_eq!(flag("PSIDD_ADD_FLAG_HDR"), PSIDD_ADD_FLAG_HDR);
+        assert_eq!(flag("PSIDD_ADAPTER_READY"), PSIDD_ADAPTER_READY);
+        assert_eq!(flag("PSIDD_ADAPTER_BOUND"), PSIDD_ADAPTER_BOUND);
+        assert_eq!(flag("PSIDD_ADAPTER_FP16"), PSIDD_ADAPTER_FP16);
+        assert_eq!(flag("PSIDD_FORMAT_RGBA16F"), PSIDD_FORMAT_RGBA16F);
+        assert_eq!(flag("PSIDD_FORMAT_RGB10A2"), PSIDD_FORMAT_RGB10A2);
+        assert!(h.contains("PSIDD_CTL(0x904)"), "GET_ADAPTER_INFO function code");
+        let roles = include_str!("../../../drivers/seat-idd/src/roles.h");
+        assert!(roles.contains(&format!("L\"{PSIDD_HWID_LOCAL_ADAPTER}\"")), "hardware id of the extra adapters");
+        let inf = include_bytes!("../../../drivers/seat-idd/seat-idd.inf");
+        let wide: Vec<u16> = inf[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let inf = String::from_utf16_lossy(&wide);
+        assert_eq!(inf.matches(&format!("PulsarSeatIdd_Install, {PSIDD_HWID_LOCAL_ADAPTER}")).count(), 4, "every model section");
     }
     use super::*;
     use std::mem::{offset_of, size_of};
@@ -268,7 +373,15 @@ mod tests {
         assert_eq!(offset_of!(PsiddFrameHeader, cursor_shape_id), 96);
         assert_eq!(offset_of!(PsiddAddMonitor, flags), 532);
         assert_eq!(offset_of!(PsiddFrameHeader, ready_nonce), 104);
-        assert_eq!(size_of::<PsiddFrameHeader>(), 120);
+        assert_eq!(offset_of!(PsiddFrameHeader, color_space), 120);
+        assert_eq!(offset_of!(PsiddFrameHeader, hdr10), 132);
+        assert_eq!(offset_of!(PsiddFrameHeader, acquire_qpc), 160);
+        assert_eq!(offset_of!(PsiddFrameHeader, frame_number), 184);
+        assert_eq!(size_of::<PsiddFrameHeader>(), 192);
+        assert_eq!(size_of::<PsiddAdapterInfo>(), 24);
+        assert_eq!(offset_of!(PsiddAdapterInfo, render_luid), 8);
+        assert_eq!(IOCTL_PSIDD_GET_ADAPTER_INFO, 0x0022_e410);
+        assert_eq!(section_size_hdr(1, 1), 266_248);
         assert_eq!(IOCTL_PSIDD_GET_VERSION, 0x0022_e400);
         assert_eq!(section_name(2, 0), "Global\\PulsarSeat.Idd.S02.C0");
         assert_eq!(section_size(1, 1), 266_244);
@@ -358,5 +471,26 @@ mod tests {
         c.cursor_width = 300;
         c.cursor_height = 300;
         assert_eq!(cursor_fits(&c), None);
+    }
+
+    #[test]
+    fn hdr_frame_bounds_follow_the_format() {
+        let view = PSIDD_FRAME_OFFSET as u64 + 1920 * 1080 * 8;
+        let mut h = hdr(1920, 1080, 1920 * 8, 1920 * 1080 * 8);
+        h.format = PSIDD_FORMAT_RGBA16F;
+        assert_eq!(frame_fits(&h, view), Some(1920 * 1080 * 8));
+        // FP16 with a BGRA-sized stride is torn.
+        h.stride = 1920 * 4;
+        assert_eq!(frame_fits(&h, view), None);
+        // 10-bit is 4 bytes per pixel.
+        let mut t = hdr(1920, 1080, 1920 * 4, 1920 * 1080 * 4);
+        t.format = PSIDD_FORMAT_RGB10A2;
+        assert_eq!(frame_fits(&t, view), Some(1920 * 1080 * 4));
+        // Unknown format: refused.
+        t.format = 7;
+        assert_eq!(frame_fits(&t, view), None);
+        assert_eq!(format_bpp(PSIDD_FORMAT_BGRA8), Some(4));
+        assert!((sdr_white_nits(0) - 80.0).abs() < f32::EPSILON);
+        assert!((sdr_white_nits(2500) - 200.0).abs() < 0.01);
     }
 }

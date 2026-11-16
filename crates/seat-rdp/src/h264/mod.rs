@@ -53,12 +53,28 @@ impl FallbackPolicy {
             return false;
         }
         self.consecutive = self.consecutive.saturating_add(1);
-        if kind == DecoderKind::Hardware && (device_lost || self.consecutive >= HW_FAIL_LIMIT) {
+        if kind.is_hardware() && (device_lost || self.consecutive >= HW_FAIL_LIMIT) {
             self.consecutive = 0;
             return true;
         }
         false
     }
+}
+
+/// Where a failing decoder falls back to (vendor async hardware MFT, then Microsoft's MFT
+/// on the GPU, then on the CPU). `None`: nothing below.
+pub fn next_decoder(kind: DecoderKind) -> Option<DecoderKind> {
+    match kind {
+        DecoderKind::HardwareVendor => Some(DecoderKind::Hardware),
+        DecoderKind::Hardware => Some(DecoderKind::Software),
+        _ => None,
+    }
+}
+
+/// Whether the vendor's asynchronous hardware MFT may be tried first: on unless
+/// `PULSAR_SEAT_H264_DECODER` is `microsoft` (Microsoft's MFT only) or `software`.
+pub fn vendor_allowed(env: Option<&str>) -> bool {
+    !matches!(env.map(str::to_ascii_lowercase).as_deref(), Some("microsoft" | "software"))
 }
 
 /// The planes of an NV12 picture: `src` holds `plane_rows` luma rows of `pitch` bytes,
@@ -161,7 +177,20 @@ mod tests {
     }
 
     #[test]
+    fn vendor_decoder_ladder() {
+        assert_eq!(next_decoder(DecoderKind::HardwareVendor), Some(DecoderKind::Hardware));
+        assert_eq!(next_decoder(DecoderKind::Hardware), Some(DecoderKind::Software));
+        assert_eq!(next_decoder(DecoderKind::Software), None);
+        let mut p = FallbackPolicy::default();
+        assert!(p.record(false, DecoderKind::HardwareVendor, true), "a vendor decoder that lost its device steps down");
+        assert!(vendor_allowed(None) && vendor_allowed(Some("hardware")));
+        assert!(!vendor_allowed(Some("Microsoft")) && !vendor_allowed(Some("software")));
+        assert!(DecoderKind::HardwareVendor.is_hardware() && !DecoderKind::Software.is_hardware());
+    }
+
+    #[test]
     fn device_loss_falls_back_at_once_and_successes_reset_the_count() {
+
         let mut f = FakePath { kind: DecoderKind::Hardware, fail_hw: false, lost_at: Some(3), switches: 0 };
         f.run(10);
         assert_eq!((f.kind, f.switches), (DecoderKind::Software, 1));

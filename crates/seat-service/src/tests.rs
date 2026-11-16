@@ -2930,3 +2930,29 @@ fn source_ip_entries_skip_shared_sessions() {
     assert!(e.is_empty());
     assert_eq!(shared, vec![s(3)]);
 }
+
+#[test]
+fn gpu_preference_follows_the_seat_gpu_at_logon_and_reverts_on_disable() {
+    use seat_core::config::{GpuPreference, GpuPreferenceMode};
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().gpu_preference = GpuPreference { mode: GpuPreferenceMode::SeatGpu, apps: vec![r"C:\Games\x\game.exe".into()] };
+    let h = harness_with(c, None);
+    h.s.boot();
+    // The mock binds seat monitors on adapter LUID 1; Windows ranks it high performance.
+    *h.p.gpu_ranks.lock().unwrap() = (Some(1), Some(2));
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let user = crate::platform::SessionUser { domain: "PC".into(), name: "ali".into(), sid: "S-1-5-21-1-2-3-1001".into(), logon_sid: "S-1-5-5-0-1".into() };
+    h.s.on_seat_logon(s(2), 10, user.clone());
+    assert_eq!(
+        h.p.gpu_prefs.lock().unwrap().last().cloned(),
+        Some(("S-1-5-21-1-2-3-1001".to_string(), vec![r"C:\Games\x\game.exe".to_string()], Some(2)))
+    );
+    // A single-GPU PC: nothing to choose, earlier values of the user are undone.
+    *h.p.gpu_ranks.lock().unwrap() = (Some(1), Some(1));
+    h.s.on_seat_logon(s(2), 10, user);
+    assert_eq!(h.p.gpu_prefs.lock().unwrap().last().unwrap().2, None);
+    // Disabling the product undoes every user's values.
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    assert!(h.p.gpu_pref_reverts.load(Ordering::SeqCst) >= 1);
+}

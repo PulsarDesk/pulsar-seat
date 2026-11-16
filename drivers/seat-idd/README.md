@@ -46,8 +46,16 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
   default mode only, never another seat's modes. `flags` bit 0
   (`PSIDD_ADD_FLAG_SOFTWARE_CURSOR`, minor 1) skips the hardware cursor (per-seat cursor
   option). The render adapter is set by `IddCxAdapterSetRenderAdapter` with the
-  physical monitor's GPU. This is **adapter-wide** and the driver has one adapter, so
-  with seats on several GPUs the last seat added wins for all of them (see Known gaps).
+  physical monitor's GPU. This is adapter-wide, so since interface minor 3 each adapter is
+  **bound to one render GPU** (first monitor with a LUID, or `SET_RENDER_ADAPTER`); a
+  monitor of another GPU gets `STATUS_DEVICE_BUSY` while the adapter still has monitors
+  (an empty adapter is re-bound). The service adds one software devnode per further GPU
+  (hardware id `PulsarSeatIdd_Adapter`, `SWD\PulsarSeatIdd\gpuN`, created with
+  `SwDeviceCreate`, removed when the service closes it) and routes each monitor to the
+  adapter of its GPU (`crates/seat-display/src/idd_adapters.rs`).
+  `IOCTL_PSIDD_GET_ADAPTER_INFO` (minor 3) answers `{flags READY|BOUND|FP16, render LUID,
+  monitor count, IddCx version}`. `flags` bit 1 (`PSIDD_ADD_FLAG_HDR`, minor 3) offers
+  HDR10 / SDR wide colour (see "HDR" below).
   Creates `Global\PulsarSeat.Idd.S<NN>.C<n>` (section) and
   `….Ready.<32 hex digits>` (auto-reset event, minor 2) with
   `D:P(A;;GA;;;SY)(A;;GA;;;BA)` plus read / synchronize for the reader SID (characters
@@ -89,6 +97,21 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
   IDDCX_XOR_CURSOR_SUPPORT_NONE`: the presenter blends with alpha only, so the OS draws
   XOR / inverting cursors (text beam) into the frames itself. If hardware cursor setup is
   refused, or the seat selects the software cursor, DWM draws the pointer into the frames.
+- HDR (minor 3, IddCx 1.10 at run time, detected with `IDD_IS_FUNCTION_AVAILABLE` /
+  `IDD_IS_FIELD_AVAILABLE`): the adapter sets `CAN_PROCESS_FP16`; the 1.10 callbacks
+  (`QueryTargetInfo`, `ParseMonitorDescription2`, `QueryTargetModes2`, `CommitModes2`,
+  `SetDefaultHdrMetaData`) report `HIGH_COLOR_SPACE | WIDE_COLOR_SPACE` and 8 + 10 bit
+  modes for HDR-flagged monitors (Windows takes the panel's HDR capability from the
+  physical monitor's EDID we pass), nothing for the others. Frames come from
+  `ReleaseAndAcquireBuffer2`: an HDR monitor's section holds 8 bytes per pixel and gets
+  FP16 / 10-bit pixels with `Format`, `ColorSpace` (DXGI value), `SdrWhiteLevel` and
+  HDR10 metadata (frame metadata NEW / UNCHANGED / DEFAULT, else the monitor default); any
+  other monitor handed an FP16 surface gets a BGRA8 conversion (64 K entry half to sRGB
+  table, clipped). Without 1.10 every monitor stays SDR and the old calls are used.
+- Latency stamps (minor 3): `AcquireQpc`, `PresentQpc` (OS), `WrittenQpc`, `FrameNumber`
+  per frame.
+- HDCP: protected content is never handed to an indirect display driver; seats on this
+  driver do not play HDCP-protected video (documented limitation).
 - Rotation: the header's `Rotation` is always 0; IddCx hands the swap chain in scan-out
   orientation (HYPOTHESIS, to verify on hardware).
 
@@ -105,13 +128,11 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
 
 - Whether a local non-console session can own an IddCx monitor at all (spec 40 q1); the
   monitor is plugged for the whole PC today, so every session's DWM may see it.
-- **One adapter, one render GPU.** Spec 40 §6.3.4 / §6.4 wants one IddCx adapter per
-  render GPU. The driver has one root devnode and one adapter, and
-  `IddCxAdapterSetRenderAdapter` is adapter-wide: with seats on two GPUs every seat
-  composes on the GPU of the last seat added and the other seat's frames cross GPUs.
-  Multi-GPU seats are unsupported for now; seat-display logs a warning when a binding
-  spans several GPUs. Fix: one `Root\PulsarSeatIdd` devnode per render LUID (the service
-  creates them) and drop the single `g_Device` assumption.
+- **One adapter per render GPU: built (minor 3, 2026-11-17), untested on hardware.**
+  HYPOTHESIS: a software devnode with the local hardware id gets the INF's device
+  security and starts its own IddCx adapter next to the root one; the OS honours one
+  render adapter per IddCx adapter. HDR frames, the 1.10 callbacks of the local role and
+  the FP16 to BGRA conversion are untested too.
 - Who owns the swap chain after a *failed* assign is not stated in the docs: the driver
   does not delete it on those paths (a leak beats a double delete). Untested on hardware.
 

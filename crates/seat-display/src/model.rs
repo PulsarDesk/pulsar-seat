@@ -571,12 +571,17 @@ pub fn diff_devices(old: &[Device], new: &[Device]) -> (Vec<Device>, Vec<DeviceK
 /// Rotate a tight BGRA frame `w`×`h` clockwise by `deg` (0 / 90 / 180 / 270; anything
 /// else = 0). Returns the frame and its new width / height.
 pub fn rotate_bgra(src: &[u8], w: u32, h: u32, deg: u16) -> (Vec<u8>, u32, u32) {
+    rotate_px(src, w, h, deg, 4)
+}
+
+/// [`rotate_bgra`] for any pixel size (`bpp` bytes, e.g. 8 for FP16 frames).
+pub fn rotate_px(src: &[u8], w: u32, h: u32, deg: u16, bpp: usize) -> (Vec<u8>, u32, u32) {
     let (w, h) = (w as usize, h as usize);
-    if src.len() < w * h * 4 {
-        return (vec![0; w * h * 4], w as u32, h as u32);
+    if src.len() < w * h * bpp {
+        return (vec![0; w * h * bpp], w as u32, h as u32);
     }
     let (nw, nh) = if deg == 90 || deg == 270 { (h, w) } else { (w, h) };
-    let mut out = vec![0u8; w * h * 4];
+    let mut out = vec![0u8; w * h * bpp];
     for y in 0..h {
         for x in 0..w {
             let (dx, dy) = match deg {
@@ -585,9 +590,9 @@ pub fn rotate_bgra(src: &[u8], w: u32, h: u32, deg: u16) -> (Vec<u8>, u32, u32) 
                 270 => (y, w - 1 - x),
                 _ => (x, y),
             };
-            let si = (y * w + x) * 4;
-            let di = (dy * nw + dx) * 4;
-            out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            let si = (y * w + x) * bpp;
+            let di = (dy * nw + dx) * bpp;
+            out[di..di + bpp].copy_from_slice(&src[si..si + bpp]);
         }
     }
     (out, nw as u32, nh as u32)
@@ -596,7 +601,13 @@ pub fn rotate_bgra(src: &[u8], w: u32, h: u32, deg: u16) -> (Vec<u8>, u32, u32) 
 /// Nearest-neighbour scale of a BGRA frame (`stride` bytes per source row) to a tight
 /// `dw`×`dh` frame, aspect ratio kept (black bars).
 pub fn scale_nearest(src: &[u8], sw: u32, sh: u32, stride: u32, dw: u32, dh: u32) -> Vec<u8> {
-    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    scale_nearest_px(src, sw, sh, stride, dw, dh, 4)
+}
+
+/// [`scale_nearest`] for any pixel size (`bpp` bytes). Black bars are all-zero pixels
+/// (black, alpha 0, in BGRA8 and in FP16 alike).
+pub fn scale_nearest_px(src: &[u8], sw: u32, sh: u32, stride: u32, dw: u32, dh: u32, bpp: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dw as usize * dh as usize * bpp];
     if sw == 0 || sh == 0 {
         return out;
     }
@@ -605,10 +616,10 @@ pub fn scale_nearest(src: &[u8], sw: u32, sh: u32, stride: u32, dw: u32, dh: u32
         let sy = (y as u64 * sh as u64 / r.height as u64) as usize;
         for x in 0..r.width {
             let sx = (x as u64 * sw as u64 / r.width as u64) as usize;
-            let si = sy * stride as usize + sx * 4;
-            let di = (((r.y as u32 + y) * dw + r.x as u32 + x) * 4) as usize;
-            if si + 4 <= src.len() {
-                out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            let si = sy * stride as usize + sx * bpp;
+            let di = ((r.y as u32 + y) * dw + r.x as u32 + x) as usize * bpp;
+            if si + bpp <= src.len() {
+                out[di..di + bpp].copy_from_slice(&src[si..si + bpp]);
             }
         }
     }
@@ -716,6 +727,80 @@ pub fn blend_cursor_region(dst: &mut [u8], region: &Rect, c: &CursorState, pm: &
             }
         }
     }
+}
+
+/// [`blend_cursor_region`] into an FP16 scRGB frame region (8 bytes per pixel): the
+/// premultiplied BGRA8 shape is converted to linear light at the session's SDR white
+/// (`sdr_white_nits`), then blended (HDR scan-out of seats 2..N).
+pub fn blend_cursor_region_f16(dst: &mut [u8], region: &Rect, c: &CursorState, pm: &[u8], sdr_white_nits: f32) {
+    use seat_core::backend::hdr::{f16_to_f32, f32_to_f16, srgb8_linear_table};
+    let need = (c.width as usize).checked_mul(c.height as usize).and_then(|n| n.checked_mul(4));
+    if !c.visible || !need.is_some_and(|n| n > 0 && pm.len() >= n) || dst.len() < region.width as usize * region.height as usize * 8 {
+        return;
+    }
+    let lin = srgb8_linear_table();
+    let white = sdr_white_nits.max(1.0) / 80.0;
+    let ox = c.x as i64 - c.hotspot_x as i64 - region.x as i64;
+    let oy = c.y as i64 - c.hotspot_y as i64 - region.y as i64;
+    let (w, h) = (region.width as i64, region.height as i64);
+    for cy in 0..c.height as i64 {
+        let y = oy + cy;
+        if y < 0 || y >= h {
+            continue;
+        }
+        for cx in 0..c.width as i64 {
+            let x = ox + cx;
+            if x < 0 || x >= w {
+                continue;
+            }
+            let si = ((cy * c.width as i64 + cx) * 4) as usize;
+            let a = pm[si + 3] as f32 / 255.0;
+            if a == 0.0 && pm[si] == 0 && pm[si + 1] == 0 && pm[si + 2] == 0 {
+                continue;
+            }
+            let di = ((y * w + x) * 8) as usize;
+            // Premultiplied BGRA: colour already scaled by alpha; un-premultiply for the
+            // transfer function, then scale back.
+            for (k, src) in [(0usize, 2usize), (1, 1), (2, 0)] {
+                let c8 = pm[si + src];
+                let straight = if a > 0.0 { ((c8 as f32 / a).round() as usize).min(255) } else { c8 as usize };
+                let s = lin[straight] * white * a;
+                let o = di + k * 2;
+                let d = f16_to_f32(u16::from_le_bytes([dst[o], dst[o + 1]]));
+                dst[o..o + 2].copy_from_slice(&f32_to_f16(s + d * (1.0 - a)).to_le_bytes());
+            }
+        }
+    }
+}
+
+/// HDR10 / VRR mode choice on a presenter target (spec 40 §6.6). `modes[i]` =
+/// (mode, FP16 source format, HDR10 wire format supported). Returns the index to apply
+/// and whether the target runs HDR10: with `hdr` the FP16 + HDR10 variant of the
+/// `wanted` mode (same size and refresh), else the closest FP16 + HDR10 mode of that size;
+/// without HDR support (or `hdr` off) `wanted` itself. With `vrr` the highest refresh of the
+/// chosen size wins (a VRR panel then adapts down to the content rate).
+pub fn pick_presenter_mode(modes: &[(DisplayMode, bool, bool)], wanted: usize, hdr: bool, vrr: bool) -> (usize, bool) {
+    let Some((w, _, _)) = modes.get(wanted) else { return (wanted, false) };
+    let size = (w.width, w.height);
+    let same_size = |m: &DisplayMode| (m.width, m.height) == size;
+    let refresh_of = |m: &DisplayMode| if vrr { u32::MAX - m.refresh_mhz } else { (m.refresh_mhz as i64 - w.refresh_mhz as i64).unsigned_abs() as u32 };
+    if hdr {
+        let best = modes.iter().enumerate().filter(|(_, (m, fp16, hdr_ok))| *fp16 && *hdr_ok && same_size(m)).min_by_key(|(_, (m, _, _))| refresh_of(m));
+        if let Some((i, _)) = best {
+            return (i, true);
+        }
+    }
+    if vrr {
+        let best = modes
+            .iter()
+            .enumerate()
+            .filter(|(_, (m, fp16, _))| same_size(m) && *fp16 == modes[wanted].1)
+            .min_by_key(|(_, (m, _, _))| refresh_of(m));
+        if let Some((i, _)) = best {
+            return (i, false);
+        }
+    }
+    (wanted, false)
 }
 
 /// Screen area of a cursor in frame coordinates (`None` when hidden).
@@ -1149,5 +1234,58 @@ pub(crate) mod tests {
         f.set_current((1280, 720));
         assert_eq!(f.current(), (1280, 720));
         assert_eq!(f.observe((1280, 720), t0 + Duration::from_secs(9)), None);
+    }
+
+    #[test]
+    fn eight_byte_pixels_rotate_and_scale() {
+        // 2x1 FP16 frame: pixel A, pixel B (8 bytes each).
+        let src: Vec<u8> = (0u8..16).collect();
+        let (r, w, h) = rotate_px(&src, 2, 1, 90, 8);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(&r[..8], &src[..8]);
+        assert_eq!(rotate_px(&r, w, h, 270, 8).0, src);
+        let up = scale_nearest_px(&src, 2, 1, 16, 4, 2, 8);
+        assert_eq!(up.len(), 4 * 2 * 8);
+        assert_eq!(&up[8..16], &src[..8], "pixel A doubled");
+        assert_eq!(&up[16..24], &src[8..16]);
+        assert_eq!(scale_nearest(&[1, 2, 3, 4], 1, 1, 4, 1, 1), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn fp16_cursor_blend() {
+        use seat_core::backend::hdr::{f16_to_f32, f32_to_f16};
+        let black: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0].iter().flat_map(|v| f32_to_f16(*v).to_le_bytes()).collect();
+        let mut d = black.repeat(4); // 2x2
+        let c = CursorState { visible: true, x: 1, y: 1, width: 1, height: 1, ..Default::default() };
+        // Opaque white cursor at 200 nits SDR white = scRGB 2.5.
+        let r = |x, y, w, h| Rect { x, y, width: w, height: h };
+        blend_cursor_region_f16(&mut d, &r(0, 0, 2, 2), &c, &[255, 255, 255, 255], 200.0);
+        let at = 3 * 8;
+        let red = f16_to_f32(u16::from_le_bytes([d[at], d[at + 1]]));
+        assert!((red - 2.5).abs() < 0.01, "{red}");
+        assert_eq!(&d[..8], &black[..], "other pixels untouched");
+        // Hidden cursor: nothing.
+        let mut e = black.repeat(4);
+        blend_cursor_region_f16(&mut e, &r(0, 0, 2, 2), &CursorState { visible: false, ..c }, &[255; 4], 200.0);
+        assert_eq!(e, black.repeat(4));
+    }
+
+    #[test]
+    fn presenter_mode_for_hdr_and_vrr() {
+        let m = |hz| DisplayMode { width: 2560, height: 1440, refresh_mhz: hz, rotation: 0 };
+        let modes = [
+            (m(60_000), false, false),
+            (m(144_000), false, false),
+            (m(60_000), true, true),
+            (m(120_000), true, true),
+            (DisplayMode { width: 1920, height: 1080, refresh_mhz: 240_000, rotation: 0 }, true, true),
+        ];
+        assert_eq!(pick_presenter_mode(&modes, 0, false, false), (0, false));
+        assert_eq!(pick_presenter_mode(&modes, 0, true, false), (2, true), "HDR variant of the same mode");
+        assert_eq!(pick_presenter_mode(&modes, 0, true, true), (3, true), "HDR + VRR: highest HDR refresh of that size");
+        assert_eq!(pick_presenter_mode(&modes, 0, false, true), (1, false), "VRR: highest SDR refresh of that size");
+        let sdr_only = [(m(60_000), false, false)];
+        assert_eq!(pick_presenter_mode(&sdr_only, 0, true, true), (0, false), "no HDR mode: SDR");
+        assert_eq!(pick_presenter_mode(&[], 3, true, false), (3, false));
     }
 }

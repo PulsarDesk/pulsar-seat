@@ -184,12 +184,28 @@ dispatches the sub-command before anything else (`crates/seat-host/src/headless.
   apart and send an IDR when a surface starts (else surfaces rarely promote, or demote
   often: `promotions` / `demotions` in the log line); Windows servers throttle on held
   acknowledgements and read `queueDepth` as documented.
-- Zero-copy limits: AVC444 surfaces stay on the CPU path; outputs that are clone sources
+- AVC444 on the GPU (2026-11-17, `gpu::avc444`, `gpu::avc444_model`): compute shaders merge
+  each view into an `R32_UINT` 4:4:4 picture, a pixel shader converts the painted
+  rectangles; promoted only at an IDR with both views over the whole surface; mixing
+  AVC420 and AVC444 on one GPU surface demotes it. The rules are tested against IronRDP's
+  CPU combination, the HLSL on WARP (dev box, `shaders_match_the_model_on_warp`).
+  HYPOTHESIS: hardware decoders' NV12 slices copy into a shader-readable NV12 texture on
+  the target drivers; the HLSL needs feature level 11.0 (below it AVC444 stays on the CPU).
+- Zero-copy limits: outputs that are clone sources
   or Display Core targets get CPU frames; one GPU compositor per connection (the adapter
   of the seat's first output); the cursor over GPU frames is drawn through a small staging
   copy per present.
-- The vendor's asynchronous hardware MFTs are not used; the Microsoft MFT already decodes
-  on the GPU through D3D11 video decoding.
+- H.264 decoder ladder (2026-11-17): the GPU vendor's asynchronous hardware MFT first
+  (`MFTEnumEx` with `MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT |
+  MFT_ENUM_FLAG_SORTANDFILTER`, unlocked with `MF_TRANSFORM_ASYNC_UNLOCK`, driven by
+  `METransformNeedInput` / `METransformHaveOutput`, at most 200 ms wait for input and
+  50 ms for the unit's picture), then Microsoft's MFT on the GPU, then on the CPU; a
+  decoder that keeps failing steps down one level. `PULSAR_SEAT_H264_DECODER=microsoft`
+  skips the vendor MFT. The ARM64 dev box (Adreno) lists **no** vendor H.264 MFT, so the
+  async path ran only as far as its fallback; HYPOTHESIS on x64 GPUs (NVIDIA / AMD /
+  Intel vendor MFTs).
+- Latency hooks: `GfxStats::decode_latency` / `frame_latency` (p50 / p95 / p99 / max of
+  the last 512 samples) in the `gfx ...` log line.
 
 ## Third-party notices
 

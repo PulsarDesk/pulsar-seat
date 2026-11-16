@@ -93,6 +93,11 @@ pub enum IssueCode {
     /// Kiosk shell of a seat (spec 35 §5.1): too many apps, an app without title or
     /// command, or an idle reset outside 1..=1440 minutes. Added 2026-11-13, error.
     InvalidKioskShell,
+    /// GPU preference of a seat (spec 40 §6.4): more than `MAX_GPU_PREF_APPS` programs, or
+    /// a program that is not an absolute `.exe` path of at most 260 characters without
+    /// control characters (the path is a registry value name in the seat user's hive).
+    /// Added 2026-11-17, error.
+    InvalidGpuPreference,
     /// Seat 1 has a kiosk shell while `settings.kiosk.seat1_desktop` keeps it the normal
     /// desktop: the shell is ignored for seat 1 (warning). Added 2026-11-13.
     KioskShellIgnoredOnSeatOne,
@@ -272,6 +277,7 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
     ip_checks(config, &mut out);
     pad_ignore_checks(config, &mut out);
     kiosk_checks(config, &mut out);
+    gpu_preference_checks(config, &mut out);
     kind_checks(config, &mut out);
     for d in &config.devices {
         if d.options.outputs.len() > 1 && !config.settings.outputs.allow_clone {
@@ -352,6 +358,26 @@ pub fn is_app_user_model_id(s: &str) -> bool {
     let Some((family, app)) = s.split_once('!') else { return false };
     let ok = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
     s.len() <= crate::config::MAX_APP_ID_CHARS && ok(family) && ok(app)
+}
+
+/// Per-seat GPU preference (spec 40 §6.4): the program paths become value names under
+/// `UserGpuPreferences`, so only plain absolute `.exe` paths are accepted.
+fn gpu_preference_checks(config: &Config, out: &mut Vec<Issue>) {
+    for s in &config.seats {
+        let g = &s.local_settings().gpu_preference;
+        let bad = g.apps.iter().any(|a| {
+            let n = a.chars().count();
+            n == 0
+                || n > 260
+                || a.trim() != a
+                || a.chars().any(char::is_control)
+                || !is_absolute_windows_path(a)
+                || !a.to_ascii_lowercase().ends_with(".exe")
+        });
+        if g.apps.len() > crate::config::MAX_GPU_PREF_APPS || bad {
+            out.push(Issue::new(Severity::Error, IssueCode::InvalidGpuPreference).seat(s.number).field("local.gpu_preference"));
+        }
+    }
 }
 
 /// Kiosk shells (spec 35 §5.1 U3).
@@ -768,6 +794,31 @@ mod tests {
         assert!(cs.contains(&IssueCode::ChildOfOtherSeatHub));
         assert!(cs.contains(&IssueCode::SeatWithoutKeyboard));
         assert!(has_conflicts(&i));
+    }
+
+    #[test]
+    fn gpu_preference_checks_paths() {
+        use crate::config::{GpuPreference, GpuPreferenceMode};
+        let mut c = Config::default();
+        c.seats.push(SeatConfig::new(s(2)));
+        let codes = |c: &Config| validate(c, None).into_iter().map(|i| i.code).collect::<Vec<_>>();
+        let set = |c: &mut Config, apps: Vec<&str>| {
+            c.seats[1].local_mut().unwrap().gpu_preference = GpuPreference { mode: GpuPreferenceMode::SeatGpu, apps: apps.into_iter().map(String::from).collect() };
+        };
+        set(&mut c, vec![r"C:\Games\x\game.exe", r"\\server\share\tool.EXE"]);
+        assert!(!codes(&c).contains(&IssueCode::InvalidGpuPreference));
+        for bad in ["game.exe", r"C:\Games\x\game.bat", " C:\\a.exe", "C:\\a\u{1}.exe", ""] {
+            set(&mut c, vec![bad]);
+            assert!(codes(&c).contains(&IssueCode::InvalidGpuPreference), "{bad:?}");
+        }
+        let many: Vec<String> = (0..=crate::config::MAX_GPU_PREF_APPS).map(|i| format!(r"C:\a{i}.exe")).collect();
+        c.seats[1].local_mut().unwrap().gpu_preference.apps = many;
+        assert!(codes(&c).contains(&IssueCode::InvalidGpuPreference));
+        // JSON shape: default omitted, mode in snake_case.
+        let mut l = crate::config::LocalSeat::default();
+        assert!(!serde_json::to_string(&l).unwrap().contains("gpu_preference"));
+        l.gpu_preference = GpuPreference { mode: GpuPreferenceMode::HighPerformance, apps: vec![] };
+        assert!(serde_json::to_string(&l).unwrap().contains(r#""gpu_preference":{"mode":"high_performance"}"#));
     }
 
     #[test]

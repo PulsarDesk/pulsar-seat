@@ -33,8 +33,12 @@ import {
   formatArgs,
   setStartupApps,
   setVirtualPads,
+  setGpuPreference,
+  setDisplayOption,
+  gpuPrefAppValid,
   setClassDefaultClasses
 } from './model.ts';
+import { issueText } from './i18n.ts';
 import { EXPERIMENTAL_WARNING_VERSION, SHARED_MASK, type Config, type Device, type DeviceView } from './types.ts';
 
 const inv = demoInventory();
@@ -331,5 +335,28 @@ describe('pad ignore lists and pad scoping', () => {
     expect(c.seats.find((s) => s.number === 2)!).not.toHaveProperty('pad_ignore_devices');
     expect(setPadDeviceScope(demoConfig(), false).settings.input.pad_device_scope).toBe(false);
     expect(demoConfig().settings.input.pad_device_scope).toBe(true);
+  });
+});
+
+describe('display and GPU options (2026-11-17)', () => {
+  it('stores HDR / VRR on the monitor record and drops them when off', () => {
+    let c = setDisplayOption(demoConfig(), dev(MON_A), 'hdr', true, 1);
+    c = setDisplayOption(c, dev(MON_A), 'vrr', true, 1);
+    expect(c.devices.find((d) => d.key === MON_A)!.options).toEqual({ hdr: true, vrr: true });
+    c = setDisplayOption(setDisplayOption(c, dev(MON_A), 'hdr', false, 1), dev(MON_A), 'vrr', false, 1);
+    expect(c.devices.find((d) => d.key === MON_A)!.options).toBeUndefined();
+  });
+
+  it('sets the GPU preference, checks program paths and removes an empty preference', () => {
+    const c = setGpuPreference(demoConfig(), 2, { mode: 'seat_gpu', apps: ['C:\\Oyunlar\\oyun.exe', ''] });
+    expect(c.seats.find((s) => s.number === 2)!.local?.gpu_preference).toEqual({ mode: 'seat_gpu', apps: ['C:\\Oyunlar\\oyun.exe'] });
+    expect(localIssues(c, null).map((i) => i.code)).not.toContain('invalid_gpu_preference');
+    const bad = setGpuPreference(c, 2, { mode: 'high_performance', apps: ['oyun.exe'] });
+    expect(localIssues(bad, null).map((i) => i.code)).toContain('invalid_gpu_preference');
+    expect(issueText.invalid_gpu_preference).toBeTruthy();
+    const off = setGpuPreference(c, 2, { mode: 'off', apps: [] });
+    expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('gpu_preference');
+    expect(gpuPrefAppValid('C:\\a.EXE')).toBe(true);
+    for (const p of ['C:\\a.bat', ' C:\\a.exe', 'a.exe', 'C:\\a\u0001.exe']) expect(gpuPrefAppValid(p)).toBe(false);
   });
 });

@@ -695,7 +695,11 @@ impl Active<'_> {
         if let Err(e) = self.splitter.present(&fb, &dirty, self.sink) {
             log_warn(&format!("present failed: {e}"));
         }
-        let wait = self.dirty_since.take().map(|t| u64::try_from(t.elapsed().as_micros()).unwrap_or(u64::MAX));
+        let waited = self.dirty_since.take().map(|t| t.elapsed());
+        if let Some(w) = waited {
+            self.gfx.record_frame_latency(w);
+        }
+        let wait = waited.map(|t| u64::try_from(t.as_micros()).unwrap_or(u64::MAX));
         self.gfx.record_present(wait);
         let frames = self.gfx.frames();
         // Completed EGFX frames beyond the one this present shows were overwritten.

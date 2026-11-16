@@ -189,6 +189,9 @@ struct Surf {
     mode: Mode,
     /// Where the CPU compositor's pixels are stale (AVC / GPU paints since the seed).
     stale: Vec<Rect>,
+    /// The AVC flavour that promoted the surface (`true` = AVC444); the other one on the
+    /// same GPU surface demotes it (their GPU state does not mix). Added 2026-11-17.
+    avc444: Option<bool>,
 }
 
 impl Surf {
@@ -271,6 +274,11 @@ impl Router {
 
     pub fn mode(&self, surface: u16) -> Option<Mode> {
         self.surfaces.get(&surface).map(|s| s.mode)
+    }
+
+    /// Width and height of a known surface.
+    pub fn surface_size(&self, surface: u16) -> Option<(u32, u32)> {
+        self.surfaces.get(&surface).map(|s| (u32::from(s.width), u32::from(s.height)))
     }
 
     /// The surface's rectangle in output space (mapped surfaces only).
@@ -398,7 +406,7 @@ impl Router {
 
     pub fn create_surface(&mut self, id: u16, width: u16, height: u16) {
         self.delete_surface(id);
-        self.surfaces.insert(id, Surf { width, height, origin: None, scaled: false, mode: Mode::Cpu, stale: Vec::new() });
+        self.surfaces.insert(id, Surf { width, height, origin: None, scaled: false, mode: Mode::Cpu, stale: Vec::new(), avc444: None });
     }
 
     pub fn delete_surface(&mut self, id: u16) {
@@ -452,9 +460,30 @@ impl Router {
     /// One AVC420 update of `id`; `regions` in surface coordinates; `idr`: the access
     /// unit carries an IDR picture.
     pub fn avc420(&mut self, id: u16, regions: &[Rect], idr: bool) -> Verdict {
+        self.avc(id, regions, idr, false)
+    }
+
+    /// One AVC444 / AVC444v2 update of `id` (all rectangles of both sub-streams).
+    /// `full_idr`: an IDR with both views whose rectangles cover the whole surface (the
+    /// only update that may promote: the GPU 4:4:4 picture starts complete). `supported`:
+    /// the GPU compositor composes AVC444; without it the surface is demoted as before.
+    pub fn avc444(&mut self, id: u16, regions: &[Rect], full_idr: bool, supported: bool) -> Verdict {
+        if !supported {
+            self.demote(id, "AVC444");
+            return Verdict::Cpu;
+        }
+        self.avc(id, regions, full_idr, true)
+    }
+
+    fn avc(&mut self, id: u16, regions: &[Rect], idr: bool, is444: bool) -> Verdict {
+        if matches!(self.mode_of(id), Mode::Seeding | Mode::Gpu) && self.surfaces.get(&id).and_then(|s| s.avc444).is_some_and(|f| f != is444) {
+            self.demote(id, "AVC420 / AVC444 mix");
+            return Verdict::Cpu;
+        }
         match self.mode_of(id) {
             Mode::Cpu if idr && self.eligible(id) => {
                 let s = self.surfaces.get_mut(&id).expect("eligible surface exists");
+                s.avc444 = Some(is444);
                 s.mode = Mode::Seeding;
                 s.stale.clear();
                 let (width, height) = (s.width, s.height);
@@ -474,11 +503,6 @@ impl Router {
             }
             Mode::Cpu | Mode::Demoted => Verdict::Cpu,
         }
-    }
-
-    /// AVC444 / AVC444v2 (not composed on the GPU).
-    pub fn avc444(&mut self, id: u16) {
-        self.demote(id, "AVC444");
     }
 
     /// Progressive (RemoteFX Progressive) tiles: their rectangles are not known here.
@@ -796,10 +820,27 @@ mod tests {
         r.map_output(1, 0, 0);
         r.avc420(1, &[], true);
         r.take_events();
-        r.avc444(1);
+        assert_eq!(r.avc444(1, &[], true, false), Verdict::Cpu);
         assert_eq!(r.take_events(), vec![Event::Demote { surface: 1, resync: false, reason: "AVC444" }]);
         assert!(!r.seeded(1));
     }
+
+    #[test]
+    fn avc444_promotes_on_a_full_idr_and_does_not_mix_with_avc420() {
+        let mut r = one_output();
+        r.create_surface(1, 1920, 1080);
+        r.map_output(1, 0, 0);
+        // A partial IDR does not promote (the GPU picture would start incomplete).
+        assert_eq!(r.avc444(1, &[Rect::new(0, 0, 100, 100)], false, true), Verdict::Cpu);
+        assert!(r.take_events().is_empty());
+        assert_eq!(r.avc444(1, &[Rect::new(0, 0, 1920, 1080)], true, true), Verdict::Both);
+        assert_eq!(r.take_events(), vec![Event::Promote { surface: 1, width: 1920, height: 1080 }]);
+        assert_eq!(r.avc444(1, &[Rect::new(0, 0, 10, 10)], false, true), Verdict::Both, "still seeding");
+        // An AVC420 update on the AVC444 surface demotes it.
+        assert_eq!(r.avc420(1, &[], false), Verdict::Cpu);
+        assert!(matches!(r.take_events().as_slice(), [Event::Demote { surface: 1, reason: "AVC420 / AVC444 mix", .. }]));
+    }
+
 
     #[test]
     fn cpu_paints_are_uploaded_minus_later_gpu_paints() {

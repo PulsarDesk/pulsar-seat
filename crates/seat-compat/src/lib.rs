@@ -32,6 +32,7 @@ pub mod apps;
 pub mod coexist;
 pub mod cpu;
 pub mod drivers;
+pub mod gpu_pref;
 pub mod importer;
 pub mod journal;
 pub mod ops;

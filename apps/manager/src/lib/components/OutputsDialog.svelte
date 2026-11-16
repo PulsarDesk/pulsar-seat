@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Video outputs assignment (spec 10 §7.5): per monitor, the outputs of its adapter that
-     should feed it (more than one = clone, needs its own switch), the cursor kind, and the
+     should feed it (more than one = clone, needs its own switch), the cursor kind, HDR and
+     variable refresh for seats 2..N (spec 40 §6.6), and the
+
      machine-wide "force-assign at start" option. The output that drives the monitor now is
      framed and bold. Applied by the service at the next seat start / reboot. -->
 <script lang="ts">
@@ -9,7 +11,7 @@
   import type { Config, Device, DisplayInfo, OutputSettings } from '#lib/types.ts';
 
   export interface OutputsResult {
-    monitors: { device: Device; outputs: number[]; software_cursor: boolean }[];
+    monitors: { device: Device; outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean }[];
     settings: OutputSettings;
   }
 
@@ -30,10 +32,10 @@
   const adapters = $derived([...new Set(monitors.map((m) => m.info.adapter_luid))]);
 
   function initial() {
-    const rows: Record<string, { outputs: number[]; software_cursor: boolean }> = {};
+    const rows: Record<string, { outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean }> = {};
     for (const d of devices.filter((x) => x.kind === 'monitor')) {
       const o = config.devices.find((a) => a.key === d.key)?.options;
-      rows[d.key] = { outputs: [...(o?.outputs ?? [])], software_cursor: o?.software_cursor ?? false };
+      rows[d.key] = { outputs: [...(o?.outputs ?? [])], software_cursor: o?.software_cursor ?? false, hdr: o?.hdr ?? false, vrr: o?.vrr ?? false };
     }
     return rows;
   }
@@ -76,7 +78,13 @@
 
   function save() {
     onSave({
-      monitors: monitors.map((m) => ({ device: m.device, outputs: rows[m.device.key]?.outputs ?? [], software_cursor: rows[m.device.key]?.software_cursor ?? false })),
+      monitors: monitors.map((m) => ({
+        device: m.device,
+        outputs: rows[m.device.key]?.outputs ?? [],
+        software_cursor: rows[m.device.key]?.software_cursor ?? false,
+        hdr: rows[m.device.key]?.hdr ?? false,
+        vrr: rows[m.device.key]?.vrr ?? false
+      })),
       settings: followSettings({ ...settings }, follow)
     });
   }
@@ -115,6 +123,8 @@
             <td>
               {#if rows[m.device.key]}
                 <label class="toggle"><input type="checkbox" bind:checked={rows[m.device.key].software_cursor} /> {t.outputs.softwareCursor}</label>
+                <label class="toggle"><input type="checkbox" data-testid="hdr" bind:checked={rows[m.device.key].hdr} /> {t.outputs.hdr}</label>
+                <label class="toggle"><input type="checkbox" data-testid="vrr" bind:checked={rows[m.device.key].vrr} /> {t.outputs.vrr}</label>
               {/if}
             </td>
           </tr>
@@ -125,6 +135,7 @@
   <label class="toggle"><input type="checkbox" bind:checked={settings.allow_clone} /> {t.outputs.allowClone}</label>
   <label class="toggle"><input type="checkbox" bind:checked={settings.force_assign_at_start} /> {t.outputs.forceAtStart}</label>
   <p class="hint" data-testid="force-note">{t.outputs.forceNote}</p>
+  <p class="hint" data-testid="hdr-note">{t.outputs.hdrVrrHint}</p>
   <label class="toggle">
     {t.outputs.followMode}
     <select bind:value={follow} data-testid="follow-mode">

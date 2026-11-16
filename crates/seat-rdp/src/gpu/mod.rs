@@ -16,6 +16,9 @@
 //! fails. **Untested on hardware and against a real server** (HYPOTHESIS throughout).
 
 pub mod ack;
+#[cfg(windows)]
+pub mod avc444;
+pub mod avc444_model;
 pub mod channel;
 #[cfg(windows)]
 pub mod d3d;
@@ -74,6 +77,37 @@ pub trait GpuCompositor: Send {
     fn publish(&mut self, id: u16) -> GpuResult<Option<SharedTexture>>;
     /// Every surface gone (protocol reset, channel closed).
     fn reset(&mut self);
+    /// Whether [`Self::avc444`] works on this compositor (added 2026-11-17). Default: no
+    /// (AVC444 surfaces stay on the CPU path).
+    fn supports_avc444(&self) -> bool {
+        false
+    }
+    /// Decode one AVC444 update of surface `id` and merge its views into the surface's
+    /// YUV 4:4:4 picture; `paint`: convert the update's rectangles into the surface
+    /// texture, otherwise only decode and merge (seeding).
+    fn avc444(&mut self, id: u16, update: &Avc444Update<'_>, paint: bool) -> GpuResult<()> {
+        let _ = (id, update, paint);
+        Err(GpuError::msg("AVC444 is not composed on this GPU path"))
+    }
+}
+
+
+/// One AVC444 / AVC444v2 update of a GPU surface (MS-RDPEGFX 2.2.4.5 / 2.2.4.6): the
+/// main (luma) and / or auxiliary (chroma) sub-stream, Annex B, each with its rectangles
+/// in surface coordinates. LC 0 = both, 1 = main only, 2 = auxiliary only.
+#[derive(Debug, Clone, Copy)]
+pub struct Avc444Update<'a> {
+    /// `RFX_AVC444V2_BITMAP_STREAM` layout.
+    pub v2: bool,
+    pub main: Option<(&'a [u8], &'a [Rect])>,
+    pub aux: Option<(&'a [u8], &'a [Rect])>,
+}
+
+impl Avc444Update<'_> {
+    /// Every rectangle of the update (what gets painted).
+    pub fn rects(&self) -> Vec<Rect> {
+        self.main.iter().chain(self.aux.iter()).flat_map(|(_, r)| r.iter().copied()).collect()
+    }
 }
 
 /// Starts the GPU compositor when the EGFX channel opens (`None`: GPU path off).

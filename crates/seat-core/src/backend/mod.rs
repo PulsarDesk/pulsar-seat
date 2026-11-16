@@ -25,6 +25,7 @@
 pub mod audio;
 pub mod display;
 pub mod gate;
+pub mod hdr;
 pub mod input;
 pub mod session;
 

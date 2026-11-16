@@ -1001,6 +1001,8 @@ mod tests {
                     software_cursor: false,
                     clone_of: None,
                     follow_mode: false,
+                    hdr: false,
+                    vrr: false,
                 }],
             },
             audio: AudioRoute::default(),
@@ -1163,6 +1165,8 @@ mod tests {
             software_cursor: false,
             clone_of,
             follow_mode: false,
+            hdr: false,
+            vrr: false,
         }
     }
 

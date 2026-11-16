@@ -180,6 +180,10 @@ export const t = {
     allowClone: 'Bir ekranı birden fazla çıkışa kopyalamaya izin ver (klonlama)',
     forceAtStart: 'Koltuklar başlarken her ekranı kayıtlı çıkışına yeniden bağla',
     softwareCursor: 'Yazılım fare imleci',
+    hdr: 'HDR',
+    vrr: 'Değişken yenileme (VRR)',
+    hdrVrrHint:
+      'HDR ve değişken yenileme 2. ve sonraki koltukların ekranları içindir (1. koltuk Windows ayarlarını kullanır). HDR, ekranın HDR desteği ve Windows 11 gerektirir; yoksa görüntü SDR kalır. Kopya korumalı (HDCP) içerik bu koltuklarda gösterilmez.',
     followMode: 'Ekran çözünürlüğü koltuğun oturumunu izlesin',
     followModeChoice: {
       auto: 'Otomatik (yalnızca masaüstü dışındaki ekranlar)',
@@ -383,6 +387,7 @@ export const t = {
     colStart: 'Kendiliğinden başlat',
     colWallpaper: 'Koltuk duvar kağıdı',
     colVirtualPads: 'Sanal oyun kolu',
+    colGpu: 'Ekran kartı tercihi',
     virtualPadsHint:
       'Sanal oyun kolu: bu koltuğa atanan oyun kolu (PlayStation, Switch Pro, Xbox ya da başka bir HID kolu) için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kol oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). “Fiziksel kolları koltuğa kilitle” açıkken gerçek kol yalnızca bu koltukta açılır.',
     colPadIgnore: 'SDL’nin yok sayacağı kollar',
@@ -425,6 +430,25 @@ export const t = {
     remove: 'Kaldır',
     notAbsolute: 'Tam yol gerekiyor (sürücü harfiyle ya da \\\\sunucu\\paylaşım ile başlamalı).',
     empty: 'Henüz başlangıç programı yok.'
+  },
+
+  gpuPref: {
+    title: (seat: number) => `${seat}. koltuk: ekran kartı tercihi`,
+    hint: 'Seçilen programlar koltuk kullanıcısı için tercih edilen ekran kartında açılır (Windows grafik ayarlarıyla aynı kayıt). Bu bir tercihtir; programlar öteki ekran kartlarını da görmeye devam eder. Değişiklik programın bir sonraki açılışında geçerli olur.',
+    mode: 'Tercih',
+    modes: {
+      off: 'Kapalı (Windows karar verir)',
+      seat_gpu: 'Koltuğun ekranlarını süren ekran kartı',
+      high_performance: 'Yüksek performanslı ekran kartı',
+      power_saving: 'Güç tasarruflu ekran kartı'
+    } as Record<string, string>,
+    program: 'Program (tam yol, .exe)',
+    add: 'Program ekle',
+    remove: 'Kaldır',
+    empty: 'Program yok.',
+    invalid: 'Tam bir .exe yolu girin (ör. C:\\Oyunlar\\oyun.exe).',
+    off: 'Kapalı',
+    count: (n: number) => `${n} program`
   },
 
   kiosk: {
@@ -1252,6 +1276,7 @@ export const issueText: Record<string, string> = {
   ip_binding_shared_session: 'Bu kiosk koltuğu oturumunu başka koltuklarla paylaşıyor; IP adresi sürücüyle zorlanamaz, yalnızca destekleyen programlar kullanır.',
   clone_not_allowed: 'Bir ekrana birden fazla çıkış seçilmiş ama klonlamaya izin verilmemiş.',
   same_account_fast_user_switch: 'Hızlı kullanıcı geçişinde her koltuğun ayrı bir hesabı olmalı.',
+  invalid_gpu_preference: 'Ekran kartı tercihindeki programlar geçersiz (en çok 64 program, her biri tam bir .exe yolu).',
   invalid_kiosk_shell: 'Kiosk koltuğunun ayarları geçersiz (en çok 16 uygulama, adı ve yolu dolu, boşta sıfırlama 0–1440 dakika).',
   kiosk_shell_ignored_on_seat_one: '1. koltuk normal masaüstü olarak kaldığı için kiosk ayarı bu koltukta kullanılmaz.',
   seat_kind_mismatch: 'Koltuğun türü (yerel / uzak) ayarlarıyla uyuşmuyor.',
@@ -1272,6 +1297,8 @@ export function issueLabel(i: Issue, deviceName?: (key: string) => string): stri
 }
 
 export const noticeText: Record<string, string> = {
+  gpu_preference_unavailable:
+    'Koltuğun ekran kartı tercihi uygulanamadı: bilgisayarda tek ekran kartı var ya da koltuğun ekran kartı Windows tarafından yüksek performanslı veya güç tasarruflu olarak tanınmıyor.',
   os_build_changed: 'Windows güncellendi. Koltuk ayarlarını gözden geçirip gerekirse yeniden kaydedin.',
   service_gap_no_input: 'Hizmet kısa bir süre yanıt vermedi; giriş bir anlığına durmuş olabilir.',
   same_account_warning: 'Aynı hesap birden fazla koltukta açık. Bu önerilmez.',

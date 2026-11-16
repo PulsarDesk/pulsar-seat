@@ -84,6 +84,16 @@ pub enum Change {
     /// **before** it asks the agent, so uninstall / reset can undo it through
     /// `HKEY_USERS\<sid>` even when the user is not logged on.
     UserPalmCheck { sid: String },
+    /// A per-app GPU preference value we wrote in user `sid`'s hive
+    /// (`Software\Microsoft\DirectX\UserGpuPreferences`, value name = the program path,
+    /// spec 40 §6.4; added 2026-11-17). Undone through `HKEY_USERS\<sid>` (hive loaded
+    /// from `NTUSER.DAT` when the user is not logged on), see [`crate::gpu_pref`].
+    UserGpuPreference {
+        sid: String,
+        app: String,
+        previous: Option<String>,
+        written: String,
+    },
     /// A System Restore checkpoint we created (informational; never reverted).
     RestorePoint { sequence: i64, description: String },
 }
@@ -117,6 +127,9 @@ impl Change {
                 format!("drv:{}", published.to_ascii_lowercase())
             }
             Self::UserPalmCheck { sid } => format!("userpalm:{}", sid.to_ascii_uppercase()),
+            Self::UserGpuPreference { sid, app, .. } => {
+                format!("usergpu:{}:{}", sid.to_ascii_uppercase(), app.to_ascii_lowercase())
+            }
             Self::RestorePoint { sequence, .. } => format!("rp:{sequence}"),
         }
     }
@@ -574,6 +587,10 @@ fn inherit_previous(new: &mut Change, old: &Change) {
             *previous = p.clone()
         }
         (Change::PowerAc { previous, .. }, Change::PowerAc { previous: p, .. }) => *previous = *p,
+        (
+            Change::UserGpuPreference { previous, .. },
+            Change::UserGpuPreference { previous: p, .. },
+        ) => *previous = p.clone(),
         _ => {}
     }
 }
@@ -672,8 +689,15 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
                 (true, false) => RevertOutcome::AlreadyRestored,
             })
         }
+        Change::UserGpuPreference {
+            sid,
+            app,
+            previous,
+            written,
+        } => crate::gpu_pref::revert_value(ops, sid, app, previous.as_deref(), written, force),
         Change::RestorePoint { .. } => Ok(RevertOutcome::Closed),
     }
+
 }
 
 /// Write a registry value through the journal: records the previous value first, then

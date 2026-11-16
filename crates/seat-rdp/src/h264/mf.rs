@@ -2,8 +2,20 @@
 //! Media Foundation H.264 decoder (see the module docs in `h264/mod.rs`). Written from the
 //! public Media Foundation documentation (Microsoft Learn: "H.264 Video Decoder",
 //! "Supporting Direct3D 11 Video Decoding in Media Foundation", "Basic MFT Processing
-//! Model"). **Untested against a real RDP server**; the round-trip test below runs the
-//! system's H.264 encoder and this decoder on the dev box.
+//! Model", "Asynchronous MFTs", "Hardware MFTs"). **Untested against a real RDP server**;
+//! the round-trip tests below run the system's H.264 encoder and this decoder on the dev
+//! box.
+//!
+//! Decoder order (added 2026-11-17): the GPU vendor's own hardware decoder first
+//! (`MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT
+//! | MFT_ENUM_FLAG_SORTANDFILTER)`, H.264 in, NV12 out; unlocked with
+//! `MF_TRANSFORM_ASYNC_UNLOCK`, driven by its `METransformNeedInput` /
+//! `METransformHaveOutput` events), then Microsoft's MFT with a D3D11 device manager, then
+//! Microsoft's MFT on the CPU. A decoder that keeps failing steps down one level
+//! ([`super::next_decoder`]). `PULSAR_SEAT_H264_DECODER=microsoft` skips the vendor MFT,
+//! `software` the GPU entirely. HYPOTHESIS (no vendor MFT on the ARM64 dev box was
+//! guaranteed to be tested; see the README): vendor decoders in low-latency mode return
+//! each picture within [`ASYNC_OUTPUT_WAIT`] of its access unit, like Microsoft's.
 
 use super::{FallbackPolicy, MAX_PICTURE_DIM, annex_b, nv12_plane_rows, nv12_planes};
 use crate::gfx::{DecoderKind, GfxMetrics};
@@ -16,6 +28,12 @@ use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIAdapter, IDXGIFact
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11Multithread,
 };
+use std::time::{Duration, Instant};
+use windows::Win32::Media::MediaFoundation::{
+    IMFActivate, IMFMediaEventGenerator, METransformHaveOutput, METransformNeedInput, MF_E_NO_EVENTS_AVAILABLE, MF_EVENT_FLAG_NO_WAIT,
+    MF_TRANSFORM_ASYNC_UNLOCK, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_FRIENDLY_NAME_Attribute, MFT_REGISTER_TYPE_INFO, MFTEnumEx,
+};
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264DecoderMFT, IMF2DBuffer, IMF2DBuffer2, IMFDXGIDeviceManager, IMFMediaBuffer, IMFSample, IMFTransform, MF_E_NOTACCEPTING,
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_LOW_LATENCY, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE,
@@ -24,7 +42,7 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES,
     MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFVideoFormat_H264, MFVideoFormat_NV12,
 };
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize};
 use windows::core::{Interface, Result as WinResult};
 
 /// Output pulls per access unit before giving up (stream changes count).
@@ -32,6 +50,87 @@ const MAX_PULLS: usize = 8;
 /// Sample duration we stamp on the access units (100 ns units, 60 per second); only the
 /// order matters to the decoder, the time pairs each picture with its access unit.
 const AU_DURATION: i64 = 166_667;
+/// Asynchronous MFT: longest wait for `METransformNeedInput` before an access unit.
+const ASYNC_INPUT_WAIT: Duration = Duration::from_millis(200);
+/// Asynchronous MFT: longest wait for the picture of the access unit just fed.
+pub(crate) const ASYNC_OUTPUT_WAIT: Duration = Duration::from_millis(50);
+
+/// Event bookkeeping of an asynchronous (vendor hardware) MFT: pending input requests and
+/// outputs announced by `METransformNeedInput` / `METransformHaveOutput`.
+struct AsyncEvents {
+    generator: IMFMediaEventGenerator,
+    need_input: u32,
+    have_output: u32,
+}
+
+impl AsyncEvents {
+    /// Take every queued event; wait (polling, at most `wait`) until `done` holds.
+    fn pump(&mut self, wait: Duration, done: fn(&Self) -> bool) -> DecoderResult<()> {
+        let deadline = Instant::now() + wait;
+        loop {
+            loop {
+                // SAFETY: COM call on the live generator; NO_WAIT never blocks.
+                match unsafe { self.generator.GetEvent(MF_EVENT_FLAG_NO_WAIT) } {
+                    Ok(ev) => {
+                        // SAFETY: COM calls on the event we own.
+                        let (ty, status) = unsafe { (ev.GetType().unwrap_or(0), ev.GetStatus().unwrap_or_default()) };
+                        if status.is_err() {
+                            return Err(DecoderError::msg(format!("vendor decoder event {ty} failed: {status:?}")));
+                        }
+                        if ty == METransformNeedInput.0 as u32 {
+                            self.need_input += 1;
+                        } else if ty == METransformHaveOutput.0 as u32 {
+                            self.have_output += 1;
+                        }
+                    }
+                    Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => break,
+                    Err(e) => return Err(err("vendor decoder event", e)),
+                }
+            }
+            if done(self) || Instant::now() >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+/// The first vendor hardware H.264 decoder that activates, and its friendly name.
+///
+/// SAFETY: plain Media Foundation calls; the activation array is freed here.
+unsafe fn vendor_transform() -> WinResult<(IMFTransform, String)> {
+    unsafe {
+        let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
+        let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
+        let flags = MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_ASYNCMFT.0 | MFT_ENUM_FLAG_SORTANDFILTER.0);
+        let mut list: *mut Option<IMFActivate> = std::ptr::null_mut();
+        let mut n = 0u32;
+        MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, flags, Some(&input), Some(&output), &mut list, &mut n)?;
+        let mut chosen = None;
+        if !list.is_null() {
+            for a in std::slice::from_raw_parts_mut(list, n as usize).iter_mut() {
+                // Every entry is released (taken out of the array) before the array is freed.
+                let Some(a) = a.take() else { continue };
+                if chosen.is_some() {
+                    continue;
+                }
+                let mut name = [0u16; 128];
+                let mut len = 0u32;
+                let label = if a.GetString(&MFT_FRIENDLY_NAME_Attribute, &mut name, Some(&mut len)).is_ok() {
+                    String::from_utf16_lossy(&name[..(len as usize).min(name.len())])
+                } else {
+                    "vendor H.264 decoder".to_string()
+                };
+                match a.ActivateObject::<IMFTransform>() {
+                    Ok(t) => chosen = Some((t, label)),
+                    Err(e) => eprintln!("seat-rdp: vendor H.264 decoder {label} did not activate: {e}"),
+                }
+            }
+            CoTaskMemFree(Some(list as *const _));
+        }
+        chosen.ok_or_else(|| windows::core::Error::new(windows::Win32::Foundation::E_NOTIMPL, "no vendor hardware H.264 decoder"))
+    }
+}
 
 /// COM + Media Foundation for the decoder's lifetime (dropped last).
 struct Runtime {
@@ -86,6 +185,10 @@ pub(crate) struct Mft {
     /// Pictures that could not be handed to their access unit (late, pushed out by
     /// `MF_E_NOTACCEPTING`); drained into the metrics after each decode.
     dropped: u64,
+    /// Asynchronous (vendor) MFT: its event bookkeeping. `None` = synchronous MFT.
+    events: Option<AsyncEvents>,
+    /// Friendly name of the vendor decoder (logs).
+    vendor: Option<String>,
     _rt: Runtime,
 }
 
@@ -186,18 +289,77 @@ unsafe fn attach_d3d(t: &IMFTransform, device: Option<ID3D11Device>, luid: Optio
 }
 
 impl Mft {
-    fn start(hardware: bool, luid: Option<u64>) -> WinResult<Self> {
-        Self::start_with(hardware, luid, None)
+    /// `want`: [`DecoderKind::HardwareVendor`] (vendor first, then Microsoft on the GPU,
+    /// then the CPU), [`DecoderKind::Hardware`] (Microsoft on the GPU, then the CPU) or
+    /// [`DecoderKind::Software`].
+    fn start(want: DecoderKind, luid: Option<u64>) -> WinResult<Self> {
+        if want == DecoderKind::HardwareVendor {
+            match Self::start_vendor(luid, None) {
+                Ok(m) => return Ok(m),
+                Err(e) => eprintln!("seat-rdp: vendor H.264 decoder not used ({e}); Microsoft's decoder"),
+            }
+        }
+        Self::start_with(want.is_hardware(), luid, None)
     }
 
     /// Hardware decode on `device` (needs video support), pictures kept on the GPU
     /// ([`Self::decode_gpu`]). No software fallback: the zero-copy path needs the texture.
+    /// The vendor's decoder first (unless `PULSAR_SEAT_H264_DECODER` says otherwise).
     pub(crate) fn start_gpu(device: &ID3D11Device) -> WinResult<Self> {
+        if super::vendor_allowed(std::env::var("PULSAR_SEAT_H264_DECODER").ok().as_deref()) {
+            match Self::start_vendor(None, Some(device.clone())) {
+                Ok(m) => return Ok(m),
+                Err(e) => eprintln!("seat-rdp: zero-copy: vendor H.264 decoder not used ({e}); Microsoft's decoder"),
+            }
+        }
         let m = Self::start_with(true, None, Some(device.clone()))?;
-        if m.kind != DecoderKind::Hardware {
+        if !m.kind.is_hardware() {
             return Err(windows::core::Error::new(windows::Win32::Foundation::E_NOTIMPL, "no hardware H.264 decode on this adapter"));
         }
         Ok(m)
+    }
+
+    /// The vendor's asynchronous hardware MFT on `device` (or a new video device on
+    /// `luid`); pictures stay on the GPU when `device` is given (zero-copy path).
+    fn start_vendor(luid: Option<u64>, device: Option<ID3D11Device>) -> WinResult<Self> {
+        let gpu_out = device.is_some();
+        let rt = Runtime::start()?;
+        // SAFETY: COM calls on interfaces we own, on this thread.
+        unsafe {
+            let (transform, name) = vendor_transform()?;
+            let attrs = transform.GetAttributes()?;
+            // An asynchronous MFT refuses every call until it is unlocked.
+            attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
+            let _ = attrs.SetUINT32(&MF_LOW_LATENCY, 1);
+            let (manager, device) = attach_d3d(&transform, device, luid)?;
+            let generator: IMFMediaEventGenerator = transform.cast()?;
+            let input = MFCreateMediaType()?;
+            input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+            transform.SetInputType(0, &input, 0)?;
+            let mut m = Self {
+                transform,
+                _manager: Some(manager),
+                device: Some(device),
+                kind: DecoderKind::HardwareVendor,
+                gpu_out,
+                provides_samples: false,
+                out_size: 0,
+                width: 0,
+                height: 0,
+                stride: 0,
+                time: 0,
+                dropped: 0,
+                events: Some(AsyncEvents { generator, need_input: 0, have_output: 0 }),
+                vendor: Some(name),
+                _rt: rt,
+            };
+            m.set_output_type()?;
+            m.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            m.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+            eprintln!("seat-rdp: H.264 decode on the vendor's hardware decoder ({})", m.vendor.as_deref().unwrap_or("?"));
+            Ok(m)
+        }
     }
 
     fn start_with(hardware: bool, luid: Option<u64>, device: Option<ID3D11Device>) -> WinResult<Self> {
@@ -237,6 +399,8 @@ impl Mft {
                 stride: 0,
                 time: 0,
                 dropped: 0,
+                events: None,
+                vendor: None,
                 _rt: rt,
             };
             m.set_output_type()?;
@@ -293,6 +457,16 @@ impl Mft {
             let _ = sample.SetSampleTime(time);
             let _ = sample.SetSampleDuration(AU_DURATION);
             self.time += 1;
+            if let Some(ev) = self.events.as_mut() {
+                // Asynchronous MFT: input only against a METransformNeedInput.
+                ev.pump(ASYNC_INPUT_WAIT, |s| s.need_input > 0)?;
+                if ev.need_input == 0 {
+                    return Err(DecoderError::msg("vendor decoder asked for no input"));
+                }
+                ev.need_input -= 1;
+                self.transform.ProcessInput(0, &sample, 0).map_err(|e| err("input", e))?;
+                return Ok(time);
+            }
             match self.transform.ProcessInput(0, &sample, 0) {
                 Ok(()) => Ok(time),
                 Err(e) if e.code() == MF_E_NOTACCEPTING => {
@@ -302,7 +476,7 @@ impl Mft {
                     // luma / chroma views paired by call: a late view is never handed to
                     // the next call.
                     for _ in 0..MAX_PULLS {
-                        match self.pull()? {
+                        match self.pull(Duration::ZERO)? {
                             Pull::NeedInput => break,
                             Pull::Frame(..) => self.dropped += 1,
                             Pull::Changed => {}
@@ -316,7 +490,18 @@ impl Mft {
         }
     }
 
-    fn pull(&mut self) -> DecoderResult<Pull> {
+    /// One output. An asynchronous MFT is only asked after `METransformHaveOutput`
+    /// (waiting at most `wait` for it); without one there is no output yet.
+    fn pull(&mut self, wait: Duration) -> DecoderResult<Pull> {
+        if let Some(ev) = self.events.as_mut() {
+            if ev.have_output == 0 {
+                ev.pump(wait, |s| s.have_output > 0)?;
+            }
+            if ev.have_output == 0 {
+                return Ok(Pull::NeedInput);
+            }
+            ev.have_output -= 1;
+        }
         // SAFETY: the output buffer structure owns at most one sample and one event
         // collection, both taken back out below.
         unsafe {
@@ -424,7 +609,9 @@ impl Mft {
         let mut current = None;
         let mut untimed = None;
         for _ in 0..MAX_PULLS {
-            match self.pull()? {
+            // Asynchronous MFT: wait for this unit's picture, then take only what is ready.
+            let wait = if current.is_none() { ASYNC_OUTPUT_WAIT } else { Duration::ZERO };
+            match self.pull(wait)? {
                 Pull::Frame(t, f) => match pick(t, time) {
                     Pick::Current => {
                         if current.replace(f).is_some() {
@@ -465,6 +652,23 @@ impl Mft {
         unsafe {
             let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         }
+        // Asynchronous MFT: announced outputs are gone with the flush; input requests that
+        // arrive afterwards are counted again (HYPOTHESIS: the MFT re-announces input).
+        if let Some(ev) = self.events.as_mut() {
+            let _ = ev.pump(Duration::ZERO, |_| true);
+            ev.have_output = 0;
+        }
+    }
+
+    /// Size of the decoded pictures (the output media type's frame size).
+    pub(crate) fn picture_size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The vendor decoder's friendly name (`None` for Microsoft's MFT).
+    #[cfg(test)]
+    pub(crate) fn vendor_name(&self) -> Option<&str> {
+        self.vendor.as_deref()
     }
 }
 
@@ -472,6 +676,8 @@ impl Mft {
 /// [`H264Decoder::wait_until_ready`] (the pipeline calls it when its channel opens, on
 /// the engine thread).
 pub struct MfH264Decoder {
+    /// Highest decoder level to try (vendor, Microsoft on the GPU, CPU).
+    want: DecoderKind,
     prefer_hardware: bool,
     /// Adapter of the seat's presenter (hardware decode there).
     adapter: Option<u64>,
@@ -488,7 +694,22 @@ unsafe impl Send for MfH264Decoder {}
 
 impl MfH264Decoder {
     pub fn new(prefer_hardware: bool, metrics: Arc<GfxMetrics>) -> Self {
-        Self { prefer_hardware, adapter: None, metrics, mft: None, scratch: Vec::new(), fallback: FallbackPolicy::default() }
+        let want = if !prefer_hardware {
+            DecoderKind::Software
+        } else if super::vendor_allowed(std::env::var("PULSAR_SEAT_H264_DECODER").ok().as_deref()) {
+            DecoderKind::HardwareVendor
+        } else {
+            DecoderKind::Hardware
+        };
+        Self { want, prefer_hardware, adapter: None, metrics, mft: None, scratch: Vec::new(), fallback: FallbackPolicy::default() }
+    }
+
+    /// Start with exactly this decoder level ([`DecoderKind::HardwareVendor`] /
+    /// `Hardware` / `Software`); tests and troubleshooting.
+    pub fn with_level(mut self, want: DecoderKind) -> Self {
+        self.want = want;
+        self.prefer_hardware = want.is_hardware();
+        self
     }
 
     /// Decode on the adapter with this LUID (the presenter's), not the default one.
@@ -502,18 +723,27 @@ impl MfH264Decoder {
         self.mft.as_ref().map_or(DecoderKind::None, |m| m.kind)
     }
 
-    /// Hardware decode keeps failing (or its device is gone): start the software MFT. The
-    /// new decoder needs an IDR; the failed updates make the session resync, which brings
-    /// one (graphics protocol reset).
+    /// Hardware decode keeps failing (or its device is gone): step down one level (vendor
+    /// MFT to Microsoft's on the GPU, GPU to CPU, [`super::next_decoder`]). The new decoder
+    /// needs an IDR; the failed updates make the session resync, which brings one
+    /// (graphics protocol reset).
     fn switch_to_software(&mut self, device_lost: bool) {
+        let from = self.kind();
+        let next = super::next_decoder(from).unwrap_or(DecoderKind::Software);
         eprintln!(
-            "seat-rdp: H.264 hardware decode {}; switching to software",
-            if device_lost { "lost its device" } else { "keeps failing" }
+            "seat-rdp: H.264 {} decode {}; switching to {}",
+            from.as_str(),
+            if device_lost { "lost its device" } else { "keeps failing" },
+            next.as_str()
         );
         self.mft = None;
-        self.prefer_hardware = false;
+        self.want = next;
+        self.prefer_hardware = next.is_hardware();
         self.metrics.record_decoder_fallback();
-        match Mft::start(false, None) {
+        // A lost device takes the GPU with it: straight to the CPU.
+        let level = if device_lost { DecoderKind::Software } else { next };
+        let luid = if level.is_hardware() { self.adapter } else { None };
+        match Mft::start(level, luid) {
             Ok(m) => {
                 self.metrics.set_decoder(m.kind);
                 self.mft = Some(m);
@@ -529,13 +759,13 @@ impl MfH264Decoder {
         if self.mft.is_some() {
             return true;
         }
-        let first = Mft::start(self.prefer_hardware, self.adapter);
+        let first = Mft::start(self.want, self.adapter);
         let started = match first {
             Ok(m) => Ok(m),
             // A hardware start that failed past the device step: try once without it.
             Err(e) if self.prefer_hardware => {
                 eprintln!("seat-rdp: H.264 decoder start failed ({e}); retrying in software");
-                Mft::start(false, None)
+                Mft::start(DecoderKind::Software, None)
             }
             Err(e) => Err(e),
         };
@@ -576,7 +806,7 @@ impl H264Decoder for MfH264Decoder {
         let (kind, lost) = match self.mft.as_mut() {
             Some(m) => {
                 self.metrics.record_h264_dropped(m.take_dropped());
-                (m.kind, r.is_err() && m.kind == DecoderKind::Hardware && m.device_lost())
+                (m.kind, r.is_err() && m.kind.is_hardware() && m.device_lost())
             }
             None => (DecoderKind::None, false),
         };
@@ -730,6 +960,28 @@ mod tests {
     fn software_round_trip() {
         round_trip(false);
     }
+
+    /// Vendor async hardware MFT when this PC has one (else the chain falls back and the
+    /// test checks the fallback decodes).
+    #[test]
+    fn vendor_or_fallback_round_trip() {
+        let Some(aus) = encode(6, 180) else {
+            eprintln!("H.264 encoder MFT not available; skipping");
+            return;
+        };
+        let metrics = GfxMetrics::new();
+        let mut d = MfH264Decoder::new(true, metrics.clone()).with_level(DecoderKind::HardwareVendor);
+        assert!(d.wait_until_ready(), "some decoder starts");
+        let kind = d.kind();
+        let name = d.mft.as_ref().and_then(|m| m.vendor_name().map(str::to_string));
+        assert_eq!(name.is_some(), kind == DecoderKind::HardwareVendor);
+        let pictures = aus.iter().filter(|au| d.decode_yuv420(au).is_ok_and(|f| (168..=192).contains(&mean(&f)))).count();
+        eprintln!("decoder {kind:?} ({name:?}): {pictures} pictures from {} access units", aus.len());
+        // The decoder may step down at run time (vendor -> Microsoft); pictures must come.
+        assert!(pictures * 2 >= aus.len(), "{pictures}/{}", aus.len());
+        d.reset();
+    }
+
 
     #[test]
     fn hardware_or_fallback_round_trip() {

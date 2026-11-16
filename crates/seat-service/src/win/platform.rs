@@ -996,6 +996,34 @@ impl Platform for WinPlatform {
         )
     }
 
+    fn gpu_ranks(&self) -> (Option<u64>, Option<u64>) {
+        seat_display::win::gpu_ranks()
+    }
+
+    fn sync_gpu_preference(&self, sid: &str, apps: &[String], pref: Option<u32>) -> Result<String, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = seat_compat::gpu_pref::sync_user(&j, &seat_compat::WinOps, sid, apps, pref).map_err(|e| e.to_string())?;
+        if !r.failed.is_empty() {
+            return Err(format!("{} of {} programs failed: {}", r.failed.len(), apps.len(), r.failed[0].1));
+        }
+        Ok(if r.no_profile {
+            "no profile".into()
+        } else if r.written + r.reverted == 0 {
+            String::new()
+        } else {
+            format!("{} written, {} unchanged, {} undone", r.written, r.unchanged, r.reverted)
+        })
+    }
+
+    fn revert_gpu_preferences(&self) -> Result<usize, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let (n, failed) = seat_compat::gpu_pref::revert_all(&j, &seat_compat::WinOps).map_err(|e| e.to_string())?;
+        match failed.first() {
+            Some(e) => Err(format!("{} failed: {e}", failed.len())),
+            None => Ok(n),
+        }
+    }
+
     fn set_keep_awake(&self, on: bool) -> BackendResult<()> {
         use windows_sys::Win32::System::Power::{PowerCreateRequest, PowerRequestSystemRequired, PowerSetRequest};
         use windows_sys::Win32::System::Threading::{POWER_REQUEST_CONTEXT_SIMPLE_STRING, REASON_CONTEXT};

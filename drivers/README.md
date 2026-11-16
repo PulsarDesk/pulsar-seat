@@ -40,7 +40,7 @@ signed once. Done: `drivers/split-idd` is merged into `drivers/seat-idd` (one IN
 
 | | local role | remote role |
 | --- | --- | --- |
-| Hardware id | `Root\PulsarSeatIdd` (root devnode made by the installer) | `PulsarSplit_IndirectDisplay` (made by a Remote Desktop protocol stack; Windows 11 model sections only) |
+| Hardware id | `Root\PulsarSeatIdd` (root devnode made by the installer) + `PulsarSeatIdd_Adapter` (one software devnode per further render GPU, made by the service; interface minor 3) | `PulsarSplit_IndirectDisplay` (made by a Remote Desktop protocol stack; Windows 11 model sections only) |
 | Sources | `src/driver.cpp`, `src/swapchain.cpp`, `public/seat_idd_ioctl.h` | `src/remote/`, `public/PulsarIddShared.h` |
 | Monitors | virtual monitor per local seat | per-session display of a remote seat, HDR (FP16) |
 | Control | `IDD_INTERFACE_GUID`, `seat_display::idd_proto` | `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, `seat_display::remote::ioctl` |

@@ -1237,6 +1237,13 @@ impl Service {
                 .and_then(|r| r.map_err(|e| log::warn(&format!("lock-screen image: {e}"))).ok());
             self.platform.sync_tweaks(&tweaks, lock.as_deref())
         } else {
+            // Seat users' GPU preferences (spec 40 §6.4) go with the product too; they are
+            // written again at the next seat logon after an enable.
+            match self.platform.revert_gpu_preferences() {
+                Ok(0) => {}
+                Ok(n) => log::info(&format!("GPU preferences of seat users undone ({n} values)")),
+                Err(e) => log::warn(&format!("GPU preferences not undone: {e}")),
+            }
             self.platform.revert_tweaks()
         };
         // The credential provider follows the same switch (and the active backend).

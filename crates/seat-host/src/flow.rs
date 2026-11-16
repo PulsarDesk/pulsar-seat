@@ -210,6 +210,8 @@ mod tests {
             software_cursor: false,
             clone_of: None,
             follow_mode: false,
+            hdr: false,
+            vrr: false,
         };
         let asg = HostAssignment {
             seat,

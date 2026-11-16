@@ -66,14 +66,23 @@ pub struct IddMonitor<'a> {
     pub reader_sid: Option<&'a str>,
     /// Per-seat software cursor option: no hardware cursor, DWM draws the pointer.
     pub software_cursor: bool,
+    /// Offer HDR / SDR wide colour on the virtual monitor (`AssignmentOptions::hdr`,
+    /// driver minor 3, IddCx 1.10). The EDID's HDR blocks tell Windows what the panel can
+    /// do; without IddCx 1.10 the monitor stays SDR.
+    pub hdr: bool,
 }
 
 /// Client of our IddCx driver (`drivers/seat-idd`), see `crate::win::idd`.
 pub trait IddControl: Send + Sync {
     fn availability(&self) -> Availability;
-    /// Plug one virtual monitor with the physical monitor's EDID and modes.
+    /// Plug one virtual monitor with the physical monitor's EDID and modes, on the
+    /// adapter of its render GPU (one adapter per GPU, [`crate::idd_adapters`]).
     fn add_monitor(&self, m: &IddMonitor<'_>) -> BackendResult<()>;
     fn remove_monitor(&self, seat: SeatNumber, connector: u32) -> BackendResult<()>;
+    /// The adapters (one per render GPU) as last seen. Default: unknown (empty).
+    fn adapters(&self) -> Vec<crate::idd_adapters::AdapterState> {
+        Vec::new()
+    }
 }
 
 /// Per-seat display options the `DisplayBinding` trait cannot carry. Set with
@@ -91,6 +100,12 @@ pub struct SeatDisplayOptions {
     pub outputs: Vec<(DeviceKey, Vec<u32>)>,
     /// Follow the seat session's resolution (spec 40 §6.5); `None` = presenter targets only.
     pub follow_session_mode: Option<bool>,
+    /// Monitors whose assignment asks for HDR on the seat's virtual monitor and the
+    /// presenter (`AssignmentOptions::hdr`). Added 2026-11-17.
+    pub hdr: HashSet<DeviceKey>,
+    /// Monitors whose assignment asks for variable refresh through the presenter
+    /// (`AssignmentOptions::vrr`). Added 2026-11-17.
+    pub vrr: HashSet<DeviceKey>,
 }
 
 /// Command for the seat host that presents a target the console cannot reach (presenter
@@ -596,6 +611,16 @@ impl DisplayBinding for Binding {
             .filter(|(k, _)| opts.software_cursor.contains(k))
             .map(|(k, m)| m.map_or_else(|| k.clone(), |m| m.device.key.clone()))
             .collect();
+        // HDR / VRR options the same way (seats 2..N, spec 40 §6.6).
+        let by_key = |set: &HashSet<DeviceKey>| -> HashSet<DeviceKey> {
+            resolved
+                .iter()
+                .filter(|(k, _)| set.contains(k))
+                .map(|(k, m)| m.map_or_else(|| k.clone(), |m| m.device.key.clone()))
+                .collect()
+        };
+        let hdr = by_key(&opts.hdr);
+        let vrr = by_key(&opts.vrr);
         let mut chosen: Vec<(&LiveMonitor, Presentation)> = Vec::new();
         for (k, m) in &resolved {
             let Some(m) = m else {
@@ -696,6 +721,8 @@ impl DisplayBinding for Binding {
                 software_cursor: sw.contains(&m.device.key),
                 clone_of: None,
                 follow_mode: follow(*p),
+                hdr: !seat.is_console() && hdr.contains(&m.device.key),
+                vrr: !seat.is_console() && vrr.contains(&m.device.key),
             });
         }
         for (m, p, master) in &clones {
@@ -718,6 +745,9 @@ impl DisplayBinding for Binding {
                 software_cursor: sw.contains(&m.device.key) || outputs[*master].software_cursor,
                 clone_of: Some(*master),
                 follow_mode: false,
+                // A clone shows its surface's frames: same colour mode; its own VRR choice.
+                hdr: outputs[*master].hdr,
+                vrr: !seat.is_console() && (vrr.contains(&m.device.key) || outputs[*master].vrr),
             });
         }
 
@@ -734,27 +764,13 @@ impl DisplayBinding for Binding {
                     let _ = idd.remove_monitor(seat, i as u32);
                 }
             }
-            // drivers/seat-idd has ONE IddCx adapter: its render GPU is adapter-wide, the
-            // last seat added picks it for every seat (spec 40 §6.4 wants one adapter per
-            // GPU; known gap, drivers/seat-idd/README.md). Seats on several GPUs work, but
-            // frames of all but one GPU cross the bus.
+            // One IddCx adapter per render GPU (driver minor 3, crate::idd_adapters): each
+            // virtual monitor goes to the adapter bound to its physical monitor's GPU, so
+            // every seat composes on the GPU that scans it out.
             {
-                let st = lock(&inner.state);
-                let mut luids: Vec<u64> = st
-                    .bound
-                    .values()
-                    .flatten()
-                    .map(|o| o.adapter_luid)
-                    .chain(chosen.iter().map(|(m, _)| m.target.adapter_luid))
-                    .filter(|&l| l != 0)
-                    .collect();
-                luids.sort_unstable();
-                luids.dedup();
-                if luids.len() > 1 {
-                    log::warn!(
-                        "display: seat {seat}: virtual monitors span {} GPUs; the IddCx driver renders all seats on the last added seat's GPU (multi-GPU seats unsupported)",
-                        luids.len()
-                    );
+                let gpus = crate::idd_adapters::distinct_gpus(chosen.iter().map(|(m, _)| m.target.adapter_luid));
+                if gpus.len() > 1 {
+                    log::info!("display: seat {seat}: virtual monitors on {} GPUs, one IddCx adapter each", gpus.len());
                 }
             }
             for (i, ((m, _), o)) in chosen.iter().zip(&outputs).enumerate() {
@@ -768,6 +784,7 @@ impl DisplayBinding for Binding {
                     render_luid: m.target.adapter_luid,
                     reader_sid: opts.frame_reader_sid.as_deref(),
                     software_cursor: o.software_cursor,
+                    hdr: o.hdr,
                 };
                 if let Err(e) = idd.add_monitor(&req) {
                     for j in 0..i {
@@ -877,6 +894,9 @@ impl DisplayBinding for Binding {
         o.outputs = prefs.outputs.clone();
         o.follow_session_mode = prefs.follow_session_mode;
         o.frame_reader_sid = prefs.frame_reader_sid.clone();
+        o.hdr = prefs.hdr.iter().cloned().collect();
+        o.vrr = prefs.vrr.iter().cloned().collect();
+
     }
 
     fn set_hotplug_sink(&self, sink: HotplugSink) {
@@ -1129,6 +1149,48 @@ mod tests {
         b.release_seat(s(2)).unwrap();
         assert_eq!(idd.1.load(Ordering::SeqCst), removes, "nothing left to remove");
         assert!(!b.caps().isolates_console);
+    }
+
+    /// Records (seat, connector, render GPU, hdr) per add.
+    struct GpuIdd(Mutex<Vec<(u8, u32, u64, bool)>>);
+    impl IddControl for GpuIdd {
+        fn availability(&self) -> Availability {
+            Availability::Available
+        }
+        fn add_monitor(&self, r: &IddMonitor<'_>) -> BackendResult<()> {
+            lock(&self.0).push((r.seat.get(), r.connector, r.render_luid, r.hdr));
+            Ok(())
+        }
+        fn remove_monitor(&self, _: SeatNumber, _: u32) -> BackendResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn hdr_vrr_options_and_render_gpu_per_monitor() {
+        // Two GPUs (LUID 5 and 6), one monitor each, plus seat 1's monitor on GPU 5.
+        let mut other_gpu = target(6, 1, true, 3840);
+        other_gpu.adapter_path = r"\\?\PCI#VEN_1002&DEV_73BF#4&2#{5b45201d-f2f2-4f3b-85bb-30ff1f953599}".into();
+        other_gpu.gdi_name = Some("\\\\.\\DISPLAY3".into());
+        let mut second = target(5, 2, true, 1920);
+        second.gdi_name = Some("\\\\.\\DISPLAY2".into());
+        let (b, _) = setup(DisplayBackendKind::PulsarIdd, vec![target(5, 1, true, 0), second, other_gpu]);
+        let idd = Arc::new(GpuIdd(Mutex::new(vec![])));
+        let b = b.with_idd(idd.clone());
+        b.set_session_has_display(false);
+        let devs = b.enumerate().unwrap();
+        let prefs = SeatDisplayPrefs { hdr: vec![devs[1].key.clone()], vrr: vec![devs[1].key.clone(), devs[2].key.clone()], ..Default::default() };
+        b.configure_seat(s(2), &prefs);
+        let out = b.bind_seat(s(2), &[devs[1].key.clone(), devs[2].key.clone()]).unwrap();
+        assert_eq!((out.outputs[0].hdr, out.outputs[0].vrr), (true, true));
+        assert_eq!((out.outputs[1].hdr, out.outputs[1].vrr), (false, true));
+        // Each virtual monitor names its own physical monitor's GPU (the client picks the
+        // adapter bound to it).
+        assert_eq!(lock(&idd.0).clone(), vec![(2, 0, 5, true), (2, 1, 6, false)]);
+        // Seat 1 never gets HDR / VRR through the presenter (Windows' own settings apply).
+        b.configure_seat(s(1), &SeatDisplayPrefs { hdr: vec![devs[0].key.clone()], vrr: vec![devs[0].key.clone()], ..Default::default() });
+        let one = b.bind_seat(s(1), &[devs[0].key.clone()]).unwrap();
+        assert!(!one.outputs[0].hdr && !one.outputs[0].vrr);
     }
 
     #[test]

@@ -1891,3 +1891,52 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   `.cargo/config.toml` (crt-static) and wdk-build fails with `StaticCrtNotEnabled`. Runtime
   behaviour stays HYPOTHESIS (list in the pads-pen entry above); new HYPOTHESIS: kiosk pen
   injection together with the per-seat kiosk user and the attributing hotkey guard.
+- 2026-11-17 (parity round, package display-gpu, branch worktree-wf_b025704c-d7f-4). Built,
+  unit-tested, nothing ran on hardware (every runtime claim below is HYPOTHESIS):
+  - **One IddCx adapter per render GPU** (seat-idd interface minor 3): adapters bind to a
+    render LUID, `GET_ADAPTER_INFO`, `STATUS_DEVICE_BUSY` for another GPU; the service
+    creates `SWD\PulsarSeatIdd\gpuN` software devnodes (`PulsarSeatIdd_Adapter`) and
+    routes each virtual monitor to its GPU's adapter (`seat_display::idd_adapters`,
+    `win::swdevice`, `win::idd::WinIdd`). The old "multi-GPU unsupported" warning is gone.
+  - **HDR / VRR for seats 2..N:** per-monitor `hdr` / `vrr` options (manager "Görüntü
+    çıkışları"); local IddCx role with IddCx 1.10 callbacks, FP16 / 10-bit frames +
+    HDR10 metadata; Display Core HDR10 scan-out (FP16 scRGB primaries, HDR10 wire
+    format) and tearing presents for VRR; flip chain VRR (tearing); SDR fallbacks
+    tone-mapped. HDCP documented as not available (troubleshooting, READMEs).
+  - **Per-seat GPU preference:** `local.gpu_preference` → seat user's
+    `UserGpuPreferences` at logon, journaled (`Change::UserGpuPreference`), undone on
+    disable / reset / uninstall; manager column "Ekran kartı tercihi".
+  - **EGFX:** AVC444 / AVC444v2 composed on the GPU (compute + pixel shaders; model
+    tested against IronRDP, HLSL tested on WARP), vendor async hardware H.264 MFT first
+    with fallback ladder (dev box has none: fallback path ran), latency percentiles.
+  - Gates: cargo test --workspace, clippy aarch64 + x86_64, manager test (201) / check /
+    build, bun test installer/scripts, build-drivers seat-idd ARM64 + x64 clean.
+    Shared target dir note: worktrees share artifact hashes in `target\wf` (cargo hashes
+    path deps relative to the workspace), so this round built with
+    `RUSTFLAGS=-C target-feature=+crt-static -C metadata=wfdisplaygpu` to keep its own
+    artifacts.
+  - Open (hardware): extra adapter devnodes start next to the root one; one render GPU
+    per IddCx adapter honoured; FP16 frames / HDR10 scan-out on real panels; VRR through
+    tearing presents on Display Core targets; NV12 slice copies for the AVC444 shaders
+    on x64 GPUs / Adreno; vendor async MFT behaviour (x64 GPUs).
+- 2026-11-17 (integrate display-gpu): merged branch worktree-wf_b025704c-d7f-4 (f74aa1a) into
+  main with a merge commit. Conflicts, all resolved keeping both sides:
+  `apps/manager/src/lib/components/BasicTab.svelte` (one import line: kiosk / pads-pen helpers
+  plus display-gpu's `setGpuPreference`), `apps/manager/src/lib/model.test.ts` (pads-pen's pad
+  ignore list suite and display-gpu's display / GPU options suite side by side),
+  `crates/seat-core/src/validate.rs` (kiosk's `is_app_user_model_id` and display-gpu's
+  `gpu_preference_checks`), `crates/seat-service/src/platform.rs` (mock platform keeps the
+  net-wfp `wfp` / `wfp_publisher` fakes and adds the `gpu_ranks` / `gpu_prefs` /
+  `gpu_pref_reverts` fields), `crates/seat-service/src/tests.rs` (net-wfp source-IP tests and
+  the GPU preference logon test), and the doc logs (status / journal keep both sides; the
+  display-gpu status entry is now a top-level bullet). All workspace `.rs` sources were
+  touched before the gate runs (shared target dir hazard noted in the display-gpu entry).
+  - Gates on main: cargo test --workspace 1725 passed / 6 ignored (1695 + 30 display-gpu
+    tests; the package's 1662 was measured against its own base), clippy -D warnings aarch64
+    host + x86_64-pc-windows-msvc clean, shim tests (1 + 7 + 3) + check x86_64 / i686 /
+    aarch64, manager 206 tests / check 0 errors / build, bun test installer/scripts 54,
+    build-drivers.ps1 -Projects seat-idd ARM64 + x64 Release + Debug clean (PE 0xAA64 /
+    0x8664, output target\wf\drivers-display). No test deleted. Runtime behaviour stays
+    HYPOTHESIS (list in the display-gpu entry above); new HYPOTHESIS: GPU preference writes at
+    logon together with the per-seat kiosk users (kiosk accounts get `UserGpuPreferences` in
+    their own hive).

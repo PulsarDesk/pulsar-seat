@@ -245,6 +245,22 @@ pub trait Platform: Send + Sync {
         let _ = (sid, console, terminal);
         Err("unsupported".into())
     }
+    /// The adapters Windows ranks as (high performance, minimum power), as LUIDs
+    /// (`IDXGIFactory6::EnumAdapterByGpuPreference`, spec 40 §6.4). Default: unknown.
+    fn gpu_ranks(&self) -> (Option<u64>, Option<u64>) {
+        (None, None)
+    }
+    /// Make user `sid`'s per-app GPU preferences (`UserGpuPreferences` in their hive)
+    /// match `apps` / `pref` (`None` = undo all of this user's), journaled
+    /// (`seat_compat::gpu_pref::sync_user`). Returns a one-line summary. Default: nothing.
+    fn sync_gpu_preference(&self, sid: &str, apps: &[String], pref: Option<u32>) -> Result<String, String> {
+        let _ = (sid, apps, pref);
+        Ok(String::new())
+    }
+    /// Undo every user's GPU preference values (product disabled). Default: nothing.
+    fn revert_gpu_preferences(&self) -> Result<usize, String> {
+        Ok(0)
+    }
 }
 
 /// Driver status of an installed driver from its version probe (`(major, minor, build)`
@@ -302,6 +318,8 @@ pub mod mock {
     /// Scriptable platform: sessions with users, processes that live until killed.
     /// `(DelegationConsole, DelegationTerminal)` of one user.
     pub type Delegation = (Option<String>, Option<String>);
+    /// One `sync_gpu_preference` call: (sid, apps, pref).
+    pub type GpuPrefCall = (String, Vec<String>, Option<u32>);
 
     #[derive(Default)]
     pub struct MockPlatform {
@@ -341,6 +359,11 @@ pub mod mock {
         /// Source-IP driver fake (seat-compat `wfp`); not loaded unless a test loads it.
         pub wfp: seat_compat::wfp::FakeWfp,
         pub wfp_publisher: seat_compat::wfp::Publisher,
+        /// `gpu_ranks` answer.
+        pub gpu_ranks: Mutex<(Option<u64>, Option<u64>)>,
+        /// `sync_gpu_preference` calls: (sid, apps, pref).
+        pub gpu_prefs: Mutex<Vec<GpuPrefCall>>,
+        pub gpu_pref_reverts: AtomicU32,
         next_pid: AtomicU32,
     }
 
@@ -498,5 +521,17 @@ pub mod mock {
             self.credprov.store(want, Ordering::SeqCst);
             Ok(want)
         }
+        fn gpu_ranks(&self) -> (Option<u64>, Option<u64>) {
+            *lock(&self.gpu_ranks)
+        }
+        fn sync_gpu_preference(&self, sid: &str, apps: &[String], pref: Option<u32>) -> Result<String, String> {
+            lock(&self.gpu_prefs).push((sid.to_string(), apps.to_vec(), pref));
+            Ok(format!("{} programs", apps.len()))
+        }
+        fn revert_gpu_preferences(&self) -> Result<usize, String> {
+            self.gpu_pref_reverts.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        }
+
     }
 }
