@@ -27,8 +27,11 @@ use windows_sys::Win32::System::Threading::{
 const CONTEXT_CONTROL: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_CONTROL_AMD64;
 #[cfg(target_arch = "x86")]
 const CONTEXT_CONTROL: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_CONTROL_X86;
+#[cfg(target_arch = "aarch64")]
+const CONTEXT_CONTROL: u32 = windows_sys::Win32::System::Diagnostics::Debug::CONTEXT_CONTROL_ARM64;
 
-/// Bytes after a function entry that a patch may overwrite (rel32 jump = 5, absolute = 14).
+/// Bytes after a function entry that a patch may overwrite (x86 / x64: rel32 jump = 5,
+/// absolute = 14; ARM64 Detours: three instructions = 12).
 const PATCH_WINDOW: usize = 16;
 const MAX_THREADS: usize = 4096;
 
@@ -58,6 +61,8 @@ fn ip(h: HANDLE) -> Option<usize> {
     return Some(c.Rip as usize);
     #[cfg(target_arch = "x86")]
     return Some(c.Eip as usize);
+    #[cfg(target_arch = "aarch64")]
+    return Some(c.Pc as usize);
 }
 
 /// Suspends every other thread of this process. `None` if a thread executes in

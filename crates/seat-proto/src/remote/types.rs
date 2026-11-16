@@ -214,7 +214,8 @@ pub struct IsolationStatus {
     pub health: Vec<serde_json::Value>,
     /// Installed module copies (`path (version)`).
     pub modules: Vec<String>,
-    /// The shim module exists for this host architecture (x64 / x86 only, spec 50 §14).
+    /// The shim module exists for this host architecture (`shim\x64\` or, since
+    /// parity-arm64, `shim\arm64\` next to the service).
     pub supported: bool,
 }
 

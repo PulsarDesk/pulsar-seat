@@ -1725,3 +1725,36 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     (faf13c7). Manager: remote seat rows and seat page say "Başlatılamaz: eşzamanlı oturum
     yok" up front when the chosen or running session backend has no concurrent sessions
     (a06d140).
+- 2026-11-17 (parity-arm64): **ARM64 gaps closed in code.** (a) **Native ARM64 shim
+  module**: hook backend split into `shim/module/src/rt/backend.rs` (`retour` on x86 / x64
+  unchanged; Microsoft Detours on `aarch64-pc-windows-msvc`, vendored subset of commit
+  `1dbd4ea2` in `shim/third_party/detours` (MIT), SHA-256 checked and built by
+  `shim/module/build.rs`); `threads.rs` reads the ARM64 `Pc`; launcher / plan know
+  `shim\arm64\` (`Arch::Arm64` launcher, `native_launcher`, `system32_module`; ARM64 targets
+  are delegated, no more `arm64_unsupported`); the service and the kiosk shell call the
+  launcher of their own architecture; the x64 launcher on an ARM64 PC adds no AppHelp layer
+  (the System32 copy there is ARM64); shimctl `install --arm64` + PE machine check. ARM64
+  MSI: WiX `shim\arm64\` (module, launcher, shimctl) + `shim\x64\` (emulated apps, no
+  shimctl) + `shim\x86\`; `build-installer.ps1` builds all three; `check-payload.ts`
+  machine rules per package; CI job `shim-arm64` (windows-11-arm). (b) **Credential
+  provider ARM64X**: `BuildAsX` in the ARM64 configuration with an ARM64EC half;
+  `build-credprov.ps1` checks the CHPE metadata (`Test-Hybrid`) and runs the self-test as
+  ARM64 + ARM64EC; `-NoArm64X` for toolchains without ARM64EC; `check-payload.ts`
+  `not_arm64x` (error with `--release`). (c) **VDD on ARM64 stays opt-in** (decision with
+  facts in architecture.md §8; test `vdd_default_is_x64_only`). Manager: two Turkish shim
+  strings no longer say ARM64 is unsupported.
+  - Verified on the ARM64 dev box: real Detours hook of `ntdll!NtCreateFile` in the test
+    process (native) and retour under x64 emulation; launcher hand-offs arm64 / x64 / x86 from
+    a scratch layout (module loaded, init ran, hooks off in the console); credprov Release +
+    Debug ARM64X (`dumpbin`: "(ARM64X)"), self-tests ARM64 / ARM64EC / x64 "0 failed";
+    `check-payload --arch arm64` on the real binaries: only the expected `unsigned_system_dll`
+    with `--release`; `PulsarSeat.wxs` compiles with candle 3.14 for arm64 and x64 (only the
+    old CNDL1150 warning).
+  - HYPOTHESIS (not run): every hook inside a seat on ARM64; x64 / ARM64EC / x86 apps under
+    emulation with their modules; AppHelp with the ARM64 System32 copy (and an x64 process
+    skipping it); an emulated x64 CredUI host loading the ARM64EC half; the VS 18 ARM64EC
+    component ids in `ci.yml`; the `shim-arm64` CI job on windows-11-arm. No MSI was built
+    in this round.
+  - Gates: cargo 1634 passed / 6 ignored (was 1629), clippy aarch64 + x86_64 clean, shim
+    11 tests (was 10) + clippy aarch64 / x86_64 + check i686, manager 199 / check / build,
+    installer scripts 54. No test deleted.

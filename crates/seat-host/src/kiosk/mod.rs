@@ -133,9 +133,12 @@ pub fn parse_args(args: &[String]) -> Option<Result<ShellArgs, String>> {
     })())
 }
 
-/// Shim launcher of the per-process module, relative to the install folder (x64 MSI only;
-/// the ARM64 MSI carries no shim, so kiosk isolation is off there).
-pub const SHIM_LAUNCHER: &str = r"shim\x64\pulsar-split-launch.exe";
+/// Shim launcher of the per-process module, relative to the install folder: the one of this
+/// build's architecture (`shim\x64\` in the x64 MSI, `shim\arm64\` in the ARM64 MSI,
+/// parity-arm64); it hands apps of other architectures to its siblings.
+pub fn shim_launcher_rel() -> std::path::PathBuf {
+    seat_shim_core::launch::native_launcher(seat_shim_core::launch::Arch::current())
+}
 
 /// What the shell does with a suspended app after `pulsar-split-launch --attach <pid>`
 /// (round 4, kiosk-isolation; HYPOTHESIS: never run on hardware).

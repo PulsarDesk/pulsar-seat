@@ -15,6 +15,12 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 seat-shim-core.workspace = true
 
+[build-dependencies]
+# Only used when the target is aarch64-pc-windows-msvc: SHA-256 check and C++ build of the
+# vendored Microsoft Detours (MIT, ../third_party/detours). MIT / Apache-2.0.
+cc = "1.2"
+sha2 = "0.11"
+
 [target.'cfg(windows)'.dependencies]
 tracelogging = "1.2"
 windows-sys = { version = "0.61", features = [
@@ -42,3 +48,5 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(all(windows, any(target_arch = "x86", target_arch = "x86_64")))'.dependencies]
 # BSD-2-Clause (notice in shim/README.md). Stable API (RawDetour), no nightly features.
 retour = "=0.4.0-alpha.4"
+# Native ARM64: Microsoft Detours (MIT), vendored and compiled by build.rs, called over FFI
+# (src/rt/backend.rs). No Rust crate dependency.

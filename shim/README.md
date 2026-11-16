@@ -4,14 +4,16 @@ Phase 4 isolation layer (spec `spec/remote/50-shim-isolation.md`, contract
 `docs/split/agents/contracts.md` §4). Processes in seat session N should behave as if seat N
 were the only interactive session; the console must not see seat-owned input.
 
-This directory is a **separate Cargo workspace** (not a root member), Windows **x64 + x86
-only**. ARM64 hosts are out of scope (spec 50 §14). All decisions live in the root crate
-`crates/seat-shim-core` (pure, unit-tested); this workspace is the thin Windows glue.
+This directory is a **separate Cargo workspace** (not a root member), Windows **x64, x86
+and native ARM64** (ARM64 since parity-arm64, 2026-11-17; spec 50 §14 had left ARM64 out).
+All decisions live in the root crate `crates/seat-shim-core` (pure, unit-tested); this
+workspace is the thin Windows glue.
 
 | Crate | Output | What |
 | --- | --- | --- |
 | `module/` | `PulsarSplitShim.dll` | the injected module: detours, health frame, fault guard |
-| `launcher/` | `pulsar-split-launch.exe` (x64), same source built for x86 and shipped as `pulsar-split-launch32.exe` | start a process suspended, load the module, run its init, resume |
+| `launcher/` | `pulsar-split-launch.exe` (x64, ARM64), same source built for x86 and shipped as `pulsar-split-launch32.exe` | start a process suspended, load the module, run its init, resume |
+| `third_party/detours/` | (static lib, ARM64 only) | Microsoft Detours, MIT, vendored subset pinned by SHA-256 (README there) |
 | `shimctl/` | `pulsar-split-shimctl.exe` | operator tool: status / install / uninstall / kill switch / DXVK |
 
 ## Mechanism (decision record, contracts §4.1)
@@ -45,6 +47,41 @@ The module installs **no hooks** in session 0, in our own binaries (under
 `%ProgramFiles%\Pulsar Split\`), in safe mode, or when `HKLM\SOFTWARE\PulsarSplit\Shim`
 `ShimDisabled` = 1 (kill switch; settable offline from WinRE with `reg load`). Console
 processes get only the HID rule, and only while a running seat asks for HID isolation.
+
+## Hook backends and architectures (parity-arm64, 2026-11-17)
+
+`module/src/rt/backend.rs` is the one place that writes code: `Prepared::new(target,
+detour)` allocates the trampoline (no thread suspended), the caller publishes the
+trampoline, `Prepared::enable` writes the jump with the other threads frozen
+(`rt/threads.rs`, which reads `Rip` / `Eip` / `Pc`). Backends:
+
+| Build | Backend | Jump |
+| --- | --- | --- |
+| x86, x64 | `retour` 0.4.0-alpha.4 (`RawDetour`) | rel32 / absolute, ≤ 14 bytes |
+| ARM64 (`aarch64-pc-windows-msvc`) | Microsoft Detours (vendored, `build.rs`: SHA-256 check + MSVC C++ build, `/W4 /WX`, static CRT, CFG) | 3 instructions, 12 bytes |
+
+Package layout and who loads what:
+
+| PC | Package folders | Native ARM64 app | x64 app | x86 app |
+| --- | --- | --- | --- | --- |
+| x64 | `shim\x64\` (+ shimctl), `shim\x86\` | n/a | x64 module | x86 module (launcher hand-off) |
+| ARM64 | `shim\arm64\` (+ shimctl), `shim\x64\`, `shim\x86\` | ARM64 module | x64 module under emulation (HYPOTHESIS) | x86 module under WOW64 emulation (HYPOTHESIS) |
+
+The service and the kiosk shell call the launcher of their own architecture
+(`seat_shim_core::launch::native_launcher`: `shim\arm64\pulsar-split-launch.exe` in the
+ARM64 MSI); it hands targets of another architecture to the sibling launcher. AppHelp on an
+ARM64 PC: the `System32` copy is the ARM64 build (`launch::system32_module`; shimctl
+`install --arm64 <dll>` and checks the PE machine), `SysWOW64` the x86 build. **x64 apps on
+ARM64 get no AppHelp shim**: an x64 process cannot load the ARM64 `System32` copy, so the x64
+launcher there never adds our layer and injects its own x64 module (launcher path only).
+HYPOTHESIS: the shim engine of an x64 process that matches our database skips the
+unloadable module without harm.
+
+ARM64EC (HYPOTHESIS, not run): an ARM64EC app's image carries the x64 machine, so the
+launcher treats it as x64 and injects the x64 module; the loader runs x64 DLLs in ARM64EC
+processes. Exports of the system DLLs there are x64-callable thunks ("fast-forward
+sequences"), so retour patches x64 code as on x64 Windows. Not verified: a hook on such a
+thunk also catching the app's own ARM64EC callers that bypass the thunk.
 
 ## What the module does (spec 50 §4–§8)
 
@@ -98,11 +135,11 @@ map cannot tell their processes apart. Instead (`seat_shim_core::kiosk`):
 | HID groups | kiosk K: its own kiosk devices and unowned ViGEm pads only; console devices, other seats' devices, remote session devices and seat pads denied. Console: kiosk devices denied while a kiosk seat of its session wants HID isolation. With kiosk seats running, enumeration also filters keyboard / mouse class interfaces (`GUID_DEVINTERFACE_KEYBOARD` / `_MOUSE`). |
 | Raw-input data (`rt/raw.rs`) | `GetRawInputData`: a denied device's header / input fails with `ERROR_INVALID_HANDLE`. `GetRawInputBuffer` (64-bit processes only): denied records removed in place (`filter::compact_raw_records`, layout checked first; a buffer that does not parse is passed on unchanged). Records without a device (injected input) pass. |
 
-**No ARM64 module:** native ARM64 targets start without it (`arm64_unsupported`); this
-round decided against an ARM64 inline-hooking backend. x64 apps under emulation on an
-ARM64 PC would take the x64 module (HYPOTHESIS; the ARM64 MSI ships no shim today).
-32-bit apps keep `GetRawInputBuffer` unfiltered (WOW64 layout). HYPOTHESIS: nothing here
-ran on hardware.
+**ARM64 (parity-arm64):** native ARM64 kiosk apps take the ARM64 module (Detours); the
+kiosk shell calls `shim\arm64\pulsar-split-launch.exe --attach`, which hands x64 / x86 apps
+to their launchers. `GetRawInputBuffer` filtering covers ARM64 too (64-bit `RAWINPUT`
+layout, same as x64). 32-bit apps keep `GetRawInputBuffer` unfiltered (WOW64 layout).
+HYPOTHESIS: no hook ran in a seat on hardware.
 
 ## DXVK (opt-in per game, spec 50 §10.2)
 
@@ -137,8 +174,10 @@ cd shim
 cargo check --target x86_64-pc-windows-msvc --all-targets
 cargo check --target i686-pc-windows-msvc --all-targets
 cargo clippy --target x86_64-pc-windows-msvc --all-targets
-cargo test                                   # host (ARM64: pure filters + shimctl parsing)
-cargo test --target x86_64-pc-windows-msvc   # runs under x64 emulation on ARM64
+cargo clippy --target aarch64-pc-windows-msvc --all-targets   # needs MSVC (Detours C++)
+cargo test                                   # host; on ARM64 includes the real Detours hook test
+cargo test --target x86_64-pc-windows-msvc   # runs under x64 emulation on ARM64 (retour hook test)
+cargo build --release --target aarch64-pc-windows-msvc
 cargo build --release --target x86_64-pc-windows-msvc
 cargo build --release --target i686-pc-windows-msvc
 ```
@@ -152,12 +191,23 @@ Operator use (elevated prompt for changes):
 ```
 pulsar-split-shimctl status
 pulsar-split-shimctl install --x64 <x64\PulsarSplitShim.dll> --x86 <x86\PulsarSplitShim.dll> --target explorer.exe --target steam.exe=Steam
+pulsar-split-shimctl install --arm64 <arm64\PulsarSplitShim.dll> --x86 <x86\PulsarSplitShim.dll> --target explorer.exe   # ARM64 PC
 pulsar-split-shimctl kill-switch on
 pulsar-split-shimctl uninstall          # mapped modules: renamed + deleted at next reboot
 pulsar-split-shimctl restore            # replay %ProgramData%\Pulsar Seat\shim\journal\shim.jsonl
 ```
 
 ## Verified on the dev box (Windows 11 ARM64, no elevation, no system change)
+
+- 2026-11-17 (parity-arm64): ARM64 release module links (machine 0xAA64, exports
+  `GetHookAPIs`, `NotifyShims`, `PulsarSplitInit`, imports OS DLLs only). Test
+  `rt::backend::tests::backend_hooks_ntcreatefile_in_this_process` hooks the test process's
+  own `ntdll!NtCreateFile` with Detours (natively) and retour (x64 under emulation) with the
+  other threads frozen, and a file open goes through the detour. Launcher matrix from a
+  scratch layout (`shim\{arm64,x64,x86}`), `--wait`, console session, empty map: ARM64
+  launcher on an ARM64 target, ARM64 launcher handing an x64 target to `x64\`, x64
+  launcher handing an ARM64 target to `arm64\`, ARM64 launcher handing an x86 target to
+  `x86\`: module loaded, init ran (`shim_inactive`: no hooks in the console), child exit 0.
 
 - Both module builds link; exports `GetHookAPIs`, `NotifyShims`, `PulsarSplitInit` are
   undecorated in the x86 build too; imports are OS DLLs only.
@@ -192,11 +242,19 @@ pulsar-split-shimctl restore            # replay %ProgramData%\Pulsar Seat\shim\
 - Kiosk seats (round 4): `--attach` on a suspended process, the kiosk map read in kiosk
   apps, raw-input data / buffer filtering, keyboard / mouse class enumeration, the x64
   module in x64 apps under emulation on ARM64.
+- ARM64 (parity-arm64): any hook in a running seat, Detours on every other hooked export
+  (only `NtCreateFile` ran), deferred hooks from the DLL notification on ARM64, the
+  AppHelp path with the ARM64 `System32` copy, x64 / ARM64EC apps under emulation with the
+  x64 module, the x86 module under WOW64 on ARM64, the fault handler on ARM64.
 - WNF focus payload layout (`HYPOTHESIS`: target PID first); the filter is off everywhere
   until a build is verified.
 
 ## Third-party notices
 
+- Microsoft Detours (MIT, <https://github.com/microsoft/Detours>, commit `1dbd4ea2`),
+  vendored subset in `third_party/detours/` (ARM64 build only). Copyright (c) Microsoft
+  Corporation; the MIT notice ships in the installer's licence notices.
+- `cc`, `sha2` (build-time only, MIT/Apache-2.0).
 - `retour` 0.4.0-alpha.4 (BSD-2-Clause, <https://github.com/Hpmason/retour-rs>), with
   `iced-x86` (MIT). Copyright (C) 2017 Elliott Linder; minhook-rs parts (C) 2015 Jascha
   Neutelings. Redistribution in binary form must reproduce the copyright notice, the list

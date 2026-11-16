@@ -30,7 +30,16 @@ fn wide_path(p: &Path) -> Vec<u16> {
 }
 
 fn own_arch() -> Arch {
-    if cfg!(target_pointer_width = "64") { Arch::X64 } else { Arch::X86 }
+    Arch::current()
+}
+
+/// The PC is ARM64 (also true for this x64 / x86 launcher running under emulation there).
+fn native_is_arm64() -> bool {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
+    let (mut process, mut native) = (0u16, 0u16);
+    // SAFETY: pseudo handle of this process, valid out pointers.
+    let ok = unsafe { IsWow64Process2(GetCurrentProcess(), &mut process, &mut native) } != 0;
+    ok && native == seat_shim_core::launch::IMAGE_FILE_MACHINE_ARM64
 }
 
 /// Resolves a bare exe name through `PATH` (with `.exe` appended when missing).
@@ -145,9 +154,14 @@ fn attach(pid: u32, a: &LaunchArgs) -> i32 {
     }
 }
 
-/// The system-directory copy AppHelp loads for a process of our bitness
-/// (`System32` for x64, `SysWOW64` for x86 under WOW64).
+/// The system-directory copy AppHelp loads for a process of our architecture (`System32`
+/// for the native 64-bit build, `SysWOW64` for x86 under WOW64). On an ARM64 PC the
+/// `System32` copy is the ARM64 build, which an x64 process cannot load: the x64 launcher
+/// there gets no copy (and its children no layer); it injects its own x64 module instead.
 fn system_module_copy() -> Option<PathBuf> {
+    if own_arch() == Arch::X64 && native_is_arm64() {
+        return None;
+    }
     use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetSystemWow64DirectoryW};
     let mut buf = vec![0u16; 520];
     // SAFETY: buffer valid for its length.

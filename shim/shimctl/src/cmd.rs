@@ -9,8 +9,10 @@ pub const USAGE: &str = "\
 usage: pulsar-split-shimctl <command>
 
   status [--json]                          shim database, modules, kill switch, foreign shim
-  install --x64 <dll> [--x86 <dll>] --target <exe|path>[=<product>]...
+  install --x64|--arm64 <dll> [--x86 <dll>] --target <exe|path>[=<product>]...
                                            copy modules, build + register our AppHelp database
+                                           (--arm64 on ARM64 PCs: the System32 copy is the
+                                           native ARM64 build)
   rebuild [--target ...]                   rebuild when target version strings changed
   uninstall                                unregister database, remove modules (reboot if in use)
   kill-switch on|off                       Shim\\ShimDisabled (modules install no hooks)
@@ -24,6 +26,7 @@ usage: pulsar-split-shimctl <command>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
     Status { json: bool },
+    /// `x64` = the module copied to System32 (`--x64`, or `--arm64` on ARM64 PCs).
     Install { x64: PathBuf, x86: Option<PathBuf>, targets: Vec<ShimTarget> },
     Rebuild { targets: Vec<ShimTarget> },
     Uninstall,
@@ -63,7 +66,12 @@ fn targets_and_modules(args: &[String]) -> Result<ModulesAndTargets, String> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--x64" => x64 = Some(PathBuf::from(value(args, &mut i, "--x64")?)),
+            flag @ ("--x64" | "--arm64") => {
+                if x64.is_some() {
+                    return Err("give one System32 module: --x64 or --arm64".into());
+                }
+                x64 = Some(PathBuf::from(value(args, &mut i, flag)?));
+            }
             "--x86" => x86 = Some(PathBuf::from(value(args, &mut i, "--x86")?)),
             "--target" => targets.push(parse_target(value(args, &mut i, "--target")?)?),
             other => return Err(format!("unknown argument {other}")),
@@ -83,7 +91,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         },
         Some("install") => {
             let (x64, x86, targets) = targets_and_modules(rest)?;
-            let x64 = x64.ok_or("install needs --x64 <dll>")?;
+            let x64 = x64.ok_or("install needs --x64 <dll> (or --arm64 <dll> on ARM64 PCs)")?;
             if targets.is_empty() {
                 return Err("install needs at least one --target".into());
             }
@@ -183,6 +191,15 @@ mod tests {
         }
         assert!(p(&["install", "--target", "x.exe"]).is_err());
         assert!(p(&["install", "--x64", "a.dll"]).is_err());
+        match p(&["install", "--arm64", "a.dll", "--x86", "b.dll", "--target", "explorer.exe"]).unwrap() {
+            Cmd::Install { x64, x86, .. } => {
+                assert_eq!(x64, PathBuf::from("a.dll"));
+                assert_eq!(x86, Some(PathBuf::from("b.dll")));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(p(&["install", "--x64", "a.dll", "--arm64", "b.dll", "--target", "explorer.exe"]).is_err());
+        assert!(p(&["rebuild", "--arm64", "a"]).is_err());
         assert!(p(&["install", "--x64"]).is_err());
         assert_eq!(p(&["kill-switch", "on"]).unwrap(), Cmd::KillSwitch(true));
         assert!(p(&["kill-switch", "maybe"]).is_err());

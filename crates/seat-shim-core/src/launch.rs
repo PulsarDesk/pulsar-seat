@@ -4,11 +4,14 @@
 //! Windows command-line quoting.
 //!
 //! Install layout (installer package):
-//! `<install>\shim\x64\{pulsar-split-launch.exe, PulsarSplitShim.dll}` and
-//! `<install>\shim\x86\{pulsar-split-launch32.exe, PulsarSplitShim.dll}`.
-//! There is **no ARM64 module** (round 4 decision: no ARM64 inline-hooking backend). Native
-//! ARM64 targets start without the module; x64 (and ARM64EC) targets would take the x64
-//! module under emulation (HYPOTHESIS, never run on an ARM64 PC).
+//! `<install>\shim\x64\{pulsar-split-launch.exe, PulsarSplitShim.dll}`,
+//! `<install>\shim\x86\{pulsar-split-launch32.exe, PulsarSplitShim.dll}` (both packages) and,
+//! in the ARM64 package, `<install>\shim\arm64\{pulsar-split-launch.exe, PulsarSplitShim.dll}`
+//! (native ARM64 module, Microsoft Detours backend, parity-arm64 2026-11-17). The service
+//! always calls the launcher of its own architecture ([`native_launcher`]); a target of
+//! another architecture is handed to the sibling launcher. x64 (and ARM64EC) targets on an
+//! ARM64 PC take the x64 module under emulation (HYPOTHESIS, never run on an ARM64 PC with a
+//! seat).
 
 use crate::dxvk::Bitness;
 use crate::error::ShimError;
@@ -16,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 pub const LAUNCHER_X64: &str = "pulsar-split-launch.exe";
 pub const LAUNCHER_X86: &str = "pulsar-split-launch32.exe";
+pub const LAUNCHER_ARM64: &str = "pulsar-split-launch.exe";
 
 pub const IMAGE_FILE_MACHINE_I386: u16 = 0x014c;
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
@@ -41,8 +45,7 @@ pub fn bitness_of_machine(m: u16) -> Option<Bitness> {
     }
 }
 
-/// Process architecture of a launcher or target image. `Arm64` is detected only so that
-/// such targets start without the module (there is no ARM64 module build).
+/// Process architecture of a launcher or target image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arch {
     X86,
@@ -51,15 +54,46 @@ pub enum Arch {
 }
 
 impl Arch {
-    /// Install sub-folder under `<install>\shim\` and launcher file name; `None` for ARM64
-    /// (no module build).
-    pub fn launcher_path(self) -> Option<(&'static str, &'static str)> {
-        match self {
-            Self::X86 => Some(("x86", LAUNCHER_X86)),
-            Self::X64 => Some(("x64", LAUNCHER_X64)),
-            Self::Arm64 => None,
+    /// Architecture of this build (x86 / x64 / native ARM64; ARM64EC builds count as x64).
+    pub const fn current() -> Self {
+        if cfg!(target_arch = "aarch64") {
+            Self::Arm64
+        } else if cfg!(target_pointer_width = "64") {
+            Self::X64
+        } else {
+            Self::X86
         }
     }
+
+    /// Install sub-folder under `<install>\shim\`.
+    pub const fn folder(self) -> &'static str {
+        self.launcher_path().0
+    }
+
+    /// Install sub-folder under `<install>\shim\` and launcher file name.
+    pub const fn launcher_path(self) -> (&'static str, &'static str) {
+        match self {
+            Self::X86 => ("x86", LAUNCHER_X86),
+            Self::X64 => ("x64", LAUNCHER_X64),
+            Self::Arm64 => ("arm64", LAUNCHER_ARM64),
+        }
+    }
+}
+
+/// Launcher the service / kiosk shell of architecture `own` calls, relative to the install
+/// folder: `shim\<own>\<launcher>` (x64 MSI: `shim\x64\pulsar-split-launch.exe`, ARM64 MSI:
+/// `shim\arm64\pulsar-split-launch.exe`).
+pub fn native_launcher(own: Arch) -> PathBuf {
+    let (folder, name) = own.launcher_path();
+    Path::new("shim").join(folder).join(name)
+}
+
+/// Module copied to `System32` for AppHelp on a PC whose native architecture is `native`,
+/// relative to the install folder: the native 64-bit build (`shim\x64\` on x64 PCs,
+/// `shim\arm64\` on ARM64 PCs). The x86 build always goes to `SysWOW64`.
+pub fn system32_module(native: Arch) -> PathBuf {
+    let folder = if matches!(native, Arch::Arm64) { "arm64" } else { "x64" };
+    Path::new("shim").join(folder).join(crate::MODULE_X64)
 }
 
 /// Architecture of a process started from an image with this COFF machine. ARM64EC images
@@ -162,13 +196,14 @@ pub enum LaunchPlan {
     InjectHere { module: PathBuf },
     /// The target has the other bitness: re-run the matching launcher with the same args.
     Delegate { launcher: PathBuf },
-    /// Unknown machine, native ARM64 target or `--no-inject`: start without the module.
+    /// Unknown machine or `--no-inject`: start without the module.
     NoInject { reason: &'static str },
 }
 
 /// `own` = architecture of the running launcher; `target` = machine of the target image.
-/// A target of the other bitness is handed to the sibling launcher (`..\x86\` /
-/// `..\x64\`); a native ARM64 target starts without the module (`arm64_unsupported`).
+/// A target of another architecture is handed to the sibling launcher (`..\x86\`,
+/// `..\x64\`, `..\arm64\`; when the sibling cannot be started the launcher starts the target
+/// without the module, `shim_blocked`).
 pub fn plan_launch(own: Arch, target_machine: Option<u16>, launcher_dir: &Path, a: &LaunchArgs) -> LaunchPlan {
     if a.no_inject {
         return LaunchPlan::NoInject { reason: "no_inject" };
@@ -176,9 +211,7 @@ pub fn plan_launch(own: Arch, target_machine: Option<u16>, launcher_dir: &Path, 
     let Some(target) = target_machine.and_then(arch_of_machine) else {
         return LaunchPlan::NoInject { reason: "unsupported_machine" };
     };
-    let Some((folder, launcher)) = target.launcher_path() else {
-        return LaunchPlan::NoInject { reason: "arm64_unsupported" };
-    };
+    let (folder, launcher) = target.launcher_path();
     if target != own {
         let sibling = launcher_dir.parent().unwrap_or(launcher_dir);
         return LaunchPlan::Delegate { launcher: sibling.join(folder).join(launcher) };
@@ -314,18 +347,45 @@ mod tests {
             plan_launch(Arch::X64, Some(0x14c), dir, &a),
             LaunchPlan::Delegate { launcher: PathBuf::from(r"C:\PF\Pulsar Split\shim\x86\pulsar-split-launch32.exe") }
         );
-        // Round 4: no ARM64 module; native ARM64 targets start without it.
+        // parity-arm64: native ARM64 targets go to the ARM64 launcher, and back.
         assert_eq!(
             plan_launch(Arch::X64, Some(IMAGE_FILE_MACHINE_ARM64), dir, &a),
-            LaunchPlan::NoInject { reason: "arm64_unsupported" }
+            LaunchPlan::Delegate { launcher: PathBuf::from(r"C:\PF\Pulsar Split\shim\arm64\pulsar-split-launch.exe") }
+        );
+        let arm = Path::new(r"C:\PF\Pulsar Split\shim\arm64");
+        assert_eq!(
+            plan_launch(Arch::Arm64, Some(IMAGE_FILE_MACHINE_ARM64), arm, &a),
+            LaunchPlan::InjectHere { module: arm.join("PulsarSplitShim.dll") }
+        );
+        assert_eq!(
+            plan_launch(Arch::Arm64, Some(0x8664), arm, &a),
+            LaunchPlan::Delegate { launcher: PathBuf::from(r"C:\PF\Pulsar Split\shim\x64\pulsar-split-launch.exe") }
+        );
+        assert_eq!(
+            plan_launch(Arch::Arm64, Some(0x14c), arm, &a),
+            LaunchPlan::Delegate { launcher: PathBuf::from(r"C:\PF\Pulsar Split\shim\x86\pulsar-split-launch32.exe") }
         );
         assert_eq!(plan_launch(Arch::X86, Some(0x1c4), dir, &a), LaunchPlan::NoInject { reason: "unsupported_machine" });
         let n = parse_launch_args(&s(&["--no-inject", "--", "g.exe"])).unwrap();
         assert_eq!(plan_launch(Arch::X64, Some(0x8664), dir, &n), LaunchPlan::NoInject { reason: "no_inject" });
         assert_eq!(arch_of_machine(IMAGE_FILE_MACHINE_I386), Some(Arch::X86));
         assert_eq!(arch_of_machine(IMAGE_FILE_MACHINE_ARM64), Some(Arch::Arm64));
-        assert_eq!(Arch::Arm64.launcher_path(), None);
-        assert_eq!(Arch::X86.launcher_path(), Some(("x86", LAUNCHER_X86)));
+        assert_eq!(Arch::Arm64.launcher_path(), ("arm64", LAUNCHER_ARM64));
+        assert_eq!(Arch::X86.launcher_path(), ("x86", LAUNCHER_X86));
+        assert_eq!(Arch::Arm64.folder(), "arm64");
+    }
+
+    #[test]
+    fn native_paths() {
+        assert_eq!(native_launcher(Arch::X64), PathBuf::from(r"shim\x64\pulsar-split-launch.exe"));
+        assert_eq!(native_launcher(Arch::Arm64), PathBuf::from(r"shim\arm64\pulsar-split-launch.exe"));
+        assert_eq!(system32_module(Arch::Arm64), PathBuf::from(r"shim\arm64\PulsarSplitShim.dll"));
+        assert_eq!(system32_module(Arch::X64), PathBuf::from(r"shim\x64\PulsarSplitShim.dll"));
+        if cfg!(target_arch = "aarch64") {
+            assert_eq!(Arch::current(), Arch::Arm64);
+        } else {
+            assert_ne!(Arch::current(), Arch::Arm64);
+        }
     }
 
     #[test]

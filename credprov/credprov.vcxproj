@@ -21,6 +21,14 @@
       <Configuration>Release</Configuration>
       <Platform>ARM64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64EC">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64EC</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64EC">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64EC</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{5B1E7C3A-2D4F-4A86-9C0B-7E3F1A2D6C58}</ProjectGuid>
@@ -37,6 +45,10 @@
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
     <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
     <SpectreMitigation>Spectre</SpectreMitigation>
+    <!-- ARM64 builds an ARM64X DLL: the ARM64 half for native LogonUI, the ARM64EC half for
+         x64 processes under emulation (CredUI hosts) that enumerate providers. The ARM64EC
+         configuration only exists as the other half of that link. -->
+    <BuildAsX Condition="'$(Platform)'=='ARM64'">true</BuildAsX>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup>

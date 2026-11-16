@@ -16,6 +16,31 @@ fn clock() -> String {
     now_rfc3339()
 }
 
+/// Machine of the System32 module: this shimctl's own build (the ARM64 MSI ships the ARM64
+/// shimctl, the x64 MSI the x64 one, and each MSI refuses the other PC architecture).
+fn native_machine() -> u16 {
+    match seat_shim_core::launch::Arch::current() {
+        seat_shim_core::launch::Arch::Arm64 => seat_shim_core::launch::IMAGE_FILE_MACHINE_ARM64,
+        _ => seat_shim_core::launch::IMAGE_FILE_MACHINE_AMD64,
+    }
+}
+
+/// A module of the wrong architecture in System32 / SysWOW64 would fail to load in every
+/// target: refuse it before anything is copied.
+fn check_machine(p: &std::path::Path, want: u16) -> Result<(), ShimError> {
+    use std::io::Read;
+    let mut head = vec![0u8; 4096];
+    let n = std::fs::File::open(p)
+        .and_then(|mut f| f.read(&mut head))
+        .map_err(|e| ShimError::InvalidValue(format!("module {}: {e}", p.display())))?;
+    head.truncate(n);
+    match seat_shim_core::launch::pe_machine(&head) {
+        Some(m) if m == want => Ok(()),
+        Some(m) => Err(ShimError::InvalidValue(format!("module {}: machine {m:#06x}, want {want:#06x}", p.display()))),
+        None => Err(ShimError::InvalidValue(format!("module {}: not a PE image", p.display()))),
+    }
+}
+
 /// Journal for read-only commands: never written, reads as empty.
 struct NoJournal;
 impl seat_shim_core::journal::RestoreLog for NoJournal {
@@ -62,6 +87,10 @@ pub fn run(c: Cmd) -> Result<String, ShimError> {
             Ok(out.trim_end().to_string())
         }
         Cmd::Install { x64, x86, targets } => {
+            check_machine(&x64, native_machine())?;
+            if let Some(m) = &x86 {
+                check_machine(m, seat_shim_core::launch::IMAGE_FILE_MACHINE_I386)?;
+            }
             inst.install(&targets, &ModulePaths { x64, x86 })?;
             Ok("installed; restart target processes (or sign out) so they load the module".into())
         }

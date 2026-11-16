@@ -67,8 +67,11 @@ pub const SHIM_DB_NAME: &str = "Pulsar Split Isolation";
 pub const SHIM_NAME: &str = "PulsarSplitIsolation";
 pub const LAYER_NAME: &str = "PulsarSplitIsolation";
 /// Module file name. Never a Windows-like name (spec 50 §2.5).
-pub const MODULE_X64: &str = "PulsarSplitShim.dll"; // System32 (x64)
+/// `MODULE_X64` is the name of the System32 copy: the x64 build on x64 PCs, the ARM64 build
+/// on ARM64 PCs (`launch::system32_module`).
+pub const MODULE_X64: &str = "PulsarSplitShim.dll"; // System32 (native 64-bit)
 pub const MODULE_X86: &str = "PulsarSplitShim.dll"; // SysWOW64 (x86)
+pub const MODULE_ARM64: &str = "PulsarSplitShim.dll"; // shim\arm64 (native ARM64, Detours)
 /// `ShimDisabled` (DWORD kill switch), `Verbosity` (DWORD 0–4), `MaskApps` (MULTI_SZ,
 /// lowercase full paths), `DisabledTargets` (MULTI_SZ, lowercase exe names, written by
 /// the crash guard), `WnfBuilds` (MULTI_SZ, Windows builds on which the focus WNF names

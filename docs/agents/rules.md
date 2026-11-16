@@ -51,8 +51,9 @@ remote). Since merge step 10 this file holds the union of Seat's rules and Pulsa
 
 - Every component (service, manager, drivers, installer) builds and runs natively on
   **ARM64 and x64**. No x64-only dependency without the maintainer's OK.
-- Accepted exception: the remote kind's per-process shim (`shim/`) is x64 / x86 only, so
-  per-process isolation of remote seats is off on ARM64; the ARM64 MSI carries no shim.
+- The per-process shim (`shim/`) builds for ARM64 too (Microsoft Detours backend, since
+  parity-arm64 2026-11-17): the ARM64 MSI ships `shim\arm64\` plus `shim\x64\` and
+  `shim\x86\` for emulated apps (the only non-native binaries besides the app API helpers).
   Third-party upstream installer stubs (for example usbip-win2's) may be x86.
 - Drivers use only frameworks available on ARM64 Windows (KMDF/UMDF, IddCx). Prefer UMDF
   and user-mode solutions where they are enough.

@@ -78,8 +78,11 @@ impl WinIsolation {
 
     fn modules(&self) -> ModulePaths {
         let x86 = self.install_dir.join(r"shim\x86").join(seat_shim_core::MODULE_X86);
+        // The service is native (ARM64 MSI: ARM64 service), so its own architecture is the
+        // PC's: the System32 copy is shim\arm64\ on ARM64 PCs, shim\x64\ on x64 PCs.
+        let native = seat_shim_core::launch::Arch::current();
         ModulePaths {
-            x64: self.install_dir.join(r"shim\x64").join(seat_shim_core::MODULE_X64),
+            x64: self.install_dir.join(seat_shim_core::launch::system32_module(native)),
             x86: x86.exists().then_some(x86),
         }
     }
@@ -146,7 +149,7 @@ impl IsolationPort for WinIsolation {
     fn install(&self) -> Result<(), ProtoError> {
         let m = self.modules();
         if !m.x64.exists() {
-            return Err(ProtoError::new(ErrorCode::Unsupported, "unsupported: the shim module is x64 / x86 only and not installed")
+            return Err(ProtoError::new(ErrorCode::Unsupported, "unsupported: the shim module for this PC architecture is not installed")
                 .with_reason("unsupported"));
         }
         let sys = seat_shim_core::win::WinShimSystem;
@@ -241,7 +244,9 @@ impl IsolationPort for WinIsolation {
     }
 
     fn launcher_path(&self) -> Option<PathBuf> {
-        let p = self.install_dir.join(r"shim\x64\pulsar-split-launch.exe");
+        // Launcher of the service's own architecture (shim\arm64\ in the ARM64 MSI); it hands
+        // targets of other architectures to its siblings.
+        let p = self.install_dir.join(seat_shim_core::launch::native_launcher(seat_shim_core::launch::Arch::current()));
         p.exists().then_some(p)
     }
 

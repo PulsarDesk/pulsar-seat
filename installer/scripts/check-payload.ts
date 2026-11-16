@@ -39,8 +39,13 @@
 //     still only as INF + CAT packages; their kernel drivers (*.sys) warn for review; an
 //     upstream installer `.exe` directly in `remote/drivers/<id>/` may be x86 (Inno Setup
 //     stubs are 32-bit on every arch); every other file there is native;
-//   - the per-process shim: `shim/x64/` must be x64, `shim/x86/` x86, and the ARM64 package
-//     carries no shim at all (shim/README.md: x64 / x86 only).
+//   - the per-process shim: `shim/x64/` must be x64, `shim/x86/` x86 (both packages) and
+//     `shim/arm64/` ARM64 (ARM64 package only; parity-arm64, Detours backend).
+//
+// ARM64 package: `pulsar-seat-credprov.dll` must be ARM64X (ARM64 machine + CHPE metadata),
+// so x64 processes under emulation that enumerate credential providers can load it
+// (`not_arm64x`; an error with `--release`, a warning otherwise: `-NoArm64ec` test builds
+// carry a plain ARM64 DLL).
 //
 // `--machine-only` checks just the PE machine (loose driver binaries in CI); the package
 // shape rules stay with the release gate.
@@ -208,8 +213,14 @@ export const APIHELPER_MACHINES: Record<string, number[]> = {
   arm64ec: [0x8664, 0xa641, 0xaa64],
 };
 
-/** Machines allowed in `shim/<folder>/` (x64 package only). */
-export const SHIM_MACHINES: Record<string, number[]> = { x64: [0x8664], x86: [0x014c] };
+/** Machines allowed in `shim/<folder>/` per package. */
+export const SHIM_MACHINES: Record<Arch, Record<string, number[]>> = {
+  x64: { x64: [0x8664], x86: [0x014c] },
+  arm64: { arm64: [0xaa64], x64: [0x8664], x86: [0x014c] },
+};
+
+/** DLLs the ARM64 package must ship as ARM64X (loaded by native and emulated x64 hosts). */
+export const MUST_BE_ARM64X = new Set(["pulsar-seat-credprov.dll"]);
 
 /**
  * `remote/drivers/<id>/<rest>` (the pinned third-party driver payload): `{ id, rest }`
@@ -229,11 +240,10 @@ export function remoteDriverFile(path: string): { id: string; rest: string } | n
 export function allowedMachines(path: string, arch: Arch): number[] | string {
   const parts = path.replace(/\\/g, "/").toLowerCase().split("/");
   const s = parts.indexOf("shim");
-  // shim/<x64|x86>/<file>
+  // shim/<arm64|x64|x86>/<file>
   if (s >= 0 && parts.length >= s + 3) {
-    if (arch !== "x64") return "the shim is x64 / x86 only and never ships in the ARM64 package";
-    const m = SHIM_MACHINES[parts[s + 1]];
-    return m ?? `unknown shim folder ${parts[s + 1]}`;
+    const m = SHIM_MACHINES[arch][parts[s + 1]];
+    return m ?? `shim folder ${parts[s + 1]} does not belong in the ${arch} package`;
   }
   // An upstream installer stub directly in remote/drivers/<id>/ (32-bit on every arch).
   const rd = remoteDriverFile(path);
@@ -303,6 +313,18 @@ export function hasHybridMetadata(b: Uint8Array): boolean | null {
   const lcSize = v.getUint32(lcOff, true);
   if (lcSize < 0xd0 || lcOff + 0xd0 > b.length) return false;
   return v.getBigUint64(lcOff + 0xc8, true) !== 0n;
+}
+
+/** ARM64 package: MUST_BE_ARM64X files carry the ARM64 machine and hybrid metadata. */
+export function checkArm64x(path: string, bytes: Uint8Array, release: boolean): Violation | null {
+  const m = peMachine(bytes.subarray(0, Math.min(bytes.length, 4096)));
+  if (m === 0xaa64 && hasHybridMetadata(bytes) === true) return null;
+  return {
+    path,
+    rule: "not_arm64x",
+    severity: release ? "error" : "warning",
+    detail: m === 0xaa64 ? "plain ARM64 image (no CHPE metadata): emulated x64 hosts cannot load it" : "not an ARM64 PE image",
+  };
 }
 
 /** `apihelper/arm64ec/` must hold real ARM64EC (or ARM64X) images, not plain x64 ones. */
@@ -499,6 +521,10 @@ export function checkDirs(dirs: string[], arch: Arch, opts: CheckOptions | boole
       if (o.blocklist && ext(f) === ".sys") {
         const b = checkBlocklist(`${d}/${f}`, readFileSync(join(d, f)), o.blocklist);
         if (b) all.push(b);
+      }
+      if (!v && !o.machineOnly && arch === "arm64" && MUST_BE_ARM64X.has((f.split("/").pop() ?? "").toLowerCase())) {
+        const x = checkArm64x(`${d}/${f}`, readFileSync(join(d, f)), o.release ?? false);
+        if (x) all.push(x);
       }
       if (o.release && MUST_BE_SIGNED.has((f.split("/").pop() ?? "").toLowerCase())) {
         const s = checkSigned(`${d}/${f}`, readFileSync(join(d, f)));

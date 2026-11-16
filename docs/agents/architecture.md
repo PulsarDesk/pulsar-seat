@@ -61,7 +61,7 @@ Remote seat kind (Pulsar Split, merged at steps 2-3 on 2026-11-14; design docs i
 | `crates/seat-audio` | lib | the one endpoint-discovery crate for both kinds (`cfgmgr`, endpoint-id model) + the remote kind's Remote Audio rules and stream-server keys (was `split-audio`) | step 8 (done 2026-11-14, §10.6) |
 | `crates/seat-stream`, `crates/seat-pads`, `crates/seat-shim-core`, `crates/seat-setup` | lib | stream backends, virtual pads, shim core, setup sub-commands (were `split-*`) | kept |
 | (removed) `apps/split-manager` | Tauri app `pulsar-split-manager` | remote seat manager | step 9 (done 2026-11-14): `apps/manager/src/lib/remote/` (§10.7) |
-| `shim/` | separate Cargo workspace, x64 + x86 only | per-process HID shim | kept |
+| `shim/` | separate Cargo workspace, x64 + x86 + ARM64 (Detours) | per-process HID shim | kept |
 | `drivers/split-idd`, `drivers/split-pad` | drivers | own IddCx display, own HID pad | round 4 (2026-11-14): `split-idd` merged into `drivers/seat-idd` (remote role); `split-pad` kept; both built by `build-drivers.ps1` for ARM64 + x64, unsigned, never loaded ([../../drivers/README.md](../../drivers/README.md)); the MSI ships no own driver |
 | (removed) `installer/split/` | packaging pieces | WiX fragment, NSIS hooks, dep pins, `fetch-deps.ts`, licences | step 10 (done 2026-11-14): one MSI; pins in `installer/remote/`, `installer/scripts/fetch-deps.ts`, licences in `installer/licenses/` ([../../installer/README.md](../../installer/README.md) "Remote seat kind") |
 | `spec/remote/` | analyst spec | remote kind ([../../spec/README.md](../../spec/README.md)); the local kind is `spec/local/` | — |
@@ -581,11 +581,11 @@ true multi-seat: one Windows user, profile and clipboard for every seat.
     dropped; while a kiosk seat runs, enumeration also looks at keyboard / mouse class
     interfaces (PS/2). Seat-1 console processes get the HID groups while a kiosk seat of
     their session wants HID isolation (kiosk devices denied to them).
-  - **Limits:** x86 / x64 processes only. There is **no ARM64 module** (decision of this
-    round: no ARM64 inline-hooking backend); native ARM64 apps start without it
-    (`arm64_unsupported`). The ARM64 MSI carries no shim, so on ARM64 PCs kiosk isolation
-    is off entirely; x64 apps under emulation on ARM64 would need the x64 module, which
-    only the x64 MSI ships (HYPOTHESIS that it would work under emulation). 32-bit apps:
+  - **Limits:** since parity-arm64 (2026-11-17) native ARM64 apps take the ARM64 module
+    (Microsoft Detours backend) and the ARM64 MSI ships `shim\arm64\`, `shim\x64\` and
+    `shim\x86\`; the shell calls its own architecture's launcher
+    (`seat_shim_core::launch::native_launcher`), which hands x64 / x86 apps to theirs (x64
+    and x86 modules under emulation on ARM64: HYPOTHESIS). 32-bit apps:
     `GetRawInputBuffer` is passed through (WOW64 buffer layout reported to differ, HYPOTHESIS). Seat-1 console apps still
     receive raw-input data of kiosk keyboards (only the HID groups apply to them). The
     launcher blocks the shell's UI thread while it attaches (≤ 15 s per remote thread).
@@ -1187,9 +1187,32 @@ stopping, error{reason}}`) and is served over the pipe; nothing in volatile regi
 - ARM64 PCs: one integrated GPU, I2C/SPI HID (no USB parent → ACPI location anchors), modern
   standby (test resume / display-on notifications), HVCI on by default — one more reason
   for user-mode defaults.
-- Credential provider (`credprov/`, 2026-11-13): one native DLL per installer architecture
-  (ARM64 LogonUI is native). No ARM64X: the provider refuses `CPUS_CREDUI`, so emulated x64
-  apps never need it (HYPOTHESIS: they skip the unloadable ARM64 DLL).
+- Credential provider (`credprov/`): x64 DLL in the x64 package, **ARM64X** DLL in the
+  ARM64 package (parity-arm64, 2026-11-17; `BuildAsX`, checked by `build-credprov.ps1` and
+  `check-payload.ts`): native LogonUI uses the ARM64 half, x64 processes under emulation
+  that enumerate providers (CredUI hosts) load the ARM64EC half, where the provider is inert
+  (not LogonUI, `CPUS_CREDUI` refused). HYPOTHESIS: never loaded by an emulated host here.
+- Per-process shim (`shim/`, parity-arm64): native ARM64 module with the vendored Microsoft
+  Detours backend (`shim/module/src/rt/backend.rs`, `shim/third_party/detours`, MIT, SHA-256
+  pinned in `build.rs`); x86 / x64 keep `retour`. The ARM64 MSI ships `shim\arm64\` (module,
+  launcher the service calls, shimctl), `shim\x64\` (x64 apps under emulation) and
+  `shim\x86\`. AppHelp: the `System32` copy is the ARM64 build, `SysWOW64` the x86 one; x64
+  apps on ARM64 are covered by the launcher path only (an x64 process cannot load the ARM64
+  `System32` copy, so the x64 launcher there adds no AppHelp layer). Verified here: the real
+  Detours hook of `ntdll!NtCreateFile` in a test process and the launcher hand-offs
+  arm64 <-> x64 / x86 (console session, hooks off). HYPOTHESIS: every hook in a seat;
+  ARM64EC apps take the x64 module (their images carry the x64 machine).
+- **VDD on ARM64** (parity-arm64 decision, 2026-11-17): the ARM64 Virtual-Display-Driver
+  package stays **opt-in** (`default_selected: false` in `installer/remote/drivers.json`,
+  test `vdd_default_is_x64_only` in seat-setup). Facts behind it: (1) the package is signed
+  by SignPath Foundation, a public CA, not by the Microsoft hardware publisher; (2) upstream
+  states that ARM64 on 24H2+ may need test-signing (Split OQ 24); (3) our rules forbid
+  test-signing and require Memory Integrity + Secure Boot on; (4) a fresh install defaults
+  to `PULSARDRIVERS=none` on both arches anyway, and remote seats default to the RDP session
+  display, which needs no driver. x64 keeps VDD as the default selection. Flip the ARM64
+  flag only after the ARM64 laptop shows the package installing and the monitor arriving
+  with Memory Integrity and Secure Boot on (HYPOTHESIS until then: it would need
+  test-signing there). Operators can opt in with `PULSARDRIVERS=vdd`.
 
 ## 9. Build and verify
 
@@ -1202,7 +1225,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo check --workspace --target x86_64-pc-windows-msvc
 cargo build --release                             then check PE machine 0xAA64 / 0x8664
 bun test installer/scripts
-cd shim && cargo test --target x86_64-pc-windows-msvc   (x64 + x86 only; x64 emulation on ARM64)
+cd shim && cargo test && cargo test --target x86_64-pc-windows-msvc   (ARM64 natively with Detours; x64 under emulation)
 ```
 
 seat-service builds seat-session with `experimental-client-sku` (a default feature of
