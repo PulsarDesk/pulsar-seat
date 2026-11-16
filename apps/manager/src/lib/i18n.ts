@@ -1427,7 +1427,10 @@ export const rt = {
     noSeats: 'Henüz uzak koltuk yok',
     session: (id: number) => `Oturum ${id}`,
     streaming: 'yayında',
-    streamingTo: (client: string) => `yayında: ${client}`
+    streamingTo: (client: string) => `yayında: ${client}`,
+    sessionUnavailable: 'Başlatılamaz: eşzamanlı oturum yok',
+    sessionUnavailableHint:
+      'Uzak koltuklar aynı anda birden fazla Windows oturumu gerektirir. Bu bilgisayarda çalışan oturum yöntemi bunu sağlamıyor (örneğin Windows istemci sürümü ya da hızlı kullanıcı değiştirme). Koltuk başlatılamaz.'
   },
   dxvk: {
     title: 'DXVK oyunları',

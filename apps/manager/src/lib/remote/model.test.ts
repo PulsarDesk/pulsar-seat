@@ -13,6 +13,7 @@ import {
   mergeRemoteInto,
   remoteSeatsOf,
   remoteServiceStatus,
+  remoteSessionsUnavailable,
   remoteSettingsOf,
   remoteState,
   remoteUsers,
@@ -238,5 +239,17 @@ describe('remote edit errors', () => {
   it('warnings do not block; other errors keep their code as reason', () => {
     expect(issueError([{ severity: 'warning', code: 'session_unavailable', seat: 3 }])).toBeNull();
     expect(issueError([{ severity: 'error', code: 'seat_kind_mismatch', seat: 3 }])).toMatchObject({ code: 'invalid_value', reason: 'seat_kind_mismatch' });
+  });
+  it('remote sessions unavailable (session backend without concurrent sessions)', () => {
+    const c = demoConfig();
+    c.settings.backends.session = 'rds_loopback';
+    expect(remoteSessionsUnavailable(c, null)).toBe(false);
+    expect(remoteSessionsUnavailable(null, null)).toBe(false);
+    const st = (session: string) => ({ active: { session } }) as never;
+    expect(remoteSessionsUnavailable(c, st('termsrv_wrapper'))).toBe(false);
+    // Configured RDS but the service fell back (client edition): cannot start.
+    expect(remoteSessionsUnavailable(c, st('fast_user_switch'))).toBe(true);
+    c.settings.backends.session = 'desktops';
+    expect(remoteSessionsUnavailable(c, null)).toBe(true);
   });
 });

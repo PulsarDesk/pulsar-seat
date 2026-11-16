@@ -25,6 +25,7 @@
     applyRecord,
     remoteSeatsOf,
     remoteServiceStatus,
+    remoteSessionsUnavailable,
     remoteSettingsOf,
     remoteUsers,
     removeRemoteSeat,
@@ -87,6 +88,8 @@
   const passive = $derived(hostInfo?.coexistence?.mode === 'passive');
   const settings = $derived(store.saved ? remoteSettingsOf(store.saved) : null);
   const serviceStatus = $derived(remoteServiceStatus(store.status, store.saved, store.view, passive));
+  /** Remote seats cannot start here (`session_unavailable`): said on the rows up front. */
+  const noSessions = $derived(remoteSessionsUnavailable(store.saved, store.status));
 
   $effect(() => {
     if (selected !== null && store.saved && !seats.some((s) => s.number === selected)) selected = null;
@@ -218,7 +221,9 @@
                 <Avatar name={s.name} picture={rec?.user_name ? pictures[rec.user_name] : null} />
                 <span class="name">
                   {s.number}. {s.name}
-                  {#if st.session_id !== null || st.streaming}
+                  {#if noSessions && st.session_id === null}
+                    <small class="sub warn" title={t.nav.sessionUnavailableHint}>{t.nav.sessionUnavailable}</small>
+                  {:else if st.session_id !== null || st.streaming}
                     <small class="sub">
                       {#if st.session_id !== null}{t.nav.session(st.session_id)}{/if}
                       {#if st.streaming}· {st.stream_client ? t.nav.streamingTo(st.stream_client) : t.nav.streaming}{/if}
@@ -249,6 +254,9 @@
 
       <main>
         {#if banner}<p class="error banner" role="alert">{banner}</p>{/if}
+        {#if current && noSessions && currentStatus?.session_id === null}
+          <p class="hint banner" role="status">{t.nav.sessionUnavailableHint}</p>
+        {/if}
         {#if current && currentRecord}
           <SeatPage
             seat={currentRecord}
@@ -439,6 +447,10 @@
   .sub {
     color: var(--muted);
     font-size: 0.75rem;
+  }
+
+  .sub.warn {
+    color: var(--danger);
   }
 
   .dot {

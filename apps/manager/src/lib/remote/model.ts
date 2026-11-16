@@ -332,3 +332,13 @@ export function mergeRemoteInto(draft: Config, saved: Config): Config {
   out.revision = saved.revision;
   return normalize(out);
 }
+
+/** `true` when remote seats cannot start: the chosen or the running session backend (after a
+ *  fallback, e.g. a client edition) has no concurrent sessions (`seat_core::SessionBackendKind::hosts_remote_seats`; the service
+ *  answers `start_seats` with `session_unavailable`). Shown on the remote seat rows before
+ *  the user tries a start. */
+export function remoteSessionsUnavailable(config: Config | null, status: ServiceStatus | null): boolean {
+  const hosts = (k: string | undefined) => k === 'rds_loopback' || k === 'termsrv_wrapper';
+  if (config && !hosts(config.settings.backends.session)) return true;
+  return !!status && !hosts(status.active.session);
+}
