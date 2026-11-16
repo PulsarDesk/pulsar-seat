@@ -74,6 +74,9 @@ pub enum DecoderKind {
     None,
     /// GPU decode (Media Foundation with a D3D11 device manager).
     Hardware,
+    /// GPU decode by the GPU vendor's asynchronous hardware MFT (`MFT_ENUM_FLAG_HARDWARE |
+    /// MFT_ENUM_FLAG_ASYNCMFT`), with a D3D11 device manager. Added 2026-11-17.
+    HardwareVendor,
     /// CPU decode (Media Foundation software path).
     Software,
     /// Start failed: H.264 not advertised.
@@ -87,10 +90,16 @@ impl DecoderKind {
             Self::Hardware => 1,
             Self::Software => 2,
             Self::Unavailable => 3,
+            Self::HardwareVendor => 4,
         }
+    }
+    /// GPU decode (Microsoft's MFT or the vendor's).
+    pub fn is_hardware(self) -> bool {
+        matches!(self, Self::Hardware | Self::HardwareVendor)
     }
     fn from_u8(v: u8) -> Self {
         match v {
+            4 => Self::HardwareVendor,
             1 => Self::Hardware,
             2 => Self::Software,
             3 => Self::Unavailable,
@@ -101,6 +110,7 @@ impl DecoderKind {
         match self {
             Self::None => "none",
             Self::Hardware => "hardware",
+            Self::HardwareVendor => "hardware_vendor",
             Self::Software => "software",
             Self::Unavailable => "unavailable",
         }
@@ -188,6 +198,16 @@ pub struct GfxMetrics {
     acks_forced: AtomicU64,
     /// GPU-path damage that a protocol reset could not repair (feeds the resync).
     gpu_damage: AtomicU64,
+    /// Latency hooks (added 2026-11-17): H.264 decode per access unit, and the oldest
+    /// change of a present (PDU painted) to that present.
+    latency: std::sync::Mutex<GfxLatency>,
+}
+
+/// Rolling latency samples of the graphics pipeline.
+#[derive(Debug, Default)]
+struct GfxLatency {
+    decode: seat_core::latency::LatencyStats,
+    frame_to_present: seat_core::latency::LatencyStats,
 }
 
 /// A copy of [`GfxMetrics`] at one moment (`SessionEvent::Graphics`).
@@ -235,6 +255,11 @@ pub struct GfxStats {
     /// hold limits.
     pub acks_held: u64,
     pub acks_forced: u64,
+    /// H.264 decode latency per access unit (p50 / p95 / p99 / max).
+    pub decode_latency: seat_core::latency::LatencySummary,
+    /// Oldest change of a present to the present (graphics PDU painted to frame handed to
+    /// the presenter).
+    pub frame_latency: seat_core::latency::LatencySummary,
 }
 
 impl GfxStats {
@@ -250,7 +275,7 @@ impl GfxStats {
             "bitmap"
         };
         format!(
-            "gfx {codec} v{:#x} decoder={} frames={} h264={} errors={} pic_dropped={} dropped={} resyncs={} fallbacks={} decode_avg={}us max={}us presents={} coalesced={} gap_max={}us gpu={} gpu_surfaces={} gpu_frames={} gpu_skipped={} promotions={} demotions={} present_skipped={} acks_held={} acks_forced={}",
+            "gfx {codec} v{:#x} decoder={} frames={} h264={} errors={} pic_dropped={} dropped={} resyncs={} fallbacks={} decode_avg={}us max={}us presents={} coalesced={} gap_max={}us gpu={} gpu_surfaces={} gpu_frames={} gpu_skipped={} promotions={} demotions={} present_skipped={} acks_held={} acks_forced={} decode_latency[{}] frame_latency[{}]",
             self.version,
             self.decoder.as_str(),
             self.frames,
@@ -273,7 +298,9 @@ impl GfxStats {
             self.gpu_demotions,
             self.presents_skipped,
             self.acks_held,
-            self.acks_forced
+            self.acks_forced,
+            self.decode_latency,
+            self.frame_latency
         )
     }
 }
@@ -284,6 +311,11 @@ impl GfxMetrics {
     }
     pub fn snapshot(&self) -> GfxStats {
         let n = self.h264_decodes.load(Ordering::Relaxed);
+        // One lock for both summaries (two guards in one expression would deadlock).
+        let (decode_latency, frame_latency) = {
+            let l = self.lat();
+            (l.decode.summary(), l.frame_to_present.summary())
+        };
         GfxStats {
             active: self.active.load(Ordering::Relaxed),
             version: self.version.load(Ordering::Relaxed),
@@ -313,7 +345,16 @@ impl GfxMetrics {
             presents_skipped: self.presents_skipped.load(Ordering::Relaxed),
             acks_held: self.acks_held.load(Ordering::Relaxed),
             acks_forced: self.acks_forced.load(Ordering::Relaxed),
+            decode_latency,
+            frame_latency,
         }
+    }
+    fn lat(&self) -> std::sync::MutexGuard<'_, GfxLatency> {
+        self.latency.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// Latency hook: the oldest change a present showed arrived `waited` before it.
+    pub fn record_frame_latency(&self, waited: std::time::Duration) {
+        self.lat().frame_to_present.record(waited);
     }
     /// Completed EGFX frames so far (the session presents on frame boundaries).
     pub fn frames(&self) -> u64 {
@@ -390,7 +431,11 @@ impl GfxMetrics {
         }
         self.decode_us_total.fetch_add(us, Ordering::Relaxed);
         self.decode_us_max.fetch_max(us, Ordering::Relaxed);
+        if ok {
+            self.lat().decode.record(std::time::Duration::from_micros(us));
+        }
     }
+
     /// One present; `gap_us` = how long the oldest changed area waited for it.
     pub fn record_present(&self, gap_us: Option<u64>) {
         self.presents.fetch_add(1, Ordering::Relaxed);

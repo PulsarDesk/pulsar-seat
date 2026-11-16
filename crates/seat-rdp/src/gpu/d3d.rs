@@ -20,13 +20,14 @@
 //! keyed-mutex sharing between two devices on one adapter works on the target drivers
 //! (x64 GPUs, Adreno on ARM64); colour matches the CPU path closely enough.
 
-use super::{GpuCompositor, GpuError, GpuResult, Rect, SharedTexture};
+use super::avc444::{Avc444Shaders, ViewKind, ViewTex, Yuv444Tex};
+use super::{Avc444Update, GpuCompositor, GpuError, GpuResult, Rect, SharedTexture};
 use crate::h264::mf::{Mft, video_device};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, RECT};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIDevice, IDXGIKeyedMutex, IDXGIResource1};
 use windows::Win32::Media::MediaFoundation::IMFDXGIBuffer;
 use windows::core::{Interface, PCWSTR};
@@ -76,10 +77,17 @@ struct Surf {
     vp: Option<Vp>,
     ring: Vec<Shared>,
     mft: Mft,
+    /// AVC444 (added 2026-11-17): the surface's YUV 4:4:4 picture and the shader-readable
+    /// copy of the last decoded view.
+    yuv444: Option<Yuv444Tex>,
+    view: Option<ViewTex>,
 }
 
 pub struct D3dCompositor {
     surfaces: HashMap<u16, Surf>,
+    /// AVC444 shaders (`None`: compile failed or feature level below 11.0; AVC444 stays on
+    /// the CPU path).
+    avc444: Option<Avc444Shaders>,
     next_generation: u64,
     luid: u64,
     vctx: ID3D11VideoContext,
@@ -117,7 +125,14 @@ impl D3dCompositor {
             (ctx, vdev, vctx)
         };
         drop(Mft::start_gpu(&device).map_err(|e| werr("hardware H.264 decoder", e))?);
-        Ok(Self { surfaces: HashMap::new(), next_generation: 1, luid, vctx, vdev, ctx, device })
+        let avc444 = match Avc444Shaders::new(&device) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("seat-rdp: AVC444 stays on the CPU path ({e})");
+                None
+            }
+        };
+        Ok(Self { surfaces: HashMap::new(), avc444, next_generation: 1, luid, vctx, vdev, ctx, device })
     }
 
     fn lost(&self) -> bool {
@@ -230,7 +245,7 @@ impl GpuCompositor for D3dCompositor {
             // SAFETY: clear through a live view.
             unsafe { self.ctx.ClearRenderTargetView(&rtv, &[0.0, 0.0, 0.0, 1.0]) };
         }
-        self.surfaces.insert(id, Surf { tex, width: w, height: h, vp: None, ring: Vec::new(), mft });
+        self.surfaces.insert(id, Surf { tex, width: w, height: h, vp: None, ring: Vec::new(), mft, yuv444: None, view: None });
         Ok(())
     }
 
@@ -304,10 +319,72 @@ impl GpuCompositor for D3dCompositor {
     fn reset(&mut self) {
         self.surfaces.clear();
     }
+
+    fn supports_avc444(&self) -> bool {
+        self.avc444.is_some()
+    }
+
+    fn avc444(&mut self, id: u16, update: &Avc444Update<'_>, paint: bool) -> GpuResult<()> {
+        let mut s = self.surfaces.remove(&id).ok_or_else(|| GpuError::msg("no GPU surface"))?;
+        let r = self.avc444_on(&mut s, update, paint);
+        self.surfaces.insert(id, s);
+        r
+    }
 }
 
 impl D3dCompositor {
-    fn avc420_on(&self, s: &mut Surf, h264: &[u8], regions: &[Rect], paint: bool) -> GpuResult<()> {
+    /// The decoder's picture texture and its array slice.
+    fn picture(&self, sample: &windows::Win32::Media::MediaFoundation::IMFSample) -> GpuResult<(ID3D11Texture2D, u32)> {
+        // SAFETY: COM calls on the decoder's sample.
+        unsafe {
+            let buf = sample.GetBufferByIndex(0).map_err(|e| self.fail("sample buffer", e))?;
+            let dxgi: IMFDXGIBuffer = buf.cast().map_err(|e| self.fail("IMFDXGIBuffer", e))?;
+            let mut raw = std::ptr::null_mut();
+            dxgi.GetResource(&ID3D11Texture2D::IID, &mut raw).map_err(|e| self.fail("decoded texture", e))?;
+            let pic = ID3D11Texture2D::from_raw(raw);
+            let slice = dxgi.GetSubresourceIndex().map_err(|e| self.fail("subresource", e))?;
+            Ok((pic, slice))
+        }
+    }
+
+    /// AVC444: decode each view, copy it into the shader-readable NV12 texture, merge it
+    /// into the 4:4:4 picture, then (when painting) convert the update's rectangles into
+    /// the surface texture (see `gpu::avc444`).
+    fn avc444_on(&self, s: &mut Surf, update: &Avc444Update<'_>, paint: bool) -> GpuResult<()> {
+        let shaders = self.avc444.as_ref().ok_or_else(|| GpuError::msg("AVC444 shaders unavailable"))?;
+        if s.yuv444.is_none() {
+            s.yuv444 = Some(Yuv444Tex::new(&self.device, s.width, s.height)?);
+        }
+        let aux_kind = if update.v2 { ViewKind::AuxV2 } else { ViewKind::AuxV1 };
+        for (part, kind) in [(update.main, ViewKind::Main), (update.aux, aux_kind)] {
+            let Some((au, rects)) = part else { continue };
+            let sample = match s.mft.decode_gpu(au) {
+                Ok(x) => x,
+                Err(e) => return Err(GpuError { message: format!("H.264 decode: {e}"), device_lost: s.mft.device_lost() }),
+            };
+            let (pic, slice) = self.picture(&sample)?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            // SAFETY: COM call on the live texture.
+            unsafe { pic.GetDesc(&mut desc) };
+            if desc.Format != DXGI_FORMAT_NV12 {
+                return Err(GpuError::msg("AVC444 needs NV12 pictures"));
+            }
+            if s.view.as_ref().is_none_or(|v| v.size() != (desc.Width, desc.Height)) {
+                s.view = Some(ViewTex::new(&self.device, desc.Width, desc.Height, None)?);
+            }
+            let (Some(view), Some(yuv)) = (s.view.as_ref(), s.yuv444.as_ref()) else { continue };
+            // SAFETY: same format and size; whole subresource copy.
+            unsafe { self.ctx.CopySubresourceRegion(view.texture(), 0, 0, 0, 0, &pic, slice, None) };
+            shaders.apply(&self.ctx, yuv, view, s.mft.picture_size(), kind, rects);
+        }
+        if paint && let Some(yuv) = s.yuv444.as_ref() {
+            shaders.convert(&self.device, &self.ctx, yuv, &s.tex, &update.rects())?;
+        }
+        Ok(())
+    }
+
+    fn avc420_on(
+&self, s: &mut Surf, h264: &[u8], regions: &[Rect], paint: bool) -> GpuResult<()> {
         let sample = match s.mft.decode_gpu(h264) {
             Ok(x) => x,
             Err(e) => return Err(GpuError { message: format!("H.264 decode: {e}"), device_lost: s.mft.device_lost() }),
