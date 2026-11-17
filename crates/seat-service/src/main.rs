@@ -31,6 +31,7 @@ mod eventid;
 mod events;
 mod host_account;
 mod guest_link;
+mod vm_guest_rq;
 mod images;
 mod inventory;
 mod listener;
@@ -110,6 +111,7 @@ fn main() {
         Command::RemoteSetup(cmd) => remote::win::setup_cmd::run(cmd),
         Command::Preflight => win::setup::preflight(),
         Command::VmGuest => win::vm_guest::run(),
+        Command::VmGuestMode { width, height, hz, out } => win::vm_guest::mode_helper(width, height, hz, &out),
         Command::Install { exe, args } => {
             let exe = exe.or_else(|| std::env::current_exe().ok()).unwrap_or_default();
             win::setup::install(&exe, &runtime::program_data(), &args)

@@ -17,14 +17,14 @@ use crate::{COLOR_DEPTH, VERSION, put_wide};
 use seat_proto::wrds::{HARDWARE_ID, LISTENER_NAME, PROVIDER_CLSID_PARTS};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_ACCESSDENIED, E_INVALIDARG, E_NOTIMPL, E_POINTER, E_UNEXPECTED,
+    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_ACCESSDENIED, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, E_UNEXPECTED,
     ERROR_INSUFFICIENT_BUFFER, HANDLE_PTR, S_FALSE,
 };
 use windows::Win32::System::Com::{IClassFactory, IClassFactory_Impl};
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
+use windows::Win32::System::Memory::{LMEM_FIXED, LocalAlloc};
 use windows::Win32::System::RemoteDesktop::*;
 use windows::Win32::System::SystemInformation::{ComputerNameNetBIOS, GetComputerNameExW};
 use windows_core::{BOOL, GUID, HRESULT, IUnknown, IUnknownImpl, Interface, PCSTR, PCWSTR, PWSTR, Ref, implement};
@@ -52,8 +52,8 @@ pub(crate) struct Shared {
     pub wake: Condvar,
     listener_cb: Mutex<Option<Agile<IWRdsProtocolListenerCallback>>>,
     conn_cbs: Mutex<HashMap<u64, Agile<IWRdsProtocolConnectionCallback>>>,
-    pub stop: AtomicBool,
-    started: AtomicBool,
+    /// Pipe thread start / stop (`state::PipeGate`).
+    pub gate: crate::state::PipeGate,
     computer: String,
 }
 
@@ -66,8 +66,7 @@ pub(crate) fn shared() -> &'static Arc<Shared> {
             wake: Condvar::new(),
             listener_cb: Mutex::new(None),
             conn_cbs: Mutex::new(HashMap::new()),
-            stop: AtomicBool::new(false),
-            started: AtomicBool::new(false),
+            gate: crate::state::PipeGate::default(),
             computer: computer_name(),
         })
     })
@@ -91,13 +90,21 @@ impl Shared {
     }
 
     fn start_pipe(self: &Arc<Self>) {
-        if self.started.swap(true, Ordering::SeqCst) {
+        if !self.gate.request_start() {
             return;
         }
-        self.stop.store(false, Ordering::SeqCst);
         let me = self.clone();
-        if std::thread::Builder::new().name("pulsar-seat-wrds-pipe".into()).spawn(move || crate::pipe::run(me)).is_err() {
-            self.started.store(false, Ordering::SeqCst);
+        let spawned = std::thread::Builder::new().name("pulsar-seat-wrds-pipe".into()).spawn(move || {
+            // A start that came in while this thread was leaving keeps it running.
+            loop {
+                crate::pipe::run(me.clone());
+                if !me.gate.thread_ended() {
+                    break;
+                }
+            }
+        });
+        if spawned.is_err() {
+            self.gate.spawn_failed();
             trace("cannot start the pipe thread");
         }
     }
@@ -215,7 +222,7 @@ impl IWRdsProtocolManager_Impl for Manager_Impl {
     fn Uninitialize(&self) -> windows_core::Result<()> {
         let s = shared();
         s.set_listener(None);
-        s.stop.store(true, Ordering::SeqCst);
+        s.gate.request_stop();
         s.wake.notify_all();
         Ok(())
     }
@@ -431,8 +438,9 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn CreateVirtualChannel(&self, _name: &PCSTR, _static: BOOL, _priority: u32) -> windows_core::Result<usize> {
-        // No virtual channels on this protocol (audio, clipboard and devices reach the seat
-        // through the stream server).
+        // No virtual channels on this protocol: sound comes from the session's audio
+        // endpoint (`WTS_QUERY_AUDIOENUM_DLL` below) captured by the stream server; input and
+        // pads reach the seat through the stream server too.
         Err(E_NOTIMPL.into())
     }
 
@@ -454,6 +462,27 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
             unsafe {
                 out.write(v(info.width));
                 out.add(1).write(v(info.height));
+            }
+            return Ok(());
+        }
+        if *query == WTS_QUERY_AUDIOENUM_DLL {
+            // The session's sound endpoint (review 2026-11-17): the RDP audio endpoint
+            // enumerator, which the stream server captures. HYPOTHESIS: TermService frees the
+            // string with LocalFree (LocalAlloc'd here, like the other WTS strings).
+            if n_out < 1 || out.is_null() {
+                return Err(E_INVALIDARG.into());
+            }
+            let info = lock(&shared().core).client_info(self.id).ok_or(windows_core::Error::from(E_UNEXPECTED))?;
+            let Some(dll) = crate::state::audio_enum_dll(&info) else { return Err(E_NOTIMPL.into()) };
+            let w: Vec<u16> = dll.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes = w.len() * 2;
+            let mem = unsafe { LocalAlloc(LMEM_FIXED, bytes) }.map_err(|_| windows_core::Error::from(E_OUTOFMEMORY))?;
+            unsafe {
+                std::ptr::copy_nonoverlapping(w.as_ptr(), mem.0.cast::<u16>(), w.len());
+                out.write(WTS_PROPERTY_VALUE {
+                    Type: WTS_VALUE_TYPE_STRING as u16,
+                    u: WTS_PROPERTY_VALUE_0 { strVal: WTS_PROPERTY_VALUE_0_0 { size: (w.len() - 1) as u32, pstrVal: PWSTR(mem.0.cast()) } },
+                });
             }
             return Ok(());
         }

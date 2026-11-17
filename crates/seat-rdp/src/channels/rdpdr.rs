@@ -735,7 +735,10 @@ impl SeatRdpdr {
         if link.send(&broker::Frame::Irp(irp.clone())).is_err() {
             return Ok(broker::failure_completion(&irp).into_iter().map(SvcMessage::from).collect());
         }
-        let ev = link.wait_for(broker::IRP_WAIT, |e| matches!(e, BrokerEvent::Pdu(p) if broker::completion_ids(p).map(|x| x.1) == cid));
+        // A directory watch or a waiting lock stays pending in the broker: do not stall the
+        // channel for it; the ticker (`poll`) delivers its completion later.
+        let wait = if broker::completes_later(&irp) { Duration::ZERO } else { broker::IRP_WAIT };
+        let ev = link.wait_for(wait, |e| matches!(e, BrokerEvent::Pdu(p) if broker::completion_ids(p).map(|x| x.1) == cid));
         self.take_broker_events(ev);
         Ok(std::mem::take(&mut self.out))
     }

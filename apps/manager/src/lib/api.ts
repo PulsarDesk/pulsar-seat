@@ -27,6 +27,8 @@ import type {
   TermServiceRestart,
   Issue,
   LocalUser,
+  HelpLink,
+  PathKind,
   Panel,
   RequestBody,
   ResponseBody,
@@ -60,6 +62,8 @@ export interface LocalApi {
   pickProgram(): Promise<PickedProgram | null>;
   /** System folder dialog: every program of the folder (`[]` = cancelled / none). */
   pickProgramFolder(): Promise<PickedProgram[]>;
+  /** System file / folder dialog for a setting's path (VM seats); `null` = cancelled. */
+  pickPath(kind: PathKind): Promise<string | null>;
   /** User pictures of one category folder (spec 10 §3.1). */
   userPictures(category: string): Promise<UserPicture[]>;
   /** One top-most wizard page per monitor (spec 10 §9.2); returns how many opened. */
@@ -148,6 +152,7 @@ export interface Api extends LocalApi {
   /** Remote seat requests (protocol 3, admin only). */
   remote: RemoteApi;
   openPanel(panel: Panel): Promise<void>;
+  openHelp(link: HelpLink): Promise<void>;
   restartElevated(): Promise<void>;
   setTrayVisible(visible: boolean): Promise<void>;
   quit(): Promise<void>;
@@ -170,7 +175,7 @@ export function expectBody<K extends ResponseBody['type']>(r: ResponseBody, type
 /** Build the request-level API on top of one transport function. */
 export function createRequestApi(
   call: (body: RequestBody) => Promise<ResponseBody>
-): Omit<Api, keyof LocalApi | 'hello' | 'appInfo' | 'openPanel' | 'restartElevated' | 'setTrayVisible' | 'quit' | 'onEvent' | 'onLink' | 'onTray' | 'onHidden'> {
+): Omit<Api, keyof LocalApi | 'hello' | 'appInfo' | 'openPanel' | 'openHelp' | 'restartElevated' | 'setTrayVisible' | 'quit' | 'onEvent' | 'onLink' | 'onTray' | 'onHidden'> {
   const ack = async (body: RequestBody) => {
     await call(body);
   };
@@ -233,6 +238,7 @@ export async function createTauriApi(): Promise<Api> {
     hello: () => invoke<HelloReply>('service_hello'),
     appInfo: () => invoke<AppInfo>('app_info'),
     openPanel: (panel) => invoke<void>('open_system_panel', { panel }),
+    openHelp: (link) => invoke<void>('open_help_link', { link }),
     restartElevated: () => invoke<void>('restart_elevated'),
     setTrayVisible: (visible) => invoke<void>('set_tray_visible', { visible }),
     quit: () => invoke<void>('quit_app'),
@@ -240,6 +246,7 @@ export async function createTauriApi(): Promise<Api> {
     lanAddresses: () => invoke<string[]>('lan_addresses'),
     pickProgram: () => invoke<PickedProgram | null>('pick_program'),
     pickProgramFolder: () => invoke<PickedProgram[]>('pick_program_folder'),
+    pickPath: (kind) => invoke<string | null>('pick_path', { kind }),
     userPictures: (category) => invoke<UserPicture[]>('list_user_pictures', { category }),
     openWizardPages: (pages) => invoke<number>('wizard_pages_open', { pages }),
     closeWizardPages: () => invoke<void>('wizard_pages_close'),

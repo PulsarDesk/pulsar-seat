@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Hyper-V VM seats in the service (hyperv-seats 2026-11-17; spec/remote 10 Â§8, 90 Â§2.4;
+//! Hyper-V VM seats in the service (hyperv-seats 2026-11-17; spec/remote 10 §8, 90 §2.4;
 //! architecture.md "Hyper-V VM seats").
 //!
 //! A VM seat is a remote seat with `remote.vm` set. The remote seat worker never sees it
@@ -39,6 +39,14 @@ use std::sync::{Mutex, MutexGuard};
 
 /// Poll interval of the VM states while a VM seat is active.
 pub const VM_POLL_MS: u64 = 2_000;
+/// Host-side stream app list of a VM seat (JSON array, `vm_seat_dir`).
+const APPS_FILE: &str = "apps.json";
+/// Marker of a pending identity reset (`vm_seat_dir`).
+const REGENERATE_FLAG: &str = "regenerate-identity";
+/// How long a forwarded seat page request waits for the guest's reply.
+pub const GUEST_REQUEST_MS: u64 = 15_000;
+/// How long a forwarded pairing PIN may take (the client finishes the pairing meanwhile).
+pub const GUEST_PAIR_MS: u64 = 120_000;
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> ProtoError {
     ProtoError::new(code, msg)
@@ -56,6 +64,12 @@ struct Active {
     user: String,
     gpu: bool,
     stopping: bool,
+    /// Ensure / Start-VM still running: a poll must not take the VM's "off" for a
+    /// finished stop (review 2026-11-17).
+    starting: bool,
+    /// Service clock when Start-VM returned. A poll whose status read began before this
+    /// may still show the VM off.
+    start_done_ms: u64,
 }
 
 #[derive(Default)]
@@ -372,13 +386,31 @@ impl Service {
         let vm_id = facts.vms.iter().find(|v| v.seat_id == spec.seat_id).map(|v| v.vm_id.clone()).unwrap_or_default();
         let config = self.guest_config(&seat, &spec, user.clone(), password, share_password);
         self.platform.guest_link_offer(&vm_id, Some(config));
-        self.vm.lock().active.insert(n, Active { seat_id: spec.seat_id.clone(), vm_id: vm_id.clone(), user, gpu: spec.gpu.is_on(), stopping: false });
+        self.vm.lock().active.insert(
+            n,
+            Active {
+                seat_id: spec.seat_id.clone(),
+                vm_id: vm_id.clone(),
+                user,
+                gpu: spec.gpu.is_on(),
+                stopping: false,
+                starting: true,
+                start_done_ms: 0,
+            },
+        );
         if let Err(e) = self.vm_run(&VmOp::Start { seat_id: spec.seat_id.clone() }, None) {
             self.vm.lock().active.remove(&n);
             self.platform.guest_link_offer(&vm_id, None);
             self.set_vm_rt(n, SeatState::Error { reason: FailureReason::Internal, detail: e.message.clone() }, Vec::new());
             return Err(e);
         }
+        let done = self.now();
+        if let Some(a) = self.vm.lock().active.get_mut(&n) {
+            a.starting = false;
+            a.start_done_ms = done;
+        }
+        // The guest got the identity reset with this config.
+        let _ = std::fs::remove_file(self.vm_seat_dir(&spec.seat_id).join(REGENERATE_FLAG));
         log::info(&format!("vm seat {n} starting"));
         self.vm_poll_now();
         Ok(())
@@ -411,10 +443,114 @@ impl Service {
                 .zip(v.shared_folders.iter())
                 .map(|(s, f)| GuestShare { unc: format!(r"\\{gw}\{}", s.name), guest_path: f.guest_path.clone(), read_only: f.read_only })
                 .collect(),
-            share_user: hv::SHARE_ACCOUNT.into(),
+            share_user: hv::share_account(&r.id),
             share_password,
             apps: r.apps.clone(),
+            stream_apps: self.vm_stream_apps(&r.id),
+            connect_password: self.secrets.get_remote(&r.id, seat_core::store::RemoteSecretSlot::ConnectPassword).ok().flatten(),
+            regenerate_identity: self.vm_seat_dir(&r.id).join(REGENERATE_FLAG).exists(),
+            start_nonce: self.platform.random_token().map(|t| t.expose().to_string()).unwrap_or_default(),
         }
+    }
+
+    /// Host-side files of a VM seat (`<data>\vm-seats\<seat id>`): the stream app list and
+    /// the pending identity reset. The guest gets them with its config.
+    fn vm_seat_dir(&self, seat_id: &str) -> std::path::PathBuf {
+        // Seat ids are GUIDs; anything else never names a folder.
+        let safe: String = seat_id.chars().filter(|c| c.is_ascii_hexdigit() || *c == '-').collect();
+        self.data_dir.join("vm-seats").join(if safe.is_empty() { "_".into() } else { safe })
+    }
+
+    /// The VM seat's stream app list as last set (`None` = the stream server's defaults).
+    fn vm_stream_apps(&self, seat_id: &str) -> Option<Vec<serde_json::Value>> {
+        let b = std::fs::read(self.vm_seat_dir(seat_id).join(APPS_FILE)).ok()?;
+        serde_json::from_slice(&b).ok()
+    }
+
+    fn vm_seat_id(&self, n: SeatNumber) -> Result<String, ProtoError> {
+        self.lock()
+            .config
+            .seat(n)
+            .and_then(|s| s.remote.as_ref().map(|r| r.id.clone()))
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| err(ErrorCode::NotReady, "the seat has no id yet; save the config").with_reason("vm_not_assigned"))
+    }
+
+    /// `get_apps` on a VM seat: the list kept on the host, or the defaults.
+    pub(crate) fn vm_get_apps(&self, n: SeatNumber) -> Result<ResponseBody, ProtoError> {
+        let id = self.vm_seat_id(n)?;
+        let apps = match self.vm_stream_apps(&id) {
+            Some(a) => a,
+            None => seat_stream::apps::default_apps().iter().filter_map(|a| serde_json::to_value(a).ok()).collect(),
+        };
+        Ok(ResponseBody::Apps(apps))
+    }
+
+    /// `set_apps` on a VM seat: checked and kept on the host (the next config carries it),
+    /// handed to the running guest at once.
+    pub(crate) fn vm_set_apps(&self, n: SeatNumber, body: &seat_proto::RequestBody) -> Result<ResponseBody, ProtoError> {
+        let seat_proto::RequestBody::SetApps { apps, .. } = body else {
+            return Err(err(ErrorCode::Internal, "not set_apps"));
+        };
+        let entries: Vec<seat_stream::apps::AppEntry> = apps
+            .iter()
+            .cloned()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .map_err(|e| err(ErrorCode::InvalidValue, format!("bad app list: {e}")).with_field("apps").with_reason("bad_app_list"))?;
+        seat_stream::apps::validate_apps(&entries)
+            .map_err(|e| err(ErrorCode::InvalidValue, e.to_string()).with_field("apps").with_reason(e.code()))?;
+        let list: Vec<serde_json::Value> = entries.iter().filter_map(|a| serde_json::to_value(a).ok()).collect();
+        let id = self.vm_seat_id(n)?;
+        let dir = self.vm_seat_dir(&id);
+        std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::write(dir.join(APPS_FILE), serde_json::to_vec_pretty(&list).unwrap_or_default()))
+            .map_err(|e| err(ErrorCode::Os, format!("app list not stored: {e}")))?;
+        if let Some(Err(e)) = self.vm_guest_forward(n, body, GUEST_REQUEST_MS) {
+            log::warn(&format!("vm seat {n}: app list stored, guest not updated yet: {e}"));
+        }
+        Ok(ResponseBody::Apps(list))
+    }
+
+    /// `set_seat_connect_password` on a VM seat: kept in the host's secret store (the next
+    /// config carries it), handed to the running guest at once.
+    pub(crate) fn vm_set_connect_password(&self, n: SeatNumber, body: &seat_proto::RequestBody) -> Result<ResponseBody, ProtoError> {
+        let seat_proto::RequestBody::SetSeatConnectPassword { password, .. } = body else {
+            return Err(err(ErrorCode::Internal, "not set_seat_connect_password"));
+        };
+        let backend = self.lock().config.seat(n).and_then(|s| s.remote.as_ref().map(|r| r.stream_backend)).unwrap_or_default();
+        if backend != seat_core::remote::StreamBackendKind::Pulsar {
+            return Err(err(ErrorCode::Unsupported, "connect passwords are a Pulsar backend option").with_reason("backend_sunshine"));
+        }
+        let n_chars = password.expose().chars().count();
+        if n_chars > 128 || password.expose().chars().any(char::is_control) {
+            return Err(err(ErrorCode::InvalidValue, "password: 1-128 characters, no control characters").with_field("password"));
+        }
+        let id = self.vm_seat_id(n)?;
+        let value = (n_chars > 0).then_some(password);
+        self.secrets
+            .set_remote(&id, seat_core::store::RemoteSecretSlot::ConnectPassword, value)
+            .map_err(|e| err(ErrorCode::Store, e.to_string()))?;
+        match self.vm_guest_forward(n, body, GUEST_REQUEST_MS) {
+            Some(Err(e)) => Err(e),
+            _ => Ok(ResponseBody::Ack),
+        }
+    }
+
+    /// `regenerate_seat_identity` on a VM seat: only while the seat is off (as on the
+    /// host); the guest makes the new identity before its stream server next starts.
+    pub(crate) fn vm_regenerate_identity(&self, n: SeatNumber, confirm: bool) -> Result<ResponseBody, ProtoError> {
+        if !confirm {
+            return Err(err(ErrorCode::BadRequest, "confirm must be true").with_field("confirm"));
+        }
+        if self.vm_active(n) {
+            return Err(err(ErrorCode::SeatRunning, "stop the seat first").with_reason("seat_running"));
+        }
+        let dir = self.vm_seat_dir(&self.vm_seat_id(n)?);
+        std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::write(dir.join(REGENERATE_FLAG), b"1"))
+            .map_err(|e| err(ErrorCode::Os, format!("identity reset not stored: {e}")))?;
+        Ok(ResponseBody::Ack)
     }
 
     fn set_vm_rt(&self, n: SeatNumber, state: SeatState, degraded: Vec<String>) {
@@ -509,10 +645,33 @@ impl Service {
                 s.vm.lock().polling = false;
             });
         }
+        self.vm_publish_notices();
+    }
+
+    /// The guests' stream notices as the seats' `stream` events (pair dialog, streaming).
+    fn vm_publish_notices(&self) {
+        use seat_proto::StreamEvent as E;
+        let active: Vec<(SeatNumber, String)> = self.vm.lock().active.iter().map(|(n, a)| (*n, a.vm_id.clone())).collect();
+        for (seat, vm_id) in active {
+            for (kind, data) in self.platform.guest_link_notices(&vm_id) {
+                let event = match kind.as_str() {
+                    "pair_pending" => E::PairPending(data),
+                    "pair_ended" => E::PairEnded(data),
+                    "stream_started" => E::StreamStarted(data),
+                    "stream_ended" => E::StreamEnded(data),
+                    "otp_changed" => E::OtpChanged(data),
+                    "trust_changed" => E::TrustChanged(data),
+                    "relay_auth_required" => E::RelayAuthRequired(data),
+                    _ => continue,
+                };
+                self.events.publish(Event::Stream { seat, event });
+            }
+        }
     }
 
     /// Read the VM states and update the VM seats' runtimes; finished stops are cleaned up.
     pub(crate) fn vm_poll_now(&self) {
+        let began = self.now();
         let facts = match self.vm_refresh() {
             Ok(f) => f,
             Err(e) => {
@@ -528,6 +687,11 @@ impl Service {
             let vm_id = vm.map(|v| v.vm_id.clone()).unwrap_or_else(|| a.vm_id.clone());
             let guest = self.platform.guest_link_phase(&vm_id);
             let state = vm_seat_state(vm.map(|v| v.state.as_str()), guest.as_ref(), &a.user, a.stopping);
+            // A start in flight (or one that finished after this status read began) is not
+            // a finished stop: leave the seat to the next poll.
+            if state == SeatState::Off && !a.stopping && (a.starting || began < a.start_done_ms) {
+                continue;
+            }
             let degraded = if guest.as_ref().is_some_and(|(p, _)| *p == GuestPhase::Streaming) { vec!["streaming".to_string()] } else { Vec::new() };
             if state == SeatState::Off {
                 self.vm.lock().active.remove(&n);
@@ -567,15 +731,47 @@ impl Service {
         }
     }
 
-    /// Pairing PIN / unpair for a VM seat: forwarded to the guest over the guest link.
-    pub(crate) fn vm_guest_request(&self, n: SeatNumber, msg: GuestMsg) -> Result<ResponseBody, ProtoError> {
-        let vm_id = self.vm.lock().active.get(&n).map(|a| a.vm_id.clone());
-        let Some(vm_id) = vm_id else {
-            return Err(err(ErrorCode::SeatNotRunning, "seat is not running"));
+    /// VM id of a running (not stopping) VM seat.
+    fn vm_running_id(&self, n: SeatNumber) -> Option<String> {
+        self.vm.lock().active.get(&n).filter(|a| !a.stopping).map(|a| a.vm_id.clone())
+    }
+
+    /// A seat page request for a VM seat, answered by the guest (its stream server, its
+    /// account) over the guest link. `None` = the seat's VM is not running.
+    pub(crate) fn vm_guest_forward(&self, n: SeatNumber, body: &seat_proto::RequestBody, timeout_ms: u64) -> Option<Result<ResponseBody, ProtoError>> {
+        let vm_id = self.vm_running_id(n)?;
+        let request = match serde_json::to_value(body) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(err(ErrorCode::Internal, format!("request not encoded: {e}")))),
         };
-        self.platform
-            .guest_link_send(&vm_id, &msg)
-            .map_err(|e| err(ErrorCode::NotReady, format!("guest link: {e}")).with_reason("vm_guest_unreachable"))?;
+        Some(self.platform.guest_link_request(&vm_id, request, timeout_ms).and_then(|v| {
+            serde_json::from_value::<ResponseBody>(v)
+                .map_err(|e| err(ErrorCode::Internal, format!("guest reply not understood: {e}")).with_reason("vm_guest_reply"))
+        }))
+    }
+
+    /// `submit_pin` on a VM seat: like the host engine, the answer is an `ack` and the
+    /// outcome arrives as a `pair_ended` stream event. The guest sends that event itself; a
+    /// link failure is reported here.
+    pub(crate) fn vm_submit_pin(&self, n: SeatNumber, body: &seat_proto::RequestBody) -> Result<ResponseBody, ProtoError> {
+        if self.vm_running_id(n).is_none() {
+            return Err(err(ErrorCode::SeatNotRunning, "seat is not running"));
+        }
+        let request_id = match body {
+            seat_proto::RequestBody::SubmitPin { request_id, .. } => *request_id,
+            _ => None,
+        };
+        let body = body.clone();
+        self.spawn(move |s| {
+            if let Some(Err(e)) = s.vm_guest_forward(n, &body, GUEST_PAIR_MS) {
+                let result = e.reason.clone().unwrap_or_else(|| "vm_guest_unreachable".into());
+                log::warn(&format!("vm seat {n}: pairing not forwarded: {e}"));
+                s.events.publish(Event::Stream {
+                    seat: n,
+                    event: seat_proto::StreamEvent::PairEnded(serde_json::json!({"request_id": request_id, "result": result})),
+                });
+            }
+        });
         Ok(ResponseBody::Ack)
     }
 }

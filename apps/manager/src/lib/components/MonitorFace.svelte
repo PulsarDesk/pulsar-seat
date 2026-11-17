@@ -28,6 +28,7 @@
 
   let el: HTMLButtonElement | undefined = $state();
   let dragging = $state(false);
+  const uid = `face-${Math.random().toString(36).slice(2, 9)}`;
   const d = $derived(item.view.device);
   const id = $derived(shortId(d) ?? '');
   const unused = $derived(!d.present || (d.details.type === 'display' && d.details.presentation === 'none' && !d.details.in_console_desktop));
@@ -49,6 +50,7 @@
   aria-haspopup="menu"
   aria-expanded={expanded ? 'true' : 'false'}
   aria-label={id ? t.device.faceActions(d.name, id) : t.device.actions(d.name)}
+  aria-describedby="{uid}-cap"
   title={deviceLines(item.view, item.mask, all, showIds).join('\n')}
   data-key={d.key}
   onclick={open}
@@ -70,9 +72,10 @@
   ondragend={() => (dragging = false)}
 >
   <span class="screen"><PulseRings number={seat} size={48} /></span>
-  <span class="cap">
+  <span class="cap" id="{uid}-cap">
     <b>{d.name}</b>
     {#if id}<span class="mono">{id}</span>{/if}
+    {#if highlight}<span class="moved-word">{t.device.found}</span>{/if}
     {#if moved}<span class="moved-word">{t.device.moved}</span>{/if}
     {#if !d.present}<span class="state" title={t.device.unplugged}><Icon name="unplug" size={14} /><span class="sr-only">, {t.device.unplugged}</span></span>{/if}
     {#if warn}<span class="state" title={t.canvas.attention}><Icon name="alert" size={14} tone="warn" /><span class="sr-only">, {t.canvas.attention}</span></span>{/if}
@@ -109,9 +112,11 @@
   .face[aria-expanded='true'] .screen {
     background: var(--border);
   }
+  /* "Found" (identify / found by touch) must not look like keyboard focus: a dashed accent-ink
+     ring, not the solid focus ring (WCAG 2.4.7, review 2026-11-17). */
   .face.found .screen {
     background: var(--accent-soft);
-    outline: 2px solid var(--focus);
+    outline: 2px dashed var(--accent-ink);
     outline-offset: -2px;
   }
   .face.off .screen {

@@ -130,6 +130,10 @@ pub struct ConnectRequest {
     /// 0 = Windows default.
     #[serde(default)]
     pub keyboard_layout: u32,
+    /// The seat streams its sound: the provider names the RDP audio endpoint enumerator, so
+    /// the session gets its "Remote Audio" endpoint (review 2026-11-17).
+    #[serde(default)]
+    pub audio: bool,
 }
 
 /// Why a request is refused before it reaches the provider.
@@ -224,6 +228,7 @@ mod tests {
             width: 1920,
             height: 1080,
             keyboard_layout: 0,
+            audio: true,
         }
     }
 

@@ -23,9 +23,11 @@
 </nav>
 
 <style>
+  /* 32px hit area (DESIGN.md target floor) without moving the text. */
   .link {
-    margin: 0;
-    padding: 0;
+    margin: -6px 0;
+    padding: 6px 0;
+    min-height: var(--h-compact);
     border: 0;
     background: transparent;
     color: var(--text-muted);

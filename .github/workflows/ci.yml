@@ -131,7 +131,7 @@ jobs:
         # against seat-rdp/client (IronRDP), which only the seat host enables.
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          cargo build --locked --release --target ${{ matrix.target }} -p seat-service
+          cargo build --locked --release --target ${{ matrix.target }} -p seat-service -p seat-wrds
           cargo build --locked --release --target ${{ matrix.target }} -p seat-host
       # App-facing helper DLL for every app architecture the PC can run: x64 PCs get
       # x86 + x64, ARM64 PCs also ARM64 + ARM64EC (crates/seat-compat/apihelper).
@@ -162,6 +162,8 @@ jobs:
           foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe") {
             Copy-Item "target/${{ matrix.target }}/release/$n" $out
           }
+          # The protocol provider DLL (build-installer.ps1 requires it in the payload).
+          Copy-Item "target/${{ matrix.target }}/release/pulsar_seat_wrds.dll" "$out/pulsar-seat-wrds.dll"
           bun installer/scripts/check-payload.ts --arch ${{ matrix.arch }} $out
       - uses: actions/upload-artifact@v4
         with:
@@ -199,8 +201,8 @@ jobs:
   # the commit SHA pinned in stream-server/sunshine.json, the patch set applied with
   # `git apply --check` first, then upstream's documented MSYS2 build (UCRT64 on x64,
   # CLANGARM64 on ARM64) with the pinned msys2-base archive extracted under target\wf\msys2.
-  # The exe, its build record and runtime manifest are uploaded; the installers use them
-  # through fetch-deps --stream-local once the maintainer pins a release of this build.
+  # The exe, its build record and runtime manifest are uploaded; the installers job ships
+  # them (build-installer.ps1 -> fetch-deps --stream-local), upstream only on request.
   stream-server:
     name: stream server (${{ matrix.arch }})
     strategy:
@@ -489,7 +491,7 @@ jobs:
   installers:
     name: installers (${{ matrix.arch }})
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.installers)
-    needs: [rust, bun, credprov, shim, shim-arm64]
+    needs: [rust, bun, credprov, shim, shim-arm64, stream-server]
     strategy:
       fail-fast: false
       matrix:
@@ -541,6 +543,12 @@ jobs:
         with:
           name: shim-${{ matrix.arch }}
           path: target/payload/${{ matrix.arch }}
+      # The Pulsar build of the stream server (job stream-server) is the default remote
+      # payload; build-installer.ps1 passes it to fetch-deps --stream-local.
+      - uses: actions/download-artifact@v4
+        with:
+          name: stream-server-${{ matrix.arch }}
+          path: target/wf/sunshine-out/${{ matrix.arch }}
       - run: bun install --frozen-lockfile
       # Licence texts of every Rust crate in the shipped binaries (MIT / Apache-2.0 /
       # similar require them) and of the manager's bundled JS packages. The bundle

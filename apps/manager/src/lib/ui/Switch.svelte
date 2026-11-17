@@ -64,4 +64,26 @@
   .switch[aria-checked='true']::after {
     translate: 16px 0;
   }
+  /* Windows contrast themes drop backgrounds and shadows: draw the track with a border and
+     keep the knob's own system colours, so on / off stays visible (review 2026-11-17). */
+  @media (forced-colors: active) {
+    .switch {
+      border: 1px solid ButtonText;
+    }
+    .switch::after {
+      forced-color-adjust: none;
+      top: 2px;
+      left: 2px;
+      background: ButtonText;
+      box-shadow: none;
+    }
+    .switch[aria-checked='true'] {
+      forced-color-adjust: none;
+      background: Highlight;
+      border-color: Highlight;
+    }
+    .switch[aria-checked='true']::after {
+      background: HighlightText;
+    }
+  }
 </style>

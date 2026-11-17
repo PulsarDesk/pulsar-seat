@@ -57,7 +57,12 @@ not pinned. CI: job `stream-server` in `.github/workflows/ci.yml`.
 
 Installer: `bun installer/scripts/fetch-deps.ts --arch x64 --stream-local target/wf/sunshine-out/x64`
 lays out the upstream payload (assets, shaders) with this exe and its manifest (checked:
-flavour, version, hash, licence).
+flavour, version, hash, licence). Since the review of 2026-11-17 this is the **default**
+payload: `build-installer.ps1` uses `target\wf\sunshine-out\<arch>` (or `-StreamServer
+<dir>`), runs this script when the build is missing, and ships upstream Sunshine only with
+`-UpstreamStreamServer` (never with `-Release`). CI's installers job downloads the
+`stream-server-<arch>` artifact of this job. MSYS2 packages stay rolling (recorded in the
+build record, not pinned).
 
 ## Results on the ARM64 dev box (2026-11-17)
 

@@ -3371,10 +3371,46 @@ fn vm_seat_runs_through_its_vm_and_guest_link() {
     h.clock.advance(crate::vm_seats::VM_POLL_MS);
     h.s.tick();
     assert_eq!(state(&h, s(3)), SeatState::SignedIn { user: "veli".into() });
-    // Pairing goes to the guest.
+    // The seat page's requests go to the guest over the link (protocol 2 request / reply).
     call(&h, &mut a, RequestBody::SubmitPin { seat: s(3), pin: Secret::new("1234"), client_name: "tv".into(), request_id: None }).unwrap();
-    assert!(matches!(&h.p.guest_sent.lock().unwrap()[0], (id, GuestMsg::SubmitPin { pin, .. }) if *id == vm_id && pin == "1234"));
-    assert_eq!(call(&h, &mut a, RequestBody::GetApps { seat: s(3) }).unwrap_err().reason.as_deref(), Some("vm_seat"));
+    {
+        let rq = h.p.guest_requests.lock().unwrap();
+        let (id, body) = &rq[0];
+        assert_eq!(id, &vm_id);
+        assert_eq!((body["type"].as_str(), body["data"]["pin"].as_str()), (Some("submit_pin"), Some("1234")));
+    }
+    h.p.guest_replies.lock().unwrap().insert(
+        "list_paired_clients".into(),
+        Ok(serde_json::json!({"type": "paired_clients", "data": [{"uuid": "u1", "name": "tv"}]})),
+    );
+    let ResponseBody::PairedClients(c) = call(&h, &mut a, RequestBody::ListPairedClients { seat: s(3) }).unwrap() else { panic!() };
+    assert_eq!(c[0].uuid, "u1");
+    call(&h, &mut a, RequestBody::UnpairClient { seat: s(3), uuid: "u1".into() }).unwrap();
+    h.p.guest_replies.lock().unwrap().insert(
+        "set_seat_display_mode".into(),
+        Err(seat_proto::ProtoError::new(ErrorCode::ServiceUnavailable, "seat is not running")),
+    );
+    let e = call(&h, &mut a, RequestBody::SetSeatDisplayMode { seat: s(3), width: 1920, height: 1080, hz: 60, hdr: false }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceUnavailable, "the guest's error comes back as is");
+    let types: Vec<String> = h.p.guest_requests.lock().unwrap().iter().map(|(_, b)| b["type"].as_str().unwrap_or_default().to_string()).collect();
+    assert_eq!(types, ["submit_pin", "list_paired_clients", "unpair_client", "set_seat_display_mode"]);
+    // Apps live on the host and reach the guest: defaults, then the stored list.
+    let ResponseBody::Apps(apps) = call(&h, &mut a, RequestBody::GetApps { seat: s(3) }).unwrap() else { panic!() };
+    assert!(!apps.is_empty(), "stream server defaults");
+    let mine = vec![serde_json::json!({"name": "Steam", "cmd": r"C:\Steam\steam.exe"})];
+    call(&h, &mut a, RequestBody::SetApps { seat: s(3), apps: mine.clone() }).unwrap();
+    let ResponseBody::Apps(apps) = call(&h, &mut a, RequestBody::GetApps { seat: s(3) }).unwrap() else { panic!() };
+    assert_eq!(apps[0]["name"], "Steam");
+    assert_eq!(h.p.guest_requests.lock().unwrap().last().unwrap().1["type"], "set_apps", "handed to the running guest");
+    let bad = vec![serde_json::json!({"cmd": 5})];
+    assert_eq!(call(&h, &mut a, RequestBody::SetApps { seat: s(3), apps: bad }).unwrap_err().code, ErrorCode::InvalidValue);
+    // Identity reset only while stopped.
+    let e = call(&h, &mut a, RequestBody::RegenerateSeatIdentity { seat: s(3), confirm: true }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::SeatRunning);
+    // The guest's stream notices become the seat's stream events.
+    h.p.guest_notices.lock().unwrap().insert(vm_id.clone(), vec![("pair_pending".into(), serde_json::json!({"request_id": 2}))]);
+    h.s.tick();
+    assert!(h.p.guest_notices.lock().unwrap().get(&vm_id).is_none(), "drained");
     // A running VM seat cannot be started twice nor deleted.
     assert_eq!(call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err().code, ErrorCode::SeatRunning);
     let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
@@ -3389,6 +3425,14 @@ fn vm_seat_runs_through_its_vm_and_guest_link() {
     assert_eq!(state(&h, s(3)), SeatState::Off);
     assert!(h.p.guest_offers.lock().unwrap().is_empty(), "offer withdrawn");
     assert_eq!(call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap_err().code, ErrorCode::SeatNotRunning);
+    // With the VM off: requests answer like an off host seat; the page keeps working.
+    let ResponseBody::PairState(p) = call(&h, &mut a, RequestBody::GetPairState { seat: s(3) }).unwrap() else { panic!() };
+    assert!(p.pending.is_none());
+    assert!(matches!(call(&h, &mut a, RequestBody::GetRemoteRuntime { seat: s(3) }).unwrap(), ResponseBody::RemoteRuntime(_)));
+    let ResponseBody::CredentialTest(t) = call(&h, &mut a, RequestBody::TestSeatCredentials { seat: s(3) }).unwrap() else { panic!() };
+    assert!(t.ok, "the guest creates the user with the stored password");
+    assert_eq!(call(&h, &mut a, RequestBody::ListPairedClients { seat: s(3) }).unwrap_err().code, ErrorCode::ServiceUnavailable);
+    call(&h, &mut a, RequestBody::RegenerateSeatIdentity { seat: s(3), confirm: true }).unwrap();
     // Reset the seat's disk (stopped), then delete the seat: VM, disk, forwards, shares go.
     use seat_proto::hyperv::VmAction as A;
     vm_status(&h, &mut a, A::ResetSandbox { seat: 3, confirm: true }).unwrap();

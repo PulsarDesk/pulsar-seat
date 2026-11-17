@@ -12,7 +12,6 @@ use seat_proto::framing::{read_frame, write_frame};
 use seat_proto::wrds::{self, PIPE_NAME, ProviderMsg, SERVICE_NAME, ServiceMsg};
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 use windows::Win32::Foundation::{GENERIC_READ, HANDLE};
@@ -40,7 +39,7 @@ pub(crate) fn run(shared: Arc<Shared>) {
     // MTA for the callbacks this thread makes into TermService.
     let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     let mut backoff = Duration::from_secs(1);
-    while !shared.stop.load(Ordering::SeqCst) {
+    while !shared.gate.stopping() {
         match connect() {
             Ok(f) => {
                 backoff = Duration::from_secs(1);
@@ -115,7 +114,7 @@ fn session(shared: &Arc<Shared>, mut f: File) -> Result<(), String> {
     let hello = shared.with(|c| c.hello(unsafe { GetCurrentProcessId() }, crate::VERSION));
     send(&mut f, &hello)?;
     let h = HANDLE(f.as_raw_handle());
-    while !shared.stop.load(Ordering::SeqCst) {
+    while !shared.gate.stopping() {
         let out = lock(&shared.core).drain();
         for m in &out {
             send(&mut f, m)?;

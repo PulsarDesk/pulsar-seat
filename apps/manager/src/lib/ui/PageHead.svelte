@@ -17,8 +17,10 @@
     actions?: Snippet;
     /** The page's own notices; shown in the one notice region after the shell's items. */
     notices?: NoticeItem[];
+    /** Before the h1 (a seat's avatar), decorative. */
+    lead?: Snippet;
   }
-  let { title, sub, status, actions, notices = [] }: Props = $props();
+  let { title, sub, status, actions, notices = [], lead }: Props = $props();
   const host = noticeHost();
   const items = $derived([...(host?.items ?? []), ...notices]);
 
@@ -32,6 +34,7 @@
 </script>
 
 <header class="page-head">
+  {#if lead}<span class="lead">{@render lead()}</span>{/if}
   <div class="titles">
     <h1>{title}</h1>
     {#if status}{@render status()}{:else if sub}<p>{sub}</p>{/if}
@@ -39,3 +42,11 @@
   {#if actions}<div class="actions">{@render actions()}</div>{/if}
 </header>
 {#if host || notices.length}<Notices {items} />{/if}
+
+<style>
+  .lead {
+    flex: none;
+    display: inline-flex;
+    align-self: center;
+  }
+</style>

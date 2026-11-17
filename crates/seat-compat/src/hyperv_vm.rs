@@ -29,8 +29,11 @@ pub const VM_SWITCH: &str = "Pulsar Seat VM";
 pub const VM_NAT: &str = "Pulsar Seat VM";
 /// Firewall rule group of the forwarded host ports.
 pub const FIREWALL_GROUP: &str = "Pulsar Seat VM";
-/// Host account that the guests use for the shared folders.
-pub const SHARE_ACCOUNT: &str = "PulsarSeatVmShare";
+/// The one share account of every VM seat before the parity-2 review (2026-11-17). Now
+/// each seat has its own ([`share_account`]); this one is only removed (upgrade, uninstall).
+pub const LEGACY_SHARE_ACCOUNT: &str = "PulsarSeatVmShare";
+/// Prefix of the per-seat share accounts.
+pub const SHARE_ACCOUNT_PREFIX: &str = "PulsarVm";
 /// VM name prefix.
 pub const VM_PREFIX: &str = "PulsarSeat-";
 /// Journal file (under the service's journal folder).
@@ -63,10 +66,27 @@ pub fn seat_disk(storage: &str, seat_id: &str) -> String {
     format!(r"{}\sandbox.vhdx", seat_dir(storage, seat_id))
 }
 
+fn short_id(seat_id: &str) -> String {
+    seat_id.chars().filter(char::is_ascii_hexdigit).take(8).collect::<String>().to_ascii_lowercase()
+}
+
 /// SMB share name of a seat's shared folder `index` (hidden share, `$`).
 pub fn share_name(seat_id: &str, index: usize) -> String {
-    let short: String = seat_id.chars().filter(char::is_ascii_hexdigit).take(8).collect();
-    format!("PulsarVm{short}-{index}$")
+    format!("{SHARE_ACCOUNT_PREFIX}{}-{index}$", short_id(seat_id))
+}
+
+/// Host account of one VM seat's shared folders (review 2026-11-17: one account per seat,
+/// so a guest's credentials open only its own seat's shares, and a seat start rotates only
+/// its own password). 16 characters, within the 20 of a local account name.
+pub fn share_account(seat_id: &str) -> String {
+    format!("{SHARE_ACCOUNT_PREFIX}{}", short_id(seat_id))
+}
+
+/// Share account that owns share `name` (`PulsarVm<short>-<n>$`).
+pub fn share_account_of(name: &str) -> Option<String> {
+    let rest = name.strip_prefix(SHARE_ACCOUNT_PREFIX)?;
+    let short = rest.split('-').next()?;
+    (short.len() == 8 && short.chars().all(|c| c.is_ascii_hexdigit())).then(|| format!("{SHARE_ACCOUNT_PREFIX}{short}"))
 }
 
 /// Firewall rule display name of a seat.
@@ -600,24 +620,26 @@ pub fn script_ensure(spec: &VmSpec) -> Result<String, String> {
             ));
         }
     }
-    // Share account (created once) and shares.
+    // This seat's own share account (its password rotates with every start of this seat
+    // only) and its shares. The shared account of older builds loses its grants.
+    let acct = q(&share_account(&spec.seat_id));
     s.push_str(&format!(
         "$sec = ConvertTo-SecureString -String $pw -AsPlainText -Force; \
          if (Get-LocalUser -Name {acct} -ErrorAction SilentlyContinue) {{ Set-LocalUser -Name {acct} -Password $sec }} \
-         else {{ New-LocalUser -Name {acct} -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -Description 'Pulsar Seat VM shared folders' | Out-Null }}; \
+         else {{ New-LocalUser -Name {acct} -Password $sec -PasswordNeverExpires -UserMayNotChangePassword -Description 'Pulsar Seat VM shared folders (one seat)' | Out-Null }}; \
          Get-SmbShare -Name {pat} -ErrorAction SilentlyContinue | Remove-SmbShare -Force; ",
-        acct = q(SHARE_ACCOUNT),
         pat = q(&share_name(&spec.seat_id, 0).replace("-0$", "-*")),
     ));
+    let legacy = q(LEGACY_SHARE_ACCOUNT);
     for sh in &spec.shares {
         let access = if sh.read_only { "-ReadAccess" } else { "-ChangeAccess" };
         let ntfs = if sh.read_only { "(OI)(CI)RX" } else { "(OI)(CI)M" };
         s.push_str(&format!(
             "New-SmbShare -Name {n} -Path {p} {access} ($env:COMPUTERNAME + '\\' + {acct}) | Out-Null; \
+             if (Get-LocalUser -Name {legacy} -ErrorAction SilentlyContinue) {{ & icacls.exe {p} /remove {legacy} | Out-Null }}; \
              & icacls.exe {p} /grant ({acct} + ':{ntfs}') | Out-Null; ",
             n = q(&sh.name),
             p = q(&sh.host_path),
-            acct = q(SHARE_ACCOUNT),
         ));
     }
     Ok(s)
@@ -672,14 +694,15 @@ pub fn script_remove(spec: &VmSpec) -> Result<String, String> {
             ip = q(&spec.guest_address),
         ));
     }
+    let acct = q(&share_account(&spec.seat_id));
     for sh in &spec.shares {
         s.push_str(&format!(
             "Remove-SmbShare -Name {n} -Force; & icacls.exe {p} /remove {acct} | Out-Null; ",
             n = q(&sh.name),
             p = q(&sh.host_path),
-            acct = q(SHARE_ACCOUNT),
         ));
     }
+    s.push_str(&format!("Remove-LocalUser -Name {acct}; "));
     Ok(s)
 }
 
@@ -709,18 +732,24 @@ pub fn script_uninstall(storage: &str, shares: &[ShareSpec]) -> String {
         base = q(&base_disk(storage)),
     );
     for sh in shares {
-        s.push_str(&format!("& icacls.exe {p} /remove {acct} | Out-Null; ", p = q(&sh.host_path), acct = q(SHARE_ACCOUNT)));
+        let mut accts = vec![LEGACY_SHARE_ACCOUNT.to_string()];
+        accts.extend(share_account_of(&sh.name));
+        for a in accts {
+            s.push_str(&format!("& icacls.exe {p} /remove {acct} | Out-Null; ", p = q(&sh.host_path), acct = q(&a)));
+        }
     }
     s.push_str(&format!(
         "Get-NetFirewallRule -Group {grp} | Remove-NetFirewallRule; \
          Get-NetNat -Name {nat} | Remove-NetNat -Confirm:$false; \
          Remove-VMSwitch -Name {sw} -Force; \
-         Remove-LocalUser -Name {acct}; \
+         Remove-LocalUser -Name {legacy}; \
+         Get-LocalUser | Where-Object {{ $_.Name -match {pat} -and $_.Description -like 'Pulsar Seat VM shared folders*' }} | Remove-LocalUser; \
          Remove-Item -Path {reg} -Recurse -Force",
         grp = q(FIREWALL_GROUP),
         nat = q(VM_NAT),
         sw = q(VM_SWITCH),
-        acct = q(SHARE_ACCOUNT),
+        legacy = q(LEGACY_SHARE_ACCOUNT),
+        pat = q(&format!("^{SHARE_ACCOUNT_PREFIX}[0-9a-f]{{8}}$")),
         reg = q(&reg),
     ));
     s
@@ -807,6 +836,11 @@ mod tests {
         assert_eq!(base_disk(r"D:\Pulsar VM\"), r"D:\Pulsar VM\zygote.vhdx");
         assert_eq!(seat_disk(r"D:\v", ID), format!(r"D:\v\seats\{ID}\sandbox.vhdx"));
         assert_eq!(share_name(ID, 2), "PulsarVm0f8fad5b-2$");
+        assert_eq!(share_account(ID), "PulsarVm0f8fad5b");
+        assert!(share_account(ID).len() <= 20, "local account name limit");
+        assert_eq!(share_account_of("PulsarVm0f8fad5b-2$").as_deref(), Some("PulsarVm0f8fad5b"));
+        assert_eq!(share_account_of("Other-1$"), None);
+        assert_eq!(share_account_of("PulsarVmzz-1$"), None);
         assert!(seat_id_ok(ID));
         assert!(!seat_id_ok("x'; Remove-Item"));
         assert_eq!(GpuChoice::from_seat(GpuPartitionMode::Adapter, None), GpuChoice::Off);
@@ -827,6 +861,14 @@ mod tests {
         assert!(s.contains("-Protocol UDP -LocalPort 48109,48110,48111"));
         assert!(s.contains("New-SmbShare -Name 'PulsarVm0f8fad5b-0$' -Path 'E:\\Games' -ReadAccess"));
         assert!(s.contains("(OI)(CI)RX"));
+        // One share account per seat (review 2026-11-17): granted only this seat's shares.
+        assert!(s.contains("Set-LocalUser -Name 'PulsarVm0f8fad5b' -Password $sec"));
+        assert!(s.contains("-ReadAccess ($env:COMPUTERNAME + '\\' + 'PulsarVm0f8fad5b')"));
+        assert!(s.contains("/grant ('PulsarVm0f8fad5b' + ':(OI)(CI)RX')"));
+        assert!(!s.contains("/grant ('PulsarSeatVmShare'"), "the old shared account gets no grant");
+        assert!(s.contains("/remove 'PulsarSeatVmShare'"), "and loses its old one");
+        let other = script_ensure(&VmSpec { seat_id: "1b4e28ba-2fa1-11d2-883f-0016d3cca427".into(), ..spec() }).unwrap();
+        assert!(other.contains("'PulsarVm1b4e28ba'") && !other.contains("'PulsarVm0f8fad5b'"));
         let mut sp = spec();
         sp.gpu = GpuChoice::Off;
         let s = script_ensure(&sp).unwrap();
@@ -886,8 +928,18 @@ mod tests {
         assert!(r.contains("Remove-VM"));
         assert!(r.contains("Remove-SmbShare -Name 'PulsarVm0f8fad5b-0$'"));
         assert!(r.contains("Remove-NetNatStaticMapping"));
+        assert!(r.contains("/remove 'PulsarVm0f8fad5b'"));
+        assert!(r.contains("Remove-LocalUser -Name 'PulsarVm0f8fad5b'"), "the seat's account goes with the seat");
         let u = script_uninstall(r"D:\vm", &spec().shares);
-        for part in ["Remove-VMSwitch -Name 'Pulsar Seat VM'", "Remove-NetNat", "Remove-LocalUser -Name 'PulsarSeatVmShare'", "GuestCommunicationServices", "/remove 'PulsarSeatVmShare'"] {
+        for part in [
+            "Remove-VMSwitch -Name 'Pulsar Seat VM'",
+            "Remove-NetNat",
+            "Remove-LocalUser -Name 'PulsarSeatVmShare'",
+            "GuestCommunicationServices",
+            "/remove 'PulsarSeatVmShare'",
+            "/remove 'PulsarVm0f8fad5b'",
+            "'^PulsarVm[0-9a-f]{8}$'",
+        ] {
             assert!(u.contains(part), "{part}");
         }
         assert!(script_for(&VmOp::Start { seat_id: "x y".into() }, "amd64").is_err());
@@ -960,6 +1012,10 @@ mod guest_tests {
             share_user: "PulsarSeatVmShare".into(),
             share_password: seat_core::Secret::new("SHAREPW"),
             apps: vec![],
+            stream_apps: None,
+            connect_password: None,
+            regenerate_identity: false,
+            start_nonce: String::new(),
         };
         let s = script_guest_apply(&cfg);
         assert!(!s.contains("SEATPW") && !s.contains("SHAREPW"), "passwords only on stdin");

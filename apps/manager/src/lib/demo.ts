@@ -554,8 +554,12 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       state.seats = state.seats.filter((x) => x.seat !== seat);
       emit({ type: 'seat_state', data: { runtime: { seat, state: { state: 'off' }, since_ms: Date.now() } } });
     },
-    relogonSeat: async () => {
+    relogonSeat: async (seat) => {
       await step('relogon_seat');
+      // The service stops the seat, then starts it again on one worker.
+      const r: SeatRuntime = { seat, state: { state: 'at_logon' }, session_id: 10 + seat, since_ms: Date.now() };
+      state.seats = [...state.seats.filter((x) => x.seat !== seat), r];
+      emit({ type: 'seat_state', data: { runtime: r } });
     },
     resetGraphics: async (seat) => {
       await step('reset_graphics');
@@ -683,6 +687,10 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       calls.push('pick_program');
       return { title: 'Game', path: 'C:\\Games\\game.exe' };
     },
+    pickPath: async (kind) => {
+      calls.push(`pick_path:${kind}`);
+      return kind === 'folder' ? 'D:\\Games' : kind === 'language_cab' ? 'D:\\iso\\tr-tr.cab' : 'D:\\iso\\install.wim';
+    },
     pickProgramFolder: async () => {
       calls.push('pick_program_folder');
       return [
@@ -757,6 +765,9 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     },
     openPanel: async () => {
       calls.push('open_panel');
+    },
+    openHelp: async (link) => {
+      calls.push(`open_help:${link}`);
     },
     restartElevated: async () => {
       calls.push('restart_elevated');

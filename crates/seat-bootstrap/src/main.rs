@@ -202,6 +202,9 @@ fn install(out: &Out, opts: &Options) -> i32 {
 
     // Keeps the unpacked MSI alive until msiexec has finished.
     let mut _temp = None;
+    // The MSI stays open from the hash check until msiexec has finished, shared for reading
+    // only: nobody can change or replace the checked bytes meanwhile (review 2026-11-17).
+    let _lock: std::fs::File;
     let msi = match source {
         Source::Embedded => {
             let e = payload::EMBEDDED.expect("choose() returned Embedded");
@@ -217,8 +220,15 @@ fn install(out: &Out, opts: &Options) -> i32 {
                 }
             };
             let p = dir.0.join(e.name);
-            match std::fs::write(&p, e.bytes).and_then(|_| plan::sha256_file(&p)) {
-                Ok(h) if h == e.sha256 => {}
+            // One handle writes, hashes and holds the file: no other writer between.
+            let r = locked(&p, true).and_then(|mut f| {
+                use std::io::Write as _;
+                f.write_all(e.bytes)?;
+                f.flush()?;
+                plan::sha256_reader(&mut f).map(|h| (h, f))
+            });
+            match r {
+                Ok((h, f)) if h == e.sha256 => _lock = f,
                 Ok(_) => {
                     out.error(&text::HASH_MISMATCH.fmt(&[&e.name]));
                     return exit::BAD_PACKAGE;
@@ -233,31 +243,64 @@ fn install(out: &Out, opts: &Options) -> i32 {
         }
         Source::Sibling(name) => {
             let p = exe_dir.join(&name);
+            let mut f = match locked(&p, false) {
+                Ok(f) => f,
+                Err(_) => {
+                    out.error(&text::HASH_MISMATCH.fmt(&[&name]));
+                    return exit::BAD_PACKAGE;
+                }
+            };
             // A checksum file beside the setup program vouches for the MSI: it must list it
             // with the same hash.
             let sums = exe_dir.join("SHA256SUMS.txt");
             if let Ok(t) = std::fs::read_to_string(&sums) {
                 let want = plan::parse_sums(&t, &name);
-                let have = plan::sha256_file(&p).ok();
+                let have = plan::sha256_reader(&mut f).ok();
                 if want.is_none() || want != have {
                     out.error(&text::HASH_MISMATCH.fmt(&[&name]));
                     return exit::BAD_PACKAGE;
                 }
             }
+            _lock = f;
             p
         }
     };
 
+    // Release: a valid signature, and by one of the certificates this setup was built for.
     #[cfg(windows)]
-    if plan::RELEASE
-        && let Err(code) = win::verify_authenticode(&msi)
-    {
+    if plan::RELEASE {
         let name = msi.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        out.error(&text::NOT_SIGNED.fmt(&[&name, &code]));
-        return exit::BAD_PACKAGE;
+        match win::verify_authenticode(&msi) {
+            Err(code) => {
+                out.error(&text::NOT_SIGNED.fmt(&[&name, &code]));
+                return exit::BAD_PACKAGE;
+            }
+            Ok(thumb) if !plan::signer_allowed(&thumb, payload::SIGNERS) => {
+                out.error(&text::WRONG_SIGNER.fmt(&[&name, &thumb]));
+                return exit::BAD_PACKAGE;
+            }
+            Ok(_) => {}
+        }
     }
 
     launch(out, &msi, opts)
+}
+
+/// Open (or with `create`, newly create) the MSI shared for reading only, so no other
+/// process can write, rename or delete it while the handle is open.
+fn locked(p: &Path, create: bool) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    if create {
+        o.write(true).create_new(true);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 0x1;
+        o.share_mode(FILE_SHARE_READ);
+    }
+    o.open(p)
 }
 
 #[cfg(windows)]

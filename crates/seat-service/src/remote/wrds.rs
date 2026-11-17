@@ -43,6 +43,8 @@ pub struct WrdsConnect {
     pub user: String,
     pub width: u32,
     pub height: u32,
+    /// The seat streams sound (`audio.stream_audio`).
+    pub audio: bool,
 }
 
 /// A seat session created through the provider.
@@ -136,6 +138,9 @@ struct HubState {
     conns: HashMap<u64, Pending>,
     outgoing: VecDeque<ServiceMsg>,
     lost: VecDeque<(u64, String)>,
+    /// Pid of the provider whose pipe broke: a hello from the same process keeps its
+    /// connections, one from a new process (TermService restarted) loses them.
+    gone_pid: Option<u32>,
 }
 
 /// Pure pipe state shared by the pipe thread and seat workers.
@@ -163,19 +168,36 @@ impl Hub {
             return None;
         }
         self.with(|s| {
+            if let Some(old) = s.gone_pid.take()
+                && old != *pid
+            {
+                // A new provider process (TermService restarted): it knows none of the old
+                // connections, so it will never report them closed. They are lost now, and
+                // the kept `disconnect` frames mean nothing to it.
+                let ids: Vec<u64> = s.conns.iter().filter(|(_, p)| p.running).map(|(id, _)| *id).collect();
+                for id in ids {
+                    if s.conns.remove(&id).is_some_and(|p| !p.ending) {
+                        s.lost.push_back((id, "provider_restarted".into()));
+                    }
+                }
+                s.outgoing.retain(|m| !matches!(m, ServiceMsg::Disconnect { .. }));
+            }
             s.provider = Some((*pid, provider_version.clone()));
             s.listening = *listening;
         });
         Some(ServiceMsg::Welcome { protocol: PROTOCOL })
     }
 
-    /// The pipe broke: every connect still waiting fails; running sessions stay (their
-    /// Windows sessions live on), but the engine hears about them on the next `Closed`.
+    /// The pipe broke: every connect still waiting fails. Running sessions stay (their
+    /// Windows sessions live on): when the same provider process comes back it still has
+    /// them and reports their end; when a new process comes back (TermService restarted)
+    /// [`Self::provider_hello`] reports them lost. Queued `disconnect` frames are kept for
+    /// the same process (review 2026-11-17).
     pub fn provider_gone(&self) {
         self.with(|s| {
-            s.provider = None;
+            s.gone_pid = s.provider.take().map(|p| p.0).or(s.gone_pid);
             s.listening = false;
-            s.outgoing.clear();
+            s.outgoing.retain(|m| matches!(m, ServiceMsg::Disconnect { .. }));
             for p in s.conns.values_mut().filter(|p| !p.running && p.failed.is_none()) {
                 p.failed = Some("provider_gone".into());
             }
@@ -276,6 +298,7 @@ impl Hub {
             width: req.width.clamp(seat_proto::wrds::MIN_SIZE, seat_proto::wrds::MAX_SIZE),
             height: req.height.clamp(seat_proto::wrds::MIN_SIZE, seat_proto::wrds::MAX_SIZE),
             keyboard_layout: 0,
+            audio: req.audio,
         };
         let id = {
             let mut s = lock(&self.st);
@@ -340,7 +363,8 @@ impl Hub {
                 p.ending = true;
             }
             s.conns.remove(&conn_id);
-            if s.provider.is_some() {
+            // Sent now, or after the provider's pipe comes back (same process).
+            if s.provider.is_some() || s.gone_pid.is_some() {
                 s.outgoing.push_back(ServiceMsg::Disconnect { conn_id });
             }
         });
@@ -368,7 +392,7 @@ mod tests {
     }
 
     fn req() -> WrdsConnect {
-        WrdsConnect { seat_id: "s1".into(), client_name: "PSS00112233".into(), user: "seat2".into(), width: 1920, height: 1080 }
+        WrdsConnect { seat_id: "s1".into(), client_name: "PSS00112233".into(), user: "seat2".into(), width: 1920, height: 1080, audio: true }
     }
 
     fn usable() -> WrdsStatus {
@@ -492,5 +516,43 @@ mod tests {
         let e = t.join().unwrap().unwrap_err();
         assert!(e.message.contains("provider_gone"), "{}", e.message);
         assert!(!hub.connected());
+    }
+
+    /// Logged-on connection `id` (session 6) without a provider thread.
+    fn running(hub: &Hub) -> u64 {
+        let mut s = lock(&hub.st);
+        s.next_id += 1;
+        let id = s.next_id;
+        s.conns.insert(id, Pending { session_id: Some(6), logged_on: true, running: true, ..Default::default() });
+        id
+    }
+
+    #[test]
+    fn same_provider_process_keeps_connections_and_queued_disconnects() {
+        let hub = Hub::new();
+        hub.provider_hello(&hello());
+        let a = running(&hub);
+        let b = running(&hub);
+        hub.provider_gone();
+        hub.disconnect(a);
+        hub.provider_hello(&hello());
+        assert_eq!(hub.take_outgoing(), vec![ServiceMsg::Disconnect { conn_id: a }], "kept across the break");
+        assert!(hub.take_lost().is_empty(), "the same process still has them");
+        hub.on_provider(ProviderMsg::Closed { conn_id: b });
+        assert_eq!(hub.take_lost().len(), 1);
+    }
+
+    #[test]
+    fn new_provider_process_loses_the_old_connections() {
+        let hub = Hub::new();
+        hub.provider_hello(&hello());
+        let a = running(&hub);
+        let b = running(&hub);
+        hub.provider_gone();
+        hub.disconnect(a);
+        let restarted = ProviderMsg::Hello { protocol: PROTOCOL, provider_version: "0.1.0".into(), pid: 99, listening: true };
+        hub.provider_hello(&restarted);
+        assert_eq!(hub.take_lost(), vec![(b, "provider_restarted".to_string())], "only the one the engine did not end");
+        assert!(hub.take_outgoing().is_empty(), "old disconnects mean nothing to the new process");
     }
 }

@@ -241,3 +241,19 @@ describe('enable dialog (redesign P8)', () => {
     expect(store.prefs.tab).toBe('settings');
   });
 });
+
+describe('help links (spec/local 10 §2.1)', () => {
+  it('open the fixed help pages, and wait for a network', async () => {
+    const { api, user } = await setup();
+    await user.click(navLink(t.nav.settings));
+    await user.click(await screen.findByRole('button', { name: new RegExp(t.settingsPage.manual) }));
+    await user.click(screen.getByRole('button', { name: new RegExp(t.settingsPage.contact) }));
+    expect(api.calls).toEqual(expect.arrayContaining(['open_help:manual', 'open_help:contact']));
+    window.dispatchEvent(new Event('offline'));
+    const site = await screen.findByRole('button', { name: new RegExp(t.settingsPage.website) });
+    await vi.waitFor(() => expect(site).toBeDisabled());
+    expect(site).toHaveTextContent(t.settingsPage.helpOffline);
+    window.dispatchEvent(new Event('online'));
+    await vi.waitFor(() => expect(site).toBeEnabled());
+  });
+});

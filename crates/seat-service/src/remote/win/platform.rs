@@ -315,29 +315,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn user_facts(&self, user: &str) -> UserFacts {
-        if user.is_empty() {
-            return UserFacts::default();
-        }
-        let name = wide(user);
-        let mut buf: *mut u8 = ptr::null_mut();
-        // SAFETY: valid name; buffer freed below.
-        let rc = unsafe { NetUserGetInfo(ptr::null(), name.as_ptr(), 1, &mut buf) };
-        if rc != NERR_SUCCESS || buf.is_null() {
-            if rc != NERR_USER_NOT_FOUND {
-                crate::log::warn(&format!("NetUserGetInfo failed: {rc}"));
-            }
-            return UserFacts::default();
-        }
-        // SAFETY: level 1 buffer.
-        let flags = unsafe { (*(buf as *const USER_INFO_1)).usri1_flags };
-        // SAFETY: allocated by NetUserGetInfo.
-        unsafe { NetApiBufferFree(buf as _) };
-        UserFacts {
-            exists: true,
-            enabled: flags & UF_ACCOUNTDISABLE == 0,
-            locked_out: flags & UF_LOCKOUT != 0,
-            password_expired: flags & UF_PASSWORD_EXPIRED != 0,
-        }
+        user_facts_of(user)
     }
 
     fn console_user(&self) -> Option<String> {
@@ -405,6 +383,33 @@ fn reboot() -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Account state of a local user (NetUserGetInfo level 1); also used by the VM guest.
+pub(crate) fn user_facts_of(user: &str) -> UserFacts {
+    if user.is_empty() {
+        return UserFacts::default();
+    }
+    let name = wide(user);
+    let mut buf: *mut u8 = ptr::null_mut();
+    // SAFETY: valid name; buffer freed below.
+    let rc = unsafe { NetUserGetInfo(ptr::null(), name.as_ptr(), 1, &mut buf) };
+    if rc != NERR_SUCCESS || buf.is_null() {
+        if rc != NERR_USER_NOT_FOUND {
+            crate::log::warn(&format!("NetUserGetInfo failed: {rc}"));
+        }
+        return UserFacts::default();
+    }
+    // SAFETY: level 1 buffer.
+    let flags = unsafe { (*(buf as *const USER_INFO_1)).usri1_flags };
+    // SAFETY: allocated by NetUserGetInfo.
+    unsafe { NetApiBufferFree(buf as _) };
+    UserFacts {
+        exists: true,
+        enabled: flags & UF_ACCOUNTDISABLE == 0,
+        locked_out: flags & UF_LOCKOUT != 0,
+        password_expired: flags & UF_PASSWORD_EXPIRED != 0,
+    }
 }
 
 #[cfg(test)]

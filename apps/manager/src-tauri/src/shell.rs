@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Shell helpers: open a fixed set of Windows panels (spec 10 §3.7) and restart the manager
-//! elevated (spec 10 §1: "asks for elevation (UAC) for that operation"). Only the targets
-//! listed in [`Panel`] can be opened; the UI never passes a path or a URL.
+//! Shell helpers: open a fixed set of Windows panels (spec 10 §3.7) and the project's help
+//! pages (spec 10 §2.1), and restart the manager elevated (spec 10 §1: "asks for elevation
+//! (UAC) for that operation"). Only the targets listed in [`Panel`] and [`HelpLink`] can be
+//! opened; the UI never passes a path or a URL.
 
 use seat_proto::{ErrorCode, ProtoError};
 use serde::Deserialize;
@@ -80,6 +81,38 @@ pub fn open_panel(panel: Panel) -> Result<(), ProtoError> {
     shell_execute("open", file, params)
 }
 
+/// The project's public pages the manager links to (spec/local 10 §2.1: user manual,
+/// product website, contact). Fixed URLs: the UI only names one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpLink {
+    Manual,
+    ManualTr,
+    Website,
+    Contact,
+    Security,
+}
+
+/// Public repository of Pulsar Seat (Cargo.toml `repository`).
+pub const REPOSITORY: &str = "https://github.com/PulsarDesk/pulsar-seat";
+
+impl HelpLink {
+    pub fn url(self) -> String {
+        match self {
+            Self::Manual => format!("{REPOSITORY}/blob/main/docs/troubleshooting.md"),
+            Self::ManualTr => format!("{REPOSITORY}/blob/main/docs/troubleshooting.tr.md"),
+            Self::Website => REPOSITORY.to_string(),
+            Self::Contact => format!("{REPOSITORY}/issues"),
+            Self::Security => format!("{REPOSITORY}/security"),
+        }
+    }
+}
+
+/// Open a help page in the default browser.
+pub fn open_help(link: HelpLink) -> Result<(), ProtoError> {
+    shell_execute("open", &link.url(), "")
+}
+
 /// ERROR_CANCELLED: the user said no in the UAC prompt.
 pub const ERROR_CANCELLED: u32 = 1223;
 
@@ -114,6 +147,10 @@ mod tests {
             let (f, _) = p.target();
             assert!(!f.contains(['\\', '/']), "{f}");
         }
+        for l in [HelpLink::Manual, HelpLink::ManualTr, HelpLink::Website, HelpLink::Contact, HelpLink::Security] {
+            assert!(l.url().starts_with("https://github.com/PulsarDesk/pulsar-seat"), "{l:?}");
+        }
+        assert!(serde_json::from_str::<HelpLink>("\"https://evil.example\"").is_err());
         let p: Panel = serde_json::from_str("\"device_manager\"").unwrap();
         assert_eq!(p, Panel::DeviceManager);
         assert!(serde_json::from_str::<Panel>("\"C:\\\\evil.exe\"").is_err());

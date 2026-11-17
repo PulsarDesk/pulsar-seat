@@ -163,8 +163,12 @@ pub fn import(j: &Journal, ops: &dyn SystemOps, der: &[u8], facts: &CertFacts) -
             rep.present.push(store);
             continue;
         }
-        j.record(OWNER, Change::Certificate { store, thumbprint: tp.clone() })?;
-        ops.cert_add(store, der)?;
+        let e = j.record(OWNER, Change::Certificate { store, thumbprint: tp.clone() })?;
+        if let Err(err) = ops.cert_add(store, der) {
+            // Not ours: uninstall must never remove a copy the operator adds later.
+            j.close(e.seq, crate::journal::RevertOutcome::NotApplied)?;
+            return Err(err.into());
+        }
         rep.added.push(store);
     }
     Ok(rep)
@@ -229,6 +233,20 @@ mod tests {
         assert!(r.failed.is_empty(), "{r:?}");
         assert!(ops.cert_thumbprints(CertStore::TrustedPublisher).unwrap().is_empty());
         assert_eq!(ops.cert_thumbprints(CertStore::Root).unwrap(), vec![tp]);
+    }
+
+    #[test]
+    fn failed_add_is_not_left_active() {
+        let j = Journal::memory();
+        let ops = MemoryOps::new();
+        let der = fake_der(9);
+        *ops.fail_next_write.lock().unwrap() = Some("denied".into());
+        assert!(import(&j, &ops, &der, &leaf(false)).is_err());
+        assert!(j.active().unwrap().is_empty(), "a failed add must not stay journaled as ours");
+        // The operator adds the same certificate later: uninstall leaves it.
+        ops.cert_add(CertStore::TrustedPublisher, &der).unwrap();
+        j.revert_all(&ops, false).unwrap();
+        assert_eq!(ops.cert_thumbprints(CertStore::TrustedPublisher).unwrap(), vec![thumbprint(&der)]);
     }
 
     #[test]

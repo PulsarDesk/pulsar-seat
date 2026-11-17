@@ -75,7 +75,7 @@ mod win {
         FileOpenDialog, IFileOpenDialog, IShellItem, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderItem, SIGDN_FILESYSPATH,
         ShellLink,
     };
-    use windows::core::{HSTRING, Interface, PCWSTR, w};
+    use windows::core::{HSTRING, Interface, PCWSTR};
 
     fn com_err(what: &str, e: windows::core::Error) -> ProtoError {
         ProtoError::new(ErrorCode::Internal, format!("{what}: {e}"))
@@ -113,32 +113,56 @@ mod win {
         }
     }
 
-    /// Show the open dialog; `None` = cancelled.
+    /// Show the open dialog for programs (or a folder of programs); `None` = cancelled.
     fn show(owner: Option<isize>, folders: bool) -> Result<Option<PathBuf>, ProtoError> {
+        if folders {
+            show_spec(owner, &crate::copy::PICK_FOLDER, &[], true, true)
+        } else {
+            show_spec(
+                owner,
+                &crate::copy::PICK_PROGRAM,
+                &[(&crate::copy::FILTER_PROGRAMS, "*.exe;*.lnk"), (&crate::copy::FILTER_ALL, "*.*")],
+                false,
+                true,
+            )
+        }
+    }
+
+    /// The open dialog: a folder (`folders`) or a file of `filters` (name, pattern). A
+    /// shortcut comes back as the .lnk itself. `programs` starts in the Start menu programs.
+    fn show_spec(
+        owner: Option<isize>,
+        title: &seat_core::i18n::Text,
+        filters: &[(&seat_core::i18n::Text, &str)],
+        folders: bool,
+        programs: bool,
+    ) -> Result<Option<PathBuf>, ProtoError> {
         // SAFETY: COM calls on an initialised STA; strings returned by the shell are freed
         // with CoTaskMemFree after copying.
         unsafe {
             let d: IFileOpenDialog =
                 CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).map_err(|e| com_err("FileOpenDialog", e))?;
             let mut opts = d.GetOptions().map_err(|e| com_err("GetOptions", e))? | FOS_FORCEFILESYSTEM;
+            d.SetTitle(&HSTRING::from(title.get())).map_err(|e| com_err("SetTitle", e))?;
             if folders {
                 opts |= FOS_PICKFOLDERS;
-                d.SetTitle(&HSTRING::from(crate::copy::PICK_FOLDER.get())).map_err(|e| com_err("SetTitle", e))?;
             } else {
                 // Shortcuts come back as the .lnk itself: we read its target and keep its name.
                 opts |= FOS_FILEMUSTEXIST | FOS_NODEREFERENCELINKS;
-                d.SetTitle(&HSTRING::from(crate::copy::PICK_PROGRAM.get())).map_err(|e| com_err("SetTitle", e))?;
                 // The names live until SetFileTypes returns (the dialog copies them).
-                let programs = HSTRING::from(crate::copy::FILTER_PROGRAMS.get());
-                let all = HSTRING::from(crate::copy::FILTER_ALL.get());
-                let spec = [
-                    COMDLG_FILTERSPEC { pszName: PCWSTR(programs.as_ptr()), pszSpec: w!("*.exe;*.lnk") },
-                    COMDLG_FILTERSPEC { pszName: PCWSTR(all.as_ptr()), pszSpec: w!("*.*") },
-                ];
-                d.SetFileTypes(&spec).map_err(|e| com_err("SetFileTypes", e))?;
+                let names: Vec<HSTRING> = filters.iter().map(|(n, _)| HSTRING::from(n.get())).collect();
+                let specs: Vec<HSTRING> = filters.iter().map(|(_, s)| HSTRING::from(*s)).collect();
+                let spec: Vec<COMDLG_FILTERSPEC> = names
+                    .iter()
+                    .zip(specs.iter())
+                    .map(|(n, s)| COMDLG_FILTERSPEC { pszName: PCWSTR(n.as_ptr()), pszSpec: PCWSTR(s.as_ptr()) })
+                    .collect();
+                if !spec.is_empty() {
+                    d.SetFileTypes(&spec).map_err(|e| com_err("SetFileTypes", e))?;
+                }
             }
             d.SetOptions(opts).map_err(|e| com_err("SetOptions", e))?;
-            if let Ok(start) = SHGetKnownFolderItem::<IShellItem>(&FOLDERID_CommonPrograms, KF_FLAG_DEFAULT, None) {
+            if programs && let Ok(start) = SHGetKnownFolderItem::<IShellItem>(&FOLDERID_CommonPrograms, KF_FLAG_DEFAULT, None) {
                 let _ = d.SetFolder(&start);
             }
             let hwnd = owner.map(|h| HWND(h as *mut core::ffi::c_void));
@@ -173,10 +197,44 @@ mod win {
         let Some(dir) = show(owner, true)? else { return Ok(Vec::new()) };
         Ok(folder_programs(&dir, resolve_link))
     }
+
+    /// A path for a setting (VM seats: Windows image, language pack, shared host folder).
+    pub fn pick_path(owner: Option<isize>, kind: super::PathKind) -> Result<Option<String>, ProtoError> {
+        use crate::copy as c;
+        let _com = Com::init()?;
+        let p = match kind {
+            super::PathKind::VmImage => show_spec(
+                owner,
+                &c::PICK_VM_IMAGE,
+                &[(&c::FILTER_VM_IMAGES, "*.wim;*.esd;*.vhdx"), (&c::FILTER_ALL, "*.*")],
+                false,
+                false,
+            )?,
+            super::PathKind::LanguageCab => {
+                show_spec(owner, &c::PICK_LANGUAGE_CAB, &[(&c::FILTER_CAB, "*.cab"), (&c::FILTER_ALL, "*.*")], false, false)?
+            }
+            super::PathKind::Folder => show_spec(owner, &c::PICK_HOST_FOLDER, &[], true, false)?,
+        };
+        Ok(p.map(|p| p.display().to_string()))
+    }
+}
+
+/// What [`pick_path`] asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathKind {
+    VmImage,
+    LanguageCab,
+    Folder,
 }
 
 #[cfg(windows)]
-pub use win::{pick_file, pick_folder};
+pub use win::{pick_file, pick_folder, pick_path};
+
+#[cfg(not(windows))]
+pub fn pick_path(_owner: Option<isize>, _kind: PathKind) -> Result<Option<String>, seat_proto::ProtoError> {
+    Ok(None)
+}
 
 #[cfg(not(windows))]
 pub fn pick_file(_owner: Option<isize>) -> Result<Option<PickedProgram>, seat_proto::ProtoError> {

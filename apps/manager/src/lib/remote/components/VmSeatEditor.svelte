@@ -14,8 +14,14 @@
     host: VmHostStatus | null;
     info?: VmSeatInfo;
     problem: string | null;
+    /** System folder dialog for a shared folder (`null` = cancelled; absent = typing only). */
+    pickFolder?: () => Promise<string | null>;
   }
-  let { vm = $bindable(), host, info, problem }: Props = $props();
+  let { vm = $bindable(), host, info, problem, pickFolder }: Props = $props();
+  async function browseFolder() {
+    const p = await pickFolder?.().catch(() => null);
+    if (p) newFolder = p;
+  }
   let newFolder = $state('');
 
   const gpuOptions = ['off', 'auto', 'adapter'].map((g) => ({ value: g, label: t.vm.gpuModes[g] }));
@@ -96,6 +102,7 @@
         {/if}
         <div class="input-group">
           <input class="input mono" aria-label={t.vm.hostFolder} placeholder="D:\Games" bind:value={newFolder} />
+          {#if pickFolder}<Button kind="secondary" label={t.vm.browse} aria-label={`${t.vm.browse} ${t.vm.hostFolder}`} onclick={browseFolder} />{/if}
           <Button kind="secondary" icon="plus" label={t.vm.addFolder} disabled={!newFolder.trim()} onclick={addFolder} />
         </div>
       </div>

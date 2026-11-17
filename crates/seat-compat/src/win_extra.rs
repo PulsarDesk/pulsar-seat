@@ -36,9 +36,9 @@ pub(crate) fn reg_values(root: winreg::RegKey, key: &str) -> OpsResult<Vec<(Stri
 
 const DEFENDER_NS: &str = "root/Microsoft/Windows/Defender";
 
-/// PowerShell single-quoted literal.
+/// PowerShell single-quoted literal (doubles `'` and the typographic quotes U+2018 to U+201B).
 fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    crate::hyperv::ps_quote(s)
 }
 
 fn run_ps(script: &str) -> OpsResult<String> {

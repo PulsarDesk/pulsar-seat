@@ -369,7 +369,7 @@
           </ul>
         </div>
       {:else}
-        <div class="wiz-title"><h1 role="status">{t.wizard.stepNames[step] ?? step}</h1></div>
+        <div class="wiz-title"><h1>{t.wizard.stepNames[step] ?? step}</h1><span class="sr-only" role="status">{t.wizard.stepNames[step] ?? step}</span></div>
       {/if}
 
       {#if step !== 'pick_console_monitor'}
@@ -525,8 +525,13 @@
     border: var(--bw) solid var(--border-strong);
     color: var(--text);
   }
+  /* The key press still to come: outline only (not faded; opacity is not a state in
+     DESIGN.md and faded text fell under 3:1). --text-muted on surface-3 is 5.26:1. */
   .bigkey kbd.pending {
-    opacity: 0.45;
+    background: transparent;
+    border-color: var(--border-input);
+    border-style: dashed;
+    color: var(--text-muted);
   }
   .bigkey .muted {
     margin-left: var(--sp-2);

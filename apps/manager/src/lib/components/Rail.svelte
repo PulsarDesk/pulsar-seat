@@ -151,6 +151,14 @@
   .foot {
     margin-top: auto;
   }
+  /* Contrast themes drop the dot's background: keep its colour (the text still says it). */
+  @media (forced-colors: active) {
+    .dot {
+      forced-color-adjust: none;
+      border: 1px solid CanvasText;
+    }
+  }
+
   .version {
     font-size: var(--fs-meta);
     line-height: var(--lh-meta);

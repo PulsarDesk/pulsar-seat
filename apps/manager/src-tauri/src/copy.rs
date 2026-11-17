@@ -16,6 +16,11 @@ pub const PICK_FOLDER: Text = Text::new("Choose the folder whose programs to add
 pub const PICK_PROGRAM: Text = Text::new("Choose a program", "Program seçin");
 pub const FILTER_PROGRAMS: Text = Text::new("Programs and shortcuts", "Programlar ve kısayollar");
 pub const FILTER_ALL: Text = Text::new("All files", "Bütün dosyalar");
+pub const PICK_VM_IMAGE: Text = Text::new("Choose a Windows image or disk", "Windows görüntüsü ya da diski seçin");
+pub const FILTER_VM_IMAGES: Text = Text::new("Windows images and disks", "Windows görüntüleri ve diskleri");
+pub const PICK_LANGUAGE_CAB: Text = Text::new("Choose a language pack", "Dil paketi seçin");
+pub const FILTER_CAB: Text = Text::new("Language packs", "Dil paketleri");
+pub const PICK_HOST_FOLDER: Text = Text::new("Choose a folder", "Klasör seçin");
 
 #[cfg(test)]
 pub const ALL: &[(&str, &Text)] = seat_core::text_table![
@@ -29,6 +34,11 @@ pub const ALL: &[(&str, &Text)] = seat_core::text_table![
     PICK_PROGRAM,
     FILTER_PROGRAMS,
     FILTER_ALL,
+    PICK_VM_IMAGE,
+    FILTER_VM_IMAGES,
+    PICK_LANGUAGE_CAB,
+    FILTER_CAB,
+    PICK_HOST_FOLDER,
 ];
 
 #[cfg(test)]

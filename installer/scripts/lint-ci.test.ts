@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, test } from "bun:test";
-import { lintLocalCoverage, lintWorkflow } from "./lint-ci";
+import { lintLocalCoverage, lintPayloadCoverage, lintWorkflow } from "./lint-ci";
 
 const ok = `name: ci
 on:
@@ -98,5 +98,23 @@ describe("local coverage (ci-local.ps1)", () => {
     const text = await Bun.file(new URL("../../.github/workflows/ci.yml", import.meta.url)).text();
     const l = await Bun.file(new URL("./ci-local.ps1", import.meta.url)).text();
     expect(cov(text, l)).toEqual([]);
+  });
+});
+
+describe("payload coverage (build-installer.ps1)", () => {
+  const installer = `foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-wrds.dll") {
+    if (-not (Test-Path (Join-Path $payload $n))) { throw "payload is missing $n ($payload)" }
+}`;
+  test("a required file the workflow never collects is reported", () => {
+    const f = lintPayloadCoverage("Copy-Item pulsar-seat-service.exe", installer);
+    expect(f.map((x) => x.msg)).toEqual([expect.stringContaining("pulsar-seat-wrds.dll")]);
+  });
+  test("the cargo name (underscores) counts too", () => {
+    expect(lintPayloadCoverage("pulsar-seat-service.exe target/release/pulsar_seat_wrds.dll", installer)).toEqual([]);
+  });
+  test("the real workflow collects everything build-installer.ps1 requires", async () => {
+    const wf = await Bun.file(".github/workflows/ci.yml").text();
+    const bi = await Bun.file("installer/scripts/build-installer.ps1").text();
+    expect(lintPayloadCoverage(wf, bi)).toEqual([]);
   });
 });

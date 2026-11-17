@@ -44,6 +44,20 @@ pub struct ClientInfo {
     pub width: u16,
     pub height: u16,
     pub keyboard_layout: u32,
+    /// Answer `WTS_QUERY_AUDIOENUM_DLL` ([`audio_enum_dll`]).
+    pub audio: bool,
+}
+
+/// The Windows RDP audio endpoint enumerator. Named for `WTS_QUERY_AUDIOENUM_DLL`, it gives
+/// the provider session the same "Remote Audio" endpoint an RDP session has; the seat's
+/// stream server captures that endpoint (loopback), so the sound needs no virtual channel
+/// of ours. HYPOTHESIS: never ran (needs Windows Server with RD Session Host); whether the
+/// enumerator creates the endpoint without an `rdpsnd` channel is unverified.
+pub const AUDIO_ENUM_DLL: &str = "rdpendp.dll";
+
+/// Audio enumerator to name for a connection (`None` = sound off: no endpoint).
+pub fn audio_enum_dll(info: &ClientInfo) -> Option<&'static str> {
+    info.audio.then_some(AUDIO_ENUM_DLL)
 }
 
 /// The seat user's credentials, handed out once.
@@ -165,6 +179,7 @@ impl Core {
             width: req.width as u16,
             height: req.height as u16,
             keyboard_layout: req.keyboard_layout,
+            audio: req.audio,
         };
         let password = Some(req.password.clone());
         drop(req);
@@ -267,6 +282,43 @@ impl Core {
     }
 }
 
+/// Start / stop bookkeeping of the pipe thread (review 2026-11-17). TermService may call
+/// `Uninitialize` and later `Initialize` again in the same process (the DLL never
+/// unloads): the second start must run a pipe thread again, and a start that races the old
+/// thread's exit must not leave the provider without one.
+#[derive(Debug, Default)]
+pub struct PipeGate {
+    stop: std::sync::atomic::AtomicBool,
+    running: std::sync::atomic::AtomicBool,
+}
+
+impl PipeGate {
+    /// `Initialize`: clear the stop request; `true` = no thread runs, spawn one.
+    pub fn request_start(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.stop.store(false, SeqCst);
+        !self.running.swap(true, SeqCst)
+    }
+    /// The spawn of a thread [`Self::request_start`] asked for failed.
+    pub fn spawn_failed(&self) {
+        self.running.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// `Uninitialize`: the thread leaves at its next check.
+    pub fn request_stop(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub fn stopping(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// The thread leaves. `true` = a start came in meanwhile: keep running (the caller
+    /// loops again or spawns a new thread).
+    pub fn thread_ended(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.running.store(false, SeqCst);
+        !self.stop.load(SeqCst) && !self.running.swap(true, SeqCst)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +334,7 @@ mod tests {
             width: 2560,
             height: 1440,
             keyboard_layout: 0x041f,
+            audio: true,
         }
     }
 
@@ -396,5 +449,34 @@ mod tests {
         }
         c.set_listening(true);
         assert!(c.drain().is_empty(), "no message without a change");
+    }
+
+    #[test]
+    fn pipe_gate_restarts_after_uninitialize() {
+        let g = PipeGate::default();
+        assert!(g.request_start(), "first Initialize spawns");
+        assert!(!g.request_start(), "a second Initialize while it runs does not");
+        g.request_stop();
+        assert!(g.stopping());
+        assert!(!g.thread_ended(), "stopped: the thread really leaves");
+        assert!(g.request_start(), "Initialize after Uninitialize spawns again");
+        assert!(!g.stopping());
+        // Uninitialize, then Initialize before the old thread noticed: no second thread,
+        // and the old one keeps running when it reaches its exit.
+        g.request_stop();
+        assert!(!g.request_start());
+        assert!(g.thread_ended(), "start came in: keep running");
+        g.spawn_failed();
+        assert!(g.request_start());
+    }
+
+    #[test]
+    fn audio_enumerator_follows_the_seat_sound() {
+        let mut c = ready();
+        let info = |c: &Core, id| c.client_info(id).unwrap();
+        let _ = c.on_service(ServiceMsg::Connect(req(41)));
+        assert_eq!(audio_enum_dll(&info(&c, 41)), Some("rdpendp.dll"));
+        let _ = c.on_service(ServiceMsg::Connect(ConnectRequest { audio: false, ..req(42) }));
+        assert_eq!(audio_enum_dll(&info(&c, 42)), None, "sound off: no endpoint");
     }
 }

@@ -3059,3 +3059,83 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     deleted on purpose: `extras.test.ts` "log level dialog returns the switches" (component
     removed; the log detail Select is covered by the Advanced tests). Installer scripts 89.
     No Rust, Tauri or driver code touched (cargo gates not required).
+
+- 2026-11-17 (parity-2 and redesign review, fix round on main): every confirmed finding of
+  the review fixed, the "gap" findings implemented, the packages' remaining build items
+  finished.
+  - **Encoding:** commit eab8383 had double-encoded `win/platform.rs`, `vm_seats.rs` (and
+    older `seat-session/lib.rs` comments): the Turkish power request / restart prompt
+    shipped as mojibake. Restored. `seat_core::i18n::mojibake` + a `check_table` rule, and
+    `crates/seat-core/tests/no_mojibake.rs` scans crates, manager, docs, installer, shim and
+    spec for double-encoded text and stray control characters (it found a pre-existing
+    `shim\arm64\` path in architecture.md mangled into BEL / `d` / U+0086).
+  - **VM seats, full seat page** (was `vm_seat` refusals): guest link protocol 2
+    (`request` / `reply` / `notice`), host `GuestHub::request` with per-request ids and
+    timeouts, connection generations (a late disconnect of an old connection no longer
+    removes the new one), guest notices published as `stream` events. App list, Pulsar
+    connect password and a pending identity reset are kept on the host and handed to the
+    guest with every config (`start_nonce` makes the reset once per start). Guest answers
+    pairing, clients, OTP, relay sign-in, runtime, log tail, credential test, enable /
+    unlock and display mode (`vm_guest_rq.rs`, pure + tested; `vm-guest-mode` helper sets
+    the VM console mode); client mode requests and Pulsar app picks are handled in the
+    guest too. Guest fixes: `shutdown` keeps the server down until the next config; a failed
+    start backs off 5 s .. 5 min and `failed` no longer flaps with `signed_in`. Host fix:
+    a start in flight (`starting`, `start_done_ms`) is never taken for a finished stop by a
+    concurrent poll. One share account per VM seat (`PulsarVm<id8>`): a guest's
+    credentials open only its own shares and a start rotates only its own password; the old
+    shared account loses its grants and goes at uninstall.
+  - **Quoting:** `hyperv::ps_quote` doubles U+2018..U+201B too (PowerShell takes them as
+    single quotes; tested injection), `win_extra` uses it, `is_abs_windows_path` refuses them.
+  - **Provider path:** `WTS_QUERY_AUDIOENUM_DLL` answers `rdpendp.dll` when the seat streams
+    sound, so provider sessions get the Remote Audio endpoint the stream server captures
+    (HYPOTHESIS). `PipeGate`: `Initialize` after `Uninitialize` runs the pipe thread again.
+    Service hub keeps queued `disconnect` frames across a pipe break and reports running
+    connections lost when a new provider process (new pid) says hello.
+  - **Drive broker:** failure replies have the shape of the IRP's major function (create =
+    `DR_CREATE_RSP`, write / set / lock / directory sizes), and the channel does not wait 50 ms
+    for IRPs that stay pending (directory watch, waiting lock).
+  - **Compat:** dism maps only `0x800f080c` to "unavailable" (`dism_info_outcome`), every
+    other failure is an error; a failed certificate add closes its journal entry as
+    `NotApplied`.
+  - **Validation:** fixed Pulsar node ports may not repeat across seats, hit the discovery
+    port 21117 or a VM seat's forwarded UDP host port, both ways round; the manager mirrors it
+    (`nodePortConflict`). Parity-round requests (`reset_graphics`, `steam_proxy_dll`,
+    `vm_seats`, `restart_term_service`, `host_audio_report`, `host_drive_broker`) need
+    protocol 3, as the docs said.
+  - **Installer / CI:** CI builds and collects `pulsar-seat-wrds.dll` (the MSI job broke
+    without it); `lint-ci.ts` now checks that every file `build-installer.ps1` requires is
+    collected (`lintPayloadCoverage`). The Pulsar build of the stream server is the default
+    payload (`build-installer.ps1 -StreamServer` / build-sunshine.ps1 when missing,
+    `-UpstreamStreamServer` only for test builds; CI downloads the stream-server artifact).
+    `setup.exe`: release builds pin the MSI signer (SHA-1 thumbprint compiled in from
+    `build-setup.ps1 -Release`, `-ExtraSigners`), and the MSI is held open shared-read-only
+    from the hash check until msiexec ends.
+  - **Manager:** Restart on a seat card waits for the stop (local seats use the service's
+    re-logon; remote seats stop, poll until off, then start) and clears "restart required"
+    only once the seat starts. Remote seat avatars back (list rows and seat page head,
+    `ui/Avatar.svelte`, `remote/avatar.ts`). Seat-level camera views (system menu "Show all
+    cameras", seat menu "Show this seat's cameras", `CameraGrid.svelte`, `cameras.ts`). Help
+    links in Settings (manual, website, issue tracker, security report; fixed URLs through the
+    shell's `open_help_link`, disabled with the reason while offline). VM settings path fields
+    get system pickers (`pick_path`). Missing refusal texts and the edition `warn` text added.
+  - **Accessibility (design review):** forced-colors rules for Switch, ChoiceList radios,
+    Segmented, Status / Rail dots; Segmented selected chip gets a `--border-input` edge and
+    32 px items; Toc links 32 px and focus moves to the chosen section; breadcrumb hit area
+    32 px; MonitorFace described by its caption; focus goes to the page h1 when the save bar
+    closes under it; Ctrl+Shift+S ignored under a modal; toasts live as long as the toast
+    region says (no store timer); Start disabled with the reason when sessions are missing;
+    wizard h1 stays a heading (separate live region) and the pending key is outlined, not
+    faded; "found" uses a dashed accent ring plus a "Found" word, not the focus ring; reduced
+    motion keeps arrived / activity as a static state for its time plus a "New" word.
+  - **Still open / not built:** the system-wide DXVK redirect (spec/remote 50 §10) and the
+    legacy verifier registration (§11): refused by the model provider's safety system in
+    remote-smalls, not retried (maintainer decision). Everything in the VM, provider-audio,
+    mode-helper and setup-pin paths is HYPOTHESIS until it runs on hardware.
+  - **BEHAVIOUR, needs maintainer test before push:** seat card Restart (re-logon / wait),
+    the stream server default (Pulsar build in every MSI), the release setup's signer pin,
+    VM seat share accounts per seat.
+  - Gates green: cargo 1933 passed / 6 ignored (was 1912), clippy -D warnings host aarch64
+    + x64, shim tests (aarch64 + x64) + check x64 / i686 / aarch64, manager 358 tests (was
+    344), check 0 / 0, build OK, installer scripts 92 (was 89). No driver touched. No test
+    deleted (the VM seat service test's `get_apps` refusal assertion became assertions of the
+    forwarded requests).

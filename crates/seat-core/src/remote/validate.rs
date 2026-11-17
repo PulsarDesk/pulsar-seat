@@ -127,6 +127,15 @@ pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
 pub const PULSAR_MAX_CLIENTS: (u8, u8) = (1, 4);
 /// Lowest fixed Pulsar node port.
 pub const PULSAR_NODE_PORT_MIN: u16 = 1024;
+/// UDP port of the Pulsar LAN beacon every Pulsar seat binds (pulsar-host-backend.md §3.6;
+/// `seat_stream::firewall::PULSAR_DISCOVERY_PORT`): never a fixed node port.
+pub const PULSAR_DISCOVERY_PORT: u16 = 21117;
+
+/// The seat's fixed Pulsar node port (UDP), when it has one.
+pub fn fixed_node_port(r: &RemoteSeatRecord) -> Option<u16> {
+    (r.stream_backend == crate::remote::StreamBackendKind::Pulsar && r.pulsar.node_port_mode == crate::remote::PulsarNodePort::Fixed)
+        .then_some(r.pulsar.node_port)
+}
 
 /// Relay address: `host` or `host:port`, host a DNS name, IPv4 address or `[IPv6]`.
 /// Empty = the built-in default relay.
@@ -176,6 +185,9 @@ pub fn pulsar_options(p: &crate::remote::PulsarSeatOptions) -> Result<(), ProtoE
     if p.node_port_mode == crate::remote::PulsarNodePort::Fixed && p.node_port < PULSAR_NODE_PORT_MIN {
         return Err(err(ErrorCode::InvalidPort, "pulsar.node_port", "node port must be 1024-65535"));
     }
+    if p.node_port_mode == crate::remote::PulsarNodePort::Fixed && p.node_port == PULSAR_DISCOVERY_PORT {
+        return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", "node port is the Pulsar LAN discovery port"));
+    }
     if !(PULSAR_MAX_CLIENTS.0..=PULSAR_MAX_CLIENTS.1).contains(&p.max_clients) {
         return Err(err(ErrorCode::InvalidValue, "pulsar.max_clients", "clients at the same time must be 1-4"));
     }
@@ -218,13 +230,39 @@ pub fn seat_against(seat: &RemoteSeatRecord, others: &[RemoteSeatRecord]) -> Res
         if !seat.rdp_client_name.is_empty() && o.rdp_client_name.eq_ignore_ascii_case(&seat.rdp_client_name) {
             return Err(err(ErrorCode::DuplicateName, "rdp_client_name", format!("client name used by seat '{}'", o.name)));
         }
-        // A fixed Pulsar node port must stay out of every other seat's port block.
-        if seat.stream_backend == crate::remote::StreamBackendKind::Pulsar
-            && seat.pulsar.node_port_mode == crate::remote::PulsarNodePort::Fixed
-            && ports::is_valid_base(o.port)
-            && (u32::from(o.port).saturating_sub(5)..=u32::from(o.port) + 21).contains(&u32::from(seat.pulsar.node_port))
-        {
-            return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", format!("node port is in the port block of seat '{}'", o.name)));
+        // A fixed Pulsar node port must stay out of every other seat's port block, other
+        // seats' fixed node ports and every VM seat's forwarded UDP host ports (review
+        // 2026-11-17), both ways round.
+        let in_block = |node: u16, base: u16| {
+            ports::is_valid_base(base) && (u32::from(base).saturating_sub(5)..=u32::from(base) + 21).contains(&u32::from(node))
+        };
+        let forwarded = |v: Option<&crate::remote::vm::VmSeat>, node: u16| {
+            v.is_some_and(|v| {
+                v.forwarded_ports.iter().any(|f| f.protocol == crate::remote::vm::PortProtocol::Udp && f.host_port == node)
+            })
+        };
+        if let Some(node) = fixed_node_port(seat) {
+            if in_block(node, o.port) {
+                return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", format!("node port is in the port block of seat '{}'", o.name)));
+            }
+            if fixed_node_port(o) == Some(node) {
+                return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", format!("node port is used by seat '{}'", o.name)));
+            }
+            if forwarded(o.vm.as_deref(), node) {
+                return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", format!("node port is forwarded to seat '{}'", o.name)));
+            }
+        }
+        if let Some(node) = fixed_node_port(o) {
+            if in_block(node, seat.port) {
+                return Err(err(ErrorCode::PortOverlap, "port", format!("port block holds the node port of seat '{}'", o.name)));
+            }
+            if forwarded(seat.vm.as_deref(), node) {
+                return Err(err(
+                    ErrorCode::PortOverlap,
+                    "vm.forwarded_ports.host_port",
+                    format!("host port is the node port of seat '{}'", o.name),
+                ));
+            }
         }
     }
     Ok(())
@@ -479,7 +517,37 @@ mod tests {
         let b = seat("b", 48200, "");
         assert_eq!(seat_against(&a, std::slice::from_ref(&b)).unwrap_err().code, ErrorCode::PortOverlap);
         a.pulsar.node_port = 48300;
-        assert!(seat_against(&a, &[b]).is_ok());
+        assert!(seat_against(&a, std::slice::from_ref(&b)).is_ok());
+        // Seen from the other seat too: its port block holds a's node port.
+        let near = seat("n", 48290, "");
+        assert_eq!(seat_against(&near, std::slice::from_ref(&a)).unwrap_err().field.as_deref(), Some("port"));
+        // Two seats with the same fixed node port.
+        let mut c2 = seat("c2", 48600, "");
+        c2.stream_backend = StreamBackendKind::Pulsar;
+        c2.pulsar = a.pulsar.clone();
+        let e = seat_against(&c2, std::slice::from_ref(&a)).unwrap_err();
+        assert_eq!((e.code, e.field.as_deref()), (ErrorCode::PortOverlap, Some("pulsar.node_port")));
+        c2.pulsar.node_port = 48301;
+        assert!(seat_against(&c2, std::slice::from_ref(&a)).is_ok());
+        // The LAN discovery port.
+        let disc = PulsarSeatOptions { node_port_mode: PulsarNodePort::Fixed, node_port: PULSAR_DISCOVERY_PORT, ..Default::default() };
+        assert_eq!(pulsar_options(&disc).unwrap_err().code, ErrorCode::PortOverlap);
+        // A VM seat's forwarded UDP host port.
+        let mut vm = seat("vm", 48700, "");
+        let mut v = crate::remote::vm::VmSeat::default();
+        v.forwarded_ports.push(crate::remote::vm::ForwardedPort {
+            protocol: crate::remote::vm::PortProtocol::Udp,
+            host_port: 48300,
+            ..Default::default()
+        });
+        vm.vm = Some(Box::new(v));
+        assert_eq!(seat_against(&a, std::slice::from_ref(&vm)).unwrap_err().field.as_deref(), Some("pulsar.node_port"));
+        assert_eq!(seat_against(&vm, std::slice::from_ref(&a)).unwrap_err().field.as_deref(), Some("vm.forwarded_ports.host_port"));
+        // A Sunshine seat's stored node port means nothing.
+        let mut sun = c2.clone();
+        sun.stream_backend = StreamBackendKind::Sunshine;
+        sun.pulsar.node_port = 48300;
+        assert!(seat_against(&sun, &[a]).is_ok());
         let mut bad_relay = seat("c", 48400, "");
         bad_relay.pulsar.relay = "bad relay".into();
         assert!(seat_alone(&bad_relay).is_err());

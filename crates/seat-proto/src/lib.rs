@@ -248,6 +248,14 @@ mod tests {
         }
         // Old requests: unchanged minimum, except the config ones (schema 2 seat shape).
         assert_eq!(RequestBody::GetStatus.min_protocol(), 1);
+        for r in [
+            RequestBody::ResetGraphics { seat: SeatNumber::new(2).unwrap() },
+            RequestBody::VmSeats { action: crate::hyperv::VmAction::Status },
+            RequestBody::RestartTermService { confirm: true },
+            RequestBody::HostDriveBroker { seat: SeatNumber::new(2).unwrap() },
+        ] {
+            assert_eq!(r.min_protocol(), 3, "parity-round request {r:?}");
+        }
         assert_eq!(RequestBody::HostTakeCredentials { seat: SeatNumber::new(2).unwrap() }.min_protocol(), 1);
         assert_eq!(RequestBody::GetConfig.min_protocol(), 3);
         assert_eq!(RequestBody::ResetConfig { confirm: true }.min_protocol(), 3);

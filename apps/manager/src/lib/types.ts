@@ -1056,6 +1056,12 @@ export type ResponseBody =
   | { type: 'audio_cleanup'; data: R.AudioCleanup }
   | { type: 'mode_result'; data: R.ModeResult };
 
+/** What the path picker asks for (`pick_path`). */
+export type PathKind = 'vm_image' | 'language_cab' | 'folder';
+
+/** The project's help pages (`open_help_link`, fixed URLs in the shell). */
+export type HelpLink = 'manual' | 'manual_tr' | 'website' | 'contact' | 'security';
+
 export type Panel =
   | 'device_manager'
   | 'display_settings'

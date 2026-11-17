@@ -39,6 +39,11 @@
     current = id;
     const smooth = !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView?.({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    // Move keyboard focus and screen readers to the chosen section (the default fragment
+    // navigation, cancelled above, would have done that; WCAG 2.4.3, review 2026-11-17).
+    const target = (el.querySelector('h2, h1') as HTMLElement | null) ?? el;
+    if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+    target.focus({ preventScroll: true });
   }
 </script>
 
@@ -57,6 +62,9 @@
     gap: 2px;
   }
   a {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--h-compact);
     padding: 6px var(--sp-3);
     border-radius: var(--r-xs);
     color: var(--text-muted);

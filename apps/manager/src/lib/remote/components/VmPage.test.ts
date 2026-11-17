@@ -70,4 +70,22 @@ describe('VmPage', () => {
     // The seat list links to the seat page.
     expect(screen.getByRole('button', { name: /Salon/ })).toBeInTheDocument();
   });
+
+  it('fills the path fields from the system picker', async () => {
+    const user = userEvent.setup();
+    const pickPath = vi.fn(async (kind: string) => (kind === 'folder' ? 'E:/VM' : 'D:/iso/install.wim'));
+    render(VmPage, {
+      seats: [],
+      settings: { ...defaultVmSettings(), image_kind: 'wim' },
+      load: vi.fn(async () => host()),
+      onAction: vi.fn(async () => host()),
+      onSaveSettings: vi.fn(async () => {}),
+      pickPath
+    });
+    await user.click(await screen.findByRole('button', { name: `${t.vm.browse} ${t.vm.imagePath}` }));
+    expect(pickPath).toHaveBeenCalledWith('vm_image');
+    expect(screen.getByRole('textbox', { name: t.vm.imagePath })).toHaveValue('D:/iso/install.wim');
+    await user.click(screen.getByRole('button', { name: `${t.vm.browse} ${t.vm.storage}` }));
+    expect(screen.getByRole('textbox', { name: t.vm.storage })).toHaveValue('E:/VM');
+  });
 });

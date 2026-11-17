@@ -48,8 +48,9 @@ pub const VM_SUFFIX: &str = " (VM)";
 /// `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices`
 /// on the host). Our own random GUID.
 pub const GUEST_LINK_SERVICE_ID: &str = "6c3c2b9e-5f1a-4f7e-9d2b-8a41c0e7b513";
-/// Guest link protocol version ([`GuestMsg::Hello`]).
-pub const GUEST_LINK_PROTOCOL: u32 = 1;
+/// Guest link protocol version ([`GuestMsg::Hello`]). 2 (parity-2 review, 2026-11-17):
+/// `request` / `reply` / `notice` for the seat page's requests on VM seats.
+pub const GUEST_LINK_PROTOCOL: u32 = 2;
 /// Longest guest link line (bytes, JSON + `\n`).
 pub const GUEST_LINK_MAX_LINE: usize = 64 * 1024;
 
@@ -249,7 +250,8 @@ pub fn is_abs_windows_path(p: &str) -> bool {
     let unc = p.starts_with(r"\\") && p.len() > 2;
     (drive || unc)
         && p.len() <= 260
-        && !p.chars().any(|c| c.is_control() || c == '"' || c == '\'' || c == '`' || c == '$')
+        // ' and U+2018 to U+201B all delimit a PowerShell single-quoted literal.
+        && !p.chars().any(|c| c.is_control() || matches!(c, '"' | '\'' | '`' | '$' | '\u{2018}'..='\u{201b}'))
         && !p.split('\\').any(|c| c == "..")
 }
 
@@ -507,6 +509,21 @@ pub struct GuestConfig {
     pub share_password: crate::Secret,
     /// Apps started in the seat session (the seat's `apps`).
     pub apps: Vec<crate::remote::AutostartApp>,
+    /// The seat's stream app list (`set_apps`), kept on the host; `None` = the stream
+    /// server's defaults. The guest writes it before the server starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_apps: Option<Vec<serde_json::Value>>,
+    /// The Pulsar backend's permanent connect password, kept on the host (`None` = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_password: Option<crate::Secret>,
+    /// `regenerate_seat_identity` asked while the VM was off: the guest makes a new stream
+    /// identity before the server starts.
+    #[serde(default)]
+    pub regenerate_identity: bool,
+    /// Random per seat start: the guest does one-time work of a start (the identity reset)
+    /// once, even when the link reconnects and the same config comes again.
+    #[serde(default)]
+    pub start_nonce: String,
 }
 
 impl GuestConfig {
@@ -597,9 +614,31 @@ pub enum GuestMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
-    /// Host -> guest: the seat stops; sign out and shut down.
+    /// Host -> guest: the seat stops; sign out and shut down. The guest keeps its stream
+    /// server down until the next `config`.
     Shutdown,
+    /// Host -> guest: one protocol 3 control request of the seat page (`RequestBody` as
+    /// JSON, `type` tagged) that the guest's stream server or account answers. `id` pairs
+    /// it with the [`GuestMsg::Reply`].
+    Request { id: u64, request: serde_json::Value },
+    /// Guest -> host: answer of a [`GuestMsg::Request`]: `response` is the `ResponseBody`
+    /// as JSON, or `error` says why not.
+    Reply {
+        id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<ProtoError>,
+    },
+    /// Guest -> host: a stream server notice (`pair_pending`, `pair_ended`,
+    /// `stream_started`, `stream_ended`, `otp_changed`, `trust_changed`,
+    /// `relay_auth_required`); the host publishes it as the seat's `stream` event.
+    Notice { kind: String, data: serde_json::Value },
 }
+
+/// Guest link notices the host turns into `stream` events (anything else is dropped).
+pub const GUEST_NOTICE_KINDS: [&str; 7] =
+    ["pair_pending", "pair_ended", "stream_started", "stream_ended", "otp_changed", "trust_changed", "relay_auth_required"];
 
 /// One line for the link (`\n` terminated). `None` when it would exceed the line limit.
 pub fn encode_line(m: &GuestMsg) -> Option<Vec<u8>> {
@@ -665,6 +704,8 @@ mod tests {
         assert_eq!(default_guest_path(r"D:\Games\Steam"), r"C:\HostFolders\Steam");
         assert!(is_abs_windows_path(r"D:\x y"));
         assert!(!is_abs_windows_path(r"D:\x'; rm"));
+        assert!(!is_abs_windows_path("D:\\Bob\u{2019}s Games"), "typographic quote");
+        assert!(!is_abs_windows_path("D:\\a\u{201a}b"));
         assert!(!is_abs_windows_path("relative"));
     }
 
@@ -757,6 +798,23 @@ mod tests {
     }
 
     #[test]
+    fn guest_link_request_reply_notice_round_trip() {
+        let rq = GuestMsg::Request { id: 7, request: serde_json::json!({"type": "list_paired_clients", "seat": 3}) };
+        let ok = GuestMsg::Reply { id: 7, response: Some(serde_json::json!({"type": "ack"})), error: None };
+        let no = GuestMsg::Reply { id: 8, response: None, error: Some(ProtoError::new(ErrorCode::Unsupported, "x").with_reason("y")) };
+        let nt = GuestMsg::Notice { kind: "pair_ended".into(), data: serde_json::json!({"result": "paired"}) };
+        let mut buf = Vec::new();
+        for m in [&rq, &ok, &no, &nt] {
+            buf.extend(encode_line(m).unwrap());
+        }
+        let got: Vec<GuestMsg> = decode_lines(&mut buf).into_iter().map(Result::unwrap).collect();
+        assert_eq!(got, vec![rq, ok, no, nt]);
+        let line = String::from_utf8(encode_line(&GuestMsg::Reply { id: 1, response: None, error: None }).unwrap()).unwrap();
+        assert_eq!(line.trim_end(), "{\"type\":\"reply\",\"id\":1}", "empty fields are left out");
+        assert!(GUEST_NOTICE_KINDS.contains(&"pair_ended"));
+    }
+
+    #[test]
     fn guest_link_lines() {
         let m = GuestMsg::State { phase: GuestPhase::SignedIn, detail: None };
         let mut buf = encode_line(&m).unwrap();
@@ -798,6 +856,10 @@ mod tests {
             share_user: "PulsarVmShare".into(),
             share_password: crate::Secret::new("sp"),
             apps: vec![],
+            stream_apps: None,
+            connect_password: None,
+            regenerate_identity: false,
+            start_nonce: String::new(),
         };
         assert!(c.check().is_ok());
         let rec = c.to_record();

@@ -99,8 +99,16 @@ cargo build --release -p seat-wrds          # target\<triple>\release\pulsar_sea
 - The seat-idd remote role starts on the device TermService creates for our hardware id
   (the 2026-11-16 VM run showed IddCx refusing a root-enumerated remote-role device, which
   is exactly why this provider exists).
-- Provider sessions have no RDP virtual channels: no RDP audio redirection endpoint and no
-  microphone hold. Sound must come from the stream server's own capture of the session
-  (as on the Pulsar stream server); this is listed as open in status.md.
+- Sound (review 2026-11-17): `QueryProperty(WTS_QUERY_AUDIOENUM_DLL)` names the Windows RDP
+  audio endpoint enumerator `rdpendp.dll` when the seat streams sound
+  (`ConnectRequest.audio`), so the session gets the same "Remote Audio" endpoint an RDP
+  session has, and the stream server captures it (loopback). Unverified: that the
+  enumerator creates the endpoint without an `rdpsnd` virtual channel, and that TermService
+  frees the returned string with `LocalFree` (it is `LocalAlloc`ed). Provider sessions still
+  have no virtual channels of their own, so no microphone hold (the reference has no
+  microphone path either, spec/remote 70 §1), no clipboard and no drive redirection (the
+  reference session asks for none, spec/remote 30 §5.1).
+- `Uninitialize` followed by `Initialize` in the same TermService process (the DLL never
+  unloads) starts the pipe thread again (`state::PipeGate`, review 2026-11-17).
 - Windows Server needs a WHQL-signed seat-idd driver (spec/remote 40 §2.3); the provider
   itself is user mode and needs only Authenticode for a release.

@@ -9,7 +9,9 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import AssignDialog from './AssignDialog.svelte';
+  import CameraGrid from './CameraGrid.svelte';
   import CameraPreview from './CameraPreview.svelte';
+  import { cameraNames } from '#lib/cameras.ts';
   import CompareDialog from './CompareDialog.svelte';
   import DeviceInfoDialog from './DeviceInfoDialog.svelte';
   import DeviceRow from './DeviceRow.svelte';
@@ -124,7 +126,8 @@
     | { kind: 'view' }
     | { kind: 'picture'; item: CanvasItem }
     | { kind: 'outputs' }
-    | { kind: 'camera'; name: string };
+    | { kind: 'camera'; name: string }
+    | { kind: 'cameras'; title: string; names: string[] | null };
 
   let dialog = $state<Dialog | null>(null);
   /** The Move menu of one device row or face (anchored at it). */
@@ -304,6 +307,11 @@
       { label: t.seatCard.ipMenu, disabled: !commands.ipBinding, action: () => commands.ipBinding?.(n) },
       { label: t.seatMenu.cpu, action: commands.cpu },
       { label: t.seatCard.gpuMenu, action: () => (dialog = { kind: 'gpu', seat: n }) },
+      {
+        label: t.seatMenu.cameras,
+        disabled: cameraNames(store.devices, n).length === 0,
+        action: () => (dialog = { kind: 'cameras', title: t.camera.seatTitle(seatTitle(s)), names: cameraNames(store.devices, n) })
+      },
       { label: t.seatMenu.compat, disabled: !store.isAdmin, action: () => (dialog = { kind: 'compat', seat: n }) },
       { label: pads ? t.settingsPage.padsOff : t.settingsPage.padsOn, action: () => store.edit((c) => setVirtualPads(c, n, !pads)) }
     );
@@ -347,8 +355,8 @@
       commands.restartSeat(n);
       return;
     }
-    if (running(n) && n !== 1) await store.stopSeat(n);
-    commands.startSeat(n);
+    // The service acks a stop before the seat is off; the store waits for it.
+    await store.restartSeat(n);
   }
 
   const moreItems = $derived<MenuEntry[]>([
@@ -363,6 +371,7 @@
     { label: t.systemMenu.view, action: () => (dialog = { kind: 'view' }) },
     { label: t.systemMenu.compare, disabled: !store.isAdmin, action: () => void compare() },
     { label: t.systemMenu.usbDock, disabled: !store.isAdmin, action: () => (dialog = { kind: 'usbDock' }) },
+    { label: t.systemMenu.cameras, disabled: cameraNames(store.devices).length === 0, action: () => (dialog = { kind: 'cameras', title: t.camera.allTitle, names: null }) },
     { separator: true },
     { label: t.power.stopAll, disabled: !store.isAdmin || !anyRunning, action: () => void stopAll() },
     { label: t.power.close, disabled: !store.isAdmin || !store.enabled || !commands.enable, action: () => commands.enable?.(false) },
@@ -768,6 +777,8 @@
   />
 {:else if dialog?.kind === 'camera'}
   <CameraPreview name={dialog.name} onClose={() => (dialog = null)} />
+{:else if dialog?.kind === 'cameras'}
+  <CameraGrid title={dialog.title} names={dialog.names} onClose={() => (dialog = null)} />
 {:else if dialog?.kind === 'view'}
   <ViewSettingsDialog prefs={store.prefs} {seats} onChange={(k, v) => store.setPref(k, v)} onClose={() => (dialog = null)} />
 {/if}

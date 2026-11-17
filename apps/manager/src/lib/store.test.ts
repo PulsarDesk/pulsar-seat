@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createDemoApi } from './demo.ts';
 import { addSeat, setDeviceMask } from './model.ts';
 import { ManagerStore } from './store.svelte.ts';
@@ -47,6 +47,54 @@ describe('ManagerStore', () => {
     expect(api.calls).not.toContain('apply_config');
     expect(store.toasts.some((x) => x.kind === 'error')).toBe(true);
     store.dispose();
+  });
+
+  it('restart of a remote seat waits for the stop before it starts again', async () => {
+    const { api, store } = await ready();
+    api.state.product = { state: 'enabled', started: true };
+    const seat = { ...JSON.parse(JSON.stringify(store.saved!.seats[1])), number: 3, kind: 'remote' } as never;
+    store.saved = { ...store.saved!, seats: [...store.saved!.seats, seat] };
+    store.restartRequired = [3];
+    // The service acks the stop at once; the seat is still stopping for two polls.
+    let polls = 0;
+    const calls: string[] = [];
+    api.stopSeat = async () => {
+      calls.push('stop');
+    };
+    const startSeats = api.startSeats.bind(api);
+    api.startSeats = async (seats) => {
+      calls.push(`start after ${polls} polls`);
+      await startSeats(seats);
+    };
+    const status = api.status.bind(api);
+    api.status = async () => {
+      const st = await status();
+      polls++;
+      const started = calls.some((c) => c.startsWith('start'));
+      const state = started ? 'at_logon' : polls <= 2 ? 'stopping' : 'off';
+      return { ...st, seats: [...st.seats.filter((r) => r.seat !== 3), { seat: 3, state: { state }, since_ms: 0 } as never] };
+    };
+    expect(await store.restartSeat(3)).toBe(true);
+    expect(calls).toEqual(['stop', 'start after 3 polls']);
+    expect(store.restartRequired).toEqual([]);
+    store.dispose();
+  });
+
+  it('leaves the toast lifetime to the toast region, bounded', async () => {
+    const { store } = await ready();
+    vi.useFakeTimers();
+    try {
+      store.toast('ok', 'hello');
+      vi.advanceTimersByTime(10_000);
+      expect(store.toasts.map((x) => x.text)).toContain('hello');
+      for (let i = 0; i < 30; i++) store.toast('ok', `n${i}`);
+      store.toast('error', 'kept');
+      expect(store.toasts.filter((x) => x.kind !== 'error')).toHaveLength(20);
+      expect(store.toasts.some((x) => x.text === 'kept')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      store.dispose();
+    }
   });
 
   it('identify by touch picks the first active device', async () => {

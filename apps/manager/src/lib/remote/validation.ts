@@ -48,3 +48,17 @@ export function blocksOverlap(a: number, b: number): boolean {
 export function portOverlapError(port: number, otherPorts: number[]): FieldError | null {
   return otherPorts.some((o) => blocksOverlap(port, o)) ? 'port_overlap' : null;
 }
+
+/** UDP port of the Pulsar LAN beacon (`seat_core::remote::validate::PULSAR_DISCOVERY_PORT`). */
+export const PULSAR_DISCOVERY_PORT = 21117;
+
+/**
+ * A fixed Pulsar node port that the service refuses (mirror of `seat_against`): inside
+ * another seat's port block (`base-5 ..= base+21`), equal to another seat's fixed node
+ * port or forwarded UDP host port (`otherNodePorts`), or the LAN discovery port.
+ */
+export function nodePortConflict(port: number, otherPorts: number[], otherNodePorts: number[] = []): boolean {
+  if (port === PULSAR_DISCOVERY_PORT) return true;
+  if (otherPorts.some((b) => b > 0 && port >= b - 5 && port <= b + 21)) return true;
+  return otherNodePorts.includes(port);
+}

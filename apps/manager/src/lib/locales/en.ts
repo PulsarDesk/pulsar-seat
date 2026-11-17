@@ -216,7 +216,11 @@ const t = {
     starting: 'Opening the camera…',
     denied: 'Camera access was not granted, or another program is using the camera.',
     notFound: 'This camera was not found among the video devices; showing the first camera.',
-    unsupported: 'Camera preview is not available in this window.'
+    unsupported: 'Camera preview is not available in this window.',
+    allTitle: 'All cameras',
+    seatTitle: (seat: string) => `${seat}: cameras`,
+    none: 'No camera is connected for this view.',
+    busy: 'This camera could not be opened (another program may be using it).'
   },
 
   bar: {
@@ -301,6 +305,8 @@ const t = {
 
   device: {
     moved: 'Moved, not saved',
+    found: 'Found',
+    arrived: 'New',
     shared: 'Shared: every seat uses it',
     unplugged: 'Not plugged in',
     actions: (name: string) => `${name}: move or details`,
@@ -331,6 +337,7 @@ const t = {
   },
 
   seatCard: {
+    restartTimeout: 'The seat did not stop in time. Try Restart again.',
     running: 'Running',
     blocked: 'Cannot start',
     off: 'Off',
@@ -374,6 +381,16 @@ const t = {
     theme: 'Theme',
     language: 'Language',
     sameAccountHelp: 'Signing in with the same account on two seats can damage files and settings.',
+    help: 'Help',
+    helpOffline: 'Needs an internet connection; this PC looks offline.',
+    manual: 'User manual',
+    manualHelp: 'Troubleshooting and how-to pages, in the browser',
+    website: 'Product website',
+    websiteHelp: 'Source code, releases and news',
+    contact: 'Report a problem or ask a question',
+    contactHelp: 'The project’s issue tracker',
+    security: 'Report a security problem',
+    securityHelp: 'Private report to the maintainers (SECURITY.md)',
     maintenance: 'Maintenance',
     diagnostics: 'Diagnostic report',
     diagnosticsHelp: 'Add it when you report a problem. It is saved on this PC and sent nowhere.',
@@ -652,10 +669,12 @@ const t = {
       'Pulsar Seat made a Windows user for this seat’s kiosk shell. When the kiosk shell is turned off the user is only disabled and its files (saves, browser profiles) are kept. Deleting it removes the user and all its files for good.',
     removeKioskUserConfirm: 'Delete the user',
     removeKioskUserDone: 'The seat’s kiosk user was deleted.',
-    compat: 'Environment and sign-in…'
+    compat: 'Environment and sign-in…',
+    cameras: 'Show this seat’s cameras'
   },
 
   systemMenu: {
+    cameras: 'Show all cameras',
     compare: 'Compare with the saved configuration…',
     view: 'View settings…',
     cpu: 'Processor cores per seat…',
@@ -1063,7 +1082,10 @@ const t = {
       warn: 'The PC’s processor architecture could not be determined.',
       fail: 'This package is for another processor architecture; install the right package.'
     },
-    edition: { info: 'Windows edition reported.' },
+    edition: {
+      info: 'Windows edition reported.',
+      warn: 'A client edition of Windows: extra seats need a session method that gives several sessions at once (Advanced settings).'
+    },
     rdsh_role: {
       pass: 'The role is installed.',
       warn: 'The role was not found; seats fall back to fast user switching.',
@@ -1249,7 +1271,13 @@ const t = {
     clipboard_filter_needs_ironrdp: 'the ActiveX client cannot filter the clipboard; clipboard off',
     drives_need_ironrdp: 'the ActiveX client does not redirect drives',
     smartcards_need_ironrdp: 'the ActiveX client does not redirect smart cards',
-    printers_need_ironrdp: 'the ActiveX client does not redirect printers'
+    printers_need_ironrdp: 'the ActiveX client does not redirect printers',
+    clipboard_backend_error: 'the clipboard stopped working for this connection',
+    clipboard_pdu_error: 'an invalid clipboard message was dropped',
+    clipboard_timer_error: 'the clipboard timer failed; clipboard off for this connection',
+    drive_configuration_invalid: 'the drive settings of this seat are invalid; no drives redirected',
+    rdpdr_poll_error: 'device redirection stopped working for this connection',
+    rdpdr_windows_only: 'device redirection needs Windows'
   } as Record<string, string>,
 
   drivers: {
@@ -2244,6 +2272,7 @@ const rt = {
     shared: 'Shared folders',
     addFolder: 'Add folder',
     hostFolder: 'Folder on this PC',
+    browse: 'Browse',
     mountPoint: 'Path in the VM',
     readOnly: 'read only',
     remove: 'Remove',
@@ -2513,6 +2542,7 @@ const rt = {
     pulsarNodePortEphemeral: 'Any free port',
     pulsarNodePortFixed: 'This port:',
     pulsarNodePortInvalid: 'The port must be 1024-65535.',
+    pulsarNodePortTaken: 'Another seat already uses this port, or it is the Pulsar discovery port (21117).',
     pulsarPortMapping: 'Ask the router to open the port (UPnP)',
     pulsarDiscovery: 'Show this seat to devices on the local network',
     pulsarDiscoveryHint: 'Opens UDP 21117 for the local subnet in the firewall while the seat runs with this option.',

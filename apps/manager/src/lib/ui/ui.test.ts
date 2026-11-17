@@ -16,6 +16,7 @@ import Notices from './Notices.svelte';
 import SaveBar from './SaveBar.svelte';
 import Status from './Status.svelte';
 import Toasts from './Toasts.svelte';
+import Toc from './Toc.svelte';
 
 afterEach(() => {
   applyLocale('en');
@@ -303,6 +304,33 @@ describe('SaveBar and ConfirmDialog', () => {
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
+  it('the save shortcut does nothing while a modal dialog is open', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(SaveBar, { count: 1, onSave, onUndo: () => {}, shortcut: true });
+    const dlg = document.createElement('dialog');
+    dlg.setAttribute('open', '');
+    document.body.appendChild(dlg);
+    await user.keyboard('{Control>}{Shift>}S{/Shift}{/Control}');
+    expect(onSave).not.toHaveBeenCalled();
+    dlg.remove();
+    await user.keyboard('{Control>}{Shift>}S{/Shift}{/Control}');
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('focus goes to the page heading when the bar closes under it', async () => {
+    const main = document.createElement('main');
+    main.innerHTML = '<h1>Seats</h1>';
+    document.body.appendChild(main);
+    const view = render(SaveBar, { target: main, props: { count: 1, onSave: () => {}, onUndo: () => {} } });
+    const undo = within(main).getByRole('button', { name: t.saveBar.undo });
+    undo.focus();
+    view.unmount();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.activeElement).toBe(main.querySelector('h1'));
+    main.remove();
+  });
+
   it('a destructive confirm opens on Cancel and waits for the typed word', async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();
@@ -390,5 +418,19 @@ describe('Notice title', () => {
       ]
     });
     expect(two.container.querySelector('li b')?.parentElement?.textContent).toBe('A: one.');
+  });
+});
+
+describe('Toc', () => {
+  it('moves focus to the chosen section, not only the scroll position', async () => {
+    const user = userEvent.setup();
+    const sec = document.createElement('section');
+    sec.id = 'net';
+    sec.innerHTML = '<h2>Network</h2>';
+    document.body.appendChild(sec);
+    render(Toc, { items: [{ id: 'net', label: 'Network' }] });
+    await user.click(screen.getByRole('link', { name: 'Network' }));
+    expect(document.activeElement).toBe(sec.querySelector('h2'));
+    sec.remove();
   });
 });

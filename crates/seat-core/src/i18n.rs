@@ -250,8 +250,33 @@ pub fn check_table(table: &[(&str, &Text)]) -> Vec<String> {
         if placeholders(text.en) != placeholders(text.tr) {
             problems.push(format!("{name}: placeholders differ ({:?} vs {:?})", placeholders(text.en), placeholders(text.tr)));
         }
+        for lang in Lang::ALL {
+            if let Some(m) = mojibake(text.pick(lang)) {
+                problems.push(format!("{name}: {} looks double-encoded ({m:?})", lang.code()));
+            }
+        }
     }
     problems
+}
+
+/// The marker of UTF-8 text that was read as Windows-1252 and written back as UTF-8
+/// (U+0131 becomes U+00C4 U+00B1, U+00A7 becomes U+00C2 U+00A7, U+2013 becomes U+00E2 U+20AC
+/// U+201C), or `None` when the text looks clean. Turkish and English copy never contains
+/// these pairs, so a hit is always an encoding accident. Written with escapes so this file
+/// passes its own repository scan.
+pub fn mojibake(text: &str) -> Option<&'static str> {
+    const MARKERS: [&str; 9] = [
+        "\u{c3}\u{a7}",   // ç
+        "\u{c3}\u{b6}",   // ö
+        "\u{c3}\u{bc}",   // ü
+        "\u{c4}\u{b1}",   // ı
+        "\u{c4}\u{b0}",   // İ
+        "\u{c4}\u{178}",  // ğ (byte 0x9F reads as U+0178 in cp1252)
+        "\u{c5}\u{178}",  // ş
+        "\u{c2}\u{a7}",   // §
+        "\u{e2}\u{20ac}", // – — “ ” ’ …
+    ];
+    MARKERS.iter().copied().find(|m| text.contains(m))
 }
 
 /// Build a `&[(&str, &Text)]` table from named [`Text`] constants, for [`check_table`].
@@ -301,6 +326,19 @@ mod tests {
         assert!(check_table(text_table![A]).is_empty());
         let p = check_table(text_table![A, B, C, A]);
         assert_eq!(p.len(), 3, "{p:?}");
+        const M: Text = Text::new("Seat in use", "ek koltuklar kullan\u{c4}\u{b1}mda");
+        let p = check_table(text_table![M]);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(p[0].contains("double-encoded"), "{p:?}");
+    }
+
+    #[test]
+    fn mojibake_markers() {
+        assert_eq!(mojibake("kullan\u{c4}\u{b1}mda"), Some("\u{c4}\u{b1}"));
+        assert_eq!(mojibake("spec 80 \u{c2}\u{a7}11"), Some("\u{c2}\u{a7}"));
+        assert_eq!(mojibake("phases 1\u{e2}\u{20ac}\u{201c}5"), Some("\u{e2}\u{20ac}"));
+        assert_eq!(mojibake("ba\u{c5}\u{178}lat"), Some("\u{c5}\u{178}"));
+        assert_eq!(mojibake("kullanımda, yapılandırma için başlatılıyor, İstanbul, Çağrı, ödül, §5 – ok"), None);
     }
 
     #[test]

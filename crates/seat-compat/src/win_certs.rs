@@ -4,7 +4,7 @@
 //! facts, and optional features through `dism.exe`. Never run on hardware (HYPOTHESIS).
 
 use crate::certs::{CertFacts, CertStore};
-use crate::features::{FeatureState, parse_dism_state};
+use crate::features::FeatureState;
 use crate::ops::{OpsError, OpsResult};
 use std::path::Path;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -195,12 +195,7 @@ pub fn feature_state(name: &str) -> OpsResult<FeatureState> {
     check_name(name)?;
     let fname = format!("/FeatureName:{name}");
     let (code, text) = dism(&["/Online", "/English", "/Get-FeatureInfo", &fname])?;
-    match parse_dism_state(&text) {
-        Some(s) => Ok(s),
-        // An unknown feature fails the call (edition without it).
-        None if code != 0 => Ok(FeatureState::Unavailable),
-        None => Err(OpsError::new("dism", "no State line")),
-    }
+    crate::features::dism_info_outcome(code, &text).map_err(|m| OpsError { op: "dism".into(), message: m, win32: Some(code) })
 }
 
 /// `dism /Online /Enable-Feature /All /NoRestart /LimitAccess`; `Ok(true)` = restart needed.

@@ -17,7 +17,7 @@
   import StartupAppsDialog from './StartupAppsDialog.svelte';
   import { Button, ChoiceList, Group, LinkRow, LockedValue, Menu, Notice, PageHead, Row, Section, Segmented, Select, SubLabel, Switch } from '#lib/ui/index.ts';
   import type { MenuEntry } from '#lib/ui/index.ts';
-  import { LANGS, seatLabel, storedLangPref, t, type LangPref } from '#lib/i18n.ts';
+  import { LANGS, activeLang, seatLabel, storedLangPref, t, type LangPref } from '#lib/i18n.ts';
   import { denyLogonAllowed } from '#lib/compat.ts';
   import {
     addSeat,
@@ -46,7 +46,7 @@
   import { seatDisplayName, seatFacts } from '#lib/settingsview.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { Config, SameAccountPolicy, SeatConfig, SeatNumber, StartMode } from '#lib/types.ts';
+  import type { Config, HelpLink, SameAccountPolicy, SeatConfig, SeatNumber, StartMode } from '#lib/types.ts';
 
   export type SettingsDialog = 'diagnostics' | 'updates' | 'import' | 'reset1' | 'clearPictures';
 
@@ -144,6 +144,20 @@
   }
 
   const seatOf = (n: SeatNumber) => draft?.seats.find((s) => s.number === n);
+
+  // Help pages need a network (the browser opens them); follow the WebView's online state.
+  let online = $state(globalThis.navigator?.onLine ?? true);
+  $effect(() => {
+    const on = () => (online = true);
+    const off = () => (online = false);
+    globalThis.addEventListener?.('online', on);
+    globalThis.addEventListener?.('offline', off);
+    return () => {
+      globalThis.removeEventListener?.('online', on);
+      globalThis.removeEventListener?.('offline', off);
+    };
+  });
+  const openHelp = (link: HelpLink) => store.api.openHelp(link).catch((e) => store.fail(e));
 </script>
 
 <div class="page">
@@ -338,6 +352,36 @@
         <LinkRow label={t.settingsPage.import} help={t.settingsPage.importHelp} onclick={() => onDialog?.('import')} />
       {/if}
       <LinkRow label={t.settingsPage.advanced} help={t.settingsPage.advancedHelp} onclick={() => onAdvanced?.()} />
+    </Group>
+  </Section>
+
+  <!-- Help pages (spec/local 10 §2.1): they open in the browser, so they wait for a network. -->
+  <Section id="help" title={t.settingsPage.help} help={online ? undefined : t.settingsPage.helpOffline}>
+    <Group>
+      <LinkRow
+        label={t.settingsPage.manual}
+        help={online ? t.settingsPage.manualHelp : t.settingsPage.helpOffline}
+        disabled={!online}
+        onclick={() => openHelp(activeLang() === 'tr' ? 'manual_tr' : 'manual')}
+      />
+      <LinkRow
+        label={t.settingsPage.website}
+        help={online ? t.settingsPage.websiteHelp : t.settingsPage.helpOffline}
+        disabled={!online}
+        onclick={() => openHelp('website')}
+      />
+      <LinkRow
+        label={t.settingsPage.contact}
+        help={online ? t.settingsPage.contactHelp : t.settingsPage.helpOffline}
+        disabled={!online}
+        onclick={() => openHelp('contact')}
+      />
+      <LinkRow
+        label={t.settingsPage.security}
+        help={online ? t.settingsPage.securityHelp : t.settingsPage.helpOffline}
+        disabled={!online}
+        onclick={() => openHelp('security')}
+      />
     </Group>
   </Section>
 

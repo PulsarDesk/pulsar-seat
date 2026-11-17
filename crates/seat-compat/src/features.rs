@@ -78,6 +78,22 @@ pub enum FeatureState {
     Unavailable,
 }
 
+/// Exit code of dism for a feature this edition does not have (`CBS_E_UNKNOWN_UPDATE`).
+pub const DISM_UNKNOWN_FEATURE: u32 = 0x800f_080c;
+
+/// Outcome of `dism /Get-FeatureInfo` from its exit code and output (pure). Only the
+/// "unknown feature" exit means the edition lacks it; any other failure (access denied,
+/// busy or pending servicing, a CBS error) is an error, never "unavailable" (review
+/// 2026-11-17).
+pub fn dism_info_outcome(code: u32, text: &str) -> Result<FeatureState, String> {
+    match parse_dism_state(text) {
+        Some(s) => Ok(s),
+        None if code == DISM_UNKNOWN_FEATURE => Ok(FeatureState::Unavailable),
+        None if code != 0 => Err(format!("dism Get-FeatureInfo exit 0x{code:08x}")),
+        None => Err("dism printed no State line".into()),
+    }
+}
+
 /// `State : …` line of `dism /English /Get-FeatureInfo`.
 pub fn parse_dism_state(text: &str) -> Option<FeatureState> {
     for line in text.lines() {
@@ -161,6 +177,17 @@ impl From<OpsError> for FeatureError {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dism_exit_codes_map_to_states_or_errors() {
+        assert_eq!(dism_info_outcome(0, "State : Enabled"), Ok(FeatureState::Enabled));
+        assert_eq!(dism_info_outcome(DISM_UNKNOWN_FEATURE, "Error: 0x800f080c"), Ok(FeatureState::Unavailable));
+        assert!(dism_info_outcome(740, "").is_err(), "elevation needed is an error");
+        assert!(dism_info_outcome(1222, "").is_err(), "busy is an error");
+        assert!(dism_info_outcome(0x800f_0831, "").is_err(), "CBS error is an error");
+        assert!(dism_info_outcome(0, "nothing").is_err());
+    }
+
     use super::*;
     use crate::ops::MemoryOps;
 

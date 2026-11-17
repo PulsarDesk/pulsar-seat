@@ -115,6 +115,8 @@
     <span class="text">
       <span class="name">{d.name}</span>
       <span class="sub" id="{uid}-meta">
+        {#if highlight}<span class="moved-word">{t.device.found}</span>{/if}
+        {#if arrived}<span class="moved-word">{t.device.arrived}</span>{/if}
         {#if moved}
           <span class="moved-word">{t.device.moved}</span>
         {:else if id}
@@ -208,6 +210,13 @@
   .dev.off .pic {
     color: var(--text-faint);
   }
+  /* On the accent-soft fill --text-faint falls under 4.5:1; --text-muted does not. */
+  .dev.off.found .name,
+  .dev.off.found .pic,
+  .dev.off.arrived .name,
+  .dev.off.arrived .pic {
+    color: var(--text-muted);
+  }
   .more {
     display: inline-grid;
     place-items: center;
@@ -226,10 +235,15 @@
   .dev[aria-expanded='true'] .more {
     background: var(--surface-3);
   }
+  /* "Found" (identify / found by touch) must not look like keyboard focus: a dashed accent-ink
+     ring, not the solid focus ring (WCAG 2.4.7, review 2026-11-17). */
   .dev.found {
     background: var(--accent-soft);
-    outline: 2px solid var(--focus);
+    outline: 2px dashed var(--accent-ink);
     outline-offset: -2px;
+  }
+  .dev.found:focus-visible {
+    outline: 2px solid var(--focus);
   }
   .dev.dragging {
     opacity: 0.5;
@@ -259,10 +273,28 @@
       background: transparent;
     }
   }
+  /* Reduced motion: no fade, but the state still shows for its whole time (a static fill
+     that ends in one step) and the meta line says "New" (review 2026-11-17). */
+  @keyframes step-off {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes step-arrived {
+    to {
+      background: transparent;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .pulse,
+    /* !important: base.css shortens every animation under reduced motion; these are not
+       motion, only the time a static state stays. */
+    .pulse {
+      animation: step-off 1.2s steps(1, end) forwards;
+      animation-duration: 1.2s !important;
+    }
     .dev.arrived {
-      animation-duration: 0.01s;
+      animation: step-arrived var(--flash) steps(1, end) forwards;
+      animation-duration: var(--flash) !important;
     }
   }
 </style>

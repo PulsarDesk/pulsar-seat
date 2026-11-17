@@ -47,6 +47,10 @@ pub const HASH_MISMATCH: Text = Text::new(
     "{0} kurulum paketi bozuk veya değiştirilmiş (SHA-256 eşleşmiyor). Yeniden indirin.",
 );
 
+pub const WRONG_SIGNER: Text = Text::new(
+    "The installer package {0} is signed by a certificate this setup does not trust ({1}). It was not started.",
+    "{0} kurulum paketi bu kurulumun güvenmediği bir sertifikayla imzalanmış ({1}). Başlatılmadı.",
+);
 pub const NOT_SIGNED: Text = Text::new(
     "The installer package {0} has no valid digital signature ({1}). It was not started.",
     "{0} kurulum paketinin geçerli bir dijital imzası yok ({1}). Başlatılmadı.",
@@ -84,6 +88,7 @@ mod tests {
             UNKNOWN_ARCH,
             HASH_MISMATCH,
             NOT_SIGNED,
+            WRONG_SIGNER,
             WRITE_FAILED,
             LAUNCH_FAILED,
             EXTRACTED,

@@ -216,7 +216,11 @@ const t = {
     starting: 'Kamera açılıyor…',
     denied: 'Kameraya erişim verilmedi ya da kamera başka bir program tarafından kullanılıyor.',
     notFound: 'Bu kamera görüntü aygıtları arasında bulunamadı; ilk kamera gösteriliyor.',
-    unsupported: 'Bu pencerede kamera önizlemesi kullanılamıyor.'
+    unsupported: 'Bu pencerede kamera önizlemesi kullanılamıyor.',
+    allTitle: 'Bütün kameralar',
+    seatTitle: (seat: string) => `${seat}: kameralar`,
+    none: 'Bu görünüm için bağlı kamera yok.',
+    busy: 'Bu kamera açılamadı (başka bir program kullanıyor olabilir).'
   },
 
   bar: {
@@ -300,6 +304,8 @@ const t = {
 
   device: {
     moved: 'Taşındı, kaydedilmedi',
+    found: 'Bulundu',
+    arrived: 'Yeni',
     shared: 'Ortak: bütün koltuklar kullanır',
     unplugged: 'Takılı değil',
     actions: (name: string) => `${name}: taşı ya da bilgi`,
@@ -330,6 +336,7 @@ const t = {
   },
 
   seatCard: {
+    restartTimeout: 'Koltuk zamanında durmadı. Yeniden başlatmayı tekrar deneyin.',
     running: 'Çalışıyor',
     blocked: 'Başlatılamıyor',
     off: 'Kapalı',
@@ -373,6 +380,16 @@ const t = {
     theme: 'Tema',
     language: 'Dil',
     sameAccountHelp: 'Aynı hesabı iki koltukta açmak dosya ve ayarları bozabilir.',
+    help: 'Yardım',
+    helpOffline: 'İnternet bağlantısı gerekiyor; bu bilgisayar çevrimdışı görünüyor.',
+    manual: 'Kullanım kılavuzu',
+    manualHelp: 'Sorun giderme ve nasıl yapılır sayfaları, tarayıcıda',
+    website: 'Ürün web sitesi',
+    websiteHelp: 'Kaynak kodu, sürümler ve haberler',
+    contact: 'Sorun bildir ya da soru sor',
+    contactHelp: 'Projenin sorun izleyicisi',
+    security: 'Güvenlik sorunu bildir',
+    securityHelp: 'Bakımcılara gizli bildirim (SECURITY.md)',
     maintenance: 'Bakım',
     diagnostics: 'Tanı raporu',
     diagnosticsHelp: 'Sorun bildirirken ekleyin. Bu bilgisayara kaydedilir, hiçbir yere gönderilmez.',
@@ -651,10 +668,12 @@ const t = {
       'Pulsar Seat bu koltuğun kiosk kabuğu için bir Windows kullanıcısı oluşturdu. Kiosk kabuğu kapatılınca kullanıcı yalnızca devre dışı bırakılır ve dosyaları (kayıtlar, tarayıcı profilleri) korunur. Silmek kullanıcıyı ve bütün dosyalarını kalıcı olarak kaldırır.',
     removeKioskUserConfirm: 'Kullanıcıyı sil',
     removeKioskUserDone: 'Koltuğun kiosk kullanıcısı silindi.',
-    compat: 'Ortam ve oturum açma…'
+    compat: 'Ortam ve oturum açma…',
+    cameras: 'Bu koltuğun kameralarını göster'
   },
 
   systemMenu: {
+    cameras: 'Bütün kameraları göster',
     compare: 'Kayıtlı yapılandırmayla karşılaştır…',
     view: 'Görünüm ayarları…',
     cpu: 'Koltuk başına işlemci çekirdekleri…',
@@ -1063,7 +1082,10 @@ const t = {
       warn: 'Bilgisayarın işlemci mimarisi belirlenemedi.',
       fail: 'Bu paket başka bir işlemci mimarisi için; doğru paketi kurun.'
     },
-    edition: { info: 'Windows baskısı bildirildi.' },
+    edition: {
+      info: 'Windows baskısı bildirildi.',
+      warn: 'Windows’un istemci baskısı: ek koltuklar aynı anda birkaç oturum veren bir oturum yöntemi gerektirir (Gelişmiş ayarlar).'
+    },
     rdsh_role: {
       pass: 'Rol kurulu.',
       warn: 'Rol bulunamadı; koltuklar hızlı kullanıcı değiştirmeye geri döner.',
@@ -1249,7 +1271,13 @@ const t = {
     clipboard_filter_needs_ironrdp: 'ActiveX istemcisi panoyu süzemez; pano kapalı',
     drives_need_ironrdp: 'ActiveX istemcisi sürücüleri yönlendirmez',
     smartcards_need_ironrdp: 'ActiveX istemcisi akıllı kartları yönlendirmez',
-    printers_need_ironrdp: 'ActiveX istemcisi yazıcıları yönlendirmez'
+    printers_need_ironrdp: 'ActiveX istemcisi yazıcıları yönlendirmez',
+    clipboard_backend_error: 'pano bu bağlantı için çalışmayı durdurdu',
+    clipboard_pdu_error: 'geçersiz bir pano iletisi atıldı',
+    clipboard_timer_error: 'pano zamanlayıcısı bozuldu; bu bağlantıda pano kapalı',
+    drive_configuration_invalid: 'bu koltuğun sürücü ayarları geçersiz; sürücü yönlendirilmedi',
+    rdpdr_poll_error: 'aygıt yönlendirmesi bu bağlantı için çalışmayı durdurdu',
+    rdpdr_windows_only: 'aygıt yönlendirmesi Windows gerektirir'
   } as Record<string, string>,
 
   drivers: {
@@ -2240,6 +2268,7 @@ const rt = {
     shared: 'Paylaşılan klasörler',
     addFolder: 'Klasör ekle',
     hostFolder: 'Bu bilgisayardaki klasör',
+    browse: 'Gözat',
     mountPoint: 'VM içindeki yol',
     readOnly: 'salt okunur',
     remove: 'Kaldır',
@@ -2509,6 +2538,7 @@ const rt = {
     pulsarNodePortEphemeral: 'Boştaki herhangi bir bağlantı noktası',
     pulsarNodePortFixed: 'Şu bağlantı noktası:',
     pulsarNodePortInvalid: 'Bağlantı noktası 1024-65535 arasında olmalı.',
+    pulsarNodePortTaken: 'Bu bağlantı noktasını başka bir koltuk kullanıyor ya da Pulsar keşif noktası (21117).',
     pulsarPortMapping: 'Yönlendiriciden bağlantı noktasını açmasını iste (UPnP)',
     pulsarDiscovery: 'Bu koltuğu yerel ağdaki cihazlara göster',
     pulsarDiscoveryHint: 'Koltuk bu seçenekle çalışırken güvenlik duvarında yerel alt ağ için UDP 21117 açılır.',

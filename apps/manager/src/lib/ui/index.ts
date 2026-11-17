@@ -2,6 +2,7 @@
 // The component kit of the manager redesign (target/redesign/final/DESIGN.md). Import from
 // '#lib/ui/index.ts'. Global styles (tokens, base, layout classes) come in through app.css.
 
+export { default as Avatar } from './Avatar.svelte';
 export { default as Breadcrumb } from './Breadcrumb.svelte';
 export { default as Button } from './Button.svelte';
 export { default as Checkbox } from './Checkbox.svelte';

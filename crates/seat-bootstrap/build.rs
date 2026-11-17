@@ -13,6 +13,10 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const MSI_ENV: &str = "PULSAR_SEAT_SETUP_MSI";
+/// Comma-separated SHA-1 thumbprints of the certificates allowed to sign the MSI (review
+/// 2026-11-17). build-setup.ps1 -Release passes the signed MSI's own signer. A release
+/// build without one stops: a release setup must not accept any validly signed MSI.
+const SIGNERS_ENV: &str = "PULSAR_SEAT_SETUP_SIGNERS";
 
 /// `ll-CC` (for example `tr-TR`).
 fn is_culture(c: &str) -> bool {
@@ -23,6 +27,8 @@ fn is_culture(c: &str) -> bool {
 fn main() {
     println!("cargo:rerun-if-changed=setup.manifest");
     println!("cargo:rerun-if-env-changed={MSI_ENV}");
+    println!("cargo:rerun-if-env-changed={SIGNERS_ENV}");
+    println!("cargo:rerun-if-env-changed=PULSAR_SEAT_RELEASE");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
@@ -74,5 +80,20 @@ fn main() {
             )
         }
     };
+    let signers: Vec<String> = std::env::var(SIGNERS_ENV)
+        .unwrap_or_default()
+        .split([',', ';', ' '])
+        .map(|s| s.trim().to_ascii_uppercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for s in &signers {
+        if s.len() != 40 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            panic!("{SIGNERS_ENV}: {s} is not a SHA-1 certificate thumbprint (40 hex digits)");
+        }
+    }
+    if std::env::var("PULSAR_SEAT_RELEASE").as_deref() == Ok("1") && signers.is_empty() {
+        panic!("{SIGNERS_ENV} is empty: a release setup must pin the MSI's signer (build-setup.ps1 -Release sets it)");
+    }
+    let code = format!("{code}pub const SIGNERS: &[&str] = &{signers:?};\n");
     std::fs::write(out, code).unwrap();
 }

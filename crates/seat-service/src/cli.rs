@@ -51,6 +51,8 @@ pub enum Command {
     RemoteSetup(seat_setup::cli::SetupCommand),
     /// Guest mode inside a Hyper-V VM seat (hyperv-seats 2026-11-17; `win::vm_guest`).
     VmGuest,
+    /// `vm-guest-mode W H HZ OUT`: display mode helper the VM guest runs in the seat session.
+    VmGuestMode { width: u32, height: u32, hz: u32, out: PathBuf },
     Help,
 }
 
@@ -113,6 +115,13 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "vm-guest" => {
             known(&[])?;
             Command::VmGuest
+        }
+        "vm-guest-mode" => {
+            let num = |i: usize| rest.get(i).and_then(|v| v.parse::<u32>().ok());
+            match (num(0), num(1), num(2), rest.get(3), rest.len()) {
+                (Some(width), Some(height), Some(hz), Some(out), 4) => Command::VmGuestMode { width, height, hz, out: PathBuf::from(out) },
+                _ => return Err("usage: vm-guest-mode WIDTH HEIGHT HZ OUTFILE".into()),
+            }
         }
         "install" => {
             // `--exe PATH` is ours; everything else goes to the compat parser, which
@@ -493,6 +502,12 @@ mod tests {
         // The guest boot task of a VM seat's base disk (seat_compat::hyperv_vm::setup_complete_cmd).
         assert_eq!(parse(&a(&["vm-guest"])).unwrap(), Command::VmGuest);
         assert!(parse(&a(&["vm-guest", "--x"])).is_err());
+        assert_eq!(
+            parse(&a(&["vm-guest-mode", "1920", "1080", "60", "out.txt"])).unwrap(),
+            Command::VmGuestMode { width: 1920, height: 1080, hz: 60, out: PathBuf::from("out.txt") }
+        );
+        assert!(parse(&a(&["vm-guest-mode", "1920", "x", "60", "o"])).is_err());
+        assert!(parse(&a(&["vm-guest-mode", "1920", "1080", "60"])).is_err());
         let msi = a(&["install", "--msi", "--restore-point=1", "--tweak=sleep_off", r"--drivers=C:\P\drivers"]);
         assert!(matches!(parse(&msi).unwrap(), Command::Install { exe: None, ref args } if args.len() == 4));
         let nsis = a(&["install", "--register-service", "--restore-point=0", "--tweak=", "--drivers=none"]);

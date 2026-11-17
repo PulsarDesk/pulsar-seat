@@ -586,8 +586,8 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
     interfaces (PS/2). Seat-1 console processes get the HID groups while a kiosk seat of
     their session wants HID isolation (kiosk devices denied to them).
   - **Limits:** since parity-arm64 (2026-11-17) native ARM64 apps take the ARM64 module
-    (Microsoft Detours backend) and the ARM64 MSI ships `shimrm64\`, `shimd\` and
-    `shim\`; the shell calls its own architecture's launcher
+    (Microsoft Detours backend) and the ARM64 MSI ships `shim\arm64\`, `shim\x64\` and
+    `shim\x86\`; the shell calls its own architecture's launcher
     (`seat_shim_core::launch::native_launcher`), which hands x64 / x86 apps to theirs (x64
     and x86 modules under emulation on ARM64: HYPOTHESIS). 32-bit apps:
     `GetRawInputBuffer` is passed through (WOW64 buffer layout reported to differ, HYPOTHESIS). Seat-1 console apps get the
@@ -1534,7 +1534,13 @@ step 2-3 Split's locked registry entries were unioned in.
   (closing with unsaved changes asks save / discard / cancel), `wizard-page-close` (Alt+F4
   on a page quits the wizard). Pictures: `options.picture` = `builtin:<id>` (our own line
   drawings) or `user:<file>`; `name_off.ext` is the "not in use" picture. Webcam indication
-  = WebView `getUserMedia` preview in the manager.
+  = WebView `getUserMedia` preview in the manager: one camera (device menu), every camera at
+  once (system menu) or the cameras a seat uses (seat menu; `cameras.ts`,
+  `CameraGrid.svelte`, review 2026-11-17). Help links (Settings > Help: manual, website,
+  issue tracker, security report) open fixed URLs through the shell (`open_help_link`,
+  `shell::HelpLink`); the UI never passes a URL, and they are disabled with the reason while
+  the WebView is offline. Path fields of the VM settings use `pick_path` (image, language
+  pack, folder).
 
 ## 10. Seat kinds (merge contract delta, steps 1 + 4, 2026-11-14)
 
@@ -1543,25 +1549,35 @@ decisions §5). Step 4 put it into `seat-core` / `seat-proto`; the remote seat w
 serves it is in `seat-service` since step 6 (§10.5). Split's old contract stays in
 [../split/agents/contracts.md](../split/agents/contracts.md) for the packages.
 
-### 10.1 Config document (`seat_core::config`, `CONFIG_SCHEMA_VERSION` = 2)
+### 10.1 Config document (`seat_core::config`, `CONFIG_SCHEMA_VERSION` = 3)
 
 ```text
 SeatConfig {
   number, name, autostart, kind: local | remote,
   account,                                   // the seat user; password in the SecretStore
   cpu_sets, cpu_hard_limit, wallpaper, ip_binding, startup_apps,   // common
+  environment,                               // per-seat user environment variables
+  deny_local_logon,                          // the seat user may not sign in at the console
   local:  Option<LocalSeat>,                 // set iff kind == local
   remote: Option<RemoteSeat>,                // set iff kind == remote
 }
 LocalSeat  { redirect, kiosk, kiosk_shell }  // physical seat only (seat host, desktops backend)
 RemoteSeat { id, display_name, port, stop_action, display, apps, rdp_client_name, audio,
-             stream, stream_backend, last_mode }   // Split's per-seat record minus name / user
-GlobalSettings.remote: RemoteSettings        // Split's old GlobalSettings (hid_isolation, ...)
+             stream, stream_backend, last_mode,      // Split's per-seat record minus name / user
+             pulsar,                                 // Pulsar backend options (relay, node port, ...)
+             vm }                                    // Some = Hyper-V VM seat (VM section below)
+DisplaySettings (remote) { ..., fixed_width, fixed_height, lock_refresh }
+GlobalSettings.remote: RemoteSettings        // Split's old GlobalSettings (hid_isolation, ..., vm)
+GlobalSettings.apps                          // per-app compatibility entries
+GlobalSettings.tweaks { ..., fast_startup_off, windows_update, device_install_deny,
+                        defender_exclusions }
 ```
 
 - Migration 1 -> 2 (`Config::from_json`): every seat without `kind` becomes `kind = local`
   and its `redirect`, `kiosk`, `kiosk_shell` move into `local`. Split's registry config is
   **not** imported (decision §5: no migration of installs, no HKLM / DPAPI importer).
+- Migration 2 -> 3: additive (VM seats, Pulsar options, compat tweaks); details in the
+  "Hyper-V VM seats" section below.
 - Mapping from Split's record (`seat_core::remote::RemoteSeatRecord`, the old
   `split_proto::SeatConfig`): `name` = `SeatConfig.name`, `user_name` = the user of a
   `local` `account`, `start_with_service` = `autostart`; every other field is in
@@ -1589,8 +1605,11 @@ GlobalSettings.remote: RemoteSettings        // Split's old GlobalSettings (hid_
 One control pipe (`\\.\pipe\PulsarSeat.Control`), `hello` first, Seat's `Access` table.
 Clients below 3 keep every request whose shape did not change (seat hosts, agents, the
 credential provider, the console listener). `RequestBody::min_protocol()` is 3 for the
-config requests (the seat shape changed) and for every new request; the service answers
-`version_mismatch` when the caller's hello version is lower. `get_status` carries `kind`
+config requests (the seat shape changed), every remote-kind request, `switch_seat` and the
+requests the parity rounds added (`reset_graphics`, `steam_proxy_dll`, `vm_seats`,
+`restart_term_service`, `host_audio_report`, `host_drive_broker`; pinned by a seat-proto
+test since the review of 2026-11-17); the service answers `version_mismatch` when the
+caller's hello version is lower. `get_status` carries `kind`
 per seat (`SeatRuntime.kind`).
 
 Seat v1 requests are unchanged (§5). Split v2 requests, as v3 (all `Access::Admin`; remote
@@ -1938,7 +1957,9 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
 
 - **Tabs.** The Seat shell (tray, wizard, subscription connection, save / discard bar) gains
   the tab **Uzak koltuklar** (`remote/components/RemoteTab.svelte`, Split's old main page):
-  the remote seat list with avatars, the seat editor (`SeatPage`, GPU warnings, apps,
+  the remote seat list with avatars (the seat user's Windows account picture on each row and
+  in the seat page head, generic fallback; restored after redesign P6 by the review of
+  2026-11-17), the seat editor (`SeatPage`, GPU warnings, apps,
   credential test), the pair dialog with QR code, host page (multi-session, experimental
   wrapper, audio cleanup), logs, DXVK games and remote settings (isolation, process
   patching, pad / display backend). The seats tab shows each seat's kind: local seats get a
@@ -2001,7 +2022,7 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
   (profiles only with `REMOVEUSERDATA`) or by `remove_kiosk_user` (admin, refused while
   the seat has a kiosk shell). The hotkey guard resolves a raw-first key queued behind a
   held-back hotkey.
-- **Requests (protocol 3, additive, admin):** `reset_graphics { seat }` (agent task
+- **Requests (need protocol 3, admin):** `reset_graphics { seat }` (agent task
   `reset_graphics`: Win+Ctrl+Shift+B into the session's input desktop; HYPOTHESIS that
   injected input triggers it), `remove_kiosk_user { seat }`, `restart_term_service
   { confirm }` (rdp-listener 2026-11-17: every running seat but seat 1 stopped and signed
@@ -2112,16 +2133,34 @@ unit-tested with fakes; nothing ran on a Hyper-V host (HYPOTHESIS throughout).
   order (first refusal answers): Hyper-V feature + `vmms` (`hyperv_unavailable`), network
   (`vm_network_missing`), base disk (`vm_base_missing`), id / address (`vm_not_assigned`),
   chosen GPU partitionable (`vm_gpu_missing`), user + stored password
-  (`missing_credentials`). Then `VmOp::Ensure` (share account password = a fresh random
-  token, on the script's stdin), guest config offered on the guest link, `VmOp::Start`.
+  (`missing_credentials`). Then `VmOp::Ensure` (the seat's own share account password = a
+  fresh random token, on the script's stdin), guest config offered on the guest link,
+  `VmOp::Start`. While Ensure / Start run the seat is marked `starting`, and a status read
+  that began before Start returned never takes the VM's "off" for a finished stop (review
+  2026-11-17: a concurrent poll used to drop the new seat).
   The tick polls the VM states every 2 s while a VM seat is active (off the tick thread) and
   maps VM state + guest phase to the seat runtime (`vm_seat_state`: running + `streaming`
   / `signed_in` = `signed_in{user}`, `streaming` adds `degraded: ["streaming"]`, guest
   `failed` = `error{internal, detail}`, off / saved = off). `restart_gpus_on_shutdown`
-  restarts the display adapters after a GPU-P VM stopped. Pairing: `submit_pin` /
-  `unpair_all` go to the guest over the link; `cancel_pair` acks; every other remote-kind
-  request on a VM seat answers `unsupported` / reason `vm_seat`.
-- **Request** `vm_seats { action }` (protocol 3, additive, admin): `status`,
+  restarts the display adapters after a GPU-P VM stopped.
+- **Seat page requests** (review 2026-11-17, full parity with host remote seats; `glue.rs`
+  `vm_kind_request`). Kept on the host and handed to the guest with every config (and at
+  once to a running guest): the stream app list (`set_apps` / `get_apps`;
+  `<data>\vm-seats\<id>\apps.json`, defaults when unset), the Pulsar connect password
+  (host secret store, slot `connect_password`), a pending identity reset
+  (`regenerate_seat_identity`, seat off only, done once per start by `start_nonce`).
+  Forwarded to the guest (`GuestMsg::Request` with the protocol 3 `RequestBody`, answered
+  by `GuestMsg::Reply` with the `ResponseBody` or the error, 15 s): `cancel_pair`,
+  `get_pair_state`, `list_paired_clients`, `unpair_client`, `unpair_all`,
+  `answer_peer_request`, `get_seat_otp`, `rotate_seat_otp`, `answer_relay_auth`,
+  `get_remote_runtime`, `get_log_tail` (`seat:<N>`), `set_seat_display_mode`,
+  `test_seat_credentials`, `enable_unlock_account`. `submit_pin` acks at once (as on the
+  host) and the outcome arrives as the `pair_ended` stream event. With the VM off the answers
+  match an off host seat (`service_unavailable` for server requests, the default pair state
+  and runtime, a credential test that only checks the stored password, enable / unlock
+  applied at the next start). The guest's stream notices (`GuestMsg::Notice`) become the
+  seat's `stream` events (pair dialog, streaming state).
+- **Request** `vm_seats { action }` (needs protocol 3, admin): `status`,
   `prepare_host{confirm}` (internal switch `Pulsar Seat VM`, host address = network + 1,
   NAT `Pulsar Seat VM`, guest link registration), `build_base{confirm}` (background;
   `building` in the status), `reset_base{confirm}` (all VM seats off), `reset_sandbox{seat,
@@ -2141,18 +2180,26 @@ unit-tested with fakes; nothing ran on a Hyper-V host (HYPOTHESIS throughout).
   `Add-NetNatStaticMapping` for the stream ports (`p-5`, `p`, `p+9..11`, `p+21`; never the
   web UI `p+1`) and the seat's forwards, one inbound firewall rule per protocol (group
   `Pulsar Seat VM`, Private + Domain), SMB shares `PulsarVm<id8>-<n>$` for the host account
-  `PulsarSeatVmShare` with a matching NTFS grant. Journal `journal\hyperv-vm.json`
+  of the seat's own share account `PulsarVm<id8>` (review 2026-11-17; one account per seat,
+  so a guest's credentials open only its own shares and a start rotates only its own
+  password) with a matching NTFS grant; the shared `PulsarSeatVmShare` of older builds
+  loses its grants and is removed at uninstall. Journal `journal\hyperv-vm.json`
   (written before the change); uninstall (`hyperv_vm_uninstall`, before the Hyper-V helper's
   own) removes VMs, disks, base disk, shares + NTFS grants, firewall group, NAT, switch,
-  share account and the registration. The Hyper-V feature is never turned on here: that
+  the share accounts (`PulsarVm<id8>`, removed with their seat too) and the registration.
+  The Hyper-V feature is never turned on here: that
   stays the Hyper-V helper's visible opt-in (Network tab, reboot notice).
 - **Guest link.** Hyper-V sockets (`seat_compat::hvsock`, `AF_HYPERV`), service id
   `6c3c2b9e-5f1a-4f7e-9d2b-8a41c0e7b513` registered under
   `...\Virtualization\GuestCommunicationServices`. Host: `guest_link::GuestHub` + listener
   thread (`HV_GUID_WILDCARD`); a VM gets a config only when the service offered one for its
   VM id (the hypervisor supplies the id with `accept`). JSON lines (`GuestMsg`: `hello`,
-  `config`, `state`, `submit_pin`, `unpair_all`, `result`, `shutdown`; 64 KiB per line,
-  protocol 1). Passwords travel only on the link, in memory.
+  `config`, `state`, `submit_pin`, `unpair_all`, `result`, `shutdown`, and since protocol 2
+  `request` / `reply` / `notice`; 64 KiB per line). Each connection has a generation: a
+  reconnect replaces the entry and the old reader's late disconnect leaves the new one
+  alone. A request waits for the reply with its id (only the asked VM may answer); a
+  disconnect fails waiting requests (`vm_guest_unreachable`), silence times out
+  (`vm_guest_timeout`). Passwords travel only on the link, in memory.
 - **Guest mode** (`win/vm_guest.rs`, `pulsar-seat-service vm-guest`). Connects to
   `HV_GUID_PARENT`, applies the config (`script_guest_apply`: static address, the host's
   DNS servers, seat user created / password set / Users member, shares as global SMB
@@ -2162,8 +2209,14 @@ unit-tested with fakes; nothing ran on a Hyper-V host (HYPOTHESIS throughout).
   the VM is the seat, so the host rule of never writing Winlogon values for seat users is
   untouched) and restarts once if nobody is signed in. When the seat user owns the console
   session it runs the seat's stream server there with the same `seat_stream` backends as
-  host remote seats (`remote::win::wiring::stream_env`), reports `signed_in` / `streaming`,
-  forwards PINs and unpair requests, stops the server on `shutdown`.
+  host remote seats (`remote::win::wiring::stream_env`), reports `signed_in` / `streaming`.
+  A failed start is retried after 5 s, doubling up to 5 min, and `failed` stays reported
+  until a start works. It answers the forwarded seat page requests (`vm_guest_rq.rs`,
+  tested over a fake stream server), sends the stream notices to the host, applies client
+  display mode requests and `set_seat_display_mode` to the VM console through the helper
+  `pulsar-seat-service vm-guest-mode W H HZ OUT` (SYSTEM token in the seat session,
+  `ChangeDisplaySettingsExW`, SDR only), starts Pulsar client app picks as the seat user,
+  and on `shutdown` stops the server, which stays down until the next `config`.
 - **Manager.** Remote tab page "VM seats" (`remote/components/VmPage.svelte`,
   `remote/vm.ts`): host state, network / base disk actions behind confirmations, settings,
   per remote seat VM mode with memory, processors, GPU, stop mode, suffix, shared folders,
@@ -2176,7 +2229,9 @@ unit-tested with fakes; nothing ran on a Hyper-V host (HYPOTHESIS throughout).
   builds, SMB global mappings + symbolic links as mount points, NAT forwarding of UDP stream
   ports and whether the host firewall applies to NAT traffic, Hyper-V sockets from a
   LocalSystem boot task, automatic sign-in through the LSA `DefaultPassword` secret, the
-  stream server's capture in a VM console session (with and without GPU-P).
+  stream server's capture in a VM console session (with and without GPU-P), the display
+  mode helper changing the VM console's mode, a non-admin guest user reusing the global
+  SMB mapping session.
 
 ## UI language (i18n, 2026-11-17)
 

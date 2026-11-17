@@ -734,8 +734,10 @@ impl Engine {
             }
         }
         // Microphone (spec/remote 70 §5.1): Pulsar seats only (pulsar-host mic pipe -> the
-        // loopback hold's stdin -> MS-RDPEAI); Moonlight sends no mic. Provider sessions have
-        // no RDP audio channel, so no mic either.
+        // loopback hold's stdin -> MS-RDPEAI); Moonlight sends no mic. Provider sessions get
+        // their sound endpoint from the RDP audio enumerator (`WTS_QUERY_AUDIOENUM_DLL`,
+        // review 2026-11-17) but have no MS-RDPEAI channel, so no mic (the reference has no
+        // mic path either, spec/remote 70 §1).
         let capture = res.wrds.is_none()
             && policy.as_ref().map(|p| rdp_client_flags(&audio, p, mic_path(seat)).capture).unwrap_or(false);
         if res.session.is_none() {
@@ -910,6 +912,7 @@ impl Engine {
             user: seat.user_name.clone(),
             width,
             height,
+            audio: seat.audio.stream_audio,
         };
         let ws = w.connect(&req, password, cancel).map_err(|f| Failure { reason: f.reason, message: f.message })?;
         log::info!("seat '{}': session {} through the protocol provider", seat.name, ws.session_id);

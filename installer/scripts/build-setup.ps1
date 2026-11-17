@@ -23,6 +23,9 @@ param(
     # Default: the MSI's folder.
     [string] $OutDir = "",
     [switch] $Release,
+    # Extra SHA-1 thumbprints the release setup accepts as MSI signer (a certificate
+    # rollover); the signed MSI's own signer is always pinned.
+    [string[]] $ExtraSigners = @(),
     [string] $CargoTargetDir = ""
 )
 
@@ -49,9 +52,14 @@ $OutDir = (Resolve-Path $OutDir).Path
 $culture = if ($msiName -match '_([A-Za-z]{2}-[A-Za-z]{2})\.msi$') { "_" + $Matches[1] } else { "" }
 $exeName = "PulsarSeat_${version}_$Arch${culture}_setup.exe"
 
+$signers = @()
 if ($Release) {
     $sig = Get-AuthenticodeSignature $Msi
     if ($sig.Status -ne "Valid") { throw "${msiName}: Authenticode $($sig.Status); a -Release setup refuses an unsigned MSI at run time, so sign the MSI first" }
+    # The release setup runs only an MSI signed by these certificates (seat-bootstrap
+    # build.rs PULSAR_SEAT_SETUP_SIGNERS), not any validly signed one.
+    $signers = @($sig.SignerCertificate.Thumbprint) + $ExtraSigners | Where-Object { $_ } | ForEach-Object { $_.ToUpperInvariant() } | Select-Object -Unique
+    foreach ($t in $signers) { if ($t -notmatch '^[0-9A-F]{40}$') { throw "signer thumbprint $t is not 40 hex digits" } }
 }
 
 if (-not $CargoTargetDir) { $CargoTargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo "target" } }
@@ -60,11 +68,12 @@ if (-not $CargoTargetDir) { $CargoTargetDir = if ($env:CARGO_TARGET_DIR) { $env:
 $setupTarget = Join-Path $CargoTargetDir "setup"
 $msiHash = (Get-FileHash $Msi -Algorithm SHA256).Hash.ToLowerInvariant()
 
-$saved = @{ RUSTFLAGS = $env:RUSTFLAGS; PULSAR_SEAT_SETUP_MSI = $env:PULSAR_SEAT_SETUP_MSI; PULSAR_SEAT_RELEASE = $env:PULSAR_SEAT_RELEASE }
+$saved = @{ RUSTFLAGS = $env:RUSTFLAGS; PULSAR_SEAT_SETUP_MSI = $env:PULSAR_SEAT_SETUP_MSI; PULSAR_SEAT_RELEASE = $env:PULSAR_SEAT_RELEASE; PULSAR_SEAT_SETUP_SIGNERS = $env:PULSAR_SEAT_SETUP_SIGNERS }
 try {
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
     $env:PULSAR_SEAT_SETUP_MSI = $Msi
     if ($Release) { $env:PULSAR_SEAT_RELEASE = "1" } else { Remove-Item Env:PULSAR_SEAT_RELEASE -ErrorAction SilentlyContinue }
+    if ($signers.Count) { $env:PULSAR_SEAT_SETUP_SIGNERS = $signers -join "," } else { Remove-Item Env:PULSAR_SEAT_SETUP_SIGNERS -ErrorAction SilentlyContinue }
     & cargo build --locked --release --manifest-path (Join-Path $repo "Cargo.toml") -p seat-bootstrap --target $triple --target-dir $setupTarget
     if ($LASTEXITCODE -ne 0) { throw "cargo build of seat-bootstrap ($triple) failed (exit $LASTEXITCODE)" }
 } finally {

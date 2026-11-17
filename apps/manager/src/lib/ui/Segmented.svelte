@@ -56,7 +56,7 @@
     background: var(--surface-3);
   }
   button {
-    min-height: 30px;
+    min-height: var(--h-compact);
     margin: 0;
     padding: 0 14px;
     border: 0;
@@ -73,9 +73,23 @@
   button:hover {
     color: var(--text);
   }
+  /* The selected chip also gets a --border-input edge: surface on surface-3 alone is under
+     the 3:1 a state needs (WCAG 1.4.11, review 2026-11-17). */
   button[aria-checked='true'] {
     background: var(--surface);
     color: var(--text);
     box-shadow: var(--shadow-xs);
+    outline: 1px solid var(--border-input);
+    outline-offset: -1px;
+  }
+  button[aria-checked='true']:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  @media (forced-colors: active) {
+    button[aria-checked='true'] {
+      outline: 2px solid Highlight;
+      outline-offset: -2px;
+    }
   }
 </style>

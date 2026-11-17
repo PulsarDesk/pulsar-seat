@@ -303,6 +303,31 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&sha2::Sha256::digest(bytes))
 }
 
+/// The MSI's signer is one of the pinned certificates (SHA-1 thumbprints, any case). An
+/// empty pin list accepts nothing: a release setup never runs an MSI just because some
+/// valid signature is on it (review 2026-11-17).
+pub fn signer_allowed(thumbprint: &str, pins: &[&str]) -> bool {
+    !thumbprint.is_empty() && pins.iter().any(|p| p.eq_ignore_ascii_case(thumbprint.trim()))
+}
+
+/// SHA-256 of an open file from its start as lower-case hex (streamed). The caller keeps
+/// the handle, so the bytes it hashed are the bytes msiexec opens.
+pub fn sha256_reader(f: &mut std::fs::File) -> std::io::Result<String> {
+    use sha2::Digest as _;
+    use std::io::{Read as _, Seek as _};
+    f.seek(std::io::SeekFrom::Start(0))?;
+    let mut h = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(hex(&h.finalize()))
+}
+
 /// SHA-256 of a file as lower-case hex (streamed).
 pub fn sha256_file(path: &Path) -> std::io::Result<String> {
     use sha2::Digest as _;
@@ -472,5 +497,25 @@ mod tests {
     #[test]
     fn release_flag_follows_the_build_env() {
         assert_eq!(RELEASE, option_env!("PULSAR_SEAT_RELEASE") == Some("1"));
+    }
+
+    #[test]
+    fn signer_pins() {
+        let pin = "0123456789ABCDEF0123456789ABCDEF01234567";
+        assert!(signer_allowed("0123456789abcdef0123456789abcdef01234567", &[pin]));
+        assert!(!signer_allowed("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", &[pin]), "another valid signer is refused");
+        assert!(!signer_allowed(pin, &[]), "no pin accepts nothing");
+        assert!(!signer_allowed("", &[""]));
+    }
+
+    #[test]
+    fn hash_from_an_open_handle() {
+        let p = std::env::temp_dir().join(format!("pss-hash-{}.bin", std::process::id()));
+        std::fs::write(&p, b"abc").unwrap();
+        let mut f = std::fs::File::open(&p).unwrap();
+        assert_eq!(sha256_reader(&mut f).unwrap(), sha256_hex(b"abc"));
+        assert_eq!(sha256_reader(&mut f).unwrap(), sha256_hex(b"abc"), "rewinds");
+        drop(f);
+        let _ = std::fs::remove_file(&p);
     }
 }

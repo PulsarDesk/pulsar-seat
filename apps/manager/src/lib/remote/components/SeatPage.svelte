@@ -25,9 +25,10 @@
   import { gpuWarnings } from '#lib/remote/gpu.ts';
   import { defaultDisplay, defaultPulsar, relayValid } from '#lib/remote/model.ts';
   import { countChanges, type RemoteStage } from '#lib/remote/stage.svelte.ts';
-  import { displayNameError, portError, portOverlapError } from '#lib/remote/validation.ts';
+  import { displayNameError, nodePortConflict, portError, portOverlapError } from '#lib/remote/validation.ts';
   import { vmSeatProblem } from '#lib/remote/vm.ts';
   import {
+    Avatar,
     Breadcrumb,
     Button,
     Checkbox,
@@ -59,8 +60,18 @@
     users: LocalUser[];
     /** Base ports of the other seats (overlap check). */
     otherPorts: number[];
+    /** Known reason the seat cannot start now (no concurrent sessions): Start is disabled
+     * with this reason instead of leading into a start that fails (review 2026-11-17). */
+    startBlockedReason?: string | null;
+    /** System folder dialog for a VM seat's shared folders. */
+    pickFolder?: () => Promise<string | null>;
+    /** The seat user's account picture (`src` null = the initial) for the page head. */
+    avatar?: { src: string | null; initial: string };
     /** Display names of the other seats (uniqueness check). */
     otherDisplayNames?: string[];
+    /** Ports a fixed Pulsar node port must not take: other seats' fixed node ports and
+     * VM seats' forwarded UDP host ports (the service refuses them too). */
+    otherNodePorts?: number[];
     serviceReachable: boolean;
     /** Store the record; `vm` is the seat's VM part when it changed (undefined = unchanged). */
     onSave: (name: string, seat: SeatConfig, vm?: VmSeat | null) => Promise<SeatConfig>;
@@ -102,6 +113,10 @@
     users,
     otherPorts,
     otherDisplayNames = [],
+    avatar,
+    startBlockedReason = null,
+    pickFolder,
+    otherNodePorts = [],
     serviceReachable,
     onSave,
     onSetPassword,
@@ -244,9 +259,15 @@
   const backendLabel = (k: StreamBackendKind) => (k === 'pulsar' ? t.seat.backendPulsar : t.seat.backendSunshine);
   const pulsar = $derived(draft.pulsar ?? defaultPulsar());
   const relayErr = $derived(!relayValid(pulsar.relay.trim()));
-  const nodePortErr = $derived(
+  const nodePortRange = $derived(
     pulsar.node_port_mode === 'fixed' && !(Number.isInteger(Number(pulsar.node_port)) && pulsar.node_port >= 1024 && pulsar.node_port <= 65535)
   );
+  const nodePortTaken = $derived(
+    pulsar.node_port_mode === 'fixed' &&
+      !nodePortRange &&
+      nodePortConflict(Number(pulsar.node_port), otherPorts, otherNodePorts)
+  );
+  const nodePortErr = $derived(nodePortRange || nodePortTaken);
   const vmProblem = $derived(vmDraft ? vmSeatProblem(vmDraft, Number(portText)) : null);
   const invalid = $derived(
     !!displayErr || !!portErr || (backend === 'pulsar' && (relayErr || nodePortErr)) || !!vmProblem
@@ -445,6 +466,7 @@
 <div class="page">
   {#if onBack}<Breadcrumb items={[{ label: seatT.nav.remote, onclick: onBack }, { label: seat.name }]} />{/if}
   <PageHead title={seat.name}>
+    {#snippet lead()}{#if avatar}<Avatar src={avatar.src} initial={avatar.initial} size={40} />{/if}{/snippet}
     {#snippet status()}<StatusLine kind={stateKind} status={t.seatState[seatState]} {summary} />{/snippet}
     {#snippet actions()}
       {#if seatState === 'running'}
@@ -453,7 +475,15 @@
       {:else if seatState === 'booting'}
         <Button kind="secondary" icon="stop" label={t.seat.stop} disabled={!serviceReachable || busy} onclick={() => run(onStop)} />
       {:else if seatState !== 'stopping'}
-        <Button kind="primary" icon="play" label={t.seat.start} disabled={!serviceReachable || busy} {busy} onclick={() => run(onStart)} />
+        <Button
+          kind="primary"
+          icon="play"
+          label={t.seat.start}
+          disabled={!serviceReachable || busy || !!startBlockedReason}
+          disabledReason={startBlockedReason ?? undefined}
+          {busy}
+          onclick={() => run(onStart)}
+        />
       {/if}
     {/snippet}
   </PageHead>
@@ -774,7 +804,7 @@
                     <input class="input port" type="number" min="1024" max="65535" aria-label={t.seat.pulsarNodePortFixed} aria-invalid={nodePortErr ? 'true' : undefined} bind:value={draft.pulsar!.node_port} />
                   {/if}
                 {/snippet}
-                {#if nodePortErr}<span class="err" role="alert">{t.seat.pulsarNodePortInvalid}</span>{/if}
+                {#if nodePortRange}<span class="err" role="alert">{t.seat.pulsarNodePortInvalid}</span>{:else if nodePortTaken}<span class="err" role="alert">{t.seat.pulsarNodePortTaken}</span>{/if}
               </Row>
               <Row label={t.seat.pulsarPortMapping}>
                 {#snippet control()}<Switch label={t.seat.pulsarPortMapping} bind:checked={draft.pulsar!.port_mapping} />{/snippet}
@@ -928,7 +958,7 @@
     </Section>
 
     {#if vmHost !== undefined}
-      <VmSeatEditor bind:vm={vmDraft} host={vmHost} info={vmInfo} problem={vmProblem} />
+      <VmSeatEditor bind:vm={vmDraft} host={vmHost} info={vmInfo} problem={vmProblem} {pickFolder} />
     {/if}
 
     <Section title={t.seatView.removal}>

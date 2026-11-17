@@ -7,7 +7,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { remoteErrorMessage as errorMessage, rt as t, t as seatT } from '#lib/i18n.ts';
-  import type { VmAction, VmHostStatus } from '#lib/types.ts';
+  import type { PathKind, VmAction, VmHostStatus } from '#lib/types.ts';
   import type { VmSeat, VmSettings } from '#lib/remote/types.ts';
   import { countChanges, type RemoteStage } from '#lib/remote/stage.svelte.ts';
   import { vmSettingsProblem } from '#lib/remote/vm.ts';
@@ -26,13 +26,19 @@
     settings: VmSettings;
     load: () => Promise<VmHostStatus>;
     onAction: (a: VmAction) => Promise<VmHostStatus>;
+    /** System file / folder dialog for the path fields (`null` = cancelled; absent = typing only). */
+    pickPath?: (kind: PathKind) => Promise<string | null>;
     onSaveSettings: (v: VmSettings) => Promise<void>;
     /** Open a seat's page (its Virtual machine section). */
     onOpenSeat?: (seat: number) => void;
     disabled?: boolean;
     onBack?: () => void;
   }
-  let { seats, settings, load, onAction, onSaveSettings, onOpenSeat, disabled = false, onBack }: Props = $props();
+  let { seats, settings, load, onAction, onSaveSettings, onOpenSeat, disabled = false, onBack, pickPath }: Props = $props();
+  async function browse(kind: PathKind, set: (p: string) => void) {
+    const p = await pickPath?.(kind).catch(() => null);
+    if (p) set(p);
+  }
 
   let host = $state<VmHostStatus | null>(null);
   let error = $state<string | null>(null);
@@ -169,7 +175,7 @@
   <Section title={t.view.vmSettingsSection}>
     <Group>
       <Row label={t.vm.storage}>
-        {#snippet control()}<input class="input mono" aria-label={t.vm.storage} bind:value={draft.storage_location} placeholder={host?.storage ?? ''} />{/snippet}
+        {#snippet control()}<input class="input mono" aria-label={t.vm.storage} bind:value={draft.storage_location} placeholder={host?.storage ?? ''} />{#if pickPath}<Button kind="secondary" label={t.vm.browse} aria-label={`${t.vm.browse} ${t.vm.storage}`} onclick={() => browse('folder', (p) => (draft.storage_location = p))} />{/if}{/snippet}
       </Row>
       <Row label={t.vm.memoryPercent}>
         {#snippet control()}<input class="input narrow" type="number" min="10" max="90" aria-label={t.vm.memoryPercent} bind:value={draft.memory_percent} /><span class="unit">%</span>{/snippet}
@@ -182,7 +188,7 @@
       </Row>
       {#if draft.image_kind !== 'none'}
         <Row label={t.vm.imagePath}>
-          {#snippet control()}<input class="input mono" aria-label={t.vm.imagePath} bind:value={draft.image_path} />{/snippet}
+          {#snippet control()}<input class="input mono" aria-label={t.vm.imagePath} bind:value={draft.image_path} />{#if pickPath}<Button kind="secondary" label={t.vm.browse} aria-label={`${t.vm.browse} ${t.vm.imagePath}`} onclick={() => browse('vm_image', (p) => (draft.image_path = p))} />{/if}{/snippet}
         </Row>
       {/if}
       {#if draft.image_kind === 'wim'}
@@ -190,7 +196,7 @@
           {#snippet control()}<input class="input narrow" type="number" min="1" max="64" aria-label={t.vm.imageIndex} bind:value={draft.image_index} />{/snippet}
         </Row>
         <Row label={t.vm.languageCab}>
-          {#snippet control()}<input class="input mono" aria-label={t.vm.languageCab} bind:value={draft.language_cab} />{/snippet}
+          {#snippet control()}<input class="input mono" aria-label={t.vm.languageCab} bind:value={draft.language_cab} />{#if pickPath}<Button kind="secondary" label={t.vm.browse} aria-label={`${t.vm.browse} ${t.vm.languageCab}`} onclick={() => browse('language_cab', (p) => (draft.language_cab = p))} />{/if}{/snippet}
         </Row>
       {/if}
       <Row label={t.vm.restartGpus}>

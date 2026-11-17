@@ -89,6 +89,19 @@
     outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
+  /* Contrast themes drop the background and inset shadow that mark a checked radio. */
+  @media (forced-colors: active) {
+    input {
+      forced-color-adjust: none;
+      border-color: ButtonText;
+      background: Canvas;
+    }
+    input:checked {
+      border-color: Highlight;
+      background: Highlight;
+      box-shadow: inset 0 0 0 3.5px Canvas;
+    }
+  }
   input:disabled {
     cursor: not-allowed;
   }

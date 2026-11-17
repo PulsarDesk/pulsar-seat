@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { blocksOverlap, displayNameError, portError, portOverlapError, seatNameError } from './validation.ts';
+import {
+  PULSAR_DISCOVERY_PORT,
+  blocksOverlap,
+  displayNameError,
+  nodePortConflict,
+  portError,
+  portOverlapError,
+  seatNameError
+} from './validation.ts';
 
 describe('seatNameError', () => {
   it('accepts ASCII letters and digits', () => {
@@ -44,5 +52,16 @@ describe('ports', () => {
     expect(blocksOverlap(47989, 48016)).toBe(false);
     expect(portOverlapError(48000, [47989])).toBe('port_overlap');
     expect(portOverlapError(48089, [47989])).toBeNull();
+  });
+});
+
+describe('nodePortConflict', () => {
+  it('refuses what the service refuses', () => {
+    expect(nodePortConflict(48210, [48200])).toBe(true);
+    expect(nodePortConflict(48195, [48200])).toBe(true);
+    expect(nodePortConflict(48300, [48200])).toBe(false);
+    expect(nodePortConflict(48300, [48200], [48300])).toBe(true);
+    expect(nodePortConflict(PULSAR_DISCOVERY_PORT, [])).toBe(true);
+    expect(nodePortConflict(50000, [0])).toBe(false);
   });
 });

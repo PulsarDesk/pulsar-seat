@@ -21,6 +21,8 @@
 //     block needs `$PSNativeCommandUseErrorActionPreference = $true` or `$LASTEXITCODE`
 //     checks
 //   - `${{ ... }}` expressions are balanced; no tabs (YAML forbids them for indentation)
+//   - every file build-installer.ps1 requires in the payload is named in the workflow
+//     (`lintPayloadCoverage`)
 
 const TOP_KEYS = new Set(["name", "run-name", "on", "permissions", "env", "defaults", "concurrency", "jobs"]);
 const JOB_KEYS = new Set([
@@ -202,6 +204,25 @@ export function lintLocalCoverage(workflow: string, local: string): Finding[] {
   return f;
 }
 
+/**
+ * Every file build-installer.ps1 requires in the payload (`foreach ($n in ...) { ... "payload
+ * is missing $n" }`) must be named in the workflow, where its job collects it: with
+ * `-SkipCargo` (the CI installer job) the script builds nothing and only checks. Review
+ * 2026-11-17: pulsar-seat-wrds.dll was required but never collected, so the MSI job broke.
+ */
+export function lintPayloadCoverage(workflow: string, buildInstaller: string): Finding[] {
+  const f: Finding[] = [];
+  for (const m of buildInstaller.matchAll(/foreach \(\$n in ([^)]*)\)\s*\{[^}]*payload is missing \$n/g)) {
+    for (const n of [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])) {
+      const built = n.replaceAll("-", "_");
+      if (!workflow.includes(n) && !workflow.includes(built)) {
+        f.push({ where: "payload", msg: `build-installer.ps1 requires ${n} in the payload; the workflow never builds or collects it` });
+      }
+    }
+  }
+  return f;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const li = args.indexOf("--local");
@@ -210,6 +231,8 @@ if (import.meta.main) {
   const text = await Bun.file(file).text();
   const findings = lintWorkflow(text);
   if (localFile) findings.push(...lintLocalCoverage(text, await Bun.file(localFile).text()));
+  const installer = Bun.file("installer/scripts/build-installer.ps1");
+  if (await installer.exists()) findings.push(...lintPayloadCoverage(text, await installer.text()));
   for (const x of findings) console.error(`${file}: ${x.where}: ${x.msg}`);
   if (findings.length) {
     console.error(`${findings.length} problem(s)`);

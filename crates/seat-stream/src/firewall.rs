@@ -236,7 +236,7 @@ pub fn pulsar_seat_rule(seat_id: &str, display_name: &str, node_port: u16, progr
 }
 
 /// UDP port of the Pulsar LAN beacon (pulsar-host-backend.md §3.6).
-pub const PULSAR_DISCOVERY_PORT: u16 = 21117;
+pub const PULSAR_DISCOVERY_PORT: u16 = seat_core::remote::validate::PULSAR_DISCOVERY_PORT;
 
 /// `PulsarSplit seat <seat-id> discovery`.
 pub fn discovery_rule_name(seat_id: &str) -> String {

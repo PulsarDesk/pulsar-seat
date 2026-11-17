@@ -194,6 +194,13 @@ async fn pick_program(window: tauri::WebviewWindow) -> Result<Option<programs::P
     tauri::async_runtime::spawn_blocking(move || programs::pick_file(owner)).await.map_err(join_err)?
 }
 
+/// Pick a path for a setting (VM seats: image, language pack, shared folder).
+#[tauri::command]
+async fn pick_path(window: tauri::WebviewWindow, kind: programs::PathKind) -> Result<Option<String>, ProtoError> {
+    let owner = owner_of(&window);
+    tauri::async_runtime::spawn_blocking(move || programs::pick_path(owner, kind)).await.map_err(join_err)?
+}
+
 /// Pick a folder and list its programs (`.exe` and shortcut targets).
 #[tauri::command]
 async fn pick_program_folder(window: tauri::WebviewWindow) -> Result<Vec<programs::PickedProgram>, ProtoError> {
@@ -204,6 +211,12 @@ async fn pick_program_folder(window: tauri::WebviewWindow) -> Result<Vec<program
 #[tauri::command]
 fn open_system_panel(panel: shell::Panel) -> Result<(), ProtoError> {
     shell::open_panel(panel)
+}
+
+/// User manual, project website, contact (fixed URLs, default browser).
+#[tauri::command]
+fn open_help_link(link: shell::HelpLink) -> Result<(), ProtoError> {
+    shell::open_help(link)
 }
 
 /// UAC prompt for an elevated copy; on success this copy exits.
@@ -402,6 +415,7 @@ pub fn run() {
             service_control,
             app_info,
             open_system_panel,
+            open_help_link,
             restart_elevated,
             set_tray_visible,
             quit_app,
@@ -410,6 +424,7 @@ pub fn run() {
             list_user_pictures,
             pick_program,
             pick_program_folder,
+            pick_path,
             wizard_pages_open,
             wizard_pages_close,
             wizard_page_monitor,

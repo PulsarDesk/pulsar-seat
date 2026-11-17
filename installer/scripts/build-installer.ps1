@@ -54,6 +54,15 @@ param(
     # Leave out the remote kind's pinned third-party payload (fetch-deps.ts needs network).
     # Test builds only; refused with -Release.
     [switch] $NoRemoteDeps,
+    # Pulsar build of the stream server (stream-server/build-sunshine.ps1 output: sunshine.exe,
+    # stream-server.json, build-record.json). Default: <repo>\target\wf\sunshine-out\<arch>,
+    # built there by build-sunshine.ps1 when missing (review 2026-11-17: the Pulsar patch
+    # set is the default payload; upstream Sunshine only on request).
+    [string] $StreamServer = "",
+    # Ship the pinned upstream stream server instead (installer/remote/stream-server.json):
+    # remote seats then run without the seat pipe, pulsar_idd capture, own pads and pair
+    # timeout (stream_fallback). Not for releases.
+    [switch] $UpstreamStreamServer,
     [string] $CargoTargetDir = "",
     # MSI culture (installer/wix/locales/<culture>.wxl). en-US is the release default; tr-TR
     # builds the Turkish MSI (dist name gets a _tr-TR suffix).
@@ -251,7 +260,19 @@ if ($NoRemoteDeps) {
     Write-Warning "no remote payload (-NoRemoteDeps): remote seats cannot stream with this package"
 } else {
     $deps = Join-Path $repo "target\installer-deps"
-    Invoke-Checked "remote payload (fetch-deps.ts)" { bun (Join-Path $repo "installer\scripts\fetch-deps.ts") --arch $Arch --out $deps }
+    $streamArgs = @()
+    if ($UpstreamStreamServer) {
+        if ($Release) { throw "-Release ships the Pulsar build of the stream server; drop -UpstreamStreamServer" }
+        Write-Warning "upstream stream server (-UpstreamStreamServer): remote seats run without the Pulsar patch set (stream_fallback)"
+    } else {
+        if (-not $StreamServer) { $StreamServer = Join-Path $repo "target\wf\sunshine-out\$Arch" }
+        if (-not (Test-Path (Join-Path $StreamServer "sunshine.exe"))) {
+            if ($SkipCargo) { throw "no Pulsar stream server build in $StreamServer (CI: the stream-server-$Arch artifact; or pass -UpstreamStreamServer for a test build)" }
+            Invoke-Checked "stream server, Pulsar build ($Arch)" { & (Join-Path $repo "stream-server\build-sunshine.ps1") -Arch $Arch -OutDir $StreamServer }
+        }
+        $streamArgs = @("--stream-local", $StreamServer)
+    }
+    Invoke-Checked "remote payload (fetch-deps.ts)" { bun (Join-Path $repo "installer\scripts\fetch-deps.ts") --arch $Arch --out $deps @streamArgs }
     Copy-Item (Join-Path $deps "$Arch\remote") $remoteDir -Recurse -Force
 }
 # LogonUI loads the credential provider as SYSTEM: a published release carries it signed.

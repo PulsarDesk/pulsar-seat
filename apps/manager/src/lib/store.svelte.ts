@@ -58,6 +58,11 @@ export type SaveOutcome =
   | { kind: 'nothing' };
 
 const POLL_MS = 3000;
+/** "Restart" on a seat card: how long to wait for the stop and for the new start. */
+const RESTART_WAIT_MS = 60_000;
+const RESTART_POLL_MS = 500;
+/** Transient toasts kept when no toast region dismisses them. */
+const MAX_TOASTS = 20;
 
 export class ManagerStore {
   readonly api: Api;
@@ -371,10 +376,18 @@ export class ManagerStore {
 
   // ------------------------------------------------------------ helpers
 
+  /**
+   * Show a toast. The toast region (`ui/Toasts.svelte`) owns its lifetime: it dismisses it
+   * after its delay and pauses while hovered or focused. A store-side timer used to remove it
+   * anyway after 6 s, which defeated the pause (review 2026-11-17). Kept bounded for a
+   * window that renders no toast region.
+   */
   toast(kind: ToastKind, text: string, code?: string): void {
     const id = ++this.toastId;
-    this.toasts = [...this.toasts, { id, kind, text, code }];
-    if (kind !== 'error') setTimeout(() => this.dismiss(id), 6000);
+    const list = [...this.toasts, { id, kind, text, code }];
+    const transient = list.filter((x) => x.kind !== 'error');
+    const drop = new Set(transient.slice(0, Math.max(0, transient.length - MAX_TOASTS)).map((x) => x.id));
+    this.toasts = list.filter((x) => !drop.has(x.id));
   }
 
   dismiss(id: number): void {
@@ -522,17 +535,43 @@ export class ManagerStore {
   }
 
   /**
-   * "Restart" on a seat that must restart after a save: stop it, then start it again; the
-   * seat then runs with the saved settings. HYPOTHESIS (not run on hardware): the service
-   * queues the start behind the stop, as it does for a manual stop followed by a start.
+   * "Restart" on a seat that must restart after a save; the seat then runs with the saved
+   * settings. The service acknowledges a stop before the seat is off and skips a start of
+   * a seat that is still stopping, so a plain stop + start only stopped it (review
+   * 2026-11-17). Local seats use the service's own re-logon (stop, then start, on one
+   * worker); remote seats are stopped, waited for until off, then started. The
+   * "restart required" mark goes only once the seat is starting again.
    */
   async restartSeat(seat: SeatNumber): Promise<boolean> {
+    const remote = this.saved?.seats.find((s) => s.number === seat)?.kind === 'remote';
+    let started = false;
     const ok = await this.run(async () => {
-      await this.api.stopSeat(seat);
-      await this.api.startSeats([seat]);
+      if (remote) {
+        await this.api.stopSeat(seat);
+        if (!(await this.waitSeat(seat, (s) => s === 'off' || s === 'error', RESTART_WAIT_MS))) {
+          throw new Error(t.seatCard.restartTimeout);
+        }
+        await this.api.startSeats([seat]);
+      } else {
+        await this.api.relogonSeat(seat);
+      }
+      started = await this.waitSeat(seat, (s) => s !== 'off' && s !== 'stopping', RESTART_WAIT_MS);
     });
-    if (ok) this.restartRequired = this.restartRequired.filter((n) => n !== seat);
-    return ok;
+    if (ok && started) this.restartRequired = this.restartRequired.filter((n) => n !== seat);
+    return ok && started;
+  }
+
+  /** Poll the service until `seat`'s state satisfies `done` (or `ms` pass). */
+  private async waitSeat(seat: SeatNumber, done: (state: string) => boolean, ms: number): Promise<boolean> {
+    const end = Date.now() + ms;
+    for (;;) {
+      const st = await this.api.status();
+      this.status = st;
+      // A seat without a runtime entry is off.
+      if (done(st.seats.find((r) => r.seat === seat)?.state.state ?? 'off')) return true;
+      if (Date.now() >= end) return false;
+      await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+    }
   }
 
   /**

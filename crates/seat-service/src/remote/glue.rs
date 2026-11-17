@@ -155,6 +155,12 @@ impl Service {
     pub(crate) fn remote_kind_request(&self, body: &RequestBody) -> Result<ResponseBody, ProtoError> {
         let seat = match body {
             RequestBody::TestSeatCredentials { seat } | RequestBody::EnableUnlockAccount { seat, .. } => Some(*seat),
+            // `seat:<N>` of a VM seat: the stream log lives in the guest.
+            RequestBody::GetLogTail { source, .. } => source
+                .strip_prefix("seat:")
+                .and_then(|x| x.trim().parse::<u8>().ok())
+                .and_then(SeatNumber::new)
+                .filter(|s| self.is_vm_seat(*s)),
             other => other.seat_kind().map(|(s, _)| s),
         };
         let kind = match seat {
@@ -182,18 +188,58 @@ impl Service {
         from_legacy(r?)
     }
 
-    /// Remote-kind requests of a VM seat: pairing goes to the guest over the guest link; the
-    /// rest lives in the guest and is refused with `vm_seat`.
+    /// Remote-kind requests of a VM seat (review 2026-11-17: full seat page). What the host
+    /// keeps (app list, connect password, a pending identity reset) is answered here and
+    /// handed to the guest; the rest is answered by the guest's stream server or account
+    /// over the guest link (`vm_guest_forward`). With the VM off, the answers match an
+    /// off host seat.
     fn vm_kind_request(&self, n: SeatNumber, body: &RequestBody, what: &str) -> Result<ResponseBody, ProtoError> {
-        use seat_core::remote::vm::GuestMsg;
+        use crate::vm_seats::GUEST_REQUEST_MS;
+        let not_running = || ProtoError::new(ErrorCode::ServiceUnavailable, "seat is not running");
+        let forward = |off: &dyn Fn() -> Result<ResponseBody, ProtoError>| match self.vm_guest_forward(n, body, GUEST_REQUEST_MS) {
+            Some(r) => r,
+            None => off(),
+        };
         match body {
-            RequestBody::SubmitPin { pin, client_name, .. } => {
-                self.vm_guest_request(n, GuestMsg::SubmitPin { pin: pin.expose().to_string(), client_name: client_name.clone() })
-            }
-            RequestBody::UnpairAll { .. } => self.vm_guest_request(n, GuestMsg::UnpairAll),
-            RequestBody::CancelPair { .. } => Ok(ResponseBody::Ack),
-            _ => Err(ProtoError::new(ErrorCode::Unsupported, format!("{what}: seat {n} runs in a VM; use the guest"))
-                .with_reason("vm_seat")),
+            RequestBody::SubmitPin { .. } => self.vm_submit_pin(n, body),
+            RequestBody::GetApps { .. } => self.vm_get_apps(n),
+            RequestBody::SetApps { .. } => self.vm_set_apps(n, body),
+            RequestBody::SetSeatConnectPassword { .. } => self.vm_set_connect_password(n, body),
+            RequestBody::RegenerateSeatIdentity { confirm, .. } => self.vm_regenerate_identity(n, *confirm),
+            RequestBody::GetPairState { .. } => forward(&|| {
+                let backend = self.lock().config.seat(n).and_then(|s| s.remote.as_ref().map(|r| r.stream_backend)).unwrap_or_default();
+                Ok(ResponseBody::PairState(seat_proto::remote::PairState { backend, ..Default::default() }))
+            }),
+            RequestBody::GetRemoteRuntime { .. } => forward(&|| Ok(ResponseBody::RemoteRuntime(Default::default()))),
+            RequestBody::GetLogTail { .. } => forward(&|| Ok(ResponseBody::LogLines(Vec::new()))),
+            // The guest re-applies the seat user (enabled, stored password) at every start.
+            RequestBody::EnableUnlockAccount { confirm, .. } => forward(&|| {
+                if !confirm {
+                    return Err(ProtoError::new(ErrorCode::BadRequest, "confirm must be true").with_field("confirm"));
+                }
+                Ok(ResponseBody::Ack)
+            }),
+            RequestBody::TestSeatCredentials { .. } => forward(&|| {
+                let user = self.lock().config.seat(n).map(|s| match &s.account {
+                    seat_core::config::SeatAccount::Local { user } | seat_core::config::SeatAccount::Domain { user, .. } => user.clone(),
+                    seat_core::config::SeatAccount::LogonScreen => String::new(),
+                });
+                if user.unwrap_or_default().is_empty() || !self.secrets.has(n) {
+                    return Err(ProtoError::new(ErrorCode::MissingCredentials, "seat needs a user and a password").with_field("user_name"));
+                }
+                // The guest creates the user with exactly this password when the VM starts.
+                Ok(ResponseBody::CredentialTest(seat_proto::remote::CredentialTest { ok: true, ..Default::default() }))
+            }),
+            RequestBody::CancelPair { .. }
+            | RequestBody::ListPairedClients { .. }
+            | RequestBody::UnpairClient { .. }
+            | RequestBody::UnpairAll { .. }
+            | RequestBody::AnswerPeerRequest { .. }
+            | RequestBody::GetSeatOtp { .. }
+            | RequestBody::RotateSeatOtp { .. }
+            | RequestBody::AnswerRelayAuth { .. }
+            | RequestBody::SetSeatDisplayMode { .. } => forward(&|| Err(not_running())),
+            _ => Err(ProtoError::new(ErrorCode::Unsupported, format!("{what}: not a seat request")).with_reason("vm_seat")),
         }
     }
 

@@ -158,7 +158,9 @@ describe('App shell', () => {
     expect(store.toasts.some((x) => x.text.includes(t.saved.restartSeats('2')))).toBe(false);
     api.state.product = { state: 'enabled', started: true };
     await store.restartSeat(2);
-    expect(api.calls).toEqual(expect.arrayContaining(['stop_seat', 'start_seats']));
+    // A local seat restarts through the service's re-logon (stop, then start, one worker).
+    expect(api.calls).toEqual(expect.arrayContaining(['relogon_seat']));
+    expect(api.calls).not.toContain('stop_seat');
     expect(store.restartRequired).toEqual([]);
   });
 

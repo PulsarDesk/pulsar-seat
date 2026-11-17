@@ -553,6 +553,15 @@ impl RequestBody {
             R::GetConfig | R::ValidateConfig { .. } | R::ApplyConfig { .. } | R::ResetConfig { .. } | R::ImportReference { .. } => 3,
             _ if self.is_remote_kind_request() => 3,
             R::SwitchSeat { .. } => 3,
+            // Added after protocol 3 (parity rounds, 2026-11-17): additive, but only
+            // protocol 3 clients know them (review 2026-11-17: the docs said so, the code
+            // did not).
+            R::ResetGraphics { .. }
+            | R::SteamProxyDll { .. }
+            | R::VmSeats { .. }
+            | R::RestartTermService { .. }
+            | R::HostAudioReport { .. }
+            | R::HostDriveBroker { .. } => 3,
             _ => crate::MIN_PROTOCOL_VERSION,
         }
     }

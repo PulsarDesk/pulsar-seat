@@ -395,17 +395,60 @@ pub fn dispatch_irp(backend: &mut dyn ironrdp_rdpdr::backend::RdpdrBackend, irp:
     out.into_iter().map(|m| m.encode_unframed_pdu().map_err(|e| e.to_string())).collect()
 }
 
-/// A failure completion for an IRP the broker could not run (`STATUS_UNSUCCESSFUL`).
+/// `STATUS_UNSUCCESSFUL`.
+const STATUS_UNSUCCESSFUL: u32 = 0xC000_0001;
+const IRP_MJ_CREATE: u32 = 0x00;
+const IRP_MJ_WRITE: u32 = 0x04;
+const IRP_MJ_SET_INFORMATION: u32 = 0x06;
+const IRP_MJ_SET_VOLUME_INFORMATION: u32 = 0x0b;
+const IRP_MJ_DIRECTORY_CONTROL: u32 = 0x0c;
+const IRP_MJ_LOCK_CONTROL: u32 = 0x11;
+const IRP_MN_NOTIFY_CHANGE_DIRECTORY: u32 = 0x02;
+
+/// Bytes after the `DR_DEVICE_IOCOMPLETION` header in the reply to an IRP of this major /
+/// minor function (MS-RDPEFS 2.2.3.4, 2.2.1.5): each response shape with its length or
+/// file id fields zero. Review 2026-11-17: every failure used to have the close reply's
+/// shape, one byte short for a create, a write, a set or a lock.
+pub fn failure_payload_len(major: u32, minor: u32) -> usize {
+    match major {
+        // DR_CREATE_RSP: FileId u32 + Information u8.
+        IRP_MJ_CREATE => 5,
+        // DR_WRITE_RSP / DR_DRIVE_SET_*_RSP: Length u32 + Padding u8.
+        IRP_MJ_WRITE | IRP_MJ_SET_INFORMATION | IRP_MJ_SET_VOLUME_INFORMATION => 5,
+        // DR_DRIVE_QUERY_DIRECTORY_RSP: Length u32, no buffer, Padding u8;
+        // DR_DRIVE_NOTIFY_CHANGE_DIRECTORY_RSP: Length u32.
+        IRP_MJ_DIRECTORY_CONTROL if minor == IRP_MN_NOTIFY_CHANGE_DIRECTORY => 4,
+        IRP_MJ_DIRECTORY_CONTROL => 5,
+        // DR_DRIVE_LOCK_RSP: Padding 5 bytes.
+        IRP_MJ_LOCK_CONTROL => 5,
+        // DR_CLOSE_RSP padding, and Length / OutputBufferLength u32 of read, query
+        // information, query volume information, device control.
+        _ => 4,
+    }
+}
+
+/// A failure completion for an IRP the broker could not run (`STATUS_UNSUCCESSFUL`), in
+/// the reply shape of the IRP's major function ([`failure_payload_len`]).
 pub fn failure_completion(irp: &[u8]) -> Option<Vec<u8>> {
-    use ironrdp_rdpdr::pdu::RdpdrPdu;
-    use ironrdp_rdpdr::pdu::efs::{DeviceCloseResponse, DeviceIoRequest, DeviceIoResponse, NtStatus};
-    use ironrdp_svc::SvcMessage;
-    let mut src = ironrdp_core::ReadCursor::new(irp.get(4..)?);
-    let header = DeviceIoRequest::decode(&mut src).ok()?;
-    let m = SvcMessage::from(RdpdrPdu::DeviceCloseResponse(DeviceCloseResponse {
-        device_io_response: DeviceIoResponse::new(header, NtStatus::UNSUCCESSFUL),
-    }));
-    m.encode_unframed_pdu().ok()
+    let (device_id, completion_id) = irp_ids(irp)?;
+    let major = u32_at(irp, 16)?;
+    let minor = u32_at(irp, 20)?;
+    let mut v = Vec::with_capacity(16 + 5);
+    v.extend_from_slice(&IO_COMPLETION_HEADER);
+    v.extend_from_slice(&device_id.to_le_bytes());
+    v.extend_from_slice(&completion_id.to_le_bytes());
+    v.extend_from_slice(&STATUS_UNSUCCESSFUL.to_le_bytes());
+    v.resize(16 + failure_payload_len(major, minor), 0);
+    Some(v)
+}
+
+/// IRPs that legitimately stay pending in the broker (a directory watch, a waiting lock):
+/// the host does not wait for their completion; the channel ticker picks it up later.
+pub fn completes_later(irp: &[u8]) -> bool {
+    matches!(
+        (u32_at(irp, 16), u32_at(irp, 20)),
+        (Some(IRP_MJ_DIRECTORY_CONTROL), Some(IRP_MN_NOTIFY_CHANGE_DIRECTORY)) | (Some(IRP_MJ_LOCK_CONTROL), _)
+    )
 }
 
 /// The broker loop: serves frames from `reader` until the host closes the pipe. Drives
@@ -759,6 +802,9 @@ mod tests {
         assert_eq!(bytes.len(), 4 + 20 + 32, "close keeps its 32-byte padding");
         let fail = failure_completion(&bytes).unwrap();
         assert_eq!(completion_ids(&fail), Some((5, 77)));
+        assert_eq!(fail.len(), 16 + 4, "DR_CLOSE_RSP: 4 bytes padding");
+        assert_eq!(&fail[12..16], &STATUS_UNSUCCESSFUL.to_le_bytes());
+        assert!(!completes_later(&bytes));
         let ids: HashSet<u32> = [5].into();
         let (ok, dropped) = filter_answers(vec![fail.clone(), vec![1, 2, 3, 4], { let mut o = fail.clone(); o[4] = 9; o }], &ids);
         assert_eq!((ok, dropped), (vec![fail], 2), "only completions of the broker's own devices pass");
@@ -805,5 +851,50 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), vec!["add 4", "irp 4", "remove 4"]);
         drop(link);
         broker.join().unwrap().unwrap();
+    }
+
+    /// A raw IRP header (`DR_DEVICE_IOREQUEST`) with these functions.
+    fn raw_irp(major: u32, minor: u32) -> Vec<u8> {
+        let mut v = IO_REQUEST_HEADER.to_vec();
+        for x in [9u32, 1, 42, major, minor] {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn failure_replies_have_the_shape_of_their_request() {
+        use ironrdp_core::ReadCursor;
+        use ironrdp_rdpdr::pdu::efs::DeviceCreateResponse;
+        // A failed create decodes as DR_CREATE_RSP (FileId + Information).
+        let create = failure_completion(&raw_irp(IRP_MJ_CREATE, 0)).unwrap();
+        assert_eq!(create.len(), 16 + 5);
+        let mut src = ReadCursor::new(&create[4..]);
+        let header = ironrdp_rdpdr::pdu::efs::DeviceIoResponse::decode(&mut src).unwrap();
+        let rsp = DeviceCreateResponse::decode(header, &mut src).unwrap();
+        assert_eq!(rsp.file_id, 0);
+        assert_eq!(completion_ids(&create), Some((9, 42)));
+        for (major, minor, len) in [
+            (0x03, 0, 4),
+            (IRP_MJ_WRITE, 0, 5),
+            (0x05, 0, 4),
+            (IRP_MJ_SET_INFORMATION, 0, 5),
+            (0x0a, 0, 4),
+            (0x0e, 0, 4),
+            (IRP_MJ_DIRECTORY_CONTROL, 1, 5),
+            (IRP_MJ_DIRECTORY_CONTROL, IRP_MN_NOTIFY_CHANGE_DIRECTORY, 4),
+            (IRP_MJ_LOCK_CONTROL, 0, 5),
+        ] {
+            assert_eq!(failure_completion(&raw_irp(major, minor)).unwrap().len(), 16 + len, "major {major:#x} minor {minor}");
+        }
+        assert!(failure_completion(&[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn pending_irps_are_not_waited_for() {
+        assert!(completes_later(&raw_irp(IRP_MJ_DIRECTORY_CONTROL, IRP_MN_NOTIFY_CHANGE_DIRECTORY)));
+        assert!(completes_later(&raw_irp(IRP_MJ_LOCK_CONTROL, 0)));
+        assert!(!completes_later(&raw_irp(IRP_MJ_DIRECTORY_CONTROL, 1)), "a directory query completes at once");
+        assert!(!completes_later(&raw_irp(0x03, 0)));
     }
 }

@@ -20,6 +20,7 @@
     SeatRuntime,
     StreamBackendInfo,
     StreamBackendKind,
+    UserPicture,
     VmSeat
   } from '#lib/remote/types.ts';
   import {
@@ -39,7 +40,8 @@
   } from '#lib/remote/model.ts';
   import { isVmSeat, setSeatVm, setVmSettings, vmOf, vmSettingsOf } from '#lib/remote/vm.ts';
   import { discardRemoteStage, remoteDirty, saveRemoteStage } from '#lib/remote/stage.svelte.ts';
-  import { Button, ConfirmDialog, Group, LinkRow, Modal, Notice, PageHead, Section, Spinner, Status } from '#lib/ui/index.ts';
+  import { Avatar, Button, ConfirmDialog, Group, LinkRow, Modal, Notice, PageHead, Section, Spinner, Status } from '#lib/ui/index.ts';
+  import { avatarSrc, initial, picturesToLoad } from '#lib/remote/avatar.ts';
   import type { StatusKind } from '#lib/ui/index.ts';
   import DxvkPage from './DxvkPage.svelte';
   import HostPage from './HostPage.svelte';
@@ -65,6 +67,8 @@
   const remote = $derived(store.api.remote);
 
   let users = $state<LocalUser[]>([]);
+  /** Account pictures by user name (null = none; loaded once per user, again after a rename). */
+  let pictures = $state<Record<string, UserPicture | null>>({});
   let addresses = $state<string[]>([]);
   let hostInfo = $state<HostInfo | null>(null);
   let runtime = $state<SeatRuntime | null>(null);
@@ -101,6 +105,21 @@
   const serviceStatus = $derived(remoteServiceStatus(store.status, store.saved, store.view, passive));
   /** Remote seats cannot start here (`session_unavailable`): said on the rows up front. */
   const noSessions = $derived(remoteSessionsUnavailable(store.saved, store.status));
+
+  $effect(() => {
+    const want = picturesToLoad([...records.values()].map((r) => r.user_name), pictures);
+    for (const u of want) {
+      pictures[u] = null;
+      remote
+        .userPicture(u)
+        .then((p) => (pictures[u] = p.data ? p : null))
+        .catch(() => {});
+    }
+  });
+  const avatarOf = (n: SeatNumber) => {
+    const u = records.get(n)?.user_name ?? '';
+    return { src: avatarSrc(u ? pictures[u] : null), initial: initial(names.get(n) ?? '') };
+  };
 
   $effect(() => {
     if (selected !== null && store.saved && !seats.some((s) => s.number === selected)) selected = null;
@@ -276,8 +295,19 @@
         onBack={back}
         extraNotice={sessionNotice}
         {users}
+        avatar={avatarOf(current.number)}
+        pickFolder={() => api.pickPath('folder')}
+        startBlockedReason={noSessions && !isVmSeat(current) && currentStatus?.session_id === null ? t.view.sessionUnavailable : null}
         otherPorts={seats.filter((s) => s.number !== current.number).map((s) => records.get(s.number)?.port ?? 0)}
         otherDisplayNames={seats.filter((s) => s.number !== current.number).map((s) => records.get(s.number)?.display_name ?? '')}
+        otherNodePorts={seats
+          .filter((s) => s.number !== current.number)
+          .flatMap((s) => {
+            const r = records.get(s.number);
+            const fixed = r?.stream_backend === 'pulsar' && r.pulsar?.node_port_mode === 'fixed' ? [r.pulsar.node_port] : [];
+            const udp = (vmOf(s)?.forwarded_ports ?? []).filter((f) => f.protocol === 'udp').map((f) => f.host_port);
+            return [...fixed, ...udp];
+          })}
         serviceReachable={reachable}
         onSave={saveSeat}
         onSetPassword={async (_name, pw) => {
@@ -347,6 +377,7 @@
         await store.applyRemote((c) => setVmSettings(c, v));
       }}
       onOpenSeat={openSeat}
+      pickPath={(k) => api.pickPath(k)}
       disabled={!reachable || passive}
     />
   {:else if page === 'logs'}
@@ -401,7 +432,9 @@
           <Group>
             {#each seats as s (s.number)}
               {@const st = rowState(s)}
+              {@const av = avatarOf(s.number)}
               <LinkRow label={s.name} help={rowHelp(s)} onclick={() => openSeat(s.number)}>
+                {#snippet lead()}<Avatar src={av.src} initial={av.initial} />{/snippet}
                 {#snippet value()}<Status kind={st.kind} text={st.text} />{/snippet}
               </LinkRow>
             {/each}

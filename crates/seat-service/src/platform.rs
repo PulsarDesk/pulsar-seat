@@ -200,6 +200,17 @@ pub trait Platform: Send + Sync {
         let _ = vm_id;
         None
     }
+    /// A control request for the guest of `vm_id` (`RequestBody` JSON); waits up to
+    /// `timeout_ms` for the guest's `ResponseBody` JSON.
+    fn guest_link_request(&self, vm_id: &str, request: serde_json::Value, timeout_ms: u64) -> crate::guest_link::GuestReply {
+        let _ = (vm_id, request, timeout_ms);
+        Err(seat_core::error::ProtoError::new(seat_core::error::ErrorCode::NotReady, "no guest link").with_reason("vm_guest_unreachable"))
+    }
+    /// Stream notices the guest of `vm_id` sent since the last call (`kind`, data).
+    fn guest_link_notices(&self, vm_id: &str) -> Vec<(String, serde_json::Value)> {
+        let _ = vm_id;
+        Vec::new()
+    }
     /// Drive broker link (rdp-listener 2026-11-17): two fresh anonymous pipes, one per
     /// direction; each end duplicated into the seat host (`host_pid`) or the seat's agent
     /// (`agent_pid`) and closed here. Handle values valid in those processes.
@@ -457,6 +468,12 @@ pub mod mock {
         pub guest_offers: Mutex<BTreeMap<String, seat_core::remote::vm::GuestConfig>>,
         pub guest_sent: Mutex<Vec<(String, seat_core::remote::vm::GuestMsg)>>,
         pub guest_phases: Mutex<BTreeMap<String, (seat_core::remote::vm::GuestPhase, Option<String>)>>,
+        /// Requests sent through `guest_link_request` (VM id, request JSON).
+        pub guest_requests: Mutex<Vec<(String, serde_json::Value)>>,
+        /// Canned guest replies by request `type` (default: `ack`).
+        pub guest_replies: Mutex<BTreeMap<String, crate::guest_link::GuestReply>>,
+        /// Notices the fake guest "sent", per VM id.
+        pub guest_notices: Mutex<BTreeMap<String, Vec<(String, serde_json::Value)>>>,
         /// `(host pid, agent pid)` of every drive broker link made.
         pub broker_links: Mutex<Vec<(u32, u32)>>,
         /// Last published camera rules.
@@ -680,6 +697,18 @@ pub mod mock {
         }
         fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
             lock(&self.guest_phases).get(vm_id).cloned()
+        }
+        fn guest_link_request(&self, vm_id: &str, request: serde_json::Value, _timeout_ms: u64) -> crate::guest_link::GuestReply {
+            if !lock(&self.guest_phases).contains_key(vm_id) {
+                return Err(seat_core::error::ProtoError::new(seat_core::error::ErrorCode::NotReady, "guest not connected")
+                    .with_reason("vm_guest_unreachable"));
+            }
+            lock(&self.guest_requests).push((vm_id.into(), request.clone()));
+            let ty = request["type"].as_str().unwrap_or_default().to_string();
+            lock(&self.guest_replies).get(&ty).cloned().unwrap_or_else(|| Ok(serde_json::json!({"type": "ack"})))
+        }
+        fn guest_link_notices(&self, vm_id: &str) -> Vec<(String, serde_json::Value)> {
+            lock(&self.guest_notices).remove(vm_id).unwrap_or_default()
         }
         fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<BrokerPipes> {
             lock(&self.broker_links).push((host_pid, agent_pid));

@@ -6,6 +6,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '#lib/i18n.ts';
+  import { matchCamera } from '#lib/cameras.ts';
   import { Button, Modal, Notice, Spinner } from '#lib/ui/index.ts';
 
   interface Props {
@@ -19,10 +20,7 @@
   let stream: MediaStream | null = null;
 
   /** Best match of a device friendly name among the media device labels. */
-  function pick(list: MediaDeviceInfo[]): MediaDeviceInfo | undefined {
-    const n = name.toLowerCase();
-    return list.find((d) => d.label.toLowerCase() === n) ?? list.find((d) => d.label && (d.label.toLowerCase().includes(n) || n.includes(d.label.toLowerCase())));
-  }
+  const pick = (list: MediaDeviceInfo[]) => matchCamera(list, name);
 
   onMount(() => {
     const md = globalThis.navigator?.mediaDevices;

@@ -33,9 +33,24 @@ pub fn alias(seat: u8) -> String {
     format!("vEthernet ({})", nic_name(seat))
 }
 
-/// PowerShell single-quoted literal.
+/// Characters PowerShell takes as a single-quote delimiter: ASCII `'` and the typographic
+/// quotes U+2018 to U+201B.
+pub const PS_SINGLE_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'];
+
+/// PowerShell single-quoted literal. Every single-quote character PowerShell knows is
+/// doubled (review 2026-11-17: a path with a typographic apostrophe used to end the
+/// literal early and run the rest as code).
 pub fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if PS_SINGLE_QUOTES.contains(&c) {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
 }
 
 pub use seat_proto::hyperv::{HyperVAction, HyperVStatus, SeatNic};
@@ -173,6 +188,21 @@ mod tests {
         assert_eq!(nic_name(3), "Pulsar Seat 03");
         assert_eq!(alias(3), "vEthernet (Pulsar Seat 03)");
         assert_eq!(ps_quote("a'b"), "'a''b'");
+        // Typographic quotes end a PowerShell literal too: doubled the same way.
+        assert_eq!(ps_quote("C:\\Bob\u{2019}s Games"), "'C:\\Bob\u{2019}\u{2019}s Games'");
+        assert_eq!(ps_quote("\u{2018}\u{201a}\u{201b}"), "'\u{2018}\u{2018}\u{201a}\u{201a}\u{201b}\u{201b}'");
+        let injected = ps_quote("C:\\a\u{2019}; Write-Output INJECTED; \u{2019}");
+        // Between the outer quotes every quote character comes in pairs.
+        let inner: Vec<char> = injected.chars().skip(1).take(injected.chars().count() - 2).collect();
+        let mut i = 0;
+        while i < inner.len() {
+            if PS_SINGLE_QUOTES.contains(&inner[i]) {
+                assert!(PS_SINGLE_QUOTES.contains(&inner[i + 1]), "{injected}");
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
         assert!(check_nic(2, "192.168.50.2", 24).is_ok());
         assert!(check_nic(0, "192.168.50.2", 24).is_err());
         assert!(check_nic(2, "127.0.0.1", 24).is_err());
