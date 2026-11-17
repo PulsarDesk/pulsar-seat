@@ -5,7 +5,7 @@
 <script lang="ts">
   import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
-  import { WARNING_TR, WARNING_VERSION, boldParts } from '#lib/warning.ts';
+  import { WARNING_VERSION, boldParts, warningText } from '#lib/warning.ts';
 
   interface Props {
     onAccept: (ackVersion: number) => void;
@@ -13,7 +13,7 @@
   }
   let { onAccept, onCancel }: Props = $props();
   let acknowledged = $state(false);
-  const lines = WARNING_TR.split('\n').filter((l) => l.trim() !== '');
+  const lines = warningText().split('\n').filter((l) => l.trim() !== '');
 </script>
 
 <Modal title={t.experimental.title} wide alert onClose={onCancel}>

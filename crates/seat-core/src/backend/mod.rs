@@ -91,7 +91,7 @@ pub enum DriverStatus {
 }
 
 /// Machine-readable error kind. The manager maps it (plus `BackendError::reason`) to
-/// Turkish copy.
+/// localized copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {

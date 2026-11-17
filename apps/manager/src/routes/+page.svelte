@@ -9,7 +9,7 @@
   import WizardPage from '#lib/components/WizardPage.svelte';
   import { createTauriApi, isTauri, type Api } from '#lib/api.ts';
   import { createDemoApi } from '#lib/demo.ts';
-  import { t } from '#lib/i18n.ts';
+  import { initLocale, t } from '#lib/i18n.ts';
   import { ManagerStore } from '#lib/store.svelte.ts';
 
   let store = $state<ManagerStore | null>(null);
@@ -19,6 +19,10 @@
     let s: ManagerStore | null = null;
     (async () => {
       const api = isTauri() ? await createTauriApi() : createDemoApi();
+      // Language before anything renders: the user's choice, else the Windows UI language.
+      const os = isTauri() ? await api.uiLanguage().catch(() => null) : null;
+      const lang = initLocale(os ? [os] : undefined);
+      await api.setUiLanguage(lang).catch(() => {});
       const preview = isTauri() ? null : new URLSearchParams(globalThis.location?.search ?? '').get('wizard-page');
       const monitor = preview ?? (await api.wizardPageMonitor().catch(() => null));
       if (monitor) {

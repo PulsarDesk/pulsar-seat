@@ -672,7 +672,7 @@ mod tests {
         let p = dir.join("service.log");
         std::fs::write(&p, "1 INFO a\n2 INFO PIN accepted 1234\n\n3 WARN Authorization: Basic x\n4 INFO b\n").unwrap();
         let t = tail_file(&p, 3);
-        assert_eq!(t, ["[satır gizlendi]", "[satır gizlendi]", "4 INFO b"]);
+        assert_eq!(t, ["[line hidden]", "[line hidden]", "4 INFO b"]);
         assert_eq!(tail_file(&p, 10).len(), 4);
         assert_eq!(redact_line("pad mapping ok, ping 3 ms"), "pad mapping ok, ping 3 ms");
         for l in [
@@ -683,7 +683,7 @@ mod tests {
             "seat identity loaded",
             "relay totp 000000",
         ] {
-            assert_eq!(redact_line(l), "[satır gizlendi]", "{l}");
+            assert_eq!(redact_line(l), "[line hidden]", "{l}");
         }
         assert_eq!(redact_line("usb hotplug event"), "usb hotplug event");
         assert!(tail_file(&dir.join("missing.log"), 5).is_empty());

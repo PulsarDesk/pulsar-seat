@@ -381,7 +381,11 @@ fn reboot() -> std::io::Result<()> {
             AdjustTokenPrivileges(tok, 0, &tp, 0, ptr::null_mut(), ptr::null_mut());
         }
         CloseHandle(tok);
-        let msg = wide("Pulsar Seat: işlem yamalama değişikliği için Windows yeniden başlatılıyor.");
+        const REBOOT: seat_core::i18n::Text = seat_core::i18n::Text::new(
+            "Pulsar Seat: restarting Windows for the process patching change.",
+            "Pulsar Seat: işlem yamalama değişikliği için Windows yeniden başlatılıyor.",
+        );
+        let msg = wide(REBOOT.get());
         let rc = InitiateShutdownW(
             ptr::null(),
             msg.as_ptr(),

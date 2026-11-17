@@ -6,7 +6,7 @@
 //! What it does (Windows part in `win.rs`, **untested on hardware**):
 //!
 //! - Full-screen launcher windows on the seat's monitors and a task bar on its first
-//!   monitor (Turkish copy in [`tr`]); app windows are kept inside the seat's area
+//!   monitor (localized copy in [`copy`]); app windows are kept inside the seat's area
 //!   ([`fit_into`]).
 //! - Starts only the seat's listed apps, inside its own kill-on-close job; windows of other
 //!   processes never get the seat's input.
@@ -28,11 +28,11 @@
 //!   filter the kiosk seats' keys **and mice** then also reach seat 1 (the mice move the
 //!   system cursor and click seat 1's windows), and seat 1's cursor can enter the kiosk
 //!   monitors and activate a kiosk app, which then gets seat 1's typing
-//!   (`input_not_isolated`, shown on the bar as [`tr::NOT_ISOLATED`]).
+//!   (`input_not_isolated`, shown on the bar as [`copy::NOT_ISOLATED`]).
 //! - Input filter (KMDF) active: the kiosk seats' units never reach the legacy input
 //!   stack, so the raw input reader sees nothing; the shell instead connects as
 //!   `kiosk_shell` (verified by PID + session), subscribes to the `host` topic and receives
-//!   its own seat's `input_packets` from the service ([`tr::FILTER_STREAM_LOST`] while that
+//!   its own seat's `input_packets` from the service ([`copy::FILTER_STREAM_LOST`] while that
 //!   stream is down). This is the one configuration where seat 1 stays the normal desktop
 //!   *and* the seats are isolated (spec 35 §4 U3+U1).
 //! - Idle reset and "Oturumu kapat": close the seat's apps, show the launcher, start the
@@ -43,7 +43,7 @@
 //!   ([`seat_media::kiosk_audio`], undocumented Windows API, HYPOTHESIS): set when an app
 //!   starts (still suspended) and for new job processes, re-applied when the endpoint id
 //!   changes, cleared before the job ends. Fallback: session default + bar line
-//!   ([`tr::AUDIO_UNAVAILABLE`], [`tr::AUDIO_FAILED`]).
+//!   ([`copy::AUDIO_UNAVAILABLE`], [`copy::AUDIO_FAILED`]).
 //! - Back to the launcher: the bar's "Uygulamalar" button or Ctrl+Alt+Home
 //!   ([`seat_input::kiosk::HOME_CHORD_VK`]).
 //!
@@ -87,21 +87,51 @@ use seat_media::kiosk_audio::{Flow, KioskAudio, KioskAudioState, SeatEndpoints, 
 use seat_proto::messages::{BackendReport, DeviceView};
 use seat_session::kiosk::{KioskPlan, SHELL_FLAG, decode_plan};
 
-/// Turkish UI copy of the shell.
-pub mod tr {
-    pub const HOME: &str = "Uygulamalar";
-    pub const LOGOUT: &str = "Oturumu kapat";
-    pub const SEAT: &str = "Koltuk";
-    pub const NO_APPS: &str = "Bu koltuk için uygulama tanımlanmamış. Pulsar Seat yöneticisinden ekleyin.";
-    pub const IDLE: &str = "İşlem yapılmazsa oturum {} dk sonra kapanır";
-    pub const NOT_ISOLATED: &str = "Giriş filtresi yok: bu koltuğun tuşları ve faresi 1. koltuğa da gider";
-    pub const FILTER_STREAM_LOST: &str = "Giriş filtresi etkin, ancak bu koltuğun girişi hizmetten alınamıyor";
-    pub const NO_SERVICE: &str = "Pulsar Seat hizmetine ulaşılamadı; cihaz listesi alınamıyor";
-    pub const NO_DEVICES: &str = "Bu koltuğa klavye veya fare atanmamış";
-    pub const START_FAILED: &str = "Uygulama başlatılamadı";
-    pub const AUDIO_UNAVAILABLE: &str = "Bu Windows sürümünde uygulama başına ses aygıtı yok: ses 1. koltuğun varsayılan aygıtından çıkar";
-    pub const AUDIO_FAILED: &str = "Uygulamaların sesi bu koltuğun ses aygıtına yönlendirilemedi; varsayılan ses aygıtı kullanılıyor";
-    pub const HINT: &str = "Uygulama listesine dönmek için: çubuktaki “Uygulamalar” düğmesi ya da Ctrl+Alt+Home. Ctrl+Alt+Del bütün koltukları etkiler.";
+/// UI copy of the shell (English default, Turkish locale; `seat_core::i18n`).
+pub mod copy {
+    use seat_core::i18n::Text;
+    pub const HOME: Text = Text::new("Apps", "Uygulamalar");
+    pub const LOGOUT: Text = Text::new("Sign out", "Oturumu kapat");
+    pub const SEAT: Text = Text::new("Seat", "Koltuk");
+    pub const NO_APPS: Text = Text::new(
+        "No app is set up for this seat. Add them in the Pulsar Seat manager.",
+        "Bu koltuk için uygulama tanımlanmamış. Pulsar Seat yöneticisinden ekleyin.",
+    );
+    /// `{0}` = minutes.
+    pub const IDLE: Text = Text::new("Without activity the session closes in {0} min", "İşlem yapılmazsa oturum {0} dk sonra kapanır");
+    pub const NOT_ISOLATED: Text = Text::new(
+        "No input filter: this seat's keys and mouse also reach seat 1",
+        "Giriş filtresi yok: bu koltuğun tuşları ve faresi 1. koltuğa da gider",
+    );
+    pub const FILTER_STREAM_LOST: Text = Text::new(
+        "The input filter is active, but this seat's input cannot be received from the service",
+        "Giriş filtresi etkin, ancak bu koltuğun girişi hizmetten alınamıyor",
+    );
+    pub const NO_SERVICE: Text = Text::new(
+        "The Pulsar Seat service cannot be reached; the device list is not available",
+        "Pulsar Seat hizmetine ulaşılamadı; cihaz listesi alınamıyor",
+    );
+    pub const NO_DEVICES: Text = Text::new("No keyboard or mouse is assigned to this seat", "Bu koltuğa klavye veya fare atanmamış");
+    pub const START_FAILED: Text = Text::new("The app could not start", "Uygulama başlatılamadı");
+    pub const AUDIO_UNAVAILABLE: Text = Text::new(
+        "This Windows version has no per-app sound device: sound comes from seat 1's default device",
+        "Bu Windows sürümünde uygulama başına ses aygıtı yok: ses 1. koltuğun varsayılan aygıtından çıkar",
+    );
+    pub const AUDIO_FAILED: Text = Text::new(
+        "The apps' sound could not be routed to this seat's sound device; the default sound device is used",
+        "Uygulamaların sesi bu koltuğun ses aygıtına yönlendirilemedi; varsayılan ses aygıtı kullanılıyor",
+    );
+    pub const HINT: Text = Text::new(
+        "To return to the app list: the “Apps” button on the bar or Ctrl+Alt+Home. Ctrl+Alt+Del affects all seats.",
+        "Uygulama listesine dönmek için: çubuktaki “Uygulamalar” düğmesi ya da Ctrl+Alt+Home. Ctrl+Alt+Del bütün koltukları etkiler.",
+    );
+
+    /// Every entry, for the completeness test.
+    #[cfg(test)]
+    pub const ALL: &[(&str, &Text)] = seat_core::text_table![
+        HOME, LOGOUT, SEAT, NO_APPS, IDLE, NOT_ISOLATED, FILTER_STREAM_LOST, NO_SERVICE, NO_DEVICES, START_FAILED,
+        AUDIO_UNAVAILABLE, AUDIO_FAILED, HINT
+    ];
 }
 
 /// Height of the task bar on the seat's first monitor (physical pixels).
@@ -214,8 +244,8 @@ pub fn audio_notice(audio: &KioskAudio) -> Option<&'static str> {
         return None;
     }
     match audio.state() {
-        KioskAudioState::Unavailable { .. } => Some(tr::AUDIO_UNAVAILABLE),
-        KioskAudioState::Failed { .. } => Some(tr::AUDIO_FAILED),
+        KioskAudioState::Unavailable { .. } => Some(copy::AUDIO_UNAVAILABLE.get()),
+        KioskAudioState::Failed { .. } => Some(copy::AUDIO_FAILED.get()),
         KioskAudioState::NoEndpoint | KioskAudioState::Routed { .. } => None,
     }
 }
@@ -242,15 +272,15 @@ pub fn focus_policy(plan: &KioskPlan) -> FocusPolicy {
 pub fn notices(plan: &KioskPlan, filter: Option<bool>, service_ok: bool, have_units: bool, stream_ok: bool) -> Vec<&'static str> {
     let mut v = Vec::new();
     if !service_ok {
-        v.push(tr::NO_SERVICE);
+        v.push(copy::NO_SERVICE.get());
     }
     match filter {
-        Some(true) if !stream_ok => v.push(tr::FILTER_STREAM_LOST),
-        Some(false) if plan.seat1_desktop => v.push(tr::NOT_ISOLATED),
+        Some(true) if !stream_ok => v.push(copy::FILTER_STREAM_LOST.get()),
+        Some(false) if plan.seat1_desktop => v.push(copy::NOT_ISOLATED.get()),
         _ => {}
     }
     if service_ok && !have_units && filter != Some(true) {
-        v.push(tr::NO_DEVICES);
+        v.push(copy::NO_DEVICES.get());
     }
     v
 }
@@ -454,7 +484,7 @@ pub fn drag_rect(start: Rect, code: i32, dx: i32, dy: i32) -> Rect {
 
 /// The idle line with the minutes filled in.
 pub fn idle_text(minutes: u32) -> String {
-    tr::IDLE.replace("{}", &minutes.to_string())
+    copy::IDLE.fmt(&[&minutes])
 }
 
 #[cfg(test)]
@@ -489,6 +519,12 @@ mod tests {
             details,
         };
         DeviceView { device, effective: mask, source: MaskSource::Explicit, isolation: None, arrived_ms: 0, port_key: None, container_key: None }
+    }
+
+    #[test]
+    fn copy_table_is_complete() {
+        let p = seat_core::i18n::check_table(copy::ALL);
+        assert!(p.is_empty(), "{p:?}");
     }
 
     #[test]
@@ -568,7 +604,7 @@ mod tests {
         let mut a = KioskAudio::new(Arc::new(FakePolicy::unavailable("os_too_old")));
         assert_eq!(audio_notice(&a), None);
         a.set_endpoints(d.audio.clone());
-        assert_eq!(audio_notice(&a), Some(tr::AUDIO_UNAVAILABLE));
+        assert_eq!(audio_notice(&a), Some(copy::AUDIO_UNAVAILABLE.get()));
         let p = Arc::new(FakePolicy::available());
         let mut a = KioskAudio::new(p.clone());
         a.set_endpoints(d.audio.clone());
@@ -576,25 +612,26 @@ mod tests {
         assert_eq!(audio_notice(&a), None);
         p.failing.lock().unwrap().insert(6);
         a.sync(&[5, 6].into_iter().collect());
-        assert_eq!(audio_notice(&a), Some(tr::AUDIO_FAILED));
-        assert!(tr::AUDIO_UNAVAILABLE.contains("1. koltuğun"));
+        assert_eq!(audio_notice(&a), Some(copy::AUDIO_FAILED.get()));
+        assert!(copy::AUDIO_UNAVAILABLE.tr.contains("1. koltuğun"));
+        assert!(copy::AUDIO_UNAVAILABLE.en.contains("seat 1"));
     }
 
     #[test]
     fn focus_and_notices() {
         assert_eq!(focus_policy(&plan(true)), FocusPolicy::LeaveForeground);
         assert_eq!(focus_policy(&plan(false)), FocusPolicy::SinkLeader);
-        assert_eq!(notices(&plan(true), Some(false), true, true, false), vec![tr::NOT_ISOLATED]);
+        assert_eq!(notices(&plan(true), Some(false), true, true, false), vec![copy::NOT_ISOLATED.get()]);
         assert!(notices(&plan(false), Some(false), true, true, false).is_empty());
-        assert_eq!(notices(&plan(false), Some(true), true, false, false), vec![tr::FILTER_STREAM_LOST]);
+        assert_eq!(notices(&plan(false), Some(true), true, false, false), vec![copy::FILTER_STREAM_LOST.get()]);
         // Filter + stream: isolated, also with seat 1 as the desktop.
         assert!(notices(&plan(true), Some(true), true, false, true).is_empty());
-        assert_eq!(notices(&plan(false), None, false, false, false), vec![tr::NO_SERVICE]);
-        assert_eq!(notices(&plan(false), Some(false), true, false, false), vec![tr::NO_DEVICES]);
+        assert_eq!(notices(&plan(false), None, false, false, false), vec![copy::NO_SERVICE.get()]);
+        assert_eq!(notices(&plan(false), Some(false), true, false, false), vec![copy::NO_DEVICES.get()]);
         // The copy names the mouse leak and never advertises Ctrl+Alt+Del as a seat key.
-        assert!(tr::NOT_ISOLATED.contains("faresi"));
-        assert!(!tr::HINT.starts_with("Ctrl+Alt+Del"));
-        assert!(tr::HINT.contains("Ctrl+Alt+Home"));
+        assert!(copy::NOT_ISOLATED.tr.contains("faresi"));
+        assert!(!copy::HINT.en.starts_with("Ctrl+Alt+Del") && !copy::HINT.tr.starts_with("Ctrl+Alt+Del"));
+        assert!(copy::HINT.en.contains("Ctrl+Alt+Home") && copy::HINT.tr.contains("Ctrl+Alt+Home"));
         let info = |kind: &str, active: bool| BackendInfo { kind: kind.into(), availability: Availability::Available, experimental: false, selected: active, active, caps: serde_json::Value::Null, notes: vec![] };
         let mut r = BackendReport { session: vec![], display: vec![], input: vec![info("raw_input_host", true), info("kmdf_filter", false)], audio: vec![], gates: vec![], drivers: vec![], source_ip: None };
         assert!(!filter_active(&r));
@@ -632,7 +669,9 @@ mod tests {
         assert_eq!(fit_into(Rect { x: 2000, y: 100, width: 800, height: 600 }, work), None);
         assert_eq!(fit_into(Rect { x: 100, y: 100, width: 800, height: 600 }, work), Some(Rect { x: 1920, y: 100, width: 800, height: 600 }));
         assert_eq!(fit_into(Rect { x: 3500, y: 0, width: 4000, height: 3000 }, work), Some(work));
-        assert_eq!(idle_text(5), "İşlem yapılmazsa oturum 5 dk sonra kapanır");
+        assert_eq!(copy::IDLE.fmt_in(seat_core::i18n::Lang::Tr, &[&5]), "İşlem yapılmazsa oturum 5 dk sonra kapanır");
+        assert_eq!(copy::IDLE.fmt_in(seat_core::i18n::Lang::En, &[&5]), "Without activity the session closes in 5 min");
+        assert_eq!(idle_text(5), copy::IDLE.fmt(&[&5]));
     }
 
     #[test]

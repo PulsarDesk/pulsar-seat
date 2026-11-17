@@ -93,7 +93,7 @@ describe('update helpers', () => {
     error: 'x'
   };
 
-  it('failure reasons are Turkish', () => {
+  it('failure reasons have their own text', () => {
     expect(describeUpdate(base)).toBe(updateText.reasons.untrusted_signer);
     expect(describeUpdate({ ...base, reason: 'something_new' })).toBe(updateText.state.failed);
     // Checksum-signature failures have their own text, not the installer-publisher one.
@@ -101,9 +101,9 @@ describe('update helpers', () => {
       const t = describeUpdate({ ...base, reason: r });
       expect(t).toBe(updateText.reasons[r]);
       expect(t).not.toBe(updateText.reasons.untrusted_signer);
-      expect(t).toContain('imza');
+      expect(t).toContain('sign');
     }
-    expect(updateText.reasons.no_release_key).not.toContain('yayıncı');
+    expect(updateText.reasons.no_release_key).not.toContain('publisher');
   });
 
   it('install only from a verified download with the opt-in on', () => {

@@ -115,7 +115,7 @@ pub struct BackendAvailability {
     pub signed: bool,
     pub kinds: Vec<PadKind>,
     /// Why it is not usable (or a caveat), English, for logs; the manager maps `id` +
-    /// state to Turkish copy.
+    /// state to localized copy.
     pub reason: Option<String>,
 }
 

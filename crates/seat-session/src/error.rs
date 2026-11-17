@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Errors of the system-access layer and the stable reason codes this crate puts into
-//! [`BackendError::reason`] (the manager maps `kind` + `reason` to Turkish copy).
+//! [`BackendError::reason`] (the manager maps `kind` + `reason` to localized copy).
 
 use seat_core::backend::{BackendError, ErrorKind};
 

@@ -6,7 +6,7 @@
   import DeviceIcon from './DeviceIcon.svelte';
   import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
-  import { builtinsFor, categoryOf, pictureValue, selectableUserPictures } from '#lib/pictures.ts';
+  import { builtinsFor, categoryOf, pictureLabel, pictureValue, selectableUserPictures } from '#lib/pictures.ts';
   import type { Device, UserPicture } from '#lib/types.ts';
 
   interface Props {
@@ -43,7 +43,7 @@
       {@const v = pictureValue({ type: 'builtin', id: b.id })}
       <button type="button" class="pic" role="radio" aria-checked={chosen === v} class:sel={chosen === v} onclick={() => (chosen = v)}>
         <DeviceIcon kind={device.kind} picture={v} size={48} />
-        <span>{b.label}</span>
+        <span>{pictureLabel(b.id)}</span>
       </button>
     {/each}
   </div>

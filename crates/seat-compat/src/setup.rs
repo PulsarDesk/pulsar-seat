@@ -43,6 +43,9 @@ pub const SETUP_LOG: &str = r"logs\setup.log";
 /// Exit code for the MSI deferred custom action (`Return="check"`): any non-zero code
 /// rolls the whole product back, so a partial result and "reboot needed" map to 0 (the
 /// log says what happened). A refusal or failure stays non-zero.
+/// Name of the restore point made before install (shown in System Restore; localized).
+pub const RESTORE_POINT_NAME: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat installation", "Pulsar Seat kurulumu");
+
 pub fn msi_exit_code(code: i32) -> i32 {
     match code {
         EXIT_PARTIAL | EXIT_REBOOT => EXIT_OK,
@@ -158,12 +161,12 @@ pub struct InstallReport {
 }
 
 impl InstallReport {
-    /// `warn` checks as Turkish lines (`<title>: <detail>`).
+    /// `warn` checks as English log lines (`<title>: <detail>`).
     pub fn warnings(&self) -> Vec<String> {
         self.checks
             .iter()
             .filter(|c| c.outcome == CheckOutcome::Warn)
-            .map(|c| format!("{}: {}", crate::preflight::title_tr(&c.id), c.detail))
+            .map(|c| format!("{}: {}", crate::preflight::title_en(&c.id), c.detail))
             .collect()
     }
 
@@ -176,13 +179,13 @@ impl InstallReport {
             .filter(|c| c.outcome == CheckOutcome::Fail)
         {
             out.push_str(&format!(
-                "ENGEL {}: {}\n",
-                crate::preflight::title_tr(&c.id),
+                "BLOCKED {}: {}\n",
+                crate::preflight::title_en(&c.id),
                 c.detail
             ));
         }
         for w in self.warnings() {
-            out.push_str(&format!("UYARI {w}\n"));
+            out.push_str(&format!("WARNING {w}\n"));
         }
         if let Some(r) = &self.restore_point {
             match r {
@@ -237,13 +240,13 @@ pub fn install_with(
         return rep;
     }
     if opts.restore_point {
-        let r = restore("Pulsar Seat kurulumu");
+        let r = restore(RESTORE_POINT_NAME.get());
         if let Ok(seq) = &r {
             let _ = j.record(
                 "install",
                 Change::RestorePoint {
                     sequence: *seq,
-                    description: "Pulsar Seat kurulumu".into(),
+                    description: RESTORE_POINT_NAME.get().into(),
                 },
             );
         }
@@ -443,7 +446,7 @@ mod tests {
         assert!(!r.refused);
         assert_eq!(r.warnings().len(), 2, "{:?}", r.warnings());
         let log = r.log_text();
-        assert!(log.contains("UYARI Uzak Masaüstü hizmeti"), "{log}");
+        assert!(log.contains("WARNING Remote Desktop service"), "{log}");
         assert!(log.ends_with("exit 0\n"));
     }
 

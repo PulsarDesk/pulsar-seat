@@ -4557,6 +4557,7 @@ name = "seat-audio"
 version = "0.1.0"
 dependencies = [
  "log",
+ "seat-core",
  "seat-proto",
  "seat-stream",
  "serde",

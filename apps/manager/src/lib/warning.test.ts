@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import configRs from '../../../../crates/seat-core/src/config.rs?raw';
-import canonical from '../../../../crates/seat-session/src/termwrap/warning_tr.txt?raw';
+import canonicalEn from '../../../../crates/seat-session/src/termwrap/warning_en.txt?raw';
+import canonicalTr from '../../../../crates/seat-session/src/termwrap/warning_tr.txt?raw';
+import { applyLocale } from './i18n.ts';
 import { EXPERIMENTAL_WARNING_VERSION } from './types.ts';
-import { WARNING_TR, WARNING_VERSION } from './warning.ts';
+import { WARNING_EN, WARNING_TR, WARNING_VERSION, warningText } from './warning.ts';
+
+afterEach(() => applyLocale('en'));
 
 describe('experimental warning', () => {
   it('has a single version constant', () => {
     expect(WARNING_VERSION).toBe(EXPERIMENTAL_WARNING_VERSION);
   });
 
-  it('matches the service text word for word', () => {
-    expect(WARNING_TR).toBe(canonical.replace(/\r\n/g, '\n'));
+  it('matches the service texts word for word', () => {
+    expect(WARNING_EN).toBe(canonicalEn.replace(/\r\n/g, '\n'));
+    expect(WARNING_TR).toBe(canonicalTr.replace(/\r\n/g, '\n'));
+    expect(WARNING_EN.split('\n')).toHaveLength(WARNING_TR.split('\n').length);
+  });
+
+  it('follows the UI language', () => {
+    expect(warningText()).toBe(WARNING_EN);
+    applyLocale('tr');
+    expect(warningText()).toBe(WARNING_TR);
   });
 
   it('matches the version in seat_core::config', () => {

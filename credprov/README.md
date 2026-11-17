@@ -17,7 +17,8 @@ loaded by LogonUI on any machine). Unsigned.
 | `credprov.vcxproj` | the DLL, ARM64 (built as ARM64X: `BuildAsX`, with an ARM64EC configuration as its other half) + x64, Release + Debug, v145 toolset, SDK 10.0.28000, static CRT, CFG, Spectre, `/W4 /WX` |
 | `credprov-selftest.vcxproj` | console self-test of the same sources (never shipped); ARM64, ARM64EC, x64 |
 | `src/dll.cpp` | `DllGetClassObject`, `DllCanUnloadNow`, class factory, `InLogonUI()` (no `DllRegisterServer`) |
-| `src/provider.*` | provider, the two tile kinds, the filter, `ApplyFilter`, `SeatTileWillExist` / `FilterHides`, `Notifier` (poll + `CredentialsChanged`), Turkish link text |
+| `src/provider.*` | provider, the two tile kinds, the filter, `ApplyFilter`, `SeatTileWillExist` / `FilterHides`, `Notifier` (poll + `CredentialsChanged`), link text in the UI language |
+| `src/copy.h` | tile copy: English default, Turkish locale (`GetUserDefaultUILanguage` of LogonUI) |
 | `src/pipe.*` | service pipe client (`\\.\pipe\PulsarSeat.Control`), one connection per call |
 | `src/json.*` | small strict JSON reader / writer for the seat-proto frames |
 | `src/pack.*` | Negotiate logon blob (`KERB_INTERACTIVE_UNLOCK_LOGON`, packed offsets) |
@@ -33,7 +34,7 @@ CLSIDs (also in `crates/seat-session/src/credprov.rs`): provider
   see it).
 - Asks the service `credprov_query` (2 s limit). No answer, or "not a seat session" = no
   tiles, nothing hidden.
-- **Seat tile** (logon screen of a seat session that has an account): label "Koltuk N",
+- **Seat tile** (logon screen of a seat session that has an account): label "Seat N" (Turkish locale "Koltuk N"),
   the account, a password box. If the service armed a one-time logon for this session it is
   the default tile with auto-logon: at `GetSerialization` it takes the credential once
   (`credprov_take_credentials`), packs it for Negotiate and submits. The outcome goes back
@@ -53,8 +54,8 @@ CLSIDs (also in `crates/seat-session/src/credprov.rs`): provider
   re-runs the filter then (if not, the other providers stay visible during a late
   auto-logon — harmless, the default tile auto-submits).
 - **Switch links** (logon and lock screen of a seat session, when other seats exist): one
-  command link per seat ("Koltuk 3'e geç") → `credprov_switch`. They sit in the seat tile
-  when it exists; otherwise in a "Koltuk değiştir" tile tied to the seat user's SID when
+  command link per seat ("Switch to seat 3", Turkish "Koltuk 3'e geç") → `credprov_switch`. They sit in the seat tile
+  when it exists; otherwise in a "Switch seat" ("Koltuk değiştir") tile tied to the seat user's SID when
   LogonUI lists it (else an "other user" tile). Windows 11 shows only the tiles of the
   locked / selected user, so a user-less switch tile was never reachable there (VM test
   2026-11-15, Win11 26300 ARM64). Seat 1 is offered while the backend reports its own

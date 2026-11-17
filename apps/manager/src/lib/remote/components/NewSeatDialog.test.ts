@@ -28,7 +28,7 @@ describe('NewSeatDialog', () => {
     expect(onCreate).toHaveBeenCalledWith('Salon2');
   });
 
-  it('rejects spaces and symbols with a Turkish message', async () => {
+  it('rejects spaces and symbols with a message', async () => {
     const { input, create, onCreate, user } = setup();
     await user.type(input, 'salon 1');
     expect(create).toBeDisabled();

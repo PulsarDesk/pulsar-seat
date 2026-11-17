@@ -43,7 +43,10 @@ param(
     # Leave out the remote kind's pinned third-party payload (fetch-deps.ts needs network).
     # Test builds only; refused with -Release.
     [switch] $NoRemoteDeps,
-    [string] $CargoTargetDir = ""
+    [string] $CargoTargetDir = "",
+    # MSI culture (installer/wix/locales/<culture>.wxl). en-US is the release default; tr-TR
+    # builds the Turkish MSI (dist name gets a _tr-TR suffix).
+    [ValidateSet("en-US", "tr-TR")] [string] $Language = "en-US"
 )
 
 $ErrorActionPreference = "Stop"
@@ -306,7 +309,7 @@ $config = Join-Path $work "tauri-bundle.json"
 Invoke-Checked "bundle config" {
     $extra = @("--bin", $payload); if ($NoArm64ec -and $Arch -eq "arm64") { $extra += "--no-arm64ec" }
     if (Test-Path $remoteDir) { $extra += @("--remote", $remoteDir) }
-    bun (Join-Path $repo "installer\scripts\bundle-config.ts") $config --drivers $staged --version $Version @extra
+    bun (Join-Path $repo "installer\scripts\bundle-config.ts") $config --drivers $staged --version $Version --language $Language @extra
 }
 
 # ---------------------------------------------------------------- 6: tauri build (MSI)
@@ -341,7 +344,7 @@ $msiCheckArgs = @($checkArgs); if ($Release) { $msiCheckArgs += "--notices" }
 Invoke-Checked "payload check inside the MSI" { bun (Join-Path $repo "installer\scripts\check-payload.ts") --arch $Arch @msiCheckArgs $extract }
 
 # ---------------------------------------------------------------- 8: dist + checksums
-$name = "PulsarSeat_${Version}_$Arch.msi"
+$name = if ($Language -eq "en-US") { "PulsarSeat_${Version}_$Arch.msi" } else { "PulsarSeat_${Version}_${Arch}_$Language.msi" }
 $out = Join-Path $dist $name
 Copy-Item $msi.FullName $out -Force
 $hash = (Get-FileHash $out -Algorithm SHA256).Hash.ToLowerInvariant()

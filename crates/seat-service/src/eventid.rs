@@ -2,6 +2,8 @@
 //! Pulsar Seat's own stable Event Log ids (spec 20 §13.6: our own numbering, Windows error
 //! code next to it in the message). Never reuse or renumber an id.
 
+use seat_core::i18n::{Lang, Text};
+
 pub const SERVICE_STARTED: u32 = 1000;
 pub const SERVICE_STOPPED: u32 = 1001;
 pub const SAFE_MODE: u32 = 1010;
@@ -16,51 +18,105 @@ pub const SEAT_LOGON_FAILED: u32 = 2102;
 pub const BACKEND_FAILED: u32 = 2200;
 pub const OWNERSHIP_FAILED: u32 = 2201;
 
-/// Turkish Event Viewer text per id (UI copy, spec 20 §13.1). The English technical line
-/// follows it in the event as the detail.
-pub fn turkish(id: u32) -> &'static str {
+/// Event Viewer text per id (UI copy, spec 20 §13.1; English default, Turkish locale via
+/// `seat_core::i18n`). The English technical line follows it in the event as the detail.
+pub fn text(id: u32) -> &'static Text {
     match id {
-        SERVICE_STARTED => "Pulsar Seat hizmeti başladı.",
-        SERVICE_STOPPED => "Pulsar Seat hizmeti düzgün biçimde durdu.",
-        SAFE_MODE => "Pulsar Seat güvenli kipte: oturma yerleri kendiliğinden başlatılmıyor.",
-        OS_BUILD_CHANGED => "Windows sürümü değişti; oturma yerlerini denetleyin.",
-        PIPE_FAILED => "Pulsar Seat denetim kanalı açılamadı.",
-        CONFIG_STORE_FAILED => "Pulsar Seat yapılandırması okunamadı veya kaydedilemedi.",
-        SECRET_STORE_FAILED => "Oturma yeri parolası saklanamadı veya okunamadı.",
-        SEAT_START_FAILED => "Bir oturma yeri başlatılamadı.",
-        SEAT_HOST_EXITED => "Bir oturma yerinin ana işlemi beklenmedik biçimde kapandı.",
-        SEAT_LOGON_FAILED => "Oturma yeri hesabıyla oturum açılamadı; saklanan parola artık kullanılmıyor.",
-        BACKEND_FAILED => "Bir Pulsar Seat bileşeni hazırlanamadı.",
-        OWNERSHIP_FAILED => "Aygıtlar oturma yerlerine atanamadı.",
-        _ => "Pulsar Seat hatası.",
+        SERVICE_STARTED => &T_SERVICE_STARTED,
+        SERVICE_STOPPED => &T_SERVICE_STOPPED,
+        SAFE_MODE => &T_SAFE_MODE,
+        OS_BUILD_CHANGED => &T_OS_BUILD_CHANGED,
+        PIPE_FAILED => &T_PIPE_FAILED,
+        CONFIG_STORE_FAILED => &T_CONFIG_STORE_FAILED,
+        SECRET_STORE_FAILED => &T_SECRET_STORE_FAILED,
+        SEAT_START_FAILED => &T_SEAT_START_FAILED,
+        SEAT_HOST_EXITED => &T_SEAT_HOST_EXITED,
+        SEAT_LOGON_FAILED => &T_SEAT_LOGON_FAILED,
+        BACKEND_FAILED => &T_BACKEND_FAILED,
+        OWNERSHIP_FAILED => &T_OWNERSHIP_FAILED,
+        _ => &T_GENERIC,
     }
 }
 
-/// Event Log message: Turkish text, then the English detail line.
+const T_SERVICE_STARTED: Text = Text::new("The Pulsar Seat service started.", "Pulsar Seat hizmeti başladı.");
+const T_SERVICE_STOPPED: Text = Text::new("The Pulsar Seat service stopped cleanly.", "Pulsar Seat hizmeti düzgün biçimde durdu.");
+const T_SAFE_MODE: Text = Text::new(
+    "Pulsar Seat is in safe mode: seats are not started automatically.",
+    "Pulsar Seat güvenli kipte: koltuklar kendiliğinden başlatılmıyor.",
+);
+const T_OS_BUILD_CHANGED: Text = Text::new("The Windows version changed; check the seats.", "Windows sürümü değişti; koltukları denetleyin.");
+const T_PIPE_FAILED: Text = Text::new("The Pulsar Seat control channel could not open.", "Pulsar Seat denetim kanalı açılamadı.");
+const T_CONFIG_STORE_FAILED: Text = Text::new(
+    "The Pulsar Seat configuration could not be read or saved.",
+    "Pulsar Seat yapılandırması okunamadı veya kaydedilemedi.",
+);
+const T_SECRET_STORE_FAILED: Text = Text::new("A seat password could not be stored or read.", "Koltuk parolası saklanamadı veya okunamadı.");
+const T_SEAT_START_FAILED: Text = Text::new("A seat could not start.", "Bir koltuk başlatılamadı.");
+const T_SEAT_HOST_EXITED: Text = Text::new("A seat's host process closed unexpectedly.", "Bir koltuğun ana işlemi beklenmedik biçimde kapandı.");
+const T_SEAT_LOGON_FAILED: Text = Text::new(
+    "Sign-in with the seat account failed; the saved password is no longer used.",
+    "Koltuk hesabıyla oturum açılamadı; saklanan parola artık kullanılmıyor.",
+);
+const T_BACKEND_FAILED: Text = Text::new("A Pulsar Seat component could not be prepared.", "Bir Pulsar Seat bileşeni hazırlanamadı.");
+const T_OWNERSHIP_FAILED: Text = Text::new("Devices could not be assigned to seats.", "Aygıtlar koltuklara atanamadı.");
+const T_GENERIC: Text = Text::new("Pulsar Seat error.", "Pulsar Seat hatası.");
+/// Label of the technical detail line.
+const T_DETAIL: Text = Text::new("Detail: {0}", "Ayrıntı: {0}");
+
+/// Event Log message: localized text, then the English detail line.
 pub fn event_message(id: u32, detail: &str) -> String {
-    format!("{}\r\n\r\nAyrıntı: {detail}", turkish(id))
+    event_message_in(seat_core::i18n::current(), id, detail)
+}
+
+pub fn event_message_in(lang: Lang, id: u32, detail: &str) -> String {
+    format!("{}\r\n\r\n{}", text(id).pick(lang), T_DETAIL.fmt_in(lang, &[&detail]))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn every_id_has_turkish_text() {
+    fn every_id_has_its_own_text() {
         for id in [
-            super::SERVICE_STARTED,
-            super::SERVICE_STOPPED,
-            super::SAFE_MODE,
-            super::OS_BUILD_CHANGED,
-            super::PIPE_FAILED,
-            super::CONFIG_STORE_FAILED,
-            super::SECRET_STORE_FAILED,
-            super::SEAT_START_FAILED,
-            super::SEAT_HOST_EXITED,
-            super::SEAT_LOGON_FAILED,
-            super::BACKEND_FAILED,
-            super::OWNERSHIP_FAILED,
+            SERVICE_STARTED,
+            SERVICE_STOPPED,
+            SAFE_MODE,
+            OS_BUILD_CHANGED,
+            PIPE_FAILED,
+            CONFIG_STORE_FAILED,
+            SECRET_STORE_FAILED,
+            SEAT_START_FAILED,
+            SEAT_HOST_EXITED,
+            SEAT_LOGON_FAILED,
+            BACKEND_FAILED,
+            OWNERSHIP_FAILED,
         ] {
-            assert_ne!(super::turkish(id), super::turkish(0), "id {id}");
+            assert_ne!(text(id), text(0), "id {id}");
         }
-        assert!(super::event_message(1000, "service 1 ready").ends_with("Ayrıntı: service 1 ready"));
+        assert!(event_message_in(Lang::Tr, 1000, "service 1 ready").ends_with("Ayrıntı: service 1 ready"));
+        assert!(event_message_in(Lang::En, 1000, "service 1 ready").ends_with("Detail: service 1 ready"));
+        assert!(event_message_in(Lang::En, 1000, "x").starts_with("The Pulsar Seat service started."));
+    }
+
+    #[test]
+    fn copy_table_is_complete() {
+        let p = seat_core::i18n::check_table(seat_core::text_table![
+            T_SERVICE_STARTED,
+            T_SERVICE_STOPPED,
+            T_SAFE_MODE,
+            T_OS_BUILD_CHANGED,
+            T_PIPE_FAILED,
+            T_CONFIG_STORE_FAILED,
+            T_SECRET_STORE_FAILED,
+            T_SEAT_START_FAILED,
+            T_SEAT_HOST_EXITED,
+            T_SEAT_LOGON_FAILED,
+            T_BACKEND_FAILED,
+            T_OWNERSHIP_FAILED,
+            T_GENERIC,
+            T_DETAIL,
+        ]);
+        assert!(p.is_empty(), "{p:?}");
     }
 }

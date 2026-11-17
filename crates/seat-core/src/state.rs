@@ -58,7 +58,7 @@ pub enum StartPhase {
     LoggingOn,
 }
 
-/// Stable snake_case failure reasons; the manager maps each to Turkish copy.
+/// Stable snake_case failure reasons; the manager maps each to localized copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureReason {

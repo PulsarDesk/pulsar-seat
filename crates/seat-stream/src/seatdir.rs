@@ -150,7 +150,7 @@ pub fn rotated_names(p: &Path, keep: usize) -> Vec<PathBuf> {
 }
 
 /// Replacement for a log line that may carry credentials.
-pub const REDACTED_LINE: &str = "[satır gizlendi]";
+pub const REDACTED_LINE: &str = "[line hidden]";
 
 /// Last `n` non-empty lines of a log (lossy UTF-8; upstream writes UTF-8). These reach the
 /// manager (`GaveUp.last_log`), so any line mentioning an `Authorization` header (upstream

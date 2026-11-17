@@ -72,7 +72,7 @@
 
   function resultText(r: string): string {
     if (mode === 'pulsar') return t.pair.results[r] ?? failureText(r);
-    return t.pair.result(r);
+    return r === 'paired' ? t.pair.paired : failureText(r);
   }
 
   async function reload() {

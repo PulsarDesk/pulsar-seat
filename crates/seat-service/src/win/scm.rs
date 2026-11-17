@@ -61,14 +61,16 @@ pub fn recovery_actions() -> Vec<ServiceAction> {
     vec![restart(5), restart(30), restart(60), ServiceAction { action_type: ServiceActionType::None, delay: Duration::ZERO }]
 }
 
-/// Turkish service description (UI copy).
-pub const SERVICE_DESCRIPTION: &str =
-    "Pulsar Seat: bu bilgisayarda birden fazla oturma yeri (monitör, klavye, fare, ses) yönetir. Durdurulursa ek oturma yerleri başlatılmaz.";
+/// Service description (UI copy, written in the language of the installing process).
+pub const SERVICE_DESCRIPTION: seat_core::i18n::Text = seat_core::i18n::Text::new(
+    "Pulsar Seat: manages several seats (monitor, keyboard, mouse, sound) on this PC. When stopped, extra seats do not start.",
+    "Pulsar Seat: bu bilgisayarda birden fazla koltuk (monitör, klavye, fare, ses) yönetir. Durdurulursa ek koltuklar başlatılmaz.",
+);
 
 fn service_info(exe: &Path) -> ServiceInfo {
     ServiceInfo {
         name: OsString::from(SERVICE_NAME),
-        display_name: OsString::from(SERVICE_DISPLAY_NAME),
+        display_name: OsString::from(SERVICE_DISPLAY_NAME.get()),
         service_type: ServiceType::OWN_PROCESS,
         start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,
@@ -110,7 +112,7 @@ pub fn configure_existing(data_dir: &Path) -> Result<(), String> {
 }
 
 fn configure(svc: &windows_service::service::Service, data_dir: &Path) -> Result<(), String> {
-    svc.set_description(SERVICE_DESCRIPTION).map_err(s)?;
+    svc.set_description(SERVICE_DESCRIPTION.get()).map_err(s)?;
     svc.update_failure_actions(ServiceFailureActions {
         reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 3600)),
         reboot_msg: None,

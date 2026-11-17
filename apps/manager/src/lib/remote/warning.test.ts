@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import configRs from '../../../../../crates/seat-core/src/config.rs?raw';
-import canonical from '../../../../../crates/seat-session/src/termwrap/warning_tr.txt?raw';
-import { WARNING_TR, WARNING_VERSION } from '../warning.ts';
+import canonicalEn from '../../../../../crates/seat-session/src/termwrap/warning_en.txt?raw';
+import canonicalTr from '../../../../../crates/seat-session/src/termwrap/warning_tr.txt?raw';
+import { WARNING_EN, WARNING_TR, WARNING_VERSION } from '../warning.ts';
 
 describe('experimental warning text', () => {
-  it('is the service text (seat_session::termwrap::WARNING_TR)', () => {
-    expect(WARNING_TR).toBe(canonical.replace(/\r\n/g, '\n'));
+  it('is the service text (seat_session::termwrap::WARNING_EN / WARNING_TR)', () => {
+    expect(WARNING_EN).toBe(canonicalEn.replace(/\r\n/g, '\n'));
+    expect(WARNING_EN.startsWith('**Experimental feature')).toBe(true);
+    expect(WARNING_TR).toBe(canonicalTr.replace(/\r\n/g, '\n'));
     expect(WARNING_TR.startsWith('**Deneysel özellik')).toBe(true);
   });
 

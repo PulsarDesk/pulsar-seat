@@ -493,7 +493,7 @@ impl Service {
             Some(w) => format!("step={step} reason={} win32={w}", e.reason),
             None => format!("step={step} reason={}", e.reason),
         };
-        // The listener's state note (the manager shows per-state Turkish text).
+        // The listener's state note (the manager shows per-state localized text).
         if e.reason == "loopback_listener_unavailable"
             && let Some(note) = e.message.split_whitespace().find(|w| w.starts_with("loopback_listener:"))
         {

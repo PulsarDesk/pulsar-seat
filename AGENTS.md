@@ -39,7 +39,7 @@ when you add a doc.
 | Dated log | [docs/journal.md](docs/journal.md) |
 | Installer (one MSI per arch), signing, updates, remote payload | [installer/README.md](installer/README.md) |
 | Release checklist (maintainer) | [docs/release/checklist.md](docs/release/checklist.md) |
-| User troubleshooting (Turkish) | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| User troubleshooting (English; Turkish copy `docs/troubleshooting.tr.md`) | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Behaviour spec (analyst-written): `spec/local/`, `spec/remote/` | [spec/README.md](spec/README.md) |
 | `pulsar-host` pipe contract (remote seats on the Pulsar backend; still binding) | [docs/split/agents/pulsar-host-backend.md](docs/split/agents/pulsar-host-backend.md) |
 | Third-party drivers / stream server / RDP libs (remote kind, verified table) | [docs/split/agents/third-party.md](docs/split/agents/third-party.md) |

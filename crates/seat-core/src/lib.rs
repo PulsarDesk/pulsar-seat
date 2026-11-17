@@ -16,8 +16,10 @@
 //! - [`remote`]: the remote seat kind (from Pulsar Split): `RemoteSeat`, Split model,
 //!   validation, ports, stream-server config, watchdog.
 //! - [`spawn`]: the process-wide spawn lock (handle-inheritance rule).
+//! - [`i18n`]: UI language (English default, Turkish locale) and the [`i18n::Text`] pairs.
 //!
-//! No platform code lives here; the crate builds and tests on any host. Contract summary:
+//! No platform code lives here (one exception: `i18n` reads the Windows UI language); the
+//! crate builds and tests on any host. Contract summary:
 //! `docs/agents/architecture.md`.
 
 pub mod assign;
@@ -26,6 +28,7 @@ pub mod config;
 pub mod consts;
 pub mod device;
 pub mod error;
+pub mod i18n;
 pub mod ids;
 pub mod latency;
 pub mod pnp;

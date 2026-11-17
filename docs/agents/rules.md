@@ -8,7 +8,20 @@ remote). Since merge step 10 this file holds the union of Seat's rules and Pulsa
 
 - License **GPL-3.0**, never MIT.
 - **bun**, never npm. Rust via rustup stable.
-- **UI copy is Turkish.** Commit messages in English.
+- **English everywhere, Turkish only as an app i18n locale** (umbrella rule). Commit
+  messages, docs, code, logs, wire codes and technical details are English. UI copy is
+  English by default with a Turkish locale that has exactly the same keys:
+  - Manager: `apps/manager/src/lib/locales/en.ts` (the key set, type `Locale`) and `tr.ts`;
+    `i18n.ts` holds the logic. Language = the user's choice (Basic settings) or the
+    Windows UI language. `i18n.test.ts` fails on a key in one locale only.
+  - Rust UI copy (tray, kiosk shell, seat host notices, Event Log, CLI, account comments,
+    firewall descriptions, Tauri shell): `seat_core::i18n::Text { en, tr }`; every table is
+    checked with `seat_core::i18n::check_table` in a test. Logs stay English only.
+  - Credential provider: `credprov/src/copy.h` (pairs, self-test checks both).
+  - Installer: `installer/wix/locales/{en-US,tr-TR}.wxl` (`!(loc.Id)`), NSIS LangStrings
+    1033 / 1055; `installer/scripts/wix-locales.test.ts`.
+  - The experimental warning: `crates/seat-session/src/termwrap/warning_{en,tr}.txt`.
+  - User docs: English; a Turkish copy may sit next to them as `*.tr.md`.
 - **Never push a behaviour change the maintainer hasn't tested.** Docs and tests may be
   pushed. Push only on the maintainer's go.
 - All work lands on `main`; short branches only, merged the same day.

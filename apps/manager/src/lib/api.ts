@@ -65,6 +65,10 @@ export interface LocalApi {
   /** Tell the shell about unsaved changes: closing the window then asks first. */
   setUiDirty(dirty: boolean): Promise<void>;
   hideToTray(): Promise<void>;
+  /** Windows user UI language of this session (`en` / `tr`, English for anything else). */
+  uiLanguage(): Promise<string>;
+  /** Tell the native shell (tray menu, window titles, file dialogs) the UI language. */
+  setUiLanguage(lang: string): Promise<void>;
   /** The window was closed while there are unsaved changes. */
   onCloseRequested(cb: () => void): Promise<Unlisten>;
   /** Alt+F4 / close on a wizard page. */
@@ -217,6 +221,8 @@ export async function createTauriApi(): Promise<Api> {
     wizardLastProgress: () => invoke<WizardProgress | null>('wizard_last_progress'),
     setUiDirty: (dirty) => invoke<void>('set_ui_dirty', { dirty }),
     hideToTray: () => invoke<void>('hide_to_tray'),
+    uiLanguage: () => invoke<string>('ui_language'),
+    setUiLanguage: (lang) => invoke<void>('set_ui_language', { lang }),
     serviceInfo: () => invoke<ServiceInfo>('service_state'),
     serviceControl: (action) => invoke<void>('service_control', { action }),
     onCloseRequested: (cb) => listen('close-requested', () => cb()),

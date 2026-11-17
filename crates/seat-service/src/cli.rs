@@ -27,6 +27,7 @@
 //! the running Pulsar Seat service before sending anything (server PID = the PID the SCM
 //! reports for the service).
 
+use seat_core::i18n::Text;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +65,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     let value = |name: &str| -> Result<Option<String>, String> {
         match rest.iter().position(|a| *a == name) {
             None => Ok(None),
-            Some(i) => rest.get(i + 1).map(|v| Some(v.to_string())).ok_or_else(|| format!("{name} bir değer ister")),
+            Some(i) => rest.get(i + 1).map(|v| Some(v.to_string())).ok_or_else(|| copy::NEEDS_VALUE.fmt(&[&name])),
         }
     };
     let flag = |name: &str| rest.contains(&name);
@@ -76,7 +77,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 continue;
             }
             if !allowed.contains(a) {
-                return Err(format!("bilinmeyen bağımsız değişken: {a}"));
+                return Err(copy::UNKNOWN_ARG.fmt(&[a]));
             }
             skip = matches!(*a, "--data-dir" | "--pipe" | "--exe");
         }
@@ -86,12 +87,12 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "--service" => Command::Service,
         "--audio-helper" => {
             let (Some(&"tone"), Some(id), Some(ms), None) = (rest.first(), rest.get(1), rest.get(2), rest.get(3)) else {
-                return Err("--audio-helper tone <uç nokta> <ms> bekler".into());
+                return Err(copy::AUDIO_HELPER_USAGE.get().into());
             };
             if !valid_endpoint_id(id) {
-                return Err("geçersiz ses uç noktası".into());
+                return Err(copy::BAD_ENDPOINT.get().into());
             }
-            let duration_ms: u32 = ms.parse().map_err(|_| "geçersiz süre".to_string())?;
+            let duration_ms: u32 = ms.parse().map_err(|_| copy::BAD_DURATION.get().to_string())?;
             Command::AudioTone { endpoint_id: id.to_string(), duration_ms: duration_ms.clamp(100, 3000) }
         }
         "--console" => {
@@ -115,7 +116,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             let mut i = 0;
             while i < rest.len() {
                 if rest[i] == "--exe" {
-                    exe = Some(PathBuf::from(rest.get(i + 1).ok_or("--exe bir değer ister")?));
+                    exe = Some(PathBuf::from(rest.get(i + 1).ok_or_else(|| copy::NEEDS_VALUE.fmt(&[&"--exe"]))?));
                     i += 2;
                     continue;
                 }
@@ -127,7 +128,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 return Err(e.clone());
             }
             if let Some(a) = unknown.first() {
-                return Err(format!("bilinmeyen bağımsız değişken: {a}"));
+                return Err(copy::UNKNOWN_ARG.fmt(&[a]));
             }
             Command::Install { exe, args }
         }
@@ -148,65 +149,209 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             let args: Vec<String> = rest.iter().map(|a| a.to_string()).collect();
             match seat_setup::cli::parse(&args)? {
                 Some(cmd) => Command::RemoteSetup(cmd),
-                None => return Err("remote-setup install | reconcile | uninstall | check-coexistence bekler".into()),
+                None => return Err(copy::REMOTE_SETUP_USAGE.get().into()),
             }
         }
         "help" | "--help" | "-h" | "/?" => Command::Help,
-        other => return Err(format!("bilinmeyen komut: {other}")),
+        other => return Err(copy::UNKNOWN_COMMAND.fmt(&[&other])),
     })
 }
 
-pub const USAGE: &str = "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>";
+/// CLI copy (English default, Turkish locale; `seat_core::i18n`).
+pub mod copy {
+    use seat_core::i18n::Text;
+    pub const NEEDS_VALUE: Text = Text::new("{0} needs a value", "{0} bir değer ister");
+    pub const UNKNOWN_ARG: Text = Text::new("unknown argument: {0}", "bilinmeyen bağımsız değişken: {0}");
+    pub const AUDIO_HELPER_USAGE: Text = Text::new("--audio-helper expects tone <endpoint> <ms>", "--audio-helper tone <uç nokta> <ms> bekler");
+    pub const BAD_ENDPOINT: Text = Text::new("invalid audio endpoint", "geçersiz ses uç noktası");
+    pub const BAD_DURATION: Text = Text::new("invalid duration", "geçersiz süre");
+    pub const REMOTE_SETUP_USAGE: Text = Text::new("remote-setup expects install | reconcile | uninstall | check-coexistence", "remote-setup install | reconcile | uninstall | check-coexistence bekler");
+    pub const UNKNOWN_COMMAND: Text = Text::new("unknown command: {0}", "bilinmeyen komut: {0}");
+    pub const VERIFY_FAILED: Text = Text::new("the service could not be verified: {0}", "hizmet doğrulanamadı: {0}");
+    pub const PIPE_FOREIGN: Text = Text::new("the channel is not owned by the Pulsar Seat service (pid {0}); disconnected", "kanalın sahibi Pulsar Seat hizmeti değil (pid {0}); bağlantı kesildi");
+    pub const CONNECT_FAILED: Text = Text::new("could not connect to the service ({0}): {1}", "hizmete bağlanılamadı ({0}): {1}");
+    pub const READ_FAILED: Text = Text::new("read error: {0}", "okuma hatası: {0}");
+    pub const CLOSED: Text = Text::new("connection closed", "bağlantı kapandı");
+    pub const NO_ANSWER: Text = Text::new("no answer", "yanıt yok");
+    pub const SERVICE_DISPATCH_FAILED: Text = Text::new("The service control dispatcher could not start: {0} (use --console to run in the foreground)", "Hizmet denetimi başlatılamadı: {0} (ön planda çalıştırmak için --console kullanın)");
+    pub const ENABLED: Text = Text::new("Pulsar Seat turned on.", "Pulsar Seat etkinleştirildi.");
+    pub const DISABLED: Text = Text::new("Pulsar Seat turned off.", "Pulsar Seat devre dışı bırakıldı.");
+    pub const RESET: Text = Text::new("Pulsar Seat reset to the defaults.", "Pulsar Seat varsayılanlara döndürüldü.");
+    pub const ERROR: Text = Text::new("Error: {0}", "Hata: {0}");
+    pub const E_VERSION_MISMATCH: Text = Text::new("version mismatch", "sürüm uyuşmuyor");
+    pub const E_BAD_REQUEST: Text = Text::new("invalid request", "geçersiz istek");
+    pub const E_ACCESS_DENIED: Text = Text::new("access denied", "erişim reddedildi");
+    pub const E_ADMIN_ONLY: Text = Text::new("administrators only", "yalnızca yöneticiler");
+    pub const E_NOT_FOUND: Text = Text::new("not found", "bulunamadı");
+    pub const E_INVALID_CONFIG: Text = Text::new("invalid configuration", "yapılandırma geçersiz");
+    pub const E_REVISION_CONFLICT: Text = Text::new("the configuration changed in the meantime", "yapılandırma bu arada değişti");
+    pub const E_CONFLICTS_NOT_CONFIRMED: Text = Text::new("conflicts not confirmed", "çakışmalar onaylanmadı");
+    pub const E_INVALID_VALUE: Text = Text::new("invalid value", "geçersiz değer");
+    pub const E_DISABLED: Text = Text::new("product turned off", "ürün devre dışı");
+    pub const E_SAFE_MODE: Text = Text::new("safe mode", "güvenli kip");
+    pub const E_SEAT_RUNNING: Text = Text::new("seat running", "koltuk çalışıyor");
+    pub const E_SEAT_NOT_RUNNING: Text = Text::new("seat not running", "koltuk çalışmıyor");
+    pub const E_UNSUPPORTED: Text = Text::new("not supported", "desteklenmiyor");
+    pub const E_NOT_READY: Text = Text::new("not ready", "hazır değil");
+    pub const E_TIMEOUT: Text = Text::new("timed out", "zaman aşımı");
+    pub const E_DRIVER_UNAVAILABLE: Text = Text::new("driver not usable", "sürücü kullanılamıyor");
+    pub const E_COEXISTENCE: Text = Text::new("conflict with another product", "başka bir ürünle çakışma");
+    pub const E_POLICY_BLOCKED: Text = Text::new("blocked by policy", "ilke engelledi");
+    pub const E_LOGON_FAILED: Text = Text::new("sign-in failed", "oturum açılamadı");
+    pub const E_WARNING_NOT_ACKNOWLEDGED: Text = Text::new("warning not acknowledged", "uyarı onaylanmadı");
+    pub const E_WIZARD_STATE: Text = Text::new("wizard state does not allow this", "sihirbaz durumu uygun değil");
+    pub const E_OS: Text = Text::new("Windows error", "Windows hatası");
+    pub const E_STORE: Text = Text::new("storage error", "kayıt hatası");
+    pub const E_SERVICE_UNAVAILABLE: Text = Text::new("service not available", "hizmet kullanılamıyor");
+    pub const E_NOT_IMPLEMENTED: Text = Text::new("not available yet", "henüz yok");
+    pub const E_INTERNAL: Text = Text::new("internal error", "iç hata");
+    pub const E_INVALID_NAME: Text = Text::new("invalid name", "geçersiz ad");
+    pub const E_DUPLICATE_NAME: Text = Text::new("name already in use", "ad zaten kullanılıyor");
+    pub const E_INVALID_DISPLAY_NAME: Text = Text::new("invalid display name", "geçersiz görünen ad");
+    pub const E_INVALID_PORT: Text = Text::new("invalid port", "geçersiz bağlantı noktası");
+    pub const E_PORT_OVERLAP: Text = Text::new("ports overlap", "bağlantı noktaları çakışıyor");
+    pub const E_NO_FREE_PORT: Text = Text::new("no free port left", "boş bağlantı noktası kalmadı");
+    pub const E_INVALID_USER: Text = Text::new("invalid user", "geçersiz kullanıcı");
+    pub const E_USER_IN_USE: Text = Text::new("user in use elsewhere", "kullanıcı başka yerde kullanılıyor");
+    pub const E_MISSING_CREDENTIALS: Text = Text::new("user name or password missing", "kullanıcı adı veya parola eksik");
+    pub const E_EDITION_UNSUPPORTED: Text = Text::new("this Windows edition is not supported", "bu Windows sürümü desteklenmiyor");
+    pub const E_SEAT_FAILED: Text = Text::new("seat failed", "koltuk başarısız oldu");
+    pub const E_DRIVER_MISSING: Text = Text::new("driver not installed", "sürücü kurulu değil");
+    pub const E_NO_PENDING_REQUEST: Text = Text::new("no pending request", "bekleyen istek yok");
+    pub const E_WRONG_PIN: Text = Text::new("wrong PIN", "PIN yanlış");
+    pub const E_HASH_MISMATCH: Text = Text::new("file could not be verified", "dosya doğrulanamadı");
+    pub const E_FIREWALL: Text = Text::new("firewall error", "güvenlik duvarı hatası");
+    pub const E_WRONG_SEAT_KIND: Text = Text::new("seat kind does not fit this action", "koltuk türü bu işleme uygun değil");
+    pub const E_SESSION_UNAVAILABLE: Text = Text::new("no concurrent sessions", "eş zamanlı oturum yok");
 
-/// Short Turkish text for a service error code (CLI output).
+    /// Every entry, for the completeness test.
+    #[cfg(test)]
+    pub const ALL: &[(&str, &Text)] = seat_core::text_table![
+        NEEDS_VALUE,
+        UNKNOWN_ARG,
+        AUDIO_HELPER_USAGE,
+        BAD_ENDPOINT,
+        BAD_DURATION,
+        REMOTE_SETUP_USAGE,
+        UNKNOWN_COMMAND,
+        VERIFY_FAILED,
+        PIPE_FOREIGN,
+        CONNECT_FAILED,
+        READ_FAILED,
+        CLOSED,
+        NO_ANSWER,
+        SERVICE_DISPATCH_FAILED,
+        ENABLED,
+        DISABLED,
+        RESET,
+        ERROR,
+        E_VERSION_MISMATCH,
+        E_BAD_REQUEST,
+        E_ACCESS_DENIED,
+        E_ADMIN_ONLY,
+        E_NOT_FOUND,
+        E_INVALID_CONFIG,
+        E_REVISION_CONFLICT,
+        E_CONFLICTS_NOT_CONFIRMED,
+        E_INVALID_VALUE,
+        E_DISABLED,
+        E_SAFE_MODE,
+        E_SEAT_RUNNING,
+        E_SEAT_NOT_RUNNING,
+        E_UNSUPPORTED,
+        E_NOT_READY,
+        E_TIMEOUT,
+        E_DRIVER_UNAVAILABLE,
+        E_COEXISTENCE,
+        E_POLICY_BLOCKED,
+        E_LOGON_FAILED,
+        E_WARNING_NOT_ACKNOWLEDGED,
+        E_WIZARD_STATE,
+        E_OS,
+        E_STORE,
+        E_SERVICE_UNAVAILABLE,
+        E_NOT_IMPLEMENTED,
+        E_INTERNAL,
+        E_INVALID_NAME,
+        E_DUPLICATE_NAME,
+        E_INVALID_DISPLAY_NAME,
+        E_INVALID_PORT,
+        E_PORT_OVERLAP,
+        E_NO_FREE_PORT,
+        E_INVALID_USER,
+        E_USER_IN_USE,
+        E_MISSING_CREDENTIALS,
+        E_EDITION_UNSUPPORTED,
+        E_SEAT_FAILED,
+        E_DRIVER_MISSING,
+        E_NO_PENDING_REQUEST,
+        E_WRONG_PIN,
+        E_HASH_MISMATCH,
+        E_FIREWALL,
+        E_WRONG_SEAT_KIND,
+        E_SESSION_UNAVAILABLE,
+        super::USAGE,
+    ];
+}
+
+pub const USAGE: Text = Text::new(
+    "Usage: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe NAME] | preflight | install [--exe PATH] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
+    "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
+);
+
+/// Short text for a service error code (CLI output; English default, Turkish locale).
 pub fn error_text(code: seat_proto::ErrorCode) -> &'static str {
+    error_copy(code).get()
+}
+
+fn error_copy(code: seat_proto::ErrorCode) -> &'static Text {
     use seat_proto::ErrorCode as E;
     match code {
-        E::VersionMismatch => "sürüm uyuşmuyor",
-        E::BadRequest => "geçersiz istek",
-        E::AccessDenied => "erişim reddedildi",
-        E::AdminOnly => "yalnızca yöneticiler",
-        E::NotFound => "bulunamadı",
-        E::InvalidConfig => "yapılandırma geçersiz",
-        E::RevisionConflict => "yapılandırma bu arada değişti",
-        E::ConflictsNotConfirmed => "çakışmalar onaylanmadı",
-        E::InvalidValue => "geçersiz değer",
-        E::Disabled => "ürün devre dışı",
-        E::SafeMode => "güvenli kip",
-        E::SeatRunning => "oturma yeri çalışıyor",
-        E::SeatNotRunning => "oturma yeri çalışmıyor",
-        E::Unsupported => "desteklenmiyor",
-        E::NotReady => "hazır değil",
-        E::Timeout => "zaman aşımı",
-        E::DriverUnavailable => "sürücü kullanılamıyor",
-        E::Coexistence => "başka bir ürünle çakışma",
-        E::PolicyBlocked => "ilke engelledi",
-        E::LogonFailed => "oturum açılamadı",
-        E::WarningNotAcknowledged => "uyarı onaylanmadı",
-        E::WizardState => "sihirbaz durumu uygun değil",
-        E::Os => "Windows hatası",
-        E::Store => "kayıt hatası",
-        E::ServiceUnavailable => "hizmet kullanılamıyor",
-        E::NotImplemented => "henüz yok",
-        E::Internal => "iç hata",
-        E::InvalidName => "geçersiz ad",
-        E::DuplicateName => "ad zaten kullanılıyor",
-        E::InvalidDisplayName => "geçersiz görünen ad",
-        E::InvalidPort => "geçersiz bağlantı noktası",
-        E::PortOverlap => "bağlantı noktaları çakışıyor",
-        E::NoFreePort => "boş bağlantı noktası kalmadı",
-        E::InvalidUser => "geçersiz kullanıcı",
-        E::UserInUse => "kullanıcı başka yerde kullanılıyor",
-        E::MissingCredentials => "kullanıcı adı veya parola eksik",
-        E::EditionUnsupported => "bu Windows sürümü desteklenmiyor",
-        E::SeatFailed => "oturma yeri başarısız oldu",
-        E::DriverMissing => "sürücü kurulu değil",
-        E::NoPendingRequest => "bekleyen istek yok",
-        E::WrongPin => "PIN yanlış",
-        E::HashMismatch => "dosya doğrulanamadı",
-        E::Firewall => "güvenlik duvarı hatası",
-        E::WrongSeatKind => "oturma yeri türü bu işleme uygun değil",
-        E::SessionUnavailable => "eş zamanlı oturum yok",
+        E::VersionMismatch => &copy::E_VERSION_MISMATCH,
+        E::BadRequest => &copy::E_BAD_REQUEST,
+        E::AccessDenied => &copy::E_ACCESS_DENIED,
+        E::AdminOnly => &copy::E_ADMIN_ONLY,
+        E::NotFound => &copy::E_NOT_FOUND,
+        E::InvalidConfig => &copy::E_INVALID_CONFIG,
+        E::RevisionConflict => &copy::E_REVISION_CONFLICT,
+        E::ConflictsNotConfirmed => &copy::E_CONFLICTS_NOT_CONFIRMED,
+        E::InvalidValue => &copy::E_INVALID_VALUE,
+        E::Disabled => &copy::E_DISABLED,
+        E::SafeMode => &copy::E_SAFE_MODE,
+        E::SeatRunning => &copy::E_SEAT_RUNNING,
+        E::SeatNotRunning => &copy::E_SEAT_NOT_RUNNING,
+        E::Unsupported => &copy::E_UNSUPPORTED,
+        E::NotReady => &copy::E_NOT_READY,
+        E::Timeout => &copy::E_TIMEOUT,
+        E::DriverUnavailable => &copy::E_DRIVER_UNAVAILABLE,
+        E::Coexistence => &copy::E_COEXISTENCE,
+        E::PolicyBlocked => &copy::E_POLICY_BLOCKED,
+        E::LogonFailed => &copy::E_LOGON_FAILED,
+        E::WarningNotAcknowledged => &copy::E_WARNING_NOT_ACKNOWLEDGED,
+        E::WizardState => &copy::E_WIZARD_STATE,
+        E::Os => &copy::E_OS,
+        E::Store => &copy::E_STORE,
+        E::ServiceUnavailable => &copy::E_SERVICE_UNAVAILABLE,
+        E::NotImplemented => &copy::E_NOT_IMPLEMENTED,
+        E::Internal => &copy::E_INTERNAL,
+        E::InvalidName => &copy::E_INVALID_NAME,
+        E::DuplicateName => &copy::E_DUPLICATE_NAME,
+        E::InvalidDisplayName => &copy::E_INVALID_DISPLAY_NAME,
+        E::InvalidPort => &copy::E_INVALID_PORT,
+        E::PortOverlap => &copy::E_PORT_OVERLAP,
+        E::NoFreePort => &copy::E_NO_FREE_PORT,
+        E::InvalidUser => &copy::E_INVALID_USER,
+        E::UserInUse => &copy::E_USER_IN_USE,
+        E::MissingCredentials => &copy::E_MISSING_CREDENTIALS,
+        E::EditionUnsupported => &copy::E_EDITION_UNSUPPORTED,
+        E::SeatFailed => &copy::E_SEAT_FAILED,
+        E::DriverMissing => &copy::E_DRIVER_MISSING,
+        E::NoPendingRequest => &copy::E_NO_PENDING_REQUEST,
+        E::WrongPin => &copy::E_WRONG_PIN,
+        E::HashMismatch => &copy::E_HASH_MISMATCH,
+        E::Firewall => &copy::E_FIREWALL,
+        E::WrongSeatKind => &copy::E_WRONG_SEAT_KIND,
+        E::SessionUnavailable => &copy::E_SESSION_UNAVAILABLE,
     }
 }
 
@@ -234,11 +379,11 @@ pub mod client {
         // SAFETY: connected client end of a pipe; out pointer valid.
         let ok = unsafe { windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId(f.as_raw_handle() as _, &mut pid) };
         if ok == 0 {
-            return Err(format!("hizmet doğrulanamadı: {}", std::io::Error::last_os_error()));
+            return Err(super::copy::VERIFY_FAILED.fmt(&[&std::io::Error::last_os_error()]));
         }
         let scm = crate::win::scm::service_pid();
         if scm.is_none() || scm != Some(pid) {
-            return Err(format!("kanalın sahibi Pulsar Seat hizmeti değil (pid {pid}); bağlantı kesildi"));
+            return Err(super::copy::PIPE_FOREIGN.fmt(&[&pid]));
         }
         Ok(())
     }
@@ -255,7 +400,7 @@ pub mod client {
             .access_mode(seat_proto::PIPE_CLIENT_ACCESS)
             .security_qos_flags(SECURITY_IDENTIFICATION)
             .open(&name)
-            .map_err(|e| format!("hizmete bağlanılamadı ({name}): {e}"))?;
+            .map_err(|e| super::copy::CONNECT_FAILED.fmt(&[&name, &e]))?;
         if dev.is_none() {
             verify_server(&f)?;
         }
@@ -270,7 +415,7 @@ pub mod client {
             seat_proto::write_message(&mut f, &Request::new(id, b)).map_err(|e| e.to_string())?;
             loop {
                 let frame: ServerFrame =
-                    seat_proto::read_message(&mut f).map_err(|e| format!("okuma hatası: {e}"))?.ok_or("bağlantı kapandı")?;
+                    seat_proto::read_message(&mut f).map_err(|e| super::copy::READ_FAILED.fmt(&[&e]))?.ok_or_else(|| super::copy::CLOSED.get().to_string())?;
                 let ServerFrame::Response(r) = frame else { continue };
                 if r.id != id {
                     continue;
@@ -278,14 +423,14 @@ pub mod client {
                 match r.result {
                     Ok(body) if id == 2 => return Ok(body),
                     Ok(_) => break,
-                    // Turkish text first; the service's technical message after it.
+                    // Localized text first; the service's technical message after it.
                     Err(ProtoError { code, message, .. }) => {
                         return Err(format!("{} ({}: {message})", super::error_text(code), code.as_str()));
                     }
                 }
             }
         }
-        Err("yanıt yok".into())
+        Err(super::copy::NO_ANSWER.get().into())
     }
 }
 
@@ -295,6 +440,14 @@ mod tests {
 
     fn a(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn copy_table_is_complete() {
+        let p = seat_core::i18n::check_table(copy::ALL);
+        assert!(p.is_empty(), "{p:?}");
+        assert!(error_copy(seat_proto::ErrorCode::WrongPin).pick(seat_core::i18n::Lang::Tr).contains("PIN"));
+        assert!(USAGE.en.starts_with("Usage: pulsar-seat-service"));
     }
 
     #[test]

@@ -78,13 +78,13 @@
                 <td>
                   <input
                     type="checkbox"
-                    aria-label={`${s.number}. koltuk, ${c.logical_index}`}
+                    aria-label={`${t.seatN(s.number)}, ${c.logical_index}`}
                     checked={(chosen[s.number] ?? []).includes(c.id)}
                     onchange={(e) => toggle(s.number, c.id, e.currentTarget.checked)}
                   />
                 </td>
               {/each}
-              <td><input type="checkbox" aria-label={`${s.number}. koltuk, ${t.cpu.hard}`} bind:checked={hard[s.number]} /></td>
+              <td><input type="checkbox" aria-label={`${t.seatN(s.number)}, ${t.cpu.hard}`} bind:checked={hard[s.number]} /></td>
             </tr>
           {/each}
         </tbody>

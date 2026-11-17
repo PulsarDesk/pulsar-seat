@@ -410,7 +410,8 @@ fn service_start_prepares_the_host_only_when_multi_seat_is_on() {
     assert!(info.multi_session);
     assert_eq!(info.display_backends.len(), 1);
     assert_eq!(info.pad_backends.len(), 1);
-    assert!(info.termwrap.unwrap()["warning_text"].as_str().unwrap().starts_with("**Deneysel"));
+    assert!(info.termwrap.as_ref().unwrap()["warning_text"].as_str().unwrap().starts_with("**Experimental"));
+    assert!(info.termwrap.unwrap()["warning_text_tr"].as_str().unwrap().starts_with("**Deneysel"));
 }
 
 #[test]
@@ -461,7 +462,7 @@ fn apps_roundtrip_and_validation() {
     let w = world();
     let s = seat();
     let apps = w.engine.get_apps(&s).unwrap();
-    assert_eq!(apps[0]["name"], "Masaüstü");
+    assert_eq!(apps[0]["name"], seat_core::remote::streamconf::DESKTOP_APP.get());
     let new = vec![serde_json::json!({"name": "Oyun", "cmd": r"C:\Games\x.exe", "output": "keep-me"})];
     let got = w.engine.set_apps(&s, new, &RemoteSettings::default()).unwrap();
     assert_eq!(got[0]["output"], "keep-me", "unknown upstream keys survive");

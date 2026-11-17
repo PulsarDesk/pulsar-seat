@@ -73,29 +73,58 @@ impl TweakId {
         format!("tweak:{}", self.as_str())
     }
 
-    /// Turkish one-line help shown next to the option (manager and installer).
-    pub fn help_tr(self) -> &'static str {
+    /// One-line help shown next to the option (manager and installer; localized).
+    pub fn help(self) -> &'static seat_core::i18n::Text {
+        use seat_core::i18n::Text;
         match self {
             Self::LockScreenImage => {
-                "Kilit ve oturum açma ekranında Pulsar Seat'in koltuk görselini gösterir. Bilgisayarın tamamını etkiler; kapatınca eski ayar geri yüklenir."
+                const T: Text = Text::new(
+                    "Shows Pulsar Seat's seat picture on the lock and sign-in screen. Affects the whole PC; the old setting comes back when turned off.",
+                    "Kilit ve oturum açma ekranında Pulsar Seat'in koltuk görselini gösterir. Bilgisayarın tamamını etkiler; kapatınca eski ayar geri yüklenir.",
+                );
+                &T
             }
             Self::HideFastUserSwitching => {
-                "Başlat menüsündeki \"Kullanıcı değiştir\" seçeneğini gizler; koltuk oturumlarının karışmasını önler."
+                const T: Text = Text::new(
+                    "Hides the \"Switch user\" option in the Start menu; keeps seat sessions from getting mixed up.",
+                    "Başlat menüsündeki \"Kullanıcı değiştir\" seçeneğini gizler; koltuk oturumlarının karışmasını önler.",
+                );
+                &T
             }
             Self::ExcludeDriverUpdates => {
-                "Windows Update'in kalite güncellemeleriyle sürücü (ör. ekran kartı) yüklemesini engeller. Varsayılan olarak kapalıdır."
+                const T: Text = Text::new(
+                    "Stops Windows Update from installing drivers (for example graphics drivers) with quality updates. Off by default.",
+                    "Windows Update'in kalite güncellemeleriyle sürücü (ör. ekran kartı) yüklemesini engeller. Varsayılan olarak kapalıdır.",
+                );
+                &T
             }
             Self::TouchpadPalmCheckMachine => {
-                "Dokunmatik yüzeyin yazarken engellenmesini tüm kullanıcılar için kapatır. Normalde her koltuk kullanıcısı için ayrı uygulanır."
+                const T: Text = Text::new(
+                    "Turns off touchpad blocking while typing for all users. Normally it applies per seat user.",
+                    "Dokunmatik yüzeyin yazarken engellenmesini tüm kullanıcılar için kapatır. Normalde her koltuk kullanıcısı için ayrı uygulanır.",
+                );
+                &T
             }
             Self::FastStartupOff => {
-                "Hızlı başlatmayı kapatır; böylece kapatıp açınca tüm koltuklar temiz başlar."
+                const T: Text = Text::new(
+                    "Turns off fast startup, so all seats start clean after a shutdown.",
+                    "Hızlı başlatmayı kapatır; böylece kapatıp açınca tüm koltuklar temiz başlar.",
+                );
+                &T
             }
             Self::SleepOff => {
-                "Etkin güç planında (prizdeyken) uyku, ekran kapatma ve USB seçici askıya almayı kapatır; bir koltuktaki boşta kalma diğerlerini uyutmaz."
+                const T: Text = Text::new(
+                    "Turns off sleep, display off and USB selective suspend in the active power plan (on mains power); an idle seat does not put the others to sleep.",
+                    "Etkin güç planında (prizdeyken) uyku, ekran kapatma ve USB seçici askıya almayı kapatır; bir koltuktaki boşta kalma diğerlerini uyutmaz.",
+                );
+                &T
             }
             Self::SmallCrashDumps => {
-                "Sistem çökme dökümünü küçük döküme çevirir; diskte yer kaplamaz."
+                const T: Text = Text::new(
+                    "Switches the system crash dump to a small dump; it takes little disk space.",
+                    "Sistem çökme dökümünü küçük döküme çevirir; diskte yer kaplamaz.",
+                );
+                &T
             }
         }
     }
@@ -489,7 +518,7 @@ mod tests {
     fn ids_roundtrip() {
         for t in TweakId::ALL {
             assert_eq!(TweakId::parse(t.as_str()), Some(t));
-            assert!(!t.help_tr().is_empty());
+            assert!(seat_core::i18n::check_table(&[(t.as_str(), t.help())]).is_empty());
         }
     }
 

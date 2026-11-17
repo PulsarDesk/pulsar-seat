@@ -32,7 +32,7 @@ function display(key: string, name: string, label: string, luid: number, target:
     present: true,
     details: {
       type: 'display',
-      adapter_name: luid === 1 ? 'Tümleşik grafik' : 'Ek ekran kartı',
+      adapter_name: luid === 1 ? 'Integrated graphics' : 'Discrete graphics card',
       adapter_luid: luid,
       target_id: target,
       output_technology: target === 1 ? 'internal' : 'hdmi',
@@ -70,12 +70,12 @@ function input(key: string, kind: 'keyboard' | 'mouse' | 'hid', name: string, la
 
 export function demoInventory(): Device[] {
   return [
-    display('mon;loc=PCIROOT(0)#GPU(1);sub=t1', 'Dizüstü ekranı', '1.1', 1, 1),
+    display('mon;loc=PCIROOT(0)#GPU(1);sub=t1', 'Laptop screen', '1.1', 1, 1),
     display('mon;loc=PCIROOT(0)#GPU(1);sub=t2', 'Harici ekran A', '1.2', 1, 2),
     display('mon;loc=PCIROOT(0)#GPU(2);sub=t1', 'Harici ekran B', '2.1', 2, 1),
-    input('kbd;loc=ACPI(KBD0)', 'keyboard', 'Yerleşik klavye', 'I2C'),
-    input('mou;loc=ACPI(TPD0);col=1:1:2', 'mouse', 'Dokunmatik yüzey', 'I2C'),
-    input('hid;loc=ACPI(TPD0);col=2:13:5', 'hid', 'Dokunmatik yüzey (hassas)', 'I2C', undefined, 0x0d),
+    input('kbd;loc=ACPI(KBD0)', 'keyboard', 'Built-in keyboard', 'I2C'),
+    input('mou;loc=ACPI(TPD0);col=1:1:2', 'mouse', 'Touchpad', 'I2C'),
+    input('hid;loc=ACPI(TPD0);col=2:13:5', 'hid', 'Touchpad (precision)', 'I2C', undefined, 0x0d),
     input('kbd;loc=USB(1-2)', 'keyboard', 'USB klavye', 'USB-1-2', 'hub;loc=USB(1)'),
     input('mou;loc=USB(1-3)', 'mouse', 'USB fare', 'USB-1-3', 'hub;loc=USB(1)'),
     input('kbd;loc=USB(2-1-1)', 'keyboard', 'Kablosuz klavye', 'USB-2-1-1', 'hub;loc=USB(2-1)'),
@@ -83,7 +83,7 @@ export function demoInventory(): Device[] {
     {
       key: 'hub;loc=USB(1)',
       kind: 'usb_hub',
-      name: 'Kök USB göbeği',
+      name: 'Root USB hub',
       label: 'USB-1',
       present: true,
       details: { type: 'usb', vendor_id: 0x8086, product_id: 1, port_count: 4, hub_depth: 0, port: 0 }
@@ -91,7 +91,7 @@ export function demoInventory(): Device[] {
     {
       key: 'hub;loc=USB(2-1)',
       kind: 'usb_hub',
-      name: 'Masa üstü USB göbeği',
+      name: 'Desk USB hub',
       label: 'USB-2-1',
       present: true,
       parent_hub: 'hub;loc=USB(2)',
@@ -100,7 +100,7 @@ export function demoInventory(): Device[] {
     {
       key: 'hub;loc=USB(2)',
       kind: 'usb_hub',
-      name: 'Kök USB göbeği',
+      name: 'Root USB hub',
       label: 'USB-2',
       present: true,
       details: { type: 'usb', vendor_id: 0x8086, product_id: 2, port_count: 2, hub_depth: 0, port: 0 }
@@ -108,14 +108,14 @@ export function demoInventory(): Device[] {
     {
       key: 'aout;inst=SPK0',
       kind: 'audio_render',
-      name: 'Hoparlörler',
+      name: 'Speakers',
       present: true,
       details: { type: 'audio', flow: 'render', endpoint_id: '{0.0.0.00000000}.{a}', form_factor: 'speakers', state: 'active' }
     },
     {
       key: 'aout;loc=USB(2-1-3)',
       kind: 'audio_render',
-      name: 'USB kulaklık',
+      name: 'USB headset',
       label: 'USB-2-1-3',
       parent_hub: 'hub;loc=USB(2-1)',
       present: true,
@@ -124,13 +124,13 @@ export function demoInventory(): Device[] {
     {
       key: 'ain;loc=USB(2-1-3)',
       kind: 'audio_capture',
-      name: 'USB kulaklık mikrofonu',
+      name: 'USB headset microphone',
       label: 'USB-2-1-3',
       parent_hub: 'hub;loc=USB(2-1)',
       present: true,
       details: { type: 'audio', flow: 'capture', endpoint_id: '{0.0.1.00000000}.{c}', form_factor: 'headset', state: 'active' }
     },
-    { key: 'cam;inst=CAM0', kind: 'webcam', name: 'Ön kamera', present: true, details: { type: 'none' } },
+    { key: 'cam;inst=CAM0', kind: 'webcam', name: 'Front camera', present: true, details: { type: 'none' } },
     {
       key: 'stor;loc=USB(1-4)',
       kind: 'storage',
@@ -140,7 +140,7 @@ export function demoInventory(): Device[] {
       present: false,
       details: { type: 'storage', removable: true, optical: false, volumes: [], letters: ['E'], file_system: 'exFAT' }
     },
-    { key: 'net;inst=WLAN0', kind: 'network', name: 'Kablosuz ağ', present: true, details: { type: 'none' } }
+    { key: 'net;inst=WLAN0', kind: 'network', name: 'Wireless network', present: true, details: { type: 'none' } }
   ];
 }
 
@@ -150,9 +150,9 @@ export function demoConfig(): Config {
     revision: 1,
     seats: [newSeat(1), { ...newSeat(2), name: 'Misafir' }],
     devices: [
-      { key: 'mon;loc=PCIROOT(0)#GPU(1);sub=t1', kind: 'monitor', mask: 1, name: 'Dizüstü ekranı', label: '1.1' },
+      { key: 'mon;loc=PCIROOT(0)#GPU(1);sub=t1', kind: 'monitor', mask: 1, name: 'Laptop screen', label: '1.1' },
       { key: 'mon;loc=PCIROOT(0)#GPU(2);sub=t1', kind: 'monitor', mask: 2, name: 'Harici ekran B', label: '2.1' },
-      { key: 'hub;loc=USB(2-1)', kind: 'usb_hub', mask: 2, name: 'Masa üstü USB göbeği', label: 'USB-2-1' }
+      { key: 'hub;loc=USB(2-1)', kind: 'usb_hub', mask: 2, name: 'Desk USB hub', label: 'USB-2-1' }
     ],
     settings: {
       enabled: false,
@@ -441,7 +441,7 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       await step('list_local_users');
       return [
         { name: 'ayse', full_name: 'Ayşe', sid: 'S-1-5-21-1-1001', disabled: false, is_admin: true },
-        { name: 'misafir', full_name: 'Misafir koltuğu', sid: 'S-1-5-21-1-1002', disabled: false, is_admin: false },
+        { name: 'misafir', full_name: 'Guest seat', sid: 'S-1-5-21-1-1002', disabled: false, is_admin: false },
         { name: 'eski', full_name: '', sid: 'S-1-5-21-1-1003', disabled: true, is_admin: false }
       ];
     },
@@ -560,13 +560,13 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     },
     pickProgram: async () => {
       calls.push('pick_program');
-      return { title: 'Oyun', path: 'C:\\Oyunlar\\oyun.exe' };
+      return { title: 'Game', path: 'C:\\Games\\game.exe' };
     },
     pickProgramFolder: async () => {
       calls.push('pick_program_folder');
       return [
-        { title: 'Oyun', path: 'C:\\Oyunlar\\oyun.exe' },
-        { title: 'Başlatıcı', path: 'C:\\Oyunlar\\baslat.exe' }
+        { title: 'Game', path: 'C:\\Games\\game.exe' },
+        { title: 'Launcher', path: 'C:\\Games\\launcher.exe' }
       ];
     },
     userPictures: async () => {
@@ -583,6 +583,10 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     wizardPageMonitor: async () => null,
     wizardLastProgress: async () => wizProgress(),
     setUiDirty: async () => {},
+    uiLanguage: async () => 'en',
+    setUiLanguage: async (lang) => {
+      calls.push(`set_ui_language:${lang}`);
+    },
     hideToTray: async () => {
       calls.push('hide_to_tray');
     },

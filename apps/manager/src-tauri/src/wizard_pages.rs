@@ -88,7 +88,7 @@ pub fn open(app: &AppHandle, pages: &[PageSpec]) -> tauri::Result<usize> {
         let l = label(generation, i);
         lock(&state.monitors).insert(l.clone(), p.monitor.clone());
         let mut b = WebviewWindowBuilder::new(app, &l, WebviewUrl::default())
-            .title("Pulsar Seat kurulum sihirbazı")
+            .title(crate::copy::WIZARD_TITLE.get())
             .decorations(false)
             .always_on_top(true)
             .skip_taskbar(true)

@@ -161,7 +161,7 @@ pub fn wrap_with_launcher(apps: &mut [AppEntry], launcher: &Path) {
 
 /// Built-in list: just the desktop.
 pub fn default_apps() -> Vec<AppEntry> {
-    vec![AppEntry { name: "Masaüstü".into(), image_path: Some("desktop.png".into()), ..Default::default() }]
+    vec![AppEntry { name: seat_core::remote::streamconf::DESKTOP_APP.get().into(), image_path: Some("desktop.png".into()), ..Default::default() }]
 }
 
 #[cfg(test)]
@@ -246,7 +246,7 @@ mod tests {
     fn default_list_is_desktop() {
         let d = default_apps();
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].name, "Masaüstü");
+        assert_eq!(d[0].name, seat_core::remote::streamconf::DESKTOP_APP.get());
         assert!(d[0].cmd.is_none());
     }
 }

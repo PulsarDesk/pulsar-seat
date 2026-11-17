@@ -4,8 +4,8 @@
 
 /// Windows service key name (SCM).
 pub const SERVICE_NAME: &str = "PulsarSeat";
-/// Service display name (Turkish UI copy).
-pub const SERVICE_DISPLAY_NAME: &str = "Pulsar Seat Hizmeti";
+/// Service display name (UI copy: services.msc; written in the installing process's language).
+pub const SERVICE_DISPLAY_NAME: crate::i18n::Text = crate::i18n::Text::new("Pulsar Seat Service", "Pulsar Seat Hizmeti");
 /// Event Log source registered by the installer (Application log).
 pub const EVENT_SOURCE: &str = "PulsarSeat";
 

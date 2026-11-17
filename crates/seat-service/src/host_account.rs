@@ -161,7 +161,7 @@ pub fn ensure_group(ops: &dyn AccountOps) -> Result<String, String> {
         GroupLookup::Ours(sid) => Err(format!("{GROUP_NAME}: unexpected SID {sid:?}")),
         GroupLookup::Foreign => Err(format!("{GROUP_NAME} exists but Pulsar did not create it; per-seat host accounts are off (rename or remove it)")),
         GroupLookup::Missing => {
-            ops.create_group(GROUP_NAME, GROUP_COMMENT)?;
+            ops.create_group(GROUP_NAME, GROUP_COMMENT.get())?;
             match ops.group_lookup(GROUP_NAME)? {
                 GroupLookup::Ours(sid) if is_sid_string(&sid) => Ok(sid),
                 other => Err(format!("{GROUP_NAME} created but not found ({other:?})")),
@@ -185,19 +185,19 @@ pub fn ensure_account(ops: &dyn AccountOps, name: &str, secret: &str, group_sid:
 /// What kind of account [`ensure_account_as`] maintains.
 #[derive(Debug, Clone, Copy)]
 pub struct AccountProfile {
-    pub full_name: &'static str,
-    pub comment: &'static str,
+    pub full_name: &'static seat_core::i18n::Text,
+    pub comment: &'static seat_core::i18n::Text,
     pub grant: &'static [&'static str],
     pub deny: &'static [&'static str],
 }
 
 /// The seat hosts' accounts (batch logon only).
-pub const HOST_PROFILE: AccountProfile = AccountProfile { full_name: ACCOUNT_FULL_NAME, comment: ACCOUNT_COMMENT, grant: GRANT_RIGHTS, deny: DENY_RIGHTS };
+pub const HOST_PROFILE: AccountProfile = AccountProfile { full_name: &ACCOUNT_FULL_NAME, comment: &ACCOUNT_COMMENT, grant: GRANT_RIGHTS, deny: DENY_RIGHTS };
 
 /// The kiosk seats' accounts (`seat_session::kiosk_account`: interactive logon only).
 pub const KIOSK_PROFILE: AccountProfile = AccountProfile {
-    full_name: seat_session::kiosk_account::KIOSK_FULL_NAME,
-    comment: seat_session::kiosk_account::KIOSK_COMMENT,
+    full_name: &seat_session::kiosk_account::KIOSK_FULL_NAME,
+    comment: &seat_session::kiosk_account::KIOSK_COMMENT,
     grant: seat_session::kiosk_account::KIOSK_GRANT_RIGHTS,
     deny: seat_session::kiosk_account::KIOSK_DENY_RIGHTS,
 };
@@ -223,7 +223,7 @@ pub fn ensure_account_as(ops: &dyn AccountOps, name: &str, secret: &str, group_s
             (sid, false)
         }
         Lookup::Missing => {
-            ops.create(name, &password, profile.full_name, profile.comment)?;
+            ops.create(name, &password, profile.full_name.get(), profile.comment.get())?;
             match ops.lookup(name) {
                 Ok(Lookup::User(sid)) => (sid, true),
                 other => {
@@ -273,6 +273,25 @@ pub fn ensure_account_as(ops: &dyn AccountOps, name: &str, secret: &str, group_s
     Ok(HostAccount { name: name.into(), sid })
 }
 
+/// Console copy of the uninstall steps (English default, Turkish locale; `seat_core::i18n`).
+/// `{0}` = account or group name, `{1}` = the error.
+mod copy {
+    use seat_core::i18n::Text;
+    pub const RIGHTS: Text = Text::new("{0}: the account's sign-in rights could not be removed: {1}", "{0} hesabının oturum hakları kaldırılamadı: {1}");
+    pub const DELETE: Text = Text::new("{0}: the account could not be deleted: {1}", "{0} hesabı silinemedi: {1}");
+    pub const NOT_USER: Text = Text::new("{0} is not a user account; left untouched", "{0} bir kullanıcı hesabı değil; dokunulmadı");
+    pub const FOREIGN: Text = Text::new("{0}: Pulsar did not create this account; left untouched", "{0} hesabını Pulsar oluşturmamış; dokunulmadı");
+    pub const LOOKUP: Text = Text::new("{0}: the account could not be looked up: {1}", "{0} hesabı aranamadı: {1}");
+    pub const HIDE: Text = Text::new("{0}: the sign-in screen entry could not be deleted: {1}", "{0} oturum açma ekranı kaydı silinemedi: {1}");
+    pub const SECRET: Text = Text::new("{0}: the password (LSA) could not be deleted: {1}", "{0} parolası (LSA) silinemedi: {1}");
+    pub const PROFILE: Text = Text::new("{0}: the account's user profile could not be deleted: {1}", "{0} hesabının kullanıcı profili silinemedi: {1}");
+    pub const GROUP_FOREIGN: Text = Text::new("{0}: Pulsar did not create this group; left untouched", "{0} grubunu Pulsar oluşturmamış; dokunulmadı");
+    pub const GROUP_LOOKUP: Text = Text::new("{0}: the group could not be looked up: {1}", "{0} grubu aranamadı: {1}");
+    #[cfg(test)]
+    pub const ALL: &[(&str, &Text)] =
+        seat_core::text_table![RIGHTS, DELETE, NOT_USER, FOREIGN, LOOKUP, HIDE, SECRET, PROFILE, GROUP_FOREIGN, GROUP_LOOKUP];
+}
+
 /// The SAM password changed but the secret could not follow: delete the stale secret.
 fn forget_password(ops: &dyn AccountOps, name: &str, secret: &str) {
     if let Err(e) = ops.store_password(secret, None) {
@@ -280,7 +299,7 @@ fn forget_password(ops: &dyn AccountOps, name: &str, secret: &str) {
     }
 }
 
-/// Remove the account (uninstall). Returns the errors (Turkish, for the console output).
+/// Remove the account (uninstall). Returns the errors (localized, for the console output).
 pub fn remove(ops: &dyn AccountOps) -> Vec<String> {
     let name = ACCOUNT_NAME;
     let mut errors = Vec::new();
@@ -288,40 +307,40 @@ pub fn remove(ops: &dyn AccountOps) -> Vec<String> {
     match ops.lookup(name) {
         Ok(Lookup::User(sid)) => {
             if let Err(e) = ops.remove_all_rights(&sid) {
-                errors.push(format!("{name} hesabının oturum hakları kaldırılamadı: {e}"));
+                errors.push(copy::RIGHTS.fmt(&[&name, &e]));
             }
             if let Err(e) = ops.delete(name) {
-                errors.push(format!("{name} hesabı silinemedi: {e}"));
+                errors.push(copy::DELETE.fmt(&[&name, &e]));
             }
         }
         Ok(Lookup::Missing) => {}
-        Ok(Lookup::Other) => errors.push(format!("{name} bir kullanıcı hesabı değil; dokunulmadı")),
+        Ok(Lookup::Other) => errors.push(copy::NOT_USER.fmt(&[&name])),
         Ok(Lookup::Foreign) => {
             // Somebody else's account with our name: leave it (and its logon-screen entry).
             crate::log::warn(&format!("{name}: a local user Pulsar did not create; left untouched"));
-            errors.push(format!("{name} hesabını Pulsar oluşturmamış; dokunulmadı"));
+            errors.push(copy::FOREIGN.fmt(&[&name]));
             foreign = true;
         }
-        Err(e) => errors.push(format!("{name} hesabı aranamadı: {e}")),
+        Err(e) => errors.push(copy::LOOKUP.fmt(&[&name, &e])),
     }
     if !foreign && let Err(e) = ops.hide_from_logon(name, false) {
-        errors.push(format!("{name} oturum açma ekranı kaydı silinemedi: {e}"));
+        errors.push(copy::HIDE.fmt(&[&name, &e]));
     }
     if let Err(e) = ops.store_password(PASSWORD_SECRET, None) {
-        errors.push(format!("{name} parolası (LSA) silinemedi: {e}"));
+        errors.push(copy::SECRET.fmt(&[&name, &e]));
     }
     errors
 }
 
 /// Remove `seat`'s host account (seat no longer configured, uninstall): rights, profile,
 /// account, logon-screen entry, secret. A name Pulsar did not create is left alone.
-/// Returns the errors (Turkish).
+/// Returns the errors (localized).
 pub fn remove_seat_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String> {
     remove_named(ops, &seat_account_name(seat), &seat_password_secret(seat))
 }
 
 /// Remove `seat`'s Pulsar kiosk account (seat no longer a kiosk seat, uninstall), with its
-/// profile. Returns the errors (Turkish).
+/// profile. Returns the errors (localized).
 pub fn remove_kiosk_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<String> {
     use seat_session::kiosk_account::{kiosk_account_name, kiosk_password_secret};
     remove_named(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat))
@@ -347,16 +366,16 @@ fn remove_named(ops: &dyn AccountOps, name: &str, secret: &str) -> Vec<String> {
     match ops.lookup(&name) {
         Ok(Lookup::User(sid)) => {
             if let Err(e) = ops.remove_all_rights(&sid) {
-                errors.push(format!("{name} hesabının oturum hakları kaldırılamadı: {e}"));
+                errors.push(copy::RIGHTS.fmt(&[&name, &e]));
             }
             if let Err(e) = ops.delete_profile(&sid) {
-                errors.push(format!("{name} hesabının kullanıcı profili silinemedi: {e}"));
+                errors.push(copy::PROFILE.fmt(&[&name, &e]));
             }
             if let Err(e) = ops.delete(&name) {
-                errors.push(format!("{name} hesabı silinemedi: {e}"));
+                errors.push(copy::DELETE.fmt(&[&name, &e]));
             }
             if let Err(e) = ops.hide_from_logon(&name, false) {
-                errors.push(format!("{name} oturum açma ekranı kaydı silinemedi: {e}"));
+                errors.push(copy::HIDE.fmt(&[&name, &e]));
             }
         }
         Ok(Lookup::Missing) => {}
@@ -365,12 +384,12 @@ fn remove_named(ops: &dyn AccountOps, name: &str, secret: &str) -> Vec<String> {
             return errors;
         }
         Err(e) => {
-            errors.push(format!("{name} hesabı aranamadı: {e}"));
+            errors.push(copy::LOOKUP.fmt(&[&name, &e]));
             return errors;
         }
     }
     if let Err(e) = ops.store_password(secret, None) {
-        errors.push(format!("{name} parolası (LSA) silinemedi: {e}"));
+        errors.push(copy::SECRET.fmt(&[&name, &e]));
     }
     errors
 }
@@ -391,7 +410,7 @@ pub fn prune(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
 }
 
 /// Uninstall: the shared account, every seat account and the host group. Returns the
-/// errors (Turkish).
+/// errors (localized).
 pub fn remove_all(ops: &dyn AccountOps) -> Vec<String> {
     let mut errors = remove(ops);
     for seat in seat_account_seats() {
@@ -407,8 +426,8 @@ pub fn remove_all(ops: &dyn AccountOps) -> Vec<String> {
             }
         }
         Ok(GroupLookup::Missing) => {}
-        Ok(GroupLookup::Foreign) => errors.push(format!("{GROUP_NAME} grubunu Pulsar oluşturmamış; dokunulmadı")),
-        Err(e) => errors.push(format!("{GROUP_NAME} grubu aranamadı: {e}")),
+        Ok(GroupLookup::Foreign) => errors.push(copy::GROUP_FOREIGN.fmt(&[&GROUP_NAME])),
+        Err(e) => errors.push(copy::GROUP_LOOKUP.fmt(&[&GROUP_NAME, &e])),
     }
     errors
 }
@@ -500,7 +519,8 @@ mod tests {
             Ok(if g.len() > 1 { g.remove(0) } else { g.first().cloned().unwrap_or(GroupLookup::Missing) })
         }
         fn create_group(&self, n: &str, c: &str) -> Result<(), String> {
-            assert_eq!((n, c), (GROUP_NAME, GROUP_COMMENT));
+            assert_eq!(n, GROUP_NAME);
+            assert!(GROUP_COMMENT.matches(c));
             self.call("create_group")
         }
         fn add_to_group(&self, g: &str, _s: &str) -> Result<(), String> {
@@ -528,6 +548,12 @@ mod tests {
 
     fn s(n: u8) -> SeatNumber {
         SeatNumber::new(n).unwrap()
+    }
+
+    #[test]
+    fn copy_table_is_complete() {
+        let p = seat_core::i18n::check_table(copy::ALL);
+        assert!(p.is_empty(), "{p:?}");
     }
 
     #[test]
@@ -688,7 +714,7 @@ mod tests {
         let errs = remove(&m);
         assert_eq!(m.calls(), ["lookup", "unstore"], "no rights / delete / unhide");
         assert_eq!(errs.len(), 1);
-        assert!(errs[0].contains("dokunulmadı"));
+        assert_eq!(errs[0], copy::FOREIGN.fmt(&[&ACCOUNT_NAME]));
     }
 
     #[test]
@@ -744,7 +770,7 @@ mod tests {
         let errs = remove(&m);
         assert_eq!(m.calls(), ["lookup", "remove_rights", "delete", "unhide", "unstore"]);
         assert_eq!(errs.len(), 1);
-        assert!(errs[0].contains("silinemedi"));
+        assert!(errs[0].contains("could not be deleted") || errs[0].contains("silinemedi"), "{}", errs[0]);
         let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), ..Default::default() };
         assert!(remove(&m).is_empty());
         assert_eq!(m.calls(), ["lookup", "unhide", "unstore"]);

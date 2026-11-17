@@ -18,7 +18,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 3. **Documented interfaces only.** No injection, no termsrv / LSM patching, no undocumented
    RPC, no registry views, no test-signing, no Memory Integrity / Secure Boot changes.
    *Maintainer's exception:* the experimental client-SKU module (`seat-session` feature
-   `experimental-client-sku`, off by default, versioned Turkish warning) points TermService
+   `experimental-client-sku`, off by default, versioned warning (English + Turkish, `warning_{en,tr}.txt`)) points TermService
    at a wrapper **the operator installed**; that wrapper changes termsrv's code in memory at
    run time, and the module writes two registry values Microsoft does not document
    (`EnableConcurrentSessions`, `AllowMultipleTSSessions`). Pulsar ships no wrapper and no
@@ -42,7 +42,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `crates/seat-compat` | lib | compat | preflight + coexistence checks, CPU sets + job launcher, reversible tweaks + journal, reference-config importer, app seat API helpers |
 | `crates/seat-service` | bin `pulsar-seat-service` | service | SCM service, pipe server, controller / state machine, boot sequence, LSA secret store, events, logs, diagnostics, sub-commands; `src/remote/` = the remote seat worker (Split's controller + engine, §10.5) |
 | `crates/seat-host` | bins `pulsar-seat-host`, `pulsar-seat-agent` | host | per-seat host (RDP client + presenter + input + audio bridge) and per-session agent |
-| `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5, `adapter-static` | manager | all screens of spec 10 (Turkish), tray, wizard UI; `src-tauri` = pipe client |
+| `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5, `adapter-static` | manager | all screens of spec 10 (English default, Turkish locale: `src/lib/locales/`), tray, wizard UI; `src-tauri` = pipe client |
 | `credprov/` | C++20 COM DLL (v145, SDK 10.0.28000), unsigned | credprov | credential provider + filter for `fast_user_switch` (auto-logon, switch link); registered only by the service — see [credprov/README.md](../../credprov/README.md) |
 | `drivers/` | C (KMDF / FltMgr) + C++17 (IddCx), built unsigned with WDK 10.0.28000; loaded only test-signed in the test VM (2026-11-16) | drivers | `seat-input-filter` (keyboard / mouse + HID roles), `seat-idd`, `seat-storage-filter` — see [drivers/README.md](../../drivers/README.md) |
 | `installer/` | packaging | installer | see [installer/README.md](../../installer/README.md) |
@@ -240,10 +240,10 @@ the host reports `Failed { nla_required }`. Chosen design: **(a) a second WinSta
 bound to loopback only, NLA off, used only by passwordless seats** (no secret crosses it; the
 pinned TLS certificate still authenticates the server; the RDP-Tcp listener stays NLA-only).
 Rejected for now: (b) a seat-host-drawn credential prompt fed into CredSSP (a credential UI
-running as SYSTEM on the seat's desktop, and a Turkish logon UI to maintain). Until (a) is
+running as SYSTEM on the seat's desktop, and a localized logon UI to maintain). Until (a) is
 built (seat-session `rds.rs` + listener pins for the second listener + service selection),
 `RdpCore::start` refuses a passwordless seat on an NLA listener up front (2026-11-13
-final-fix): `Policy` / `nla_required` → `FailureReason::NlaRequired` with Turkish copy
+final-fix): `Policy` / `nla_required` → `FailureReason::NlaRequired` with localized copy
 ("Koltuğa parola kaydedin"). Design (a) itself is **still open**.
 
 Update 2026-11-13 (second-listener), design (a) **built, untested on hardware**
@@ -321,7 +321,7 @@ Update 2026-11-13 (fix-second-listener; supersedes the matching points above):
   stop and session logoff / end. `restore_host` clears `prepared` first and
   `ensure_listener` re-checks it under `busy`.
 - `loopback_listener_unavailable` → `FailureReason::LoopbackListenerUnavailable`; the seat
-  `detail` gets `listener=loopback_listener:<state>[:<x>]` (manager shows per-state Turkish
+  `detail` gets `listener=loopback_listener:<state>[:<x>]` (manager shows per-state localized
   copy).
 
 Autostart (2026-11-13 final-fix): `start_autostart_seats` (boot `at_boot`,
@@ -387,7 +387,7 @@ ARM64X: CredUI is refused) gives this backend auto-logon and a "switch seat" lin
   the same lock rules).
 - Agent switch (spec 35 §5.5(a)): `agent_switch_targets` / `agent_switch{seat}`
   (`Access::Agent`, own seat only, same checks as `credprov_switch`, FUS backend, no
-  secure desktop). `pulsar-seat-agent` shows a notification-area icon with Turkish
+  secure desktop). `pulsar-seat-agent` shows a notification-area icon with localized
   "N. koltuğa geç" items (`agent.rs` `win::tray`). Untested on hardware.
 - DLL behaviour: README in `credprov/`. Inert outside LogonUI and for every scenario but
   logon / unlock; the filter hides others only with `hide_others`, only when the answer
@@ -822,7 +822,7 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   after every non-clone entry, so RDP monitor `i` = `outputs[i]`
   (`SeatOutputs::layout_outputs`). Both presenters show output `i`'s frames and cursor on
   its clones (own mode, letterbox). The ActiveX client cannot clone: the host covers
-  desktop clone targets with a presenter window and a Turkish notice. IddCx monitors are
+  desktop clone targets with a presenter window and a localized notice. IddCx monitors are
   plugged only for non-clone entries. `caps.clone` is true for every kind except
   `console_only`.
 - *Window presenter rendering.* D3D11 flip model per window (`win/flip.rs`:
@@ -1891,6 +1891,28 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
 - **Gone with Split's Tauri crate:** the
   `tauri-plugin-dialog` file picker (the pages use Seat's `pick_program`). Kept from it: the
   LAN address order for the pair dialog (`net::order_lan`, Tauri command `lan_addresses`).
-- **Copy.** One `i18n.ts`: Split's copy is its `rt` object plus `remoteErrorMessage`,
+- **Copy.** One `i18n.ts` (locale tables in `locales/en.ts` / `tr.ts` since 2026-11-17): Split's copy is its `rt` object plus `remoteErrorMessage`,
   `remoteFailureText`, `remoteFieldErrorText`; the remote components import those under
   their old names. Split's styles are `remote/remote.css`, scoped to `.remote-ui`.
+
+## UI language (i18n, 2026-11-17)
+
+English is the default UI language everywhere; Turkish is the one extra locale, with the
+same keys. Logs, wire codes, `detail` strings and technical messages stay English and are
+never translated; the manager maps codes to its own copy.
+
+| Part | Table | Language choice |
+| --- | --- | --- |
+| Manager web UI | `apps/manager/src/lib/locales/en.ts` (type `Locale`) + `tr.ts`; `i18n.ts` fills the exported tables (`t`, `rt`, `failureText`, ...) with `applyLocale` | stored choice (`localStorage` `pulsar-seat.manager.lang.v1`, Basic settings "Language") else the Windows user UI language (Tauri `ui_language`, fallback `navigator.languages`); a change reloads the window |
+| Manager shell (tray menu, window titles, file dialogs) | `apps/manager/src-tauri/src/copy.rs` | OS language at start, then `set_ui_language` from the UI (relabels the tray) |
+| Service (Event Log, CLI, install / uninstall console, service + SCM description, account full names / comments, firewall rule descriptions, power request, reboot message, stream default app name, input fallback names) | `seat_core::i18n::Text` pairs next to the code | `PULSAR_SEAT_LANG`, else `GetUserDefaultUILanguage` of the process (LocalSystem: the machine default, HYPOTHESIS) |
+| Seat host, kiosk shell, seat agent tray | same | the seat user's UI language |
+| Credential provider tiles | `credprov/src/copy.h` | LogonUI's UI language (SYSTEM: machine default, HYPOTHESIS) |
+| MSI / NSIS | `installer/wix/locales/*.wxl`, `hooks.nsh` LangStrings | one MSI per culture (`build-installer.ps1 -Language`, en-US default); NSIS picks the OS language |
+| Experimental warning | `crates/seat-session/src/termwrap/warning_{en,tr}.txt`; manager `warning.ts` (`WARNING_EN` / `WARNING_TR`, checked word for word) | the manager's language; the service status carries `warning_text` (English) and `warning_text_tr` |
+
+Account comments mark Pulsar's own accounts and group: `Text::matches` accepts the comment
+in either language, so a language change never turns our account into a "foreign" one.
+Preflight check titles are localized on the console (`seat_compat::preflight::title`), the
+setup log uses English titles (`title_en`, `BLOCKED` / `WARNING` prefixes).
+

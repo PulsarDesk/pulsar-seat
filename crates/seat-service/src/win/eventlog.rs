@@ -5,7 +5,7 @@
 //! The source has no message table of its own (no message compiler in the build). It
 //! points at the .NET event-log message DLL, which formats any event id as its insertion
 //! string, when one exists on this PC; otherwise Event Viewer shows the raw string. The
-//! string is the Turkish text of the id ([`crate::eventid::turkish`]) followed by the
+//! string is the localized text of the id ([`crate::eventid::text`]) followed by the
 //! English technical detail (`service.log` stays English).
 //! HYPOTHESIS / untested on hardware: the DLL path on ARM64 (`FrameworkArm64`).
 

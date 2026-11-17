@@ -67,7 +67,7 @@ describe('ManagerStore', () => {
     expect(store.arrivals[v.device.key]).toBe(true);
     api.emit({ type: 'seat_state', data: { runtime: { seat: 2, state: { state: 'error', reason: 'logon_failed', detail: '' }, since_ms: 1 } } });
     expect(store.status?.seats.find((s) => s.seat === 2)?.state.state).toBe('error');
-    expect(store.toasts.at(-1)?.text).toContain('parola');
+    expect(store.toasts.at(-1)?.text).toContain('password');
     store.dispose();
   });
 
@@ -81,7 +81,7 @@ describe('ManagerStore', () => {
     expect(store.status?.seats.find((s) => s.seat === 2)?.state.state).toBe('at_logon');
     api.failNext({ code: 'timeout', message: 'x', reason: 'session_timeout' });
     expect(await store.relogon(2)).toBe(false);
-    expect(store.toasts.at(-1)?.text).toBe('Oturum zamanında başlamadı');
+    expect(store.toasts.at(-1)?.text).toBe('The session did not start in time');
     store.dispose();
   });
 
@@ -160,6 +160,25 @@ describe('ManagerStore', () => {
     store.handleEvent(notice as never);
     expect(store.sameAccountSeat).toBeNull();
     store.setPref('hideSameAccountWarning', false);
+    store.dispose();
+  });
+});
+
+describe('language switch', () => {
+  it('stores the choice, tells the shell and reloads', async () => {
+    const { applyLocale, storeLangPref, storedLangPref, t } = await import('./i18n.ts');
+    const { api, store } = await ready();
+    let reloaded = 0;
+    store.changeLanguage('tr', () => reloaded++);
+    expect(storedLangPref()).toBe('tr');
+    expect(t.seats).toBe('Koltuklar');
+    expect(api.calls).toContain('set_ui_language:tr');
+    expect(reloaded).toBe(1);
+    store.changeLanguage('system', () => reloaded++);
+    expect(storedLangPref()).toBe('system');
+    expect(t.seats).toBe('Seats');
+    storeLangPref('system');
+    applyLocale('en');
     store.dispose();
   });
 });

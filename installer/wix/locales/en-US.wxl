@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Strings of installer/wix/PulsarSeat.wxs (`!(loc.Id)`), culture en-US. Same ids in every
+     locale file (installer/scripts/wix-locales.test.ts). Tauri adds its own default strings
+     for ids this file does not set (bundle.windows.wix.language.<culture>.localePath). -->
+<WixLocalization Culture="en-us" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="PsArchArm64Only">This installer is for ARM64 PCs. Please use the x64 package.</String>
+  <String Id="PsArchX64Only">This installer is for x64 PCs. Please use the ARM64 package.</String>
+  <String Id="PsCoexistence">Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.&#13;&#10;&#13;&#10;To install Pulsar Seat, first uninstall that product and restart the PC. Pulsar Seat does not touch that product's files or settings.</String>
+  <String Id="PsOsTooOld">Pulsar Seat needs Windows 10 22H2 (build 19045) or newer.</String>
+  <String Id="PsNeedsAdmin">Administrator rights are needed to install Pulsar Seat.</String>
+  <String Id="PsBadTweaks">PSTWEAKS is invalid: only lowercase letters, underscores and commas are allowed.</String>
+  <String Id="PsBadRestorePoint">PSRESTOREPOINT can only be 0 or 1.</String>
+  <String Id="PsBadDrivers">PULSARDRIVERS is invalid: only driver names and commas are allowed.</String>
+  <String Id="PsBadConsent">PULSARCONSENT is invalid: only driver names and commas are allowed.</String>
+  <String Id="PsBadRemoveUserData">REMOVEUSERDATA can only be 0 or 1.</String>
+  <String Id="PsServiceDisplayName">Pulsar Seat Service</String>
+  <String Id="PsServiceDescription">Manages several seats (monitor, keyboard, mouse, sound) on one PC.</String>
+  <String Id="PsStopSeatsText">The Pulsar Seat service will be updated, repaired or removed. All running seats will stop and the sessions on the seats will close.&#13;&#10;&#13;&#10;Continue?</String>
+  <String Id="PsTermSrvText">The Remote Desktop service (TermService) was changed by other software:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat will be installed, but seats based on Remote Desktop will not be used on this PC. Pulsar Seat does not touch this setting.</String>
+  <String Id="PsSetupTitle">[ProductName] Setup</String>
+  <String Id="PsOptionsTitle">{\WixUI_Font_Title}Optional system settings</String>
+  <String Id="PsOptionsDescription">None of them is required. Every change is recorded and undone at uninstall.</String>
+  <String Id="PsOptRestorePoint">Create a System Restore point before system settings change</String>
+  <String Id="PsOptFastStartup">Turn off fast startup (seat devices are recognised correctly at every start)</String>
+  <String Id="PsOptSleep">Turn off sleep in the active power plan (the PC does not sleep while seats are in use)</String>
+  <String Id="PsOptDumps">Set the crash dump to a small dump (saves disk space)</String>
+  <String Id="PsOptNote">Settings that are not ticked are left untouched.</String>
+  <String Id="PsRemoveTitle">{\WixUI_Font_Title}Settings and logs</String>
+  <String Id="PsRemoveDescription">What should happen to your saved data when Pulsar Seat is removed?</String>
+  <String Id="PsRemoveText">Seat configuration, device assignments and logs are in the %ProgramData%\Pulsar Seat folder. If you keep them, Pulsar Seat continues where it left off when installed again. Seat passwords are always deleted.</String>
+  <String Id="PsRemoveData">Also delete the settings and logs</String>
+  <String Id="PsButtonContinue">Continue</String>
+  <String Id="PsButtonCancel">Cancel</String>
+  <String Id="PsButtonBack">&amp;Back</String>
+  <String Id="PsButtonNext">&amp;Next</String>
+  <String Id="PsButtonCancelSetup">Cancel</String>
+</WixLocalization>

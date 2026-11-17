@@ -18,7 +18,7 @@ Helpers: `launch::{SessionLauncher, command_line, env_block}` and `win::process:
 stdin), kill-on-close job `PulsarSeat.Seat.NN`, `autologon::{credentials_for,
 classify_disconnect, after_session_end}` (re-logon policy, never a retry loop after a logon
 failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users`),
-`wts::client_name_for` (`PSEAT-NN`), `experimental_warning_tr()` (Turkish warning),
+`wts::client_name_for` (`PSEAT-NN`), `experimental_warning(lang)` (warning in English or Turkish),
 `backends::termsrv_wrapper::TermsrvWrapperBackend::boot_check()`.
 
 ## Backends

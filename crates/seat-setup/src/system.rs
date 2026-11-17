@@ -101,14 +101,20 @@ pub struct ServiceSpec {
     pub required_privileges: Vec<String>,
 }
 
+/// Service description (UI copy: services.msc; written in the installing process's language).
+pub const SERVICE_DESCRIPTION: seat_core::i18n::Text = seat_core::i18n::Text::new(
+    "Manages several seats (local and remote) on one PC.",
+    "Bir bilgisayarda birden çok koltuğu (yerel ve uzak) yönetir.",
+);
+
 impl ServiceSpec {
     /// Spec 90 §2.7: LocalSystem, own process, demand start, SID type unrestricted,
     /// restart after 5 s / 30 s / 120 s, reset after one day.
     pub fn pulsar_seat(exe: &Path) -> Self {
         Self {
             name: crate::layout::SERVICE_NAME.into(),
-            display_name: seat_core::consts::SERVICE_DISPLAY_NAME.into(),
-            description: "Bir bilgisayarda birden çok koltuğu (yerel ve uzak) yönetir.".into(),
+            display_name: seat_core::consts::SERVICE_DISPLAY_NAME.get().into(),
+            description: SERVICE_DESCRIPTION.get().into(),
             command_line: format!("\"{}\" --service", exe.display()),
             restart_delays_ms: vec![5_000, 30_000, 120_000],
             reset_period_s: 86_400,

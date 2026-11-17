@@ -67,20 +67,30 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use seat_core::i18n::Text;
 use serde::{Deserialize, Serialize};
 
 /// Local account of the seat hosts and the console listener (≤ 20 characters).
 pub const ACCOUNT_NAME: &str = "PulsarSeatHost";
-/// Full name and comment of the account (Turkish UI copy: visible in "lusrmgr").
-pub const ACCOUNT_FULL_NAME: &str = "Pulsar Seat koltuk ana makinesi";
-pub const ACCOUNT_COMMENT: &str = "Pulsar Seat hizmetinin otomatik hesabı. Silmeyin; kaldırma sırasında silinir.";
+/// Full name and comment of the account (UI copy: visible in "lusrmgr"). Written in the
+/// service's language; the comment marks the account as Pulsar's in either language
+/// ([`seat_core::i18n::Text::matches`]).
+pub const ACCOUNT_FULL_NAME: Text = Text::new("Pulsar Seat seat host", "Pulsar Seat koltuk ana makinesi");
+pub const ACCOUNT_COMMENT: Text = Text::new(
+    "Automatic account of the Pulsar Seat service. Do not delete; it is removed at uninstall.",
+    "Pulsar Seat hizmetinin otomatik hesabı. Silmeyin; kaldırma sırasında silinir.",
+);
 /// LSA private data holding the account's password (`L$` = local, never replicated).
 pub const PASSWORD_SECRET: &str = "L$PulsarSeat.HostAccount";
 /// Local group of every host account (shared and per seat); the control pipe has one ACE
 /// for it. Created and removed by the service (comment [`GROUP_COMMENT`]).
 pub const GROUP_NAME: &str = "PulsarSeatHosts";
-/// Comment of the group (Turkish UI copy: visible in "lusrmgr"); marks it as Pulsar's.
-pub const GROUP_COMMENT: &str = "Pulsar Seat koltuk ana makinesi hesapları. Silmeyin; kaldırma sırasında silinir.";
+/// Comment of the group (UI copy: visible in "lusrmgr"); marks it as Pulsar's in either
+/// language.
+pub const GROUP_COMMENT: Text = Text::new(
+    "Pulsar Seat seat host accounts. Do not delete; removed at uninstall.",
+    "Pulsar Seat koltuk ana makinesi hesapları. Silmeyin; kaldırma sırasında silinir.",
+);
 
 /// Local account of one seat's host: [`ACCOUNT_NAME`] + the two-digit seat number
 /// (`PulsarSeatHost02`, 16 characters, under the 20-character SAM limit).

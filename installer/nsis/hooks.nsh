@@ -37,6 +37,55 @@ ${StrLoc}
 !define PS_RUN_KEY "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
 !define PS_SETUP_LOG "$COMMONAPPDATA\Pulsar Seat\logs\setup.log"
 
+; UI copy: English default, Turkish locale (Tauri loads both NSIS languages; NSIS picks
+; the one of the Windows UI language). 1033 = English, 1055 = Turkish. Every id has both
+; (installer/scripts/wix-locales.test.ts). HYPOTHESIS: the hooks are included after the
+; languages are inserted (never built, see the header).
+LangString PsStepFailed 1033 "Pulsar Seat setup step failed"
+LangString PsStepFailed 1055 "Pulsar Seat kurulum adımı başarısız oldu"
+LangString PsStepPartial 1033 "Pulsar Seat setup step partly done"
+LangString PsStepPartial 1055 "Pulsar Seat kurulum adımı kısmen tamamlandı"
+LangString PsChecksBlockedLog 1033 "The pre-flight checks blocked the installation. Details: ${PS_SETUP_LOG}"
+LangString PsChecksBlockedLog 1055 "Ön denetimler kurulumu engelledi. Ayrıntılar: ${PS_SETUP_LOG}"
+LangString PsRebootNeeded 1033 "Restart the PC to finish the changes."
+LangString PsRebootNeeded 1055 "Değişikliklerin tamamlanması için bilgisayarı yeniden başlatın."
+LangString PsServiceStuck 1033 "The Pulsar Seat service did not stop within 60 seconds. Restart the PC and try again."
+LangString PsServiceStuck 1055 "Pulsar Seat hizmeti 60 saniye içinde durmadı. Bilgisayarı yeniden başlatıp tekrar deneyin."
+LangString PsArchX64Only 1033 "This installer is for x64 PCs. Please use the ARM64 package."
+LangString PsArchX64Only 1055 "Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın."
+LangString PsArchArm64Only 1033 "This installer is for ARM64 PCs. Please use the x64 package."
+LangString PsArchArm64Only 1055 "Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın."
+LangString PsOsTooOld 1033 "Pulsar Seat needs Windows 10 22H2 (build 19045) or newer."
+LangString PsOsTooOld 1055 "Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir."
+LangString PsCoexistence 1033 "Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.$\r$\n$\r$\nFirst uninstall that product and restart the PC. Pulsar Seat does not touch that product's files or settings."
+LangString PsCoexistence 1055 "Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.$\r$\n$\r$\nÖnce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz."
+LangString PsTermSrv 1033 "The Remote Desktop service (TermService) was changed by other software:$\r$\n$1$\r$\n$\r$\nPulsar Seat will be installed, but seats based on Remote Desktop will not be used on this PC. Pulsar Seat does not touch this setting."
+LangString PsTermSrv 1055 "Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:$\r$\n$1$\r$\n$\r$\nPulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz."
+LangString PsChecksBlocked 1033 "The pre-flight checks blocked the installation; nothing was installed.$\r$\n$\r$\n$1"
+LangString PsChecksBlocked 1055 "Ön denetimler kurulumu engelledi; hiçbir şey kurulmadı.$\r$\n$\r$\n$1"
+LangString PsChecksFailed 1033 "The pre-flight checks could not run (exit code $0); nothing was installed.$\r$\n$\r$\n$1"
+LangString PsChecksFailed 1055 "Ön denetimler çalıştırılamadı (çıkış kodu $0); hiçbir şey kurulmadı.$\r$\n$\r$\n$1"
+LangString PsChecksWarn 1033 "Pre-flight check warnings:$\r$\n$\r$\n$1$\r$\nContinue the installation?"
+LangString PsChecksWarn 1055 "Ön denetim uyarıları:$\r$\n$\r$\n$1$\r$\nKuruluma devam edilsin mi?"
+LangString PsStopSeats 1033 "Pulsar Seat will be updated. All running seats will stop and the sessions on the seats will close.$\r$\n$\r$\nContinue?"
+LangString PsStopSeats 1055 "Pulsar Seat güncellenecek. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.$\r$\n$\r$\nDevam edilsin mi?"
+LangString PsAskRestorePoint 1033 "Create a restore point before system settings change?"
+LangString PsAskRestorePoint 1055 "Sistem ayarları değiştirilmeden önce bir geri yükleme noktası oluşturulsun mu?"
+LangString PsBadTweaks 1033 "The /TWEAKS value is invalid (only lowercase letters, _ and commas are allowed); no system setting will change."
+LangString PsBadTweaks 1055 "/TWEAKS değeri geçersiz (yalnızca küçük harf, _ ve virgül kullanılabilir); sistem ayarı değiştirilmeyecek."
+LangString PsAskFastStartup 1033 "Turn off fast startup?$\r$\n$\r$\nAll seats start clean after a shutdown. The old setting comes back when Pulsar Seat is removed."
+LangString PsAskFastStartup 1055 "Hızlı başlatma kapatılsın mı?$\r$\n$\r$\nKapatıp açınca tüm koltuklar temiz başlar. Pulsar Seat kaldırılınca eski ayar geri yüklenir."
+LangString PsAskSleep 1033 "Turn off sleep and display off on mains power?$\r$\n$\r$\nWhile nobody works on one seat, the other seats do not sleep. The active power plan changes; it is restored at uninstall."
+LangString PsAskSleep 1055 "Prizdeyken uyku ve ekran kapatma devre dışı bırakılsın mı?$\r$\n$\r$\nBir koltukta kimse çalışmıyorken diğer koltuklar uyumaz. Etkin güç planı değişir; kaldırınca geri yüklenir."
+LangString PsAskDumps 1033 "Switch the system crash dump to a small dump? (Saves disk space.)"
+LangString PsAskDumps 1055 "Sistem çökme dökümü küçük döküme çevrilsin mi? (Diskte yer kazandırır.)"
+LangString PsSetupLog 1033 "Setup log: ${PS_SETUP_LOG}"
+LangString PsSetupLog 1055 "Kurulum günlüğü: ${PS_SETUP_LOG}"
+LangString PsAskRemoveData 1033 "Also delete the seat settings, logs and diagnostic reports (%ProgramData%\Pulsar Seat)?$\r$\n$\r$\nSaved seat passwords are always deleted."
+LangString PsAskRemoveData 1055 "Koltuk ayarları, günlükler ve tanılama raporları (%ProgramData%\Pulsar Seat) da silinsin mi?$\r$\n$\r$\nKayıtlı koltuk parolaları her durumda silinir."
+LangString PsDetails 1033 "Details:"
+LangString PsDetails 1055 "Ayrıntılar:"
+
 ; App API helper DLL for every app architecture this PC runs (same layout as the MSI:
 ; apihelper\<x86|x64[|arm64|arm64ec]>\pulsar-seat-api.dll, crates/seat-compat/apihelper).
 !macro PS_INSTALL_APIHELPER
@@ -73,13 +122,13 @@ Var PsTweaks
   nsExec::ExecToLog '"${PS_SERVICE_EXE}" ${ARGS}'
   Pop $0
   ${If} $0 == "1"
-    DetailPrint "Pulsar Seat kurulum adımı başarısız oldu (${ARGS}). Ayrıntılar: ${PS_SETUP_LOG}"
+    DetailPrint "$(PsStepFailed) (${ARGS}). $(PsDetails) ${PS_SETUP_LOG}"
   ${ElseIf} $0 == "2"
-    DetailPrint "Pulsar Seat kurulum adımı kısmen tamamlandı (${ARGS}). Ayrıntılar: ${PS_SETUP_LOG}"
+    DetailPrint "$(PsStepPartial) (${ARGS}). $(PsDetails) ${PS_SETUP_LOG}"
   ${ElseIf} $0 == "4"
-    MessageBox MB_ICONSTOP|MB_OK "Ön denetimler kurulumu engelledi. Ayrıntılar: ${PS_SETUP_LOG}" /SD IDOK
+    MessageBox MB_ICONSTOP|MB_OK "$(PsChecksBlockedLog)" /SD IDOK
   ${ElseIf} $0 == "3010"
-    DetailPrint "Değişikliklerin tamamlanması için bilgisayarı yeniden başlatın."
+    DetailPrint "$(PsRebootNeeded)"
     SetRebootFlag true
   ${EndIf}
 !macroend
@@ -102,7 +151,7 @@ Var PsTweaks
     ${EndIf}
     IntOp $3 $3 + 1
     ${If} $3 >= 60
-      MessageBox MB_ICONSTOP|MB_OK "Pulsar Seat hizmeti 60 saniye içinde durmadı. Bilgisayarı yeniden başlatıp tekrar deneyin." /SD IDOK
+      MessageBox MB_ICONSTOP|MB_OK "$(PsServiceStuck)" /SD IDOK
       Abort
     ${EndIf}
     Sleep 1000
@@ -142,12 +191,12 @@ FunctionEnd
   ; --- architecture guard (native machine, not the WOW64 variable) ----------------------
   ${If} ${IsNativeARM64}
     !if "${ARCH}" != "arm64"
-      MessageBox MB_ICONSTOP|MB_OK "Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın." /SD IDOK
+      MessageBox MB_ICONSTOP|MB_OK "$(PsArchX64Only)" /SD IDOK
       Abort
     !endif
   ${Else}
     !if "${ARCH}" == "arm64"
-      MessageBox MB_ICONSTOP|MB_OK "Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın." /SD IDOK
+      MessageBox MB_ICONSTOP|MB_OK "$(PsArchArm64Only)" /SD IDOK
       Abort
     !endif
   ${EndIf}
@@ -158,7 +207,7 @@ FunctionEnd
   ReadRegStr $1 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
   ${If} $1 != ""
   ${AndIf} $1 < 19045
-    MessageBox MB_ICONSTOP|MB_OK "Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir." /SD IDOK
+    MessageBox MB_ICONSTOP|MB_OK "$(PsOsTooOld)" /SD IDOK
     Abort
   ${EndIf}
 
@@ -175,7 +224,7 @@ FunctionEnd
   ${EndIf}
   Goto ps_reference_done
   ps_reference_found:
-    MessageBox MB_ICONSTOP|MB_OK "Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.$\r$\n$\r$\nÖnce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz." /SD IDOK
+    MessageBox MB_ICONSTOP|MB_OK "$(PsCoexistence)" /SD IDOK
     Abort
   ps_reference_done:
 
@@ -193,13 +242,13 @@ FunctionEnd
     ${EndIf}
     ; NSIS string comparison is case-insensitive.
     ${If} $2 != "$WINDIR\System32\termsrv.dll"
-      MessageBox MB_ICONEXCLAMATION|MB_OK "Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:$\r$\n$1$\r$\n$\r$\nPulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz." /SD IDOK
+      MessageBox MB_ICONEXCLAMATION|MB_OK "$(PsTermSrv)" /SD IDOK
     ${EndIf}
   ${EndIf}
 
   ; --- full pre-flight gate BEFORE any file is laid down ----------------------------------
   ; Our service binary is extracted to the private plugins dir and asked for the gate
-  ; only (no system change). Exit 4 = refused; stdout = Turkish warning lines.
+  ; only (no system change). Exit 4 = refused; stdout = warning lines (console language).
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
   File "$%PULSAR_SEAT_BIN%\pulsar-seat-service.exe"
@@ -207,14 +256,14 @@ FunctionEnd
   Pop $0
   Pop $1
   ${If} $0 == "4"
-    MessageBox MB_ICONSTOP|MB_OK "Ön denetimler kurulumu engelledi; hiçbir şey kurulmadı.$\r$\n$\r$\n$1" /SD IDOK
+    MessageBox MB_ICONSTOP|MB_OK "$(PsChecksBlocked)" /SD IDOK
     Abort
   ${ElseIf} $0 != "0"
-    MessageBox MB_ICONSTOP|MB_OK "Ön denetimler çalıştırılamadı (çıkış kodu $0); hiçbir şey kurulmadı.$\r$\n$\r$\n$1" /SD IDOK
+    MessageBox MB_ICONSTOP|MB_OK "$(PsChecksFailed)" /SD IDOK
     Abort
   ${ElseIf} $1 != ""
     ; Warnings never stop the install (spec 90 §11 item 4: warn).
-    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "Ön denetim uyarıları:$\r$\n$\r$\n$1$\r$\nKuruluma devam edilsin mi?" /SD IDOK IDOK ps_warn_ok
+    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "$(PsChecksWarn)" /SD IDOK IDOK ps_warn_ok
     Abort
     ps_warn_ok:
   ${EndIf}
@@ -226,7 +275,7 @@ FunctionEnd
     Pop $1
     ${StrLoc} $2 $1 "RUNNING" ">"
     ${If} $2 != ""
-      MessageBox MB_ICONQUESTION|MB_YESNO "Pulsar Seat güncellenecek. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.$\r$\n$\r$\nDevam edilsin mi?" /SD IDYES IDYES ps_stop_ok
+      MessageBox MB_ICONQUESTION|MB_YESNO "$(PsStopSeats)" /SD IDYES IDYES ps_stop_ok
       Abort
       ps_stop_ok:
     ${EndIf}
@@ -254,7 +303,7 @@ FunctionEnd
   ${IfNot} ${Errors}
     StrCpy $PsRestore "1"
   ${Else}
-    MessageBox MB_ICONQUESTION|MB_YESNO "Sistem ayarları değiştirilmeden önce bir geri yükleme noktası oluşturulsun mu?" /SD IDNO IDNO ps_no_restore
+    MessageBox MB_ICONQUESTION|MB_YESNO "$(PsAskRestorePoint)" /SD IDNO IDNO ps_no_restore
     StrCpy $PsRestore "1"
     ps_no_restore:
   ${EndIf}
@@ -266,7 +315,7 @@ FunctionEnd
     Call PsValidTweaks
     Pop $1
     ${If} $1 != "1"
-      MessageBox MB_ICONEXCLAMATION|MB_OK "/TWEAKS değeri geçersiz (yalnızca küçük harf, _ ve virgül kullanılabilir); sistem ayarı değiştirilmeyecek." /SD IDOK
+      MessageBox MB_ICONEXCLAMATION|MB_OK "$(PsBadTweaks)" /SD IDOK
       StrCpy $PsTweaks ""
     ${EndIf}
   ${Else}
@@ -276,14 +325,14 @@ FunctionEnd
     ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Power" "HiberbootEnabled"
     ${If} ${Errors}
     ${OrIf} $1 != "0"
-      MessageBox MB_ICONQUESTION|MB_YESNO "Hızlı başlatma kapatılsın mı?$\r$\n$\r$\nKapatıp açınca tüm koltuklar temiz başlar. Pulsar Seat kaldırılınca eski ayar geri yüklenir." /SD IDNO IDNO ps_no_fast
+      MessageBox MB_ICONQUESTION|MB_YESNO "$(PsAskFastStartup)" /SD IDNO IDNO ps_no_fast
       StrCpy $PsTweaks "$PsTweaksfast_startup_off,"
       ps_no_fast:
     ${EndIf}
-    MessageBox MB_ICONQUESTION|MB_YESNO "Prizdeyken uyku ve ekran kapatma devre dışı bırakılsın mı?$\r$\n$\r$\nBir koltukta kimse çalışmıyorken diğer koltuklar uyumaz. Etkin güç planı değişir; kaldırınca geri yüklenir." /SD IDNO IDNO ps_no_sleep
+    MessageBox MB_ICONQUESTION|MB_YESNO "$(PsAskSleep)" /SD IDNO IDNO ps_no_sleep
     StrCpy $PsTweaks "$PsTweakssleep_off,"
     ps_no_sleep:
-    MessageBox MB_ICONQUESTION|MB_YESNO "Sistem çökme dökümü küçük döküme çevrilsin mi? (Diskte yer kazandırır.)" /SD IDNO IDNO ps_no_dump
+    MessageBox MB_ICONQUESTION|MB_YESNO "$(PsAskDumps)" /SD IDNO IDNO ps_no_dump
     StrCpy $PsTweaks "$PsTweakssmall_crash_dumps,"
     ps_no_dump:
   ${EndIf}
@@ -309,7 +358,7 @@ FunctionEnd
 
   ; Warnings from the install step (also shown by the manager on its first start).
   ${If} ${FileExists} "${PS_SETUP_LOG}"
-    DetailPrint "Kurulum günlüğü: ${PS_SETUP_LOG}"
+    DetailPrint "$(PsSetupLog)"
   ${EndIf}
 
   ; --- manager autostart in every interactive session ---------------------------------
@@ -339,7 +388,7 @@ FunctionEnd
   ${IfNot} ${Errors}
     StrCpy $R3 "1"
   ${Else}
-    MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 "Koltuk ayarları, günlükler ve tanılama raporları (%ProgramData%\Pulsar Seat) da silinsin mi?$\r$\n$\r$\nKayıtlı koltuk parolaları her durumda silinir." /SD IDNO IDNO ps_keep_data
+    MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON2 "$(PsAskRemoveData)" /SD IDNO IDNO ps_keep_data
     StrCpy $R3 "1"
     ps_keep_data:
   ${EndIf}

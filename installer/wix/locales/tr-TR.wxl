@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Strings of installer/wix/PulsarSeat.wxs (`!(loc.Id)`), culture tr-TR. Same ids in every
+     locale file (installer/scripts/wix-locales.test.ts). Tauri adds its own default strings
+     for ids this file does not set (bundle.windows.wix.language.<culture>.localePath). -->
+<WixLocalization Culture="tr-tr" xmlns="http://schemas.microsoft.com/wix/2006/localization">
+  <String Id="PsArchArm64Only">Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın.</String>
+  <String Id="PsArchX64Only">Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın.</String>
+  <String Id="PsCoexistence">Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.&#13;&#10;&#13;&#10;Pulsar Seat'i kurmak için önce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.</String>
+  <String Id="PsOsTooOld">Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir.</String>
+  <String Id="PsNeedsAdmin">Pulsar Seat'i kurmak için yönetici hakları gerekir.</String>
+  <String Id="PsBadTweaks">PSTWEAKS geçersiz: yalnızca küçük harf, alt çizgi ve virgül kullanılabilir.</String>
+  <String Id="PsBadRestorePoint">PSRESTOREPOINT yalnızca 0 ya da 1 olabilir.</String>
+  <String Id="PsBadDrivers">PULSARDRIVERS geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.</String>
+  <String Id="PsBadConsent">PULSARCONSENT geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.</String>
+  <String Id="PsBadRemoveUserData">REMOVEUSERDATA yalnızca 0 ya da 1 olabilir.</String>
+  <String Id="PsServiceDisplayName">Pulsar Seat Hizmeti</String>
+  <String Id="PsServiceDescription">Bir bilgisayarda birden çok koltuğu (ekran, klavye, fare, ses) yönetir.</String>
+  <String Id="PsStopSeatsText">Pulsar Seat hizmeti güncellenecek, onarılacak ya da kaldırılacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.&#13;&#10;&#13;&#10;Devam edilsin mi?</String>
+  <String Id="PsTermSrvText">Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz.</String>
+  <String Id="PsSetupTitle">[ProductName] Kurulumu</String>
+  <String Id="PsOptionsTitle">{\WixUI_Font_Title}İsteğe bağlı sistem ayarları</String>
+  <String Id="PsOptionsDescription">Hiçbiri zorunlu değil. Yapılan her değişiklik kaydedilir ve kaldırırken geri alınır.</String>
+  <String Id="PsOptRestorePoint">Sistem ayarları değişmeden önce bir Sistem Geri Yükleme noktası oluştur</String>
+  <String Id="PsOptFastStartup">Hızlı başlatmayı kapat (koltuk aygıtları her açılışta doğru tanınır)</String>
+  <String Id="PsOptSleep">Etkin güç planında uyku modunu kapat (koltuklar kullanılırken bilgisayar uyumaz)</String>
+  <String Id="PsOptDumps">Çökme dökümünü küçük döküm olarak ayarla (disk alanından tasarruf)</String>
+  <String Id="PsOptNote">İşaretlenmeyen ayarlara dokunulmaz.</String>
+  <String Id="PsRemoveTitle">{\WixUI_Font_Title}Ayarlar ve günlükler</String>
+  <String Id="PsRemoveDescription">Pulsar Seat kaldırılırken kayıtlı verileriniz ne olsun?</String>
+  <String Id="PsRemoveText">Koltuk yapılandırması, aygıt atamaları ve günlükler %ProgramData%\Pulsar Seat klasöründedir. Saklarsanız Pulsar Seat yeniden kurulduğunda kaldığı yerden devam eder. Koltuk parolaları her durumda silinir.</String>
+  <String Id="PsRemoveData">Ayarları ve günlükleri de sil</String>
+  <String Id="PsButtonContinue">Devam</String>
+  <String Id="PsButtonCancel">Vazgeç</String>
+  <String Id="PsButtonBack">&amp;Geri</String>
+  <String Id="PsButtonNext">&amp;İleri</String>
+  <String Id="PsButtonCancelSetup">İptal</String>
+</WixLocalization>

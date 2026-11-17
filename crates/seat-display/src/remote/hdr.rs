@@ -36,7 +36,7 @@ pub struct HdrCaps {
     pub server: bool,
 }
 
-/// Why a seat runs SDR (stable snake_case codes; the manager maps them to Turkish text).
+/// Why a seat runs SDR (stable snake_case codes; the manager maps them to localized text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HdrUnavailable {

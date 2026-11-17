@@ -98,11 +98,11 @@
                       Name="PROCESSOR_ARCHITECTURE" />
     </Property>
 <?if $(sys.BUILDARCH) = "arm64" ?>
-    <Condition Message="Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın.">
+    <Condition Message="!(loc.PsArchArm64Only)">
       <![CDATA[Installed OR PSNATIVEARCH ~= "ARM64"]]>
     </Condition>
 <?else ?>
-    <Condition Message="Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın.">
+    <Condition Message="!(loc.PsArchX64Only)">
       <![CDATA[Installed OR PSNATIVEARCH ~= "AMD64"]]>
     </Condition>
 <?endif ?>
@@ -116,7 +116,7 @@
       <RegistrySearch Id="PsRefDriverService" Root="HKLM" Win64="yes" Type="raw"
                       Key="SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" Name="Type" />
     </Property>
-    <Condition Message="Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.&#13;&#10;&#13;&#10;Pulsar Seat'i kurmak için önce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.">
+    <Condition Message="!(loc.PsCoexistence)">
       <![CDATA[Installed OR (NOT PSREFSEATSERVICE AND NOT PSREFDRIVERSERVICE)]]>
     </Condition>
 
@@ -125,11 +125,11 @@
       <RegistrySearch Id="PsOsBuild" Root="HKLM" Win64="yes" Type="raw"
                       Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" />
     </Property>
-    <Condition Message="Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir.">
+    <Condition Message="!(loc.PsOsTooOld)">
       <![CDATA[Installed OR (PSOSBUILD >= "19045" AND PSOSBUILD <> "")]]>
     </Condition>
 
-    <Condition Message="Pulsar Seat'i kurmak için yönetici hakları gerekir.">
+    <Condition Message="!(loc.PsNeedsAdmin)">
       <![CDATA[Privileged]]>
     </Condition>
 
@@ -141,16 +141,16 @@
     <!-- Not in CDATA: `&#9;` must be a real tab character in the condition (inside CDATA it
          would be the literal text "&#9;"). The service's own parser
          (seat-compat valid_tweak_list: a-z, _ and , only) stays the real validator. -->
-    <Condition Message="PSTWEAKS geçersiz: yalnızca küçük harf, alt çizgi ve virgül kullanılabilir.">Installed OR NOT (PSTWEAKS &gt;&lt; " " OR PSTWEAKS &gt;&lt; "&#9;" OR PSTWEAKS &gt;&lt; "-" OR PSTWEAKS &gt;&lt; "/" OR PSTWEAKS &gt;&lt; "\" OR PSTWEAKS &gt;&lt; "=" OR PSTWEAKS &gt;&lt; "[" OR PSTWEAKS &gt;&lt; "]")</Condition>
-    <Condition Message="PSRESTOREPOINT yalnızca 0 ya da 1 olabilir.">
+    <Condition Message="!(loc.PsBadTweaks)">Installed OR NOT (PSTWEAKS &gt;&lt; " " OR PSTWEAKS &gt;&lt; "&#9;" OR PSTWEAKS &gt;&lt; "-" OR PSTWEAKS &gt;&lt; "/" OR PSTWEAKS &gt;&lt; "\" OR PSTWEAKS &gt;&lt; "=" OR PSTWEAKS &gt;&lt; "[" OR PSTWEAKS &gt;&lt; "]")</Condition>
+    <Condition Message="!(loc.PsBadRestorePoint)">
       <![CDATA[Installed OR NOT PSRESTOREPOINT OR PSRESTOREPOINT = "0" OR PSRESTOREPOINT = "1"]]>
     </Condition>
     <!-- PULSARDRIVERS / PULSARCONSENT reach a SYSTEM command line (quoted argument): ids,
          commas and "-" / "_" only; the same characters as for PSTWEAKS are refused here
          (except "-", which driver ids use; seat-setup's parser refuses unknown ids). -->
-    <Condition Message="PULSARDRIVERS geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.">Installed OR NOT (PULSARDRIVERS &gt;&lt; " " OR PULSARDRIVERS &gt;&lt; "&#9;" OR PULSARDRIVERS &gt;&lt; "/" OR PULSARDRIVERS &gt;&lt; "\" OR PULSARDRIVERS &gt;&lt; "=" OR PULSARDRIVERS &gt;&lt; "[" OR PULSARDRIVERS &gt;&lt; "]")</Condition>
-    <Condition Message="PULSARCONSENT geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.">Installed OR NOT (PULSARCONSENT &gt;&lt; " " OR PULSARCONSENT &gt;&lt; "&#9;" OR PULSARCONSENT &gt;&lt; "/" OR PULSARCONSENT &gt;&lt; "\" OR PULSARCONSENT &gt;&lt; "=" OR PULSARCONSENT &gt;&lt; "[" OR PULSARCONSENT &gt;&lt; "]")</Condition>
-    <Condition Message="REMOVEUSERDATA yalnızca 0 ya da 1 olabilir.">
+    <Condition Message="!(loc.PsBadDrivers)">Installed OR NOT (PULSARDRIVERS &gt;&lt; " " OR PULSARDRIVERS &gt;&lt; "&#9;" OR PULSARDRIVERS &gt;&lt; "/" OR PULSARDRIVERS &gt;&lt; "\" OR PULSARDRIVERS &gt;&lt; "=" OR PULSARDRIVERS &gt;&lt; "[" OR PULSARDRIVERS &gt;&lt; "]")</Condition>
+    <Condition Message="!(loc.PsBadConsent)">Installed OR NOT (PULSARCONSENT &gt;&lt; " " OR PULSARCONSENT &gt;&lt; "&#9;" OR PULSARCONSENT &gt;&lt; "/" OR PULSARCONSENT &gt;&lt; "\" OR PULSARCONSENT &gt;&lt; "=" OR PULSARCONSENT &gt;&lt; "[" OR PULSARCONSENT &gt;&lt; "]")</Condition>
+    <Condition Message="!(loc.PsBadRemoveUserData)">
       <![CDATA[NOT REMOVEUSERDATA OR REMOVEUSERDATA = "0" OR REMOVEUSERDATA = "1"]]>
     </Condition>
 
@@ -190,8 +190,8 @@
               Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-service.exe" />
         <ServiceInstall Id="PulsarSeatServiceInstall"
                         Name="PulsarSeat"
-                        DisplayName="Pulsar Seat Hizmeti"
-                        Description="Bir bilgisayarda birden çok koltuğu (ekran, klavye, fare, ses) yönetir."
+                        DisplayName="!(loc.PsServiceDisplayName)"
+                        Description="!(loc.PsServiceDescription)"
                         Type="ownProcess"
                         Start="auto"
                         ErrorControl="normal"
@@ -440,22 +440,22 @@
            /qn and /qb stop them silently (documented in installer/README.md). -->
       <Dialog Id="PsStopSeatsDlg" Width="320" Height="130" Title="[ProductName]">
         <Control Id="Text" Type="Text" X="15" Y="15" Width="290" Height="70"
-                 Text="Pulsar Seat hizmeti güncellenecek, onarılacak ya da kaldırılacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.&#13;&#10;&#13;&#10;Devam edilsin mi?" />
-        <Control Id="Yes" Type="PushButton" X="160" Y="100" Width="70" Height="18" Default="yes" Text="Devam">
+                 Text="!(loc.PsStopSeatsText)" />
+        <Control Id="Yes" Type="PushButton" X="160" Y="100" Width="70" Height="18" Default="yes" Text="!(loc.PsButtonContinue)">
           <Publish Event="EndDialog" Value="Return">1</Publish>
         </Control>
-        <Control Id="No" Type="PushButton" X="236" Y="100" Width="70" Height="18" Cancel="yes" Text="Vazgeç">
+        <Control Id="No" Type="PushButton" X="236" Y="100" Width="70" Height="18" Cancel="yes" Text="!(loc.PsButtonCancel)">
           <Publish Event="EndDialog" Value="Exit">1</Publish>
         </Control>
       </Dialog>
       <!-- Non-blocking warning (spec 90 §11 item 4: warn about other multi-seat). -->
       <Dialog Id="PsTermSrvDlg" Width="320" Height="140" Title="[ProductName]">
         <Control Id="Text" Type="Text" X="15" Y="15" Width="290" Height="80"
-                 Text="Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz." />
-        <Control Id="Ok" Type="PushButton" X="160" Y="110" Width="70" Height="18" Default="yes" Text="Devam">
+                 Text="!(loc.PsTermSrvText)" />
+        <Control Id="Ok" Type="PushButton" X="160" Y="110" Width="70" Height="18" Default="yes" Text="!(loc.PsButtonContinue)">
           <Publish Event="EndDialog" Value="Return">1</Publish>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="236" Y="110" Width="70" Height="18" Cancel="yes" Text="Vazgeç">
+        <Control Id="Cancel" Type="PushButton" X="236" Y="110" Width="70" Height="18" Cancel="yes" Text="!(loc.PsButtonCancel)">
           <Publish Event="EndDialog" Value="Exit">1</Publish>
         </Control>
       </Dialog>
@@ -463,29 +463,29 @@
            choices (default off). Wizard (WixUI_InstallDir, Tauri's template):
            InstallDirDlg -> PsOptionsDlg -> VerifyReadyDlg. The later Publish (higher Order)
            of a NewDialog event wins over the built-in one. -->
-      <Dialog Id="PsOptionsDlg" Width="370" Height="270" Title="[ProductName] Kurulumu">
+      <Dialog Id="PsOptionsDlg" Width="370" Height="270" Title="!(loc.PsSetupTitle)">
         <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
-                 Text="{\WixUI_Font_Title}İsteğe bağlı sistem ayarları" />
+                 Text="!(loc.PsOptionsTitle)" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
-                 Text="Hiçbiri zorunlu değil. Yapılan her değişiklik kaydedilir ve kaldırırken geri alınır." />
+                 Text="!(loc.PsOptionsDescription)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="RestorePoint" Type="CheckBox" X="20" Y="60" Width="330" Height="18" Property="PSRESTOREPOINT"
-                 CheckBoxValue="1" Text="Sistem ayarları değişmeden önce bir Sistem Geri Yükleme noktası oluştur" />
+                 CheckBoxValue="1" Text="!(loc.PsOptRestorePoint)" />
         <Control Id="FastStartup" Type="CheckBox" X="20" Y="90" Width="330" Height="18" Property="PSUI_FASTSTARTUP"
-                 CheckBoxValue="1" Text="Hızlı başlatmayı kapat (koltuk aygıtları her açılışta doğru tanınır)">
+                 CheckBoxValue="1" Text="!(loc.PsOptFastStartup)">
           <Condition Action="hide"><![CDATA[PSHIBERBOOT = "#0"]]></Condition>
         </Control>
         <Control Id="Sleep" Type="CheckBox" X="20" Y="115" Width="330" Height="18" Property="PSUI_SLEEP"
-                 CheckBoxValue="1" Text="Etkin güç planında uyku modunu kapat (koltuklar kullanılırken bilgisayar uyumaz)" />
+                 CheckBoxValue="1" Text="!(loc.PsOptSleep)" />
         <Control Id="Dumps" Type="CheckBox" X="20" Y="140" Width="330" Height="18" Property="PSUI_DUMPS"
-                 CheckBoxValue="1" Text="Çökme dökümünü küçük döküm olarak ayarla (disk alanından tasarruf)" />
+                 CheckBoxValue="1" Text="!(loc.PsOptDumps)" />
         <Control Id="Note" Type="Text" X="20" Y="175" Width="330" Height="40" NoPrefix="yes"
-                 Text="İşaretlenmeyen ayarlara dokunulmaz." />
+                 Text="!(loc.PsOptNote)" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Geri">
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.PsButtonBack)">
           <Publish Event="NewDialog" Value="InstallDirDlg">1</Publish>
         </Control>
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;İleri">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.PsButtonNext)">
           <!-- Rebuild PSTWEAKS from the boxes ("{}" clears it; the service ignores the
                trailing comma). Fast startup only while it is on. -->
           <Publish Property="PSTWEAKS" Value="{}" Order="1">1</Publish>
@@ -494,7 +494,7 @@
           <Publish Property="PSTWEAKS" Value="[PSTWEAKS]small_crash_dumps," Order="4">PSUI_DUMPS</Publish>
           <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="5">1</Publish>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="İptal">
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.PsButtonCancelSetup)">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>
@@ -505,24 +505,24 @@
            Full UI only (MaintenanceTypeDlg -> Remove -> PsRemoveDataDlg -> VerifyReadyDlg).
            Removal from Settings runs with reduced UI and keeps the data unless
            REMOVEUSERDATA=1 is given; the update download cache is deleted always. -->
-      <Dialog Id="PsRemoveDataDlg" Width="370" Height="270" Title="[ProductName] Kurulumu">
+      <Dialog Id="PsRemoveDataDlg" Width="370" Height="270" Title="!(loc.PsSetupTitle)">
         <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
-                 Text="{\WixUI_Font_Title}Ayarlar ve günlükler" />
+                 Text="!(loc.PsRemoveTitle)" />
         <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
-                 Text="Pulsar Seat kaldırılırken kayıtlı verileriniz ne olsun?" />
+                 Text="!(loc.PsRemoveDescription)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="Text" Type="Text" X="20" Y="60" Width="330" Height="50" NoPrefix="yes"
-                 Text="Koltuk yapılandırması, aygıt atamaları ve günlükler %ProgramData%\Pulsar Seat klasöründedir. Saklarsanız Pulsar Seat yeniden kurulduğunda kaldığı yerden devam eder. Koltuk parolaları her durumda silinir." />
+                 Text="!(loc.PsRemoveText)" />
         <Control Id="RemoveData" Type="CheckBox" X="20" Y="120" Width="330" Height="18" Property="REMOVEUSERDATA"
-                 CheckBoxValue="1" Text="Ayarları ve günlükleri de sil" />
+                 CheckBoxValue="1" Text="!(loc.PsRemoveData)" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="&amp;Geri">
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.PsButtonBack)">
           <Publish Event="NewDialog" Value="MaintenanceTypeDlg">1</Publish>
         </Control>
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="&amp;İleri">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.PsButtonNext)">
           <Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="İptal">
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.PsButtonCancelSetup)">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>

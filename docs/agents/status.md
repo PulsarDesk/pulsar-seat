@@ -1940,3 +1940,51 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     HYPOTHESIS (list in the display-gpu entry above); new HYPOTHESIS: GPU preference writes at
     logon together with the per-seat kiosk users (kiosk accounts get `UserGpuPreferences` in
     their own hive).
+- 2026-11-17 (parity round, package i18n, on main). Umbrella rule "English everywhere,
+  Turkish only as an app i18n locale". Built and unit-tested; nothing ran on hardware
+  (runtime claims below are HYPOTHESIS):
+  - **Manager:** English default UI, Turkish locale with the same keys:
+    `apps/manager/src/lib/locales/en.ts` (key set, type `Locale`) + `tr.ts`; `i18n.ts`
+    keeps the helpers and fills the exported tables with `applyLocale`. Language = stored
+    choice (Basic settings > Appearance > Language: Windows display language / English /
+    Türkçe, `localStorage`) else the Windows user UI language (Tauri `ui_language`, then
+    `navigator.languages`); a change reloads the window and tells the shell
+    (`set_ui_language`). Strings moved out of components / helpers (describe, update,
+    pictures, hotkey key names, demo data, kiosk / store seat prefixes, placeholders,
+    avatar upper case, update dates). Tests in English plus locale key parity, no Turkish
+    letters in `en`, Turkish switch tests.
+  - **Rust:** `seat_core::i18n` (`Lang`, `Text { en, tr }`, `{n}` fill, `check_table`,
+    `text_table!`, `Text::matches`; `PULSAR_SEAT_LANG` else `GetUserDefaultUILanguage`).
+    Localized: seat agent tray + notices, kiosk shell bar, RDP connecting texts, presenter
+    idle text, Event Log, service CLI, install / uninstall console, host / kiosk account full
+    names and comments (recognised in either language), SCM / setup service descriptions and
+    display name, firewall rule descriptions, power request reason, reboot messages, stream
+    default app name, input fallback names, restore point name, tweak help, known-app
+    advice, audio state copy, preflight titles (console), Tauri shell (`src-tauri/src/copy.rs`:
+    tray menu, window titles, file dialogs). English only now: preflight / coexistence
+    details, setup log (`BLOCKED` / `WARNING`, English titles), redacted log line
+    (`[line hidden]`).
+  - **Experimental warning:** `crates/seat-session/src/termwrap/warning_en.txt` next to
+    `warning_tr.txt` (version unchanged: same substance); manager `WARNING_EN` / `WARNING_TR`
+    checked word for word; the remote status sends `warning_text` (English) and
+    `warning_text_tr`.
+  - **Credential provider:** `credprov/src/copy.h` (tile labels, statuses, "Switch to seat N" /
+    "Koltuk N'ye geç"); build-credprov.ps1 ARM64 (ARM64X) + ARM64EC self-test + x64 clean,
+    self-test 0 failed.
+  - **Installer:** `installer/wix/locales/{en-US,tr-TR}.wxl` with every fragment string
+    (`!(loc.Id)`), `tauri-bundle.json` builds `en-US`, `build-installer.ps1 -Language tr-TR`
+    (`bundle-config.ts --language`) a Turkish MSI; NSIS hooks LangStrings 1033 / 1055 and
+    languages English + Turkish; `installer/scripts/wix-locales.test.ts`.
+  - **Docs:** rules.md copy rule, AGENTS.md, CLEANROOM.md, architecture.md "UI language"
+    section, READMEs; `docs/troubleshooting.md` in English (new section 11 Language), the
+    Turkish copy is `docs/troubleshooting.tr.md`.
+  - Gates: cargo test --workspace 1739 passed / 6 ignored, clippy -D warnings aarch64 host +
+    x86_64-pc-windows-msvc clean, shim tests + check x86_64 / i686 / aarch64, manager 214 tests /
+    check 0 errors / build, bun test installer/scripts 58. No test deleted (tests that
+    asserted Turkish copy now assert English or switch to the Turkish locale; agent / termwrap
+    tests renamed).
+  - Open (HYPOTHESIS, hardware / builds not run here): WebView2 reports the Windows display
+    language; the service (LocalSystem) and LogonUI pick the machine default UI language;
+    tray relabel at runtime; Tauri merges its default WiX strings with our locale file and
+    names the MSI per culture; NSIS LangStrings with numeric ids where the hooks are
+    included.

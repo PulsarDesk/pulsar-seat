@@ -62,20 +62,20 @@ fn main() {
     let cmd = match cli::parse(&args) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{e}\n{}", cli::USAGE);
+            eprintln!("{e}\n{}", cli::USAGE.get());
             // 1, never 2: the installers read 2 as "partial" (installer/README.md).
             std::process::exit(1);
         }
     };
     let code = match cmd {
         Command::Help => {
-            println!("{}", cli::USAGE);
+            println!("{}", cli::USAGE.get());
             0
         }
         Command::Service => match win::scm::run_dispatcher() {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("Hizmet denetimi başlatılamadı: {e} (ön planda çalıştırmak için --console kullanın)");
+                eprintln!("{}", cli::copy::SERVICE_DISPATCH_FAILED.fmt(&[&e]));
                 1
             }
         },
@@ -114,15 +114,15 @@ fn main() {
         Command::Enable => report(
             win::scm::set_start(true)
                 .and_then(|_| cli::client::call(seat_proto::RequestBody::SetEnabled { enabled: true }).map(|_| ())),
-            "etkinleştirildi",
+            &cli::copy::ENABLED,
         ),
         Command::Disable => report(
             cli::client::call(seat_proto::RequestBody::SetEnabled { enabled: false }).map(|_| ()),
-            "devre dışı bırakıldı",
+            &cli::copy::DISABLED,
         ),
         Command::Reset => report(
             cli::client::call(seat_proto::RequestBody::ResetConfig { confirm: true }).map(|_| ()),
-            "varsayılanlara döndürüldü",
+            &cli::copy::RESET,
         ),
         Command::Status => match cli::client::call(seat_proto::RequestBody::GetStatus) {
             Ok(seat_proto::ResponseBody::Status(s)) => {
@@ -154,14 +154,14 @@ fn main() {
 }
 
 #[cfg(windows)]
-fn report(r: Result<(), String>, ok: &str) -> i32 {
+fn report(r: Result<(), String>, ok: &seat_core::i18n::Text) -> i32 {
     match r {
         Ok(()) => {
-            println!("Pulsar Seat {ok}.");
+            println!("{}", ok.get());
             0
         }
         Err(e) => {
-            eprintln!("Hata: {e}");
+            eprintln!("{}", cli::copy::ERROR.fmt(&[&e]));
             1
         }
     }

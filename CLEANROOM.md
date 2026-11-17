@@ -37,7 +37,7 @@ they analysed. The rules below apply to both.
 
 - No third-party names, logos, icons, images, fonts or UI copy are used. The layout and the
   flow of the screens may follow the spec; every visual asset and every string is ours.
-  UI copy is Turkish (Pulsar rule).
+  UI copy is English with a Turkish locale (Pulsar rule).
 - Code from open-source projects (for example GPL-3.0 code from Sunshine) may be used under
   a GPL-3-compatible licence and must keep its notices (`installer/licenses/`, package
   READMEs).

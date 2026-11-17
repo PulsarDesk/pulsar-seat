@@ -1,99 +1,103 @@
-# Pulsar Seat — sorun giderme ve kurtarma
+# Pulsar Seat — troubleshooting and recovery
 
-Bu sayfa kullanıcılar içindir. Pulsar Seat'in kendi sürücüleri (klavye/fare süzgeci, sanal
-ekran, USB depolama kapısı) **imzalanana kadar yüklenmez**; bugünkü sürümde bu adımlara
-normalde gerek yoktur. Sürücüler imzalanıp kurulduktan sonra bir şey ters giderse buradaki
-adımlar bilgisayarı eski hâline döndürür.
+> Turkish copy: [troubleshooting.tr.md](troubleshooting.tr.md). Names in quotes are the
+> English labels of the manager; with the Turkish locale the manager shows the Turkish ones.
 
-Adlar (hepsi Pulsar Seat'e aittir):
+This page is for users. Pulsar Seat's own drivers (keyboard/mouse filter, virtual display,
+USB storage gate) **do not load until they are signed**; with today's version these steps
+are normally not needed. Once the drivers are signed and installed, the steps here bring
+the PC back to its old state if something goes wrong.
 
-| Parça | Hizmet adı | Sürücü paketi (INF) | Dosya |
+Names (all of them belong to Pulsar Seat):
+
+| Part | Service name | Driver package (INF) | File |
 | --- | --- | --- | --- |
-| Klavye / fare / HID süzgeci | `PulsarSeatInput` | `seat-input-filter.inf` | `seatinput.sys` |
-| USB depolama kapısı (minifilter) | `PulsarSeatStorageGate` | `seat-storage-filter.inf` | `pulsarseatstoragegate.sys` |
-| Sanal ekran (IddCx) | aygıt `Root\PulsarSeatIdd` (ek ekran kartı başına bir `SWD\PulsarSeatIdd\gpuN`; hizmet durunca kaybolur) | `seat-idd.inf` | `seat-idd.dll` |
-| Pulsar Seat hizmeti | `PulsarSeat` | — | `pulsar-seat-service.exe` |
-| Oturum açma bileşeni (kimlik sağlayıcı + süzgeç) | — | — | `pulsar-seat-credprov.dll` |
+| Keyboard / mouse / HID filter | `PulsarSeatInput` | `seat-input-filter.inf` | `seatinput.sys` |
+| USB storage gate (minifilter) | `PulsarSeatStorageGate` | `seat-storage-filter.inf` | `pulsarseatstoragegate.sys` |
+| Virtual display (IddCx) | device `Root\PulsarSeatIdd` (one `SWD\PulsarSeatIdd\gpuN` per extra graphics card; it goes away when the service stops) | `seat-idd.inf` | `seat-idd.dll` |
+| Pulsar Seat service | `PulsarSeat` | — | `pulsar-seat-service.exe` |
+| Sign-in component (credential provider + filter) | — | — | `pulsar-seat-credprov.dll` |
 
-Sürücü deposundaki adı Windows `oem<N>.inf` olarak verir (`N` her bilgisayarda farklıdır).
+Windows names the package in the driver store `oem<N>.inf` (`N` differs on every PC).
 
-Bilinen sınırlar (görüntü):
+Known limits (display):
 
-- Kopya korumalı (HDCP) görüntü 2. ve sonraki koltuklarda gösterilmez (ör. bazı film
-  uygulamaları siyah ekran gösterir). Bu bir arıza değildir; bu koltukların ekranı sanal
-  ekran ve Pulsar Seat'in kendi gösterimi üzerinden gelir.
-- HDR ve değişken yenileme (VRR) yalnızca ekrandan "Görüntü çıkışları" penceresinde
-  açılırsa ve ekran destekliyorsa çalışır. Koltuğun ekranı masaüstünden çıkarılmamışsa
-  (yedek gösterim) HDR yoktur, görüntü SDR olarak gösterilir.
-- Ekran kartı tercihi Windows'un grafik ayarlarındaki kaydı kullanır; koltuk kullanıcısı
-  oturum açınca yazılır, Pulsar Seat kapatılınca geri alınır. Kullanıcı aynı programı
-  Windows ayarlarında değiştirirse onun seçimi korunur.
+- Copy-protected (HDCP) content is not shown on seat 2 and later (for example some film
+  apps show a black screen). This is not a fault; the picture of these seats comes through
+  the virtual display and Pulsar Seat's own presentation.
+- HDR and variable refresh (VRR) only work when they are turned on for the monitor in the
+  "Display outputs" window and the monitor supports them. If the seat's monitor was not
+  taken off the desktop (fallback presentation), there is no HDR and the picture is shown
+  as SDR.
+- The graphics card preference uses the entry of the Windows graphics settings; it is
+  written when the seat user signs in and undone when Pulsar Seat is turned off. If the user
+  changes the same program in the Windows settings, their choice is kept.
 
-## 1. Windows açılıyor: önce Pulsar Seat'i kapatın
+## 1. Windows starts: turn Pulsar Seat off first
 
-1. Yönetici uygulamasında **Pulsar Seat'i kapatın** (ana anahtar). Bütün aygıtlar 1. koltuğa
-   döner, ek koltuklar kapanır, isteğe bağlı sistem ayarları geri alınır.
-2. Olmazsa yönetici olarak açılmış bir komut isteminde:
+1. In the manager, **turn Pulsar Seat off** (main switch). All devices go back to seat 1,
+   the extra seats close, optional system settings are undone.
+2. If that does not work, in a command prompt opened as administrator:
 
    ```bat
    "C:\Program Files\Pulsar Seat\pulsar-seat-service.exe" disable
    sc stop PulsarSeat
    ```
 
-## 2. Windows açılıyor: sürücüleri kaldırın (pnputil)
+## 2. Windows starts: remove the drivers (pnputil)
 
-Yönetici komut isteminde:
+In an administrator command prompt:
 
 ```bat
 pnputil /enum-drivers
 ```
 
-Listede **Özgün Ad** (Original Name) `seat-input-filter.inf`, `seat-storage-filter.inf` ya da
-`seat-idd.inf` olan satırların **Yayımlanan Ad** (Published Name) değerini (`oem<N>.inf`) not
-edin ve her biri için:
+Note the **Published Name** (`oem<N>.inf`) of the rows whose **Original Name** is
+`seat-input-filter.inf`, `seat-storage-filter.inf` or `seat-idd.inf`, and for each one:
 
 ```bat
 pnputil /delete-driver oem<N>.inf /uninstall
 ```
 
-`/uninstall` süzgeç kaydını yalnızca Pulsar Seat'in eklediği aygıtlardan siler; başka
-yazılımların süzgeçlerine dokunmaz. Ardından bilgisayarı yeniden başlatın.
+`/uninstall` removes the filter entry only from the devices Pulsar Seat added it to; it does
+not touch the filters of other software. Then restart the PC.
 
-## 3. Klavye ya da fare çalışmıyor ama Windows açılıyor
+## 3. The keyboard or mouse does not work but Windows starts
 
-Klavye/fare süzgecinin bir **güvenli geçiş** anahtarı vardır: açıkken süzgeç hiçbir şeyi
-yönlendirmez, her tuş ve fare hareketi normal yoluna gider.
+The keyboard/mouse filter has a **pass-through** switch: while it is on, the filter routes
+nothing and every key and mouse movement goes its normal way.
 
 ```bat
 reg add HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatInput\Parameters /v PassThrough /t REG_DWORD /d 1 /f
 ```
 
-Yeniden başlatın. Ekran klavyesi (Erişim Kolaylığı > Ekran Klavyesi) ya da uzaktan masaüstü
-bu komutu yazmak için kullanılabilir. Güvenli Mod'da süzgeç zaten her şeyi geçirir.
+Restart. The on-screen keyboard (Accessibility > On-Screen Keyboard) or a remote desktop can
+be used to type this command. In Safe Mode the filter passes everything anyway.
 
-## 4. Windows açılmıyor: Windows Kurtarma Ortamı (WinRE)
+## 4. Windows does not start: Windows Recovery Environment (WinRE)
 
-Açılış iki kez yarıda kalırsa Windows kendiliğinden kurtarma ortamını açar. Ya da kurulum
-USB'sinden başlatıp **Bilgisayarınızı onarın** seçin. Sonra:
-**Sorun gider > Gelişmiş seçenekler > Komut İstemi**.
+If startup fails twice, Windows opens the recovery environment by itself. Or start from the
+installation USB stick and choose **Repair your computer**. Then:
+**Troubleshoot > Advanced options > Command Prompt**.
 
-Kurtarma ortamında Windows bölümünün harfi çoğu zaman `C:` değildir. Önce bulun:
+In the recovery environment the letter of the Windows partition is often not `C:`. Find it
+first:
 
 ```bat
 dir C:\Windows
 dir D:\Windows
 ```
 
-Aşağıda Windows bölümü `D:` diye yazılmıştır; kendi harfinizle değiştirin.
+Below, the Windows partition is written as `D:`; replace it with your own letter.
 
-### 4a. Önerilen yol: süzgeci güvenli geçişe alın
+### 4a. Recommended way: put the filter into pass-through
 
 ```bat
 reg load HKLM\OFFSYS D:\Windows\System32\config\SYSTEM
 reg query HKLM\OFFSYS\Select /v Current
 ```
 
-`Current` değeri hangi denetim kümesinin kullanıldığını söyler (`0x1` → `ControlSet001`).
+The `Current` value tells which control set is used (`0x1` → `ControlSet001`).
 
 ```bat
 reg add HKLM\OFFSYS\ControlSet001\Services\PulsarSeatInput\Parameters /v PassThrough /t REG_DWORD /d 1 /f
@@ -101,145 +105,143 @@ reg add HKLM\OFFSYS\ControlSet001\Services\PulsarSeatStorageGate /v Start /t REG
 reg unload HKLM\OFFSYS
 ```
 
-Komut istemini kapatıp **Devam et** ile Windows'u başlatın. Sonra 2. adımdaki gibi sürücüleri
-kaldırın.
+Close the command prompt and start Windows with **Continue**. Then remove the drivers as in
+step 2.
 
-**Uyarı:** `PulsarSeatInput` için `Start=4` (devre dışı) **yazmayın**. Bu süzgeç klavye ve
-fare aygıtlarının kendi `UpperFilters` listesindedir; yüklenemeyen bir süzgeç o aygıtları
-tamamen durdurur. Klavye süzgecini çevrim dışı kapatmanın güvenli yolu `PassThrough=1` ya da
-aşağıdaki paket kaldırmadır. Depolama kapısı (`PulsarSeatStorageGate`) bir minifilter'dır,
-onun için `Start=4` güvenlidir.
+**Warning:** do **not** write `Start=4` (disabled) for `PulsarSeatInput`. This filter is in
+the keyboard and mouse devices' own `UpperFilters` list; a filter that cannot load stops
+those devices completely. The safe way to turn the keyboard filter off offline is
+`PassThrough=1` or removing the package as below. The storage gate
+(`PulsarSeatStorageGate`) is a minifilter; `Start=4` is safe for it.
 
-### 4b. Paketleri çevrim dışı kaldırın (dism)
+### 4b. Remove the packages offline (dism)
 
 ```bat
 dism /image:D:\ /get-drivers /format:table
 ```
 
-Listede `seat-input-filter.inf`, `seat-storage-filter.inf` ya da `seat-idd.inf` olan
-satırların yayımlanan adını (`oem<N>.inf`) bulun ve her biri için:
+Find the published name (`oem<N>.inf`) of the rows with `seat-input-filter.inf`,
+`seat-storage-filter.inf` or `seat-idd.inf`, and for each one:
 
 ```bat
 dism /image:D:\ /remove-driver /driver:oem<N>.inf
 ```
 
-Çevrim dışı kaldırmada Windows aygıtların süzgeç listesini her zaman temizleyemez. Bu yüzden
-`dism` ile kaldırmadan önce 4a'daki `PassThrough=1` adımını da yapın. Windows açılınca 2.
-adımdaki `pnputil /delete-driver … /uninstall` komutu kalanları temizler.
+When removing offline, Windows cannot always clean the devices' filter lists. So do the
+`PassThrough=1` step of 4a too before removing with `dism`. Once Windows starts, the
+`pnputil /delete-driver … /uninstall` command of step 2 cleans up the rest.
 
-### 4c. Son çare: elle süzgeç kaydını silmek
+### 4c. Last resort: deleting the filter entry by hand
 
-Yalnızca 4a ve 4b işe yaramazsa. Çevrim dışı kayıt defterinde (`reg load`, yukarıdaki gibi)
-`HKLM\OFFSYS\ControlSet001\Enum\` altında klavye ve fare aygıtlarının `UpperFilters`
-değerlerine bakın. Değerden **yalnızca** `PulsarSeatInput` satırını silin; `kbdclass`,
-`mouclass` ve başka satırlara dokunmayın. `regedit` kurtarma ortamında da çalışır: **Dosya >
-Kovan Yükle** ile `D:\Windows\System32\config\SYSTEM` açılabilir. İşiniz bitince kovanı
-**Kovanı Kaldır** ile kapatın.
+Only if 4a and 4b do not help. In the offline registry (`reg load`, as above) look at the
+`UpperFilters` values of the keyboard and mouse devices under
+`HKLM\OFFSYS\ControlSet001\Enum\`. Delete **only** the `PulsarSeatInput` line from the value;
+do not touch `kbdclass`, `mouclass` or other lines. `regedit` also works in the recovery
+environment: **File > Load Hive** opens `D:\Windows\System32\config\SYSTEM`. When done,
+close the hive with **Unload Hive**.
 
-## 5. Ek koltuklar başlamıyor
+## 5. Extra seats do not start
 
-- Yönetici uygulamasında bir **Tanı raporu** oluşturun. Rapor
-  `%ProgramData%\Pulsar Seat\diag\` klasörüne yazılır; parola ve kullanıcı adları içermez.
-- Hizmet günlüğü: `%ProgramData%\Pulsar Seat\logs\service.log`.
-- Windows güncellemesinden sonra deneysel istemci oturum modülü kendiliğinden kapanabilir;
-  bu durumda koltuklar hızlı kullanıcı değiştirmeye döner.
-- Hızlı kullanıcı değiştirme yönteminde koltuklar bilgisayar açılırken kendiliğinden
-  başlamaz (her başlatma konsolu o koltuğa geçirir). Koltuğu yönetici uygulamasından
-  başlatın.
-- Koltuk sunucusu (`pulsar-seat-host.exe`) güvenlik için her koltukta o koltuğa ait ayrı bir
-  yerel hesapla (**`PulsarSeatHost02`**, **`PulsarSeatHost03`** …) ve düşük bütünlük düzeyinde
-  çalışır; böylece bir koltuğun sunucusu başka bir koltuğunkine erişemez. Bu hesaplar
-  **`PulsarSeatHosts`** adlı yerel grubun üyesidir. Koltuk silinirse hesabı hizmetin bir
-  sonraki başlangıcında, Pulsar Seat kaldırılırsa hepsi silinir. Koltuğun hesabı
-  kurulamazsa o koltuk ortak **`PulsarSeatHost`** hesabıyla çalışır (yerel bağlantı
-  dinleyicisi de bu ortak hesabı kullanır). Koltuğa yazıcı yönlendirmesi açıksa koltuk
-  sunucusu çalıştığı sürece hesabın kullanıcı profili yüklenir (`C:\Users\PulsarSeatHost02`
-  gibi bir klasör oluşur). Hesabı hizmet kendisi oluşturur ve her
-  başlangıçta parolasını rastgele yeniler (parola yalnızca Windows'un korumalı LSA
-  deposunda durur, kimse yazmaz). Bu hesapla Windows'ta oturum açılamaz, ağdan
-  bağlanılamaz; oturum açma ekranında da görünmez. Silmeyin: silinirse hizmet bir sonraki
-  başlangıçta yeniden oluşturur. Hesap `Users` dışında herhangi bir yerel gruba
-  (`Administrators`, `Backup Operators`, `Remote Desktop Users` gibi; doğrudan ya da bir etki
-  alanı grubu üzerinden) eklenirse ya da grupları okunamazsa hizmet onu kullanmaz. Bu
-  durumda hesabı o gruplardan çıkarın ve hizmeti yeniden başlatın.
-- **Pano paylaşımı:** bu hesapla çalışan koltuk sunucusu panoya yalnızca koltuğun
-  ayarlarında pano paylaşımı açıksa erişir. Ayarı değiştirdikten sonra koltuğu yeniden
-  başlatın; değişiklik koltuk sunucusu yeniden başlayınca etkili olur.
-- Bir koltuğun kendi hesabı kurulamazsa ya da koltuk sunucusu bu hesapla masaüstüne
-  veya hizmete ulaşamazsa, o koltuk hizmetin o çalışması boyunca ortak `PulsarSeatHost`
-  hesabına döner. Ortak hesap da kurulamazsa ya da ulaşamazsa hizmet bir önceki ayara
-  (SYSTEM, düşük bütünlük düzeyi) döner. Her ikisi de `service.log` dosyasına yazılır.
-- `PulsarSeatHosts` adında Pulsar'ın oluşturmadığı bir grup ya da kullanıcı varsa koltuk
-  başına hesaplar kapalı kalır ve bütün koltuklar ortak hesabı kullanır; o adı
-  değiştirip hizmeti yeniden başlatın.
-- Oturum açma ekranında açılan (hesabı olmayan) koltuklar parolasız koltuk bağlantı
-  noktasından bağlanır. Bu bağlantı noktasını yalnızca koltuklara atanmış hesaplar ve
-  Gelişmiş sekmesindeki **ek hesaplar** kullanabilir. Hiç hesap yoksa bu koltuklar
-  başlayamaz; yönetici uygulaması koltukta bunu uyarı olarak gösterir. Bu koltuklarda
-  oturum açacak kişileri ek hesaplara yazın ya da koltuğa bir hesap verin.
-- Bir bilgisayarda koltuk yine de hiç bağlanmıyorsa, yönetici komut isteminde aşağıdaki
-  değerlerden birini ayarlayıp hizmeti yeniden başlatın:
+- Create a **Diagnostic report** in the manager. The report is written to
+  `%ProgramData%\Pulsar Seat\diag\`; it contains no passwords or user names.
+- Service log: `%ProgramData%\Pulsar Seat\logs\service.log`.
+- After a Windows update the experimental client session module may turn itself off; the
+  seats then fall back to fast user switching.
+- With the fast user switching method, seats do not start by themselves when the PC starts
+  (every start moves the console to that seat). Start the seat from the manager.
+- For safety, the seat host (`pulsar-seat-host.exe`) runs on every seat as a separate local
+  account of that seat (**`PulsarSeatHost02`**, **`PulsarSeatHost03`** …) and at low
+  integrity level, so one seat's host cannot reach another one's. These accounts are members
+  of the local group **`PulsarSeatHosts`**. When a seat is deleted, its account is deleted
+  at the next service start; when Pulsar Seat is uninstalled, all of them are. If the seat's
+  account cannot be set up, that seat runs as the shared **`PulsarSeatHost`** account (the
+  local connection listener uses this shared account too). If printer redirection is on for
+  the seat, the account's user profile is loaded while the seat host runs (a folder such as
+  `C:\Users\PulsarSeatHost02` appears). The service creates the account itself and renews
+  its password at random at every start (the password lives only in Windows' protected LSA
+  store; nobody types it). Nobody can sign in to Windows with this account or connect with
+  it over the network; it does not show on the sign-in screen either. Do not delete it: if
+  it is deleted, the service creates it again at the next start. If the account is added to
+  any local group other than `Users` (such as `Administrators`, `Backup Operators`,
+  `Remote Desktop Users`; directly or through a domain group), or its groups cannot be read,
+  the service does not use it. In that case remove the account from those groups and
+  restart the service.
+- **Clipboard sharing:** a seat host running as this account reaches the clipboard only
+  when clipboard sharing is on in the seat's settings. Restart the seat after changing the
+  setting; the change takes effect when the seat host restarts.
+- If a seat's own account cannot be set up, or the seat host cannot reach the desktop or the
+  service with it, that seat falls back to the shared `PulsarSeatHost` account for this run
+  of the service. If the shared account cannot be set up or cannot reach them either, the
+  service falls back to the earlier setting (SYSTEM, low integrity level). Both are written
+  to `service.log`.
+- If a group or user named `PulsarSeatHosts` exists that Pulsar did not create, per-seat
+  accounts stay off and all seats use the shared account; rename it and restart the service.
+- Seats that open at the sign-in screen (without an account) connect through the port for
+  seats without a password. Only accounts given to seats and the **extra accounts** of the
+  Advanced tab can use this port. With no account at all these seats cannot start; the
+  manager shows this as a warning on the seat. Enter the people who will sign in on these
+  seats as extra accounts, or give the seat an account.
+- If a seat still never connects on a PC, set one of the values below in an administrator
+  command prompt and restart the service:
 
   ```
   reg add HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters /v HostTokenCompat /t REG_DWORD /d 2 /f
   ```
 
-  - `3`: koltuk başına hesap kullanılmaz; bütün koltuk sunucuları ortak `PulsarSeatHost`
-    hesabıyla çalışır (önceki sürümlerin davranışı).
-  - `2`: ayrı hesap kullanılmaz; koltuk sunucusu SYSTEM olarak, düşük bütünlük
-    düzeyinde çalışır.
-  - `1`: en eski ayar (SYSTEM, ayrıcalıksız, sistem bütünlük düzeyi). Yalnızca `2` de
-    yardımcı olmazsa kullanın.
+  - `3`: no per-seat accounts; all seat hosts run as the shared `PulsarSeatHost` account
+    (the behaviour of earlier versions).
+  - `2`: no separate account; the seat host runs as SYSTEM at low integrity level.
+  - `1`: the oldest setting (SYSTEM, unprivileged, system integrity level). Use it only if
+    `2` does not help either.
 
-  Geri almak için aynı değeri silin (`reg delete … /v HostTokenCompat /f`) ve sorunu
-  bildirin.
+  To undo, delete the same value (`reg delete … /v HostTokenCompat /f`) and report the
+  problem.
 
-## 5a. Çekirdek sınırı ve kaynak IP adresi neyi kapsar?
+## 5a. What do the core limit and the source IP address cover?
 
-- **Koltuğa ayrılan işlemci çekirdekleri** yalnızca Pulsar Seat'in o koltukta kendisi
-  başlattığı programlara uygulanır: koltuğun başlangıç uygulamaları ve Pulsar Seat
-  başlatıcısından açılan programlar (ve bunların açtığı programlar).
-- **Sınırlanmayanlar:** masaüstünden, Başlat menüsünden ya da Dosya Gezgini'nden açılan
-  programlar; yönetici olarak (UAC onayıyla) çalıştırılan programlar.
-- Çekirdek ayarını değiştirdiğinizde çalışan koltuk yeni ayarı hemen alır. Kesin sınırı
-  kaldırmak ise ancak o koltukta oturum kapatılıp yeniden açıldığında etkili olur.
-- **Koltuğun kaynak IP adresi**, Pulsar Seat'in kaynak IP sürücüsü yüklüyse zorla
-  uygulanır: koltuk oturumundaki programların IPv4 bağlantıları koltuğun adresinden çıkar
-  (Ağ adresleri sekmesi "Kaynak IP sürücüsü yüklü" der). Sürücü Microsoft imzası alana kadar
-  yüklenmez; o zamana kadar yalnızca ayarlarında "adrese bağlan" seçeneği olan ya da
-  `PULSAR_SEAT_SOURCE_IP` ortam değişkenini okuyan programlar bu adresi kullanabilir.
-  Değişken, Pulsar Seat'in başlattığı programlara verilir; bu programların açtığı programlar
-  da kurala bakılmaksızın değişkeni devralır.
-- Sürücü yüklüyken de dokunulmayanlar: programın kendisinin seçtiği adres, bu bilgisayarın
-  içindeki (127.x) bağlantılar, IPv6 bağlantıları ve oturumunu başka koltuklarla paylaşan
-  kiosk koltukları.
-- Sürücü ağ bağlantılarını bozarsa: `HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatWfp\Parameters`
-  altında `PassThrough` değerini 1 yapıp bilgisayarı yeniden başlatın (Güvenli Mod'da sürücü
-  zaten hiçbir şey yapmaz). Kaldırmak için: `pnputil /enum-drivers` ile `seat-wfp.inf`
-  paketinin `oem<N>.inf` adını bulun, `sc stop PulsarSeatWfp` ve
+- **Processor cores given to a seat** apply only to programs Pulsar Seat itself starts on
+  that seat: the seat's startup apps and programs opened from the Pulsar Seat launcher (and
+  the programs they open).
+- **Not limited:** programs opened from the desktop, the Start menu or File Explorer;
+  programs run as administrator (with UAC approval).
+- When you change the core setting, a running seat takes the new setting at once. Removing
+  a hard limit only takes effect once that seat signs out and in again.
+- **The seat's source IP address** is enforced when Pulsar Seat's source IP driver is loaded:
+  the IPv4 connections of the programs in the seat session leave from the seat's address (the
+  Network addresses tab says "Source IP driver loaded"). The driver does not load until it
+  has a Microsoft signature; until then only programs that have a "bind to address" option
+  in their settings or read the `PULSAR_SEAT_SOURCE_IP` environment variable can use this
+  address. The variable is given to programs Pulsar Seat starts; programs those open
+  inherit the variable too, whatever the rule.
+- Left untouched even with the driver loaded: an address the program picks itself,
+  connections inside this PC (127.x), IPv6 connections and kiosk seats that share their
+  session with other seats.
+- If the driver breaks network connections: set the `PassThrough` value under
+  `HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatWfp\Parameters` to 1 and restart the PC
+  (in Safe Mode the driver does nothing anyway). To remove it: find the `oem<N>.inf` name of
+  the `seat-wfp.inf` package with `pnputil /enum-drivers`, then `sc stop PulsarSeatWfp` and
   `pnputil /delete-driver oem<N>.inf /uninstall`.
 
-## 5b. Parolasız koltuklar için ayrı bağlantı noktası (Windows Server)
+## 5b. Separate port for seats without a password (Windows Server)
 
-Parolası kayıtlı olmayan (oturum açma ekranıyla başlayan) Uzak Masaüstü koltukları için
-Pulsar Seat ikinci bir Uzak Masaüstü dinleyicisi kurar:
+For Remote Desktop seats that have no saved password (they start at the sign-in screen),
+Pulsar Seat sets up a second Remote Desktop listener:
 
-- Kayıt defteri anahtarı:
+- Registry key:
   `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\PulsarSeat-Loopback`
-- Bağlantı noktası: varsayılan **33389** (Gelişmiş sekmesinden değiştirilebilir).
-- Güvenlik duvarı kuralı (gelen, engelle): **`Pulsar Seat - loopback RDP (block remote) <port>`**,
-  örneğin `Pulsar Seat - loopback RDP (block remote) 33389`. Eski sürümler yalnızca
-  `Pulsar Seat - loopback RDP (block remote)` adını kullanıyordu.
+- Port: **33389** by default (can be changed in the Advanced tab).
+- Firewall rule (inbound, block): **`Pulsar Seat - loopback RDP (block remote) <port>`**,
+  for example `Pulsar Seat - loopback RDP (block remote) 33389`. Older versions used only the
+  name `Pulsar Seat - loopback RDP (block remote)`.
 
-Bu dinleyicide ağ düzeyinde kimlik doğrulaması kapalıdır; bilgisayarın dışından
-bağlanılamamasını yalnızca bu güvenlik duvarı kuralı sağlar. Bu yüzden Windows Güvenlik
-Duvarı bir profilde kapalıysa ya da bir grup ilkesi yerel kuralları yok sayıyorsa Pulsar Seat
-dinleyiciyi kaldırır. Uzak Masaüstü koltukları açıkken Uzak Masaüstü Hizmetleri yeniden
-başlatılamaz; kaldırılan dinleyici o zamana kadar çalışmaya devam eder. Yönetici
-uygulaması bunu gösterir: Uzak Masaüstü koltuklarını kapatın ya da bilgisayarı yeniden
-başlatın.
+Network level authentication is off on this listener; only this firewall rule keeps it from
+being reached from outside the PC. So if Windows Firewall is off in a profile, or a group
+policy ignores local rules, Pulsar Seat removes the listener. Remote Desktop Services cannot
+restart while Remote Desktop seats are open; a removed listener keeps running until then.
+The manager shows this: close the Remote Desktop seats or restart the PC.
 
-Pulsar Seat kaldırıldıktan sonra anahtar ya da kural kaldıysa, yönetici komut isteminde:
+If the key or the rule is left after Pulsar Seat was uninstalled, in an administrator
+command prompt:
 
 ```
 reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\PulsarSeat-Loopback" /f
@@ -247,60 +249,62 @@ netsh advfirewall firewall delete rule name="Pulsar Seat - loopback RDP (block r
 netsh advfirewall firewall delete rule name="Pulsar Seat - loopback RDP (block remote)"
 ```
 
-Bağlantı noktasını değiştirdiyseniz kural adındaki `33389` yerine o numarayı yazın. Kalan
-kuralları görmek için: `netsh advfirewall firewall show rule name=all | findstr /C:"Pulsar Seat"`.
-**Önce anahtarı silin, sonra bilgisayarı yeniden başlatın, kuralı en son silin**: kural
-silinip dinleyici hâlâ çalışıyorsa bağlantı noktası ağa açık kalır.
+If you changed the port, write that number instead of `33389` in the rule name. To see the
+remaining rules: `netsh advfirewall firewall show rule name=all | findstr /C:"Pulsar Seat"`.
+**Delete the key first, then restart the PC, delete the rule last**: if the rule is deleted
+while the listener still runs, the port stays open to the network.
 
-Windows açılmıyorsa (kurtarma ortamı, `reg load HKLM\OFFSYS D:\Windows\System32\config\SYSTEM`):
-`HKLM\OFFSYS\ControlSet001\Control\Terminal Server\WinStations\PulsarSeat-Loopback`
-anahtarını silin, `reg unload HKLM\OFFSYS` ile kapatın. Güvenlik duvarı kuralı Windows
-açıldıktan sonra yukarıdaki `netsh` komutuyla silinir.
+If Windows does not start (recovery environment,
+`reg load HKLM\OFFSYS D:\Windows\System32\config\SYSTEM`): delete the
+`HKLM\OFFSYS\ControlSet001\Control\Terminal Server\WinStations\PulsarSeat-Loopback` key and
+close it with `reg unload HKLM\OFFSYS`. The firewall rule is deleted with the `netsh`
+command above once Windows starts.
 
-## 6. Pulsar Seat'i tamamen kaldırmak
+## 6. Removing Pulsar Seat completely
 
-**Ayarlar > Uygulamalar** içinden kaldırın. Kaldırma; hizmeti, sürücü paketlerini, kayıtlı
-koltuk parolalarını, koltuk sunucusunun `PulsarSeatHost` hesabını (oturum hakları ve
-parolasıyla birlikte) ve Pulsar Seat'in yaptığı sistem ayarlarını (kilit ekranı görseli, hızlı
-kullanıcı değiştirmeyi gizleme, sürücü güncellemelerini dışarıda bırakma, güç ayarları) geri
-alır. Aygıtlara, aygıt sınıflarına ve yazıcılara verilen erişim izinleri de eski hâline
-döndürülür; geri alınamayan bir şey kalırsa kaldırma bunu ekrana yazar. Kendi verilerinizin de silinmesini kaldırma sırasında ayrıca seçebilirsiniz.
+Uninstall it from **Settings > Apps**. The uninstall undoes the service, the driver
+packages, the saved seat passwords, the seat host's `PulsarSeatHost` account (with its
+sign-in rights and password) and the system settings Pulsar Seat made (lock screen picture,
+hiding fast user switching, leaving driver updates out, power settings). Access permissions
+given to devices, device classes and printers are restored too; if something cannot be
+undone, the uninstall prints it. You can also choose during the uninstall to delete your own
+data.
 
-Kaldırma, hesabı silmeden önce hizmeti durdurur ve koltuk sunucularına açık oturumların
-masaüstünde verilmiş izinleri geri alır. Hizmet durdurulamazsa hesap silinmez; hizmeti
-durdurup kaldırmayı yeniden çalıştırın. Geri alınamayan bir masaüstü izni, o oturum
-kapanınca kendiliğinden kalkar.
+The uninstall stops the service before deleting the account and revokes the desktop
+permissions given to the seat hosts in open sessions. If the service cannot be stopped, the
+account is not deleted; stop the service and run the uninstall again. A desktop permission
+that could not be revoked goes by itself when that session closes.
 
-## 7. Oturum açma ekranında kutucuklar yok ya da yanlış (kimlik sağlayıcı)
+## 7. No tiles or wrong tiles on the sign-in screen (credential provider)
 
-Pulsar Seat, "tek seferde bir koltuk" (hızlı kullanıcı değiştirme) kipinde koltuğun
-kayıtlı parolasıyla kendiliğinden oturum açmak için oturum açma ekranına küçük bir bileşen
-ekler (`pulsar-seat-credprov.dll`). Bu bileşen **yalnızca** Pulsar Seat açıkken ve bu kip
-kullanılırken kayıtlıdır; Pulsar Seat'i kapatınca ya da kaldırınca kaydı silinir.
+In the "one seat at a time" (fast user switching) mode, Pulsar Seat adds a small component
+to the sign-in screen (`pulsar-seat-credprov.dll`) to sign in by itself with the seat's
+saved password. This component is registered **only** while Pulsar Seat is on and this mode
+is used; turning Pulsar Seat off or uninstalling it deletes the registration.
 
-Bileşen kendini güvenli tarafta tutar: Pulsar Seat hizmeti yanıt vermezse hiçbir kutucuğu
-gizlemez ve kendisi de görünmez. Diğer oturum açma seçeneklerini (parola, PIN) yalnızca
-bir koltuk kendiliğinden oturum açarken, yalnızca o koltuğun oturumunda gizler. Kilit
-ekranında asla kendiliğinden oturum açmaz.
+The component keeps itself on the safe side: if the Pulsar Seat service does not answer, it
+hides no tile and does not show itself either. It hides the other sign-in options
+(password, PIN) only while a seat signs in by itself, and only in that seat's session. It
+never signs in by itself on the lock screen.
 
-**Kayıtlı parola kabul edilmezse** ("Kayıtlı parola kabul edilmedi. Parolayı girin."):
-Pulsar Seat parolayı bir daha denemez. Aynı ekranda PIN, Windows Hello ya da "Diğer
-kullanıcı" kutucukları gizli kalabilir. Koltuk hesabının parolasını yazın, "Koltuk
-değiştir" bağlantısını kullanın ya da Ctrl+Alt+Del'e basıp (veya ekranı kilitleyip)
-yeni bir oturum açma ekranı açın: yeni ekranda bütün kutucuklar yeniden görünür. Kayıtlı
-parolayı Pulsar Seat yöneticisinde yeniden girin.
+**If the saved password is not accepted** ("The saved password was not accepted. Enter the
+password."): Pulsar Seat does not try the password again. PIN, Windows Hello or "Other
+user" tiles may stay hidden on the same screen. Type the seat account's password, use the
+"Switch seat" link, or press Ctrl+Alt+Del (or lock the screen) to open a new sign-in screen:
+on the new screen all tiles show again. Enter the saved password again in the Pulsar Seat
+manager.
 
-Yine de oturum açma ekranında hiç kutucuk yoksa ya da Pulsar Seat kutucuğu takılı kalırsa:
+If there is still no tile at all on the sign-in screen, or the Pulsar Seat tile hangs:
 
-### 7a. Windows açılıyor ve başka bir hesapla girebiliyorsunuz
+### 7a. Windows starts and you can sign in with another account
 
-Yönetici olarak açılmış bir komut isteminde:
+In a command prompt opened as administrator:
 
 ```bat
 "C:\Program Files\Pulsar Seat\pulsar-seat-service.exe" disable
 ```
 
-Bileşen kalıcı olarak kapalı kalsın istiyorsanız (Pulsar Seat açık olsa bile):
+If the component should stay off for good (even while Pulsar Seat is on):
 
 ```bat
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters" /v CredProvDisabled /t REG_DWORD /d 1 /f
@@ -308,20 +312,21 @@ sc stop PulsarSeat
 sc start PulsarSeat
 ```
 
-Geri almak için aynı değeri silin
+To undo, delete the same value
 (`reg delete "HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters" /v CredProvDisabled /f`).
 
-### 7b. Güvenli mod
+### 7b. Safe mode
 
-Güvenli modda Pulsar Seat hizmeti çalışmaz; bileşen hizmete ulaşamadığı için hiçbir şeyi
-gizlemez ve görünmez. Normal Windows oturum açma ekranı gelir. Oradan 7a'daki komutları
-çalıştırın. (Güvenli moda geçmek için oturum açma ekranında **Shift** basılıyken
-**Yeniden başlat**, sonra **Sorun gider > Gelişmiş seçenekler > Başlangıç Ayarları**.)
+In Safe Mode the Pulsar Seat service does not run; since the component cannot reach the
+service, it hides nothing and does not show. The normal Windows sign-in screen comes up.
+Run the commands of 7a from there. (To get to Safe Mode: on the sign-in screen hold
+**Shift** and choose **Restart**, then **Troubleshoot > Advanced options > Startup
+Settings**.)
 
-### 7c. Elle kayıt silmek (çalışan Windows'ta)
+### 7c. Deleting the registration by hand (running Windows)
 
-Yönetici komut isteminde Pulsar Seat'e ait yalnızca şu dört anahtarı silin; başka
-anahtarlara dokunmayın:
+In an administrator command prompt delete only these four keys that belong to Pulsar Seat;
+do not touch other keys:
 
 ```bat
 reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters\{FDC3F428-E8C8-455F-AA01-6CEB41E3155E}" /f
@@ -330,11 +335,11 @@ reg delete "HKLM\SOFTWARE\Classes\CLSID\{FDC3F428-E8C8-455F-AA01-6CEB41E3155E}" 
 reg delete "HKLM\SOFTWARE\Classes\CLSID\{C086BD57-C066-4FBA-ACED-7679C157E3DC}" /f
 ```
 
-### 7d. Windows'a hiç girilemiyorsa: kurtarma ortamından (WinRE)
+### 7d. If you cannot get into Windows at all: from the recovery environment (WinRE)
 
-§4'teki gibi kurtarma ortamında komut istemini açın ve Windows bölümünü bulun (aşağıda
-`D:`). Kayıt defterinin SOFTWARE kovanını yükleyip yalnızca Pulsar Seat anahtarlarını
-silin, sonra kovanı kaldırın:
+Open the command prompt in the recovery environment as in §4 and find the Windows
+partition (`D:` below). Load the SOFTWARE hive of the registry, delete only the Pulsar Seat
+keys, then unload the hive:
 
 ```bat
 reg load HKLM\OFFSOFT D:\Windows\System32\config\SOFTWARE
@@ -345,134 +350,145 @@ reg delete "HKLM\OFFSOFT\Classes\CLSID\{C086BD57-C066-4FBA-ACED-7679C157E3DC}" /
 reg unload HKLM\OFFSOFT
 ```
 
-Bir anahtar "bulunamadı" derse sorun değil; o parça zaten yoktur. Sonra bilgisayarı
-yeniden başlatın. Kayıt silindiğinde Windows'un kendi oturum açma ekranı eksiksiz geri
-gelir.
+If a key says "not found", that is fine; that part is not there. Then restart the PC. Once
+the registration is deleted, Windows' own sign-in screen comes back complete.
 
+## 8. Broken, frozen or black picture (H.264)
 
-## 8. Görüntü bozuk, donuk ya da siyah ekran (H.264)
-
-Koltuk görüntüsü sunucudan grafik hattıyla (EGFX) gelir; çoğunlukla H.264 olarak
-kodlanır ve ekran kartında çözülür. Bazı sürücülerde bu yol bozuk renkler, donan bölgeler
-ya da siyah ekran verebilir. Koltuk sunucusu (`pulsar-seat-host.exe`) aşağıdaki ortam
-değişkenlerini okur. Bunları **sistem ortam değişkeni** olarak ayarlayın (yönetici komut
-istemi), sonra koltuğu yönetici uygulamasından yeniden başlatın (değer koltuk sunucusu
-her başladığında okunur). Önce birincisini deneyin, yetmezse ikincisini ekleyin:
+The seat's picture comes from the server through the graphics pipeline (EGFX); mostly it is
+encoded as H.264 and decoded on the graphics card. With some drivers this path can give
+broken colours, frozen areas or a black screen. The seat host (`pulsar-seat-host.exe`) reads
+the environment variables below. Set them as **system environment variables**
+(administrator command prompt), then restart the seat from the manager (the value is read
+every time the seat host starts). Try the first one first; if that is not enough, add the
+second:
 
 ```
 setx /M PULSAR_SEAT_H264_DECODER software
 setx /M PULSAR_SEAT_GFX no-h264
 ```
 
-- `PULSAR_SEAT_H264_DECODER=software`: H.264 ekran kartı yerine işlemcide çözülür. İlk
-  deneyin; görüntü düzelirse sorun ekran kartı sürücüsündedir.
-- `PULSAR_SEAT_GFX=no-h264`: grafik hattı kalır ama H.264 istenmez (RemoteFX ve benzeri
-  kodlayıcılar kullanılır).
-- `PULSAR_SEAT_GFX=bitmap` (ya da `off`): grafik hattı hiç açılmaz, eski bitmap
-  güncellemeleri kullanılır. En yavaş ama en uyumlu yol.
-- `PULSAR_SEAT_GFX_ZERO_COPY=0`: ekran kartında çözülen görüntü işlemciye hiç kopyalanmadan
-  doğrudan ekrana verilir ("sıfır kopya" yolu). Görüntü yalnızca bu yol açıkken bozuluyorsa
-  (yanlış renkler, titreyen ya da eski kalan bölgeler, imleç izi) bu değişkenle yolu
-  kapatın; H.264 yine ekran kartında çözülür, görüntü eskisi gibi işlemci üzerinden
-  gelir.
-- Geri almak için değişkeni silin (`reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PULSAR_SEAT_GFX /f`)
-  ve koltuğu yeniden başlatın.
+- `PULSAR_SEAT_H264_DECODER=software`: H.264 is decoded on the processor instead of the
+  graphics card. Try it first; if the picture gets fixed, the problem is in the graphics
+  driver.
+- `PULSAR_SEAT_GFX=no-h264`: the graphics pipeline stays but H.264 is not requested
+  (RemoteFX and similar codecs are used).
+- `PULSAR_SEAT_GFX=bitmap` (or `off`): the graphics pipeline does not open at all; the old
+  bitmap updates are used. The slowest but most compatible way.
+- `PULSAR_SEAT_GFX_ZERO_COPY=0`: the picture decoded on the graphics card is given straight
+  to the screen without ever being copied to the processor (the "zero-copy" path). If the
+  picture breaks only while this path is on (wrong colours, flickering or stale areas, a
+  pointer trail), turn the path off with this variable; H.264 is still decoded on the
+  graphics card and the picture comes through the processor as before.
+- To undo, delete the variable
+  (`reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PULSAR_SEAT_GFX /f`)
+  and restart the seat.
 
-Koltuk sunucusu günlüğünde (`%ProgramData%\Pulsar Seat\logs\host-NN.log`, NN = koltuk
-numarası, örneğin `host-02.log`) şu satırı arayın:
+In the seat host log (`%ProgramData%\Pulsar Seat\logs\host-NN.log`, NN = seat number, for
+example `host-02.log`) look for this line:
 
 ```
 seat host: gfx avc444 v0xa0701 decoder=hardware frames=… h264=… errors=… pic_dropped=… dropped=… resyncs=… fallbacks=… …
 ```
 
-- İlk sözcük kullanılan yoldur: `avc444` / `avc420` (H.264), `egfx` (H.264'süz grafik
-  hattı), `bitmap` (grafik hattı yok).
-- `decoder=`: `hardware` (ekran kartı), `software` (işlemci), `unavailable` (H.264
-  çözücü başlamadı), `none` (henüz H.264 yok).
-- `gpu=`: sıfır kopya yolu. `ready` (açık), `off` (bu çıkış için yok ya da kapalı),
-  `failed` (başlamadı ya da çalışırken hata verdi; bu bağlantı boyunca işlemci yolu).
-  `gpu_frames` ekran kartından ekrana giden kare sayısıdır; `demotions` sürekli artıyorsa
-  sunucu bu yolun desteklemediği şeyler gönderiyor demektir (sorun değil, görüntü işlemci
-  yolundan gelir).
-- `present_skipped`, `acks_held` artıyorsa ekran yetişemiyor; koltuk sunucusu bu sırada
-  kareleri birleştirir ve sunucudan yavaşlamasını ister. `acks_forced` sürekli artıyorsa
-  ekran uzun süre takılı kalıyor demektir; günlüğü sorun bildirimine ekleyin.
-- `errors`, `pic_dropped`, `dropped` artıyorsa görüntünün bir kısmı çizilemedi; koltuk
-  sunucusu bu durumda sunucudan ekranı yeniden ister (`resyncs`). `fallbacks` 0'dan
-  büyükse ekran kartıyla çözme sürekli başarısız olduğu için çalışırken işlemciye
-  geçildi.
-- Sayılar sürekli artıyor ve görüntü düzelmiyorsa yukarıdaki ayarları deneyin ve
-  günlüğü sorun bildirimine ekleyin.
+- The first word is the path in use: `avc444` / `avc420` (H.264), `egfx` (graphics pipeline
+  without H.264), `bitmap` (no graphics pipeline).
+- `decoder=`: `hardware` (graphics card), `software` (processor), `unavailable` (the H.264
+  decoder did not start), `none` (no H.264 yet).
+- `gpu=`: the zero-copy path. `ready` (on), `off` (not available or off for this output),
+  `failed` (did not start, or failed while running; the processor path for this
+  connection). `gpu_frames` is the number of frames from the graphics card to the screen;
+  if `demotions` keeps growing, the server sends things this path does not support (not a
+  problem, the picture comes through the processor path).
+- If `present_skipped` and `acks_held` grow, the screen cannot keep up; the seat host then
+  merges frames and asks the server to slow down. If `acks_forced` keeps growing, the
+  screen hangs for a long time; add the log to the problem report.
+- If `errors`, `pic_dropped` or `dropped` grow, part of the picture could not be drawn; the
+  seat host then asks the server for the screen again (`resyncs`). If `fallbacks` is above
+  0, decoding on the graphics card kept failing and it switched to the processor while
+  running.
+- If the numbers keep growing and the picture does not get better, try the settings above
+  and add the log to the problem report.
 
+## 9. Kiosk seats: the mouse is locked to an area, a window does not come to the front
 
-## 9. Kiosk koltukları: fare bir alana kilitli, pencere öne gelmiyor
+While kiosk seats run (several seats in the same Windows session) and seat 1 is a kiosk
+seat too, Pulsar Seat locks the system pointer to a "focus area" and pins the foreground
+window. If the kiosk shell crashes or the service does not answer, the mouse may stay in
+this area or Windows windows may not come to the front.
 
-Kiosk koltukları (aynı Windows oturumunda birden çok koltuk) çalışırken 1. koltuk da kiosk
-koltuğuysa Pulsar Seat sistem imlecini bir "odak alanına" kilitler ve öne gelen pencereyi
-sabitler. Kiosk kabuğu çökerse ya da hizmet yanıt vermezse fare bu alanda kalabilir ya da
-Windows pencereleri öne gelmeyebilir.
-
-1. Konsol klavyesinde **Ctrl+Alt+Del**'e basın, sonra **İptal**'i seçin. Windows bu
-   sırada imleç kilidini kaldırır.
-2. Kiosk koltuğunda ana ekrana dönmek için alt çubuktaki düğmeyi ya da
-   **Ctrl+Alt+Home**'u kullanın (Ctrl+Alt+Del kiosk koltuğunda bütün koltukları etkiler).
-3. Sorun sürüyorsa yönetici komut isteminde kiosk koltuklarını kapatın; hizmet durunca
-   bütün kiosk kabukları ve içlerindeki uygulamalar kapanır:
+1. Press **Ctrl+Alt+Del** on the console keyboard, then choose **Cancel**. Windows removes
+   the pointer lock at that moment.
+2. To get back to the home screen on a kiosk seat, use the button on the bottom bar or
+   **Ctrl+Alt+Home** (Ctrl+Alt+Del affects all seats on a kiosk seat).
+3. If the problem stays, turn the kiosk seats off in an administrator command prompt; when
+   the service stops, all kiosk shells and the apps in them close:
 
 ```
 "C:\Program Files\Pulsar Seat\pulsar-seat-service.exe" disable
 sc stop PulsarSeat
 ```
 
-4. Kilit hâlâ kalkmadıysa oturumu kapatıp yeniden açın; imleç kilidi ve ön plan kilidi
-   oturumla birlikte biter.
+4. If the lock is still there, sign out and in again; the pointer lock and the foreground
+   lock end with the session.
 
-Bilinen sınırlar: ham giriş, DirectInput ya da XInput kullanan oyunlar koltuğun kendi
-aygıtlarını yalnızca uygulama başına yalıtım açıksa alır. Tam ekran oyunlar için kiosk
-uygulamasında "Tam ekran" seçin; bilgisayarda aynı anda yalnızca bir oyun gerçek tam
-ekranda olabilir. Mağaza (UWP / MSIX) uygulamaları uygulama kimliğiyle (AUMID) eklenir ve
-her Windows sürümünde açılmayabilir. Giriş süzgeci kurulu değilse Pulsar kiosk
-klavyelerinin sistem tuşlarını aygıta göre ayırıp 1. koltuktan uzak tutmaya çalışır; kiosk
-farelerinin hareketi 1. koltuğun imlecini yine oynatabilir (yönetici uygulamasında "Giriş
-tam yalıtılmıyor" notu). Ctrl+Alt+Del ve Win+L hiçbir kullanıcı kipi programıyla
-engellenemez.
+Known limits: games that use raw input, DirectInput or XInput get the seat's own devices
+only when per-app isolation is on. For full-screen games choose "Full screen" on the kiosk
+app; only one game on the PC can be in true full screen at a time. Store (UWP / MSIX) apps
+are added by their app ID (AUMID) and may not open on every Windows version. Without the
+input filter, Pulsar tries to tell kiosk keyboards apart by device and keep their system
+keys away from seat 1; moving a kiosk mouse can still move seat 1's pointer (the manager's
+"Input is not fully isolated" note). Ctrl+Alt+Del and Win+L cannot be blocked by any
+user-mode program.
 
-## 9a. Kiosk koltuğu kendi kullanıcısıyla açılmıyor / eski ayarlar kayboldu
+## 9a. A kiosk seat does not open as its own user / old settings are gone
 
-2026-11-17'den beri 2. ve sonraki kiosk koltukları kendi Windows kullanıcısıyla çalışır:
-koltuğa hesap ve parola kayıtlıysa o hesapla, değilse Pulsar'ın oluşturduğu gizli yerel
-hesapla (`PulsarKiosk02` …). Bu hesaplar oturum açma ekranında görünmez ve Uzak Masaüstü
-ya da ağ üzerinden oturum açamaz.
+Since 2026-11-17, kiosk seats 2 and later run as their own Windows user: the account saved
+for the seat if it has an account and password, otherwise a hidden local account Pulsar
+creates (`PulsarKiosk02` …). These accounts do not show on the sign-in screen and cannot
+sign in over Remote Desktop or the network.
 
-1. Güncellemeden önce kiosk uygulamalarının ayarları ve verileri 1. koltuğun kullanıcısının
-   profilindeydi; yeni koltuk kullanıcısının profili boş başlar. Bu veriler taşınmaz;
-   gerekiyorsa uygulamanın kendi dışa / içe aktarma özelliğini kullanın.
-2. Yönetici uygulamasında "Bir kiosk koltuğunun kendi kullanıcısı açılamadı" notu varsa o
-   koltuk 1. koltuğun kullanıcısıyla çalışıyordur. Hizmet günlüğünde (`logs\service.log`)
-   `could not be logged on` satırına bakın: kayıtlı parola yanlışsa koltuğun hesabını ve
-   parolasını yeniden girin; `PulsarKiosk..` adında Pulsar'ın oluşturmadığı bir hesap
-   varsa onu yeniden adlandırın.
-3. Eski davranışa dönmek için Temel sekmesinde "Her kiosk koltuğu kendi Windows
-   kullanıcısıyla çalışsın" seçeneğini kapatın. Pulsar'ın kiosk hesapları ve profilleri
-   koltuk kiosk koltuğu olmaktan çıkınca (hizmetin sonraki açılışında) ya da kaldırmada
-   silinir; seçeneği kapatmak onları silmez.
+1. Before the update the kiosk apps' settings and data were in seat 1's user profile; the new
+   seat user's profile starts empty. This data is not moved; if needed, use the app's own
+   export / import feature.
+2. If the manager shows the note "A kiosk seat's own user could not be opened", that seat
+   runs as seat 1's user. Look for the `could not be logged on` line in the service log
+   (`logs\service.log`): if the saved password is wrong, enter the seat's account and
+   password again; if an account named `PulsarKiosk..` exists that Pulsar did not create,
+   rename it.
+3. To go back to the old behaviour, turn off "Each kiosk seat runs as its own Windows user"
+   in the Basic tab. Pulsar's kiosk accounts and profiles are deleted when the seat stops
+   being a kiosk seat (at the next service start) or at uninstall; turning the option off
+   does not delete them.
 
-## 10. Kiosk koltuğunun sesi kendi aygıtından çıkmıyor
+## 10. A kiosk seat's sound does not come from its own device
 
-Kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı (hoparlör, kulaklık, mikrofon)
-verildiyse, kiosk kabuğu koltuğun her uygulamasına bu aygıtı "uygulama başına varsayılan
-aygıt" olarak verir (Windows 10 1803 ve sonrası). Yönetici uygulamasında Kiosk sütununun
-altındaki "Ses:" satırı koltuğun aygıtını gösterir.
+If a kiosk seat was given a sound device assigned only to it (speaker, headphones,
+microphone), the kiosk shell gives every app of the seat this device as its "per-app
+default device" (Windows 10 1803 and later). In the manager, the "Sound:" line under the
+Kiosk column shows the seat's device.
 
-1. "koltuğa ayrı ses aygıtı atanmamış" yazıyorsa ses aygıtını yalnızca bu koltuğa atayın
-   (birden çok koltuğa atanmış aygıt sayılmaz).
-2. Koltuğun alt çubuğunda "uygulama başına ses aygıtı yok" ya da "yönlendirilemedi"
-   yazıyorsa Windows bu ayarı kabul etmedi; ses 1. koltuğun varsayılan aygıtından çıkar.
-   Bu ayar belgelenmemiş bir Windows arabirimiyle yapılır ve bir Windows güncellemesi onu
-   bozabilir.
-3. Uygulama sesi hâlâ eski aygıttan çalıyorsa uygulamayı "Oturumu kapat" ile yeniden
-   başlatın: bazı uygulamalar yeni aygıtı yalnızca yeni açtıkları seste kullanır.
-4. Aynı programı iki kiosk koltuğunda çalıştırmayın: Windows bu ayarı program başına
-   saklar, iki koltuk aynı aygıtı paylaşır (yönetici uygulaması bunu uyarır).
-5. Windows Ayarlar > Sistem > Ses > Uygulama ses düzeyi ve cihaz tercihleri sayfasında
-   kalmış bir kayıt varsa oradan "Sıfırla" ile temizleyebilirsiniz.
+1. If it says "no separate sound device given to the seat", assign the sound device to this
+   seat only (a device assigned to several seats does not count).
+2. If the seat's bottom bar says "no per-app sound device" or "could not be routed", Windows
+   did not accept this setting; sound comes from seat 1's default device. This setting is
+   made through an undocumented Windows interface and a Windows update can break it.
+3. If an app's sound still plays from the old device, restart the app with "Sign out": some
+   apps use the new device only for sound they open afresh.
+4. Do not run the same program on two kiosk seats: Windows stores this setting per program,
+   so two seats share the same device (the manager warns about this).
+5. If an old entry is left on the Windows Settings > System > Sound > Volume mixer (app
+   volume and device preferences) page, you can clear it there with "Reset".
+
+## 11. Language
+
+The manager follows the Windows display language (English, or Turkish on a Turkish
+Windows). To choose it by hand: **Basic settings > Appearance > Language**; the manager
+reloads in the chosen language. The choice is per user. Texts that the service or the
+installer writes (Event Log, tray menu of the seat agent, kiosk bar, sign-in tiles, the
+service description) follow the Windows UI language of the process that writes them
+(HYPOTHESIS: for the service, running as LocalSystem, this is the PC's default UI
+language). To force one language for these, set the system environment variable
+`PULSAR_SEAT_LANG` to `en` or `tr` and restart the PC (services read system environment
+variables only at Windows start). The MSI is English; a Turkish
+MSI can be built with `installer\scripts\build-installer.ps1 -Language tr-TR`.

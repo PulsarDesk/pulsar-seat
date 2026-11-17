@@ -21,7 +21,7 @@ pub enum Severity {
     Warning,
 }
 
-/// Stable snake_case codes; the manager maps them to Turkish copy.
+/// Stable snake_case codes; the manager maps them to localized copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueCode {

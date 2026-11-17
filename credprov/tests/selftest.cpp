@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Self-test of the pure parts of the credential provider (no LogonUI, no service, no
 // registry): JSON reader on the seat-proto shapes, the logon packing layout, the filter
-// decision, the Turkish link text, and that provider + filter stay inert outside LogonUI.
+// decision, the localized link text (English and Turkish), the copy table, and that provider + filter stay inert outside LogonUI.
 // Run: build\<Platform>\<Configuration>\credprov-selftest.exe (exit code 0 = all passed).
 #include "../src/json.h"
 #include "../src/pack.h"
@@ -151,20 +151,32 @@ void FilterDecision() {
 }
 
 void LinkText() {
-    Check(pulsar::SwitchLinkText(2) == L"Koltuk 2'ye geç", "2'ye");
-    Check(pulsar::SwitchLinkText(3) == L"Koltuk 3'e geç", "3'e");
-    Check(pulsar::SwitchLinkText(6) == L"Koltuk 6'ya geç", "6'ya");
-    Check(pulsar::SwitchLinkText(9) == L"Koltuk 9'a geç", "9'a");
-    Check(pulsar::SwitchLinkText(10) == L"Koltuk 10'a geç", "10'a");
-    Check(pulsar::SwitchLinkText(16) == L"Koltuk 16'ya geç", "16'ya");
-    Check(pulsar::SwitchLinkText(1) == L"Koltuk 1'e geç", "1'e");
-    Check(pulsar::SwitchLinkText(11) == L"Koltuk 11'e geç", "11'e");
-    Check(pulsar::SwitchLinkText(21) == L"Koltuk 21'e geç", "21'e");
-    Check(pulsar::SwitchLinkText(20) == L"Koltuk 20'ye geç", "20'ye");
-    Check(pulsar::SwitchLinkText(40) == L"Koltuk 40'a geç", "40'a");
-    Check(pulsar::SwitchLinkText(50) == L"Koltuk 50'ye geç", "50'ye");
-    Check(pulsar::SwitchLinkText(61) == L"Koltuk 61'e geç", "61'e");
-    Check(pulsar::SwitchLinkText(64) == L"Koltuk 64'e geç", "64'e");
+    using pulsar::copy::Lang;
+    Check(pulsar::SwitchLinkTextIn(2, Lang::Tr) == L"Koltuk 2'ye geç", "2'ye");
+    Check(pulsar::SwitchLinkTextIn(3, Lang::Tr) == L"Koltuk 3'e geç", "3'e");
+    Check(pulsar::SwitchLinkTextIn(6, Lang::Tr) == L"Koltuk 6'ya geç", "6'ya");
+    Check(pulsar::SwitchLinkTextIn(9, Lang::Tr) == L"Koltuk 9'a geç", "9'a");
+    Check(pulsar::SwitchLinkTextIn(10, Lang::Tr) == L"Koltuk 10'a geç", "10'a");
+    Check(pulsar::SwitchLinkTextIn(16, Lang::Tr) == L"Koltuk 16'ya geç", "16'ya");
+    Check(pulsar::SwitchLinkTextIn(1, Lang::Tr) == L"Koltuk 1'e geç", "1'e");
+    Check(pulsar::SwitchLinkTextIn(11, Lang::Tr) == L"Koltuk 11'e geç", "11'e");
+    Check(pulsar::SwitchLinkTextIn(21, Lang::Tr) == L"Koltuk 21'e geç", "21'e");
+    Check(pulsar::SwitchLinkTextIn(20, Lang::Tr) == L"Koltuk 20'ye geç", "20'ye");
+    Check(pulsar::SwitchLinkTextIn(40, Lang::Tr) == L"Koltuk 40'a geç", "40'a");
+    Check(pulsar::SwitchLinkTextIn(50, Lang::Tr) == L"Koltuk 50'ye geç", "50'ye");
+    Check(pulsar::SwitchLinkTextIn(61, Lang::Tr) == L"Koltuk 61'e geç", "61'e");
+    Check(pulsar::SwitchLinkTextIn(64, Lang::Tr) == L"Koltuk 64'e geç", "64'e");
+    Check(pulsar::SwitchLinkTextIn(3, Lang::En) == L"Switch to seat 3", "English link");
+    Check(pulsar::SwitchLinkText(3) == pulsar::SwitchLinkTextIn(3, pulsar::copy::Current()), "link follows the UI language");
+}
+
+void CopyTable() {
+    bool filled = true;
+    for (const auto* t : pulsar::copy::kAll) filled = filled && t->en && *t->en && t->tr && *t->tr;
+    Check(filled, "every copy entry has English and Turkish");
+    Check(pulsar::copy::FromLangId(0x041f) == pulsar::copy::Lang::Tr, "tr-TR is Turkish");
+    Check(pulsar::copy::FromLangId(0x0409) == pulsar::copy::Lang::En, "en-US is English");
+    Check(pulsar::copy::FromLangId(0x0407) == pulsar::copy::Lang::En, "other languages fall back to English");
 }
 
 // VM test 2026-11-15: the switch links must be reachable from the seat tile (Windows 11
@@ -260,6 +272,7 @@ int wmain() {
     FilterDecision();
     SessionDecisions();
     LinkText();
+    CopyTable();
     TileLinks();
     TileImageDrawn();
     InertOutsideLogonUI();

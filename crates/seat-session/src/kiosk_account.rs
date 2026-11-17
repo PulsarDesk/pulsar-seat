@@ -51,11 +51,14 @@ use seat_core::config::{GlobalSettings, KioskAccountMode, SeatConfig};
 /// Prefix of Pulsar's kiosk accounts (`PulsarKiosk02`, 13 characters, under the 20-character
 /// SAM limit).
 pub const KIOSK_ACCOUNT_PREFIX: &str = "PulsarKiosk";
-/// Full name of a kiosk account (Turkish UI copy: visible in "lusrmgr").
-pub const KIOSK_FULL_NAME: &str = "Pulsar Seat kiosk koltuğu";
+/// Full name of a kiosk account (UI copy: visible in "lusrmgr").
+pub const KIOSK_FULL_NAME: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat kiosk seat", "Pulsar Seat kiosk koltuğu");
 /// Comment of a kiosk account; marks it as Pulsar's (a user of that name with another
-/// comment is never taken over or deleted).
-pub const KIOSK_COMMENT: &str = "Pulsar Seat kiosk koltuğunun otomatik hesabı. Silmeyin; kaldırma sırasında silinir.";
+/// comment, in any supported language, is never taken over or deleted).
+pub const KIOSK_COMMENT: seat_core::i18n::Text = seat_core::i18n::Text::new(
+    "Automatic account of a Pulsar Seat kiosk seat. Do not delete; it is removed at uninstall.",
+    "Pulsar Seat kiosk koltuğunun otomatik hesabı. Silmeyin; kaldırma sırasında silinir.",
+);
 /// LSA private data prefix of the kiosk accounts' passwords.
 pub const KIOSK_PASSWORD_SECRET: &str = "L$PulsarSeat.KioskAccount";
 /// Grant journal of the kiosk logons (run dir), separate from the hosts' journal.

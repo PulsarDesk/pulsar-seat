@@ -160,19 +160,41 @@ fn kind_of(class: InputClass) -> DeviceKind {
     }
 }
 
-/// Fallback name (Turkish UI copy) when Windows has no friendly name.
+/// Fallback names when Windows has no friendly name (UI copy, localized by `seat_core::i18n`).
+pub mod fallback {
+    use seat_core::i18n::Text;
+    pub const KEYBOARD: Text = Text::new("Keyboard", "Klavye");
+    pub const MOUSE: Text = Text::new("Mouse", "Fare");
+    pub const TOUCHSCREEN: Text = Text::new("Touch screen", "Dokunmatik ekran");
+    pub const PEN: Text = Text::new("Pen", "Kalem");
+    pub const TOUCHPAD: Text = Text::new("Touchpad", "Dokunmatik yüzey");
+    pub const GAMEPAD: Text = Text::new("Gamepad", "Oyun kumandası");
+    pub const MEDIA_KEYS: Text = Text::new("Media keys", "Medya tuşları");
+    pub const SYSTEM_BUTTONS: Text = Text::new("System buttons", "Sistem düğmeleri");
+    pub const LIGHTING: Text = Text::new("Lighting", "Aydınlatma");
+    pub const HID: Text = Text::new("HID device", "HID aygıtı");
+    #[cfg(test)]
+    pub const ALL: &[(&str, &Text)] =
+        seat_core::text_table![KEYBOARD, MOUSE, TOUCHSCREEN, PEN, TOUCHPAD, GAMEPAD, MEDIA_KEYS, SYSTEM_BUTTONS, LIGHTING, HID];
+}
+
+/// Fallback name when Windows has no friendly name, in the process language.
 pub fn fallback_name(class: InputClass, page: u16, usage: u16) -> &'static str {
+    fallback_text(class, page, usage).get()
+}
+
+pub fn fallback_text(class: InputClass, page: u16, usage: u16) -> &'static seat_core::i18n::Text {
     match (class, page, usage) {
-        (InputClass::Keyboard, ..) => "Klavye",
-        (InputClass::Mouse, ..) => "Fare",
-        (_, 0x0D, 0x04) => "Dokunmatik ekran",
-        (_, 0x0D, 0x02) => "Kalem",
-        (_, 0x0D, 0x05) => "Dokunmatik yüzey",
-        (_, 0x01, 0x04) | (_, 0x01, 0x05) => "Oyun kumandası",
-        (_, 0x0C, _) => "Medya tuşları",
-        (_, 0x01, 0x80) => "Sistem düğmeleri",
-        (_, 0x59, _) => "Aydınlatma",
-        _ => "HID aygıtı",
+        (InputClass::Keyboard, ..) => &fallback::KEYBOARD,
+        (InputClass::Mouse, ..) => &fallback::MOUSE,
+        (_, 0x0D, 0x04) => &fallback::TOUCHSCREEN,
+        (_, 0x0D, 0x02) => &fallback::PEN,
+        (_, 0x0D, 0x05) => &fallback::TOUCHPAD,
+        (_, 0x01, 0x04) | (_, 0x01, 0x05) => &fallback::GAMEPAD,
+        (_, 0x0C, _) => &fallback::MEDIA_KEYS,
+        (_, 0x01, 0x80) => &fallback::SYSTEM_BUTTONS,
+        (_, 0x59, _) => &fallback::LIGHTING,
+        _ => &fallback::HID,
     }
 }
 
@@ -408,6 +430,14 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fallback_names_are_complete() {
+        let p = seat_core::i18n::check_table(fallback::ALL);
+        assert!(p.is_empty(), "{p:?}");
+        assert_eq!(fallback_text(InputClass::Keyboard, 1, 6).en, "Keyboard");
+        assert_eq!(fallback_text(InputClass::Hid, 0x0D, 0x05).tr, "Dokunmatik yüzey");
+    }
+
+    #[test]
     fn usage_parsing() {
         assert_eq!(hid_usage(&["HID_DEVICE_UP:000D_U:0004".into()]), Some((0x0D, 0x04)));
         assert_eq!(hid_usage(&["hid_device_system_mouse".into()]), Some((1, 2)));
@@ -447,7 +477,7 @@ pub(crate) mod tests {
         assert!(touch.warnings.is_empty());
         assert_eq!(input_info(touch).unwrap().bus, "i2c");
         assert!(input_info(touch).unwrap().built_in);
-        assert_eq!(touch.name, "Dokunmatik ekran");
+        assert_eq!(touch.name, fallback::TOUCHSCREEN.get());
         assert_eq!(touch.label.as_deref(), Some("ACPI"));
     }
 

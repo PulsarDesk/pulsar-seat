@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Pre-flight checks (spec 90 §11 item 4, spec 80 §11.4 "check level" replaced by an
-//! explicit list). Each check is pass / warn / fail / info with a **Turkish** detail (the
-//! manager shows `detail` verbatim; spec 80 §11.4 asks for the reason in the UI language).
-//! The title comes from the manager's i18n by `id`; [`title_tr`] mirrors that wording for
-//! the installer and logs.
+//! explicit list). Each check is pass / warn / fail / info with an English technical
+//! detail (logs; the manager shows its own localized text per `id` and outcome and the
+//! detail only as "technical detail"). [`title`] mirrors the manager's check titles for
+//! the installer console (English default, Turkish locale); logs use [`title_en`].
 //!
 //! Security states (Secure Boot, Memory Integrity, Smart App Control) are **reported
 //! only, never changed**.
@@ -112,22 +112,22 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
     use CheckOutcome::*;
     let mut v = Vec::new();
     v.push(if env.is_admin {
-        chk("admin", Pass, "yükseltilmiş yönetici")
+        chk("admin", Pass, "elevated administrator")
     } else {
-        chk("admin", Fail, "yönetici hakları gerekiyor")
+        chk("admin", Fail, "administrator rights needed")
     });
     v.push(if env.os_build < MIN_BUILD {
         chk(
             "os_build",
             Fail,
-            format!("derleme {} en az {MIN_BUILD} olmalı", env.os_build),
+            format!("build {} must be at least {MIN_BUILD}", env.os_build),
         )
     } else if env.os_build > MAX_TESTED_BUILD {
         chk(
             "os_build",
             Warn,
             format!(
-                "derleme {}.{}, denenmiş en yeni derlemeden ({MAX_TESTED_BUILD}) daha yeni",
+                "build {}.{} is newer than the newest tested build ({MAX_TESTED_BUILD})",
                 env.os_build, env.os_ubr
             ),
         )
@@ -135,7 +135,7 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
         chk(
             "os_build",
             Pass,
-            format!("derleme {}.{}", env.os_build, env.os_ubr),
+            format!("build {}.{}", env.os_build, env.os_ubr),
         )
     });
     v.push(if env.native_machine == 0 {
@@ -145,7 +145,7 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
             "arch_native",
             Warn,
             format!(
-                "bilgisayarın yerel mimarisi belirlenemedi; bu paket {} için",
+                "the PC's native architecture could not be determined; this package is for {}",
                 machine_name(env.binary_machine)
             ),
         )
@@ -153,14 +153,14 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
         chk(
             "arch_native",
             Pass,
-            format!("yerel {}", machine_name(env.native_machine)),
+            format!("native {}", machine_name(env.native_machine)),
         )
     } else {
         chk(
             "arch_native",
             Fail,
             format!(
-                "bu {} paketi {} bir bilgisayarda çalışıyor; {} paketini kurun",
+                "this {} package runs on a {} PC; install the {} package",
                 machine_name(env.binary_machine),
                 machine_name(env.native_machine),
                 machine_name(env.native_machine)
@@ -173,61 +173,61 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
         format!(
             "{} ({})",
             env.edition_id,
-            if env.is_server { "sunucu" } else { "istemci" }
+            if env.is_server { "server" } else { "client" }
         ),
     ));
     if env.is_server {
         v.push(match env.rdsh_role {
-            Some(true) => chk("rdsh_role", Pass, "rol kurulu"),
+            Some(true) => chk("rdsh_role", Pass, "role installed"),
             Some(false) => chk(
                 "rdsh_role",
                 Warn,
-                "rol bulunamadı; koltuklar hızlı kullanıcı değiştirmeye geri döner",
+                "role not found; seats fall back to fast user switching",
             ),
-            None => chk("rdsh_role", Info, "rol durumu bilinmiyor"),
+            None => chk("rdsh_role", Info, "role state unknown"),
         });
     }
     v.push(match env.secure_boot {
-        Some(true) => chk("secure_boot", Pass, "açık"),
+        Some(true) => chk("secure_boot", Pass, "on"),
         Some(false) => chk(
             "secure_boot",
             Info,
-            "kapalı (yalnızca bildirilir; Pulsar Seat bunu asla değiştirmez)",
+            "off (reported only; Pulsar Seat never changes it)",
         ),
-        None => chk("secure_boot", Info, "yok (eski BIOS ya da bilinmiyor)"),
+        None => chk("secure_boot", Info, "not available (legacy BIOS or unknown)"),
     });
     v.push(match env.memory_integrity {
-        Some(true) => chk("memory_integrity", Pass, "açık"),
+        Some(true) => chk("memory_integrity", Pass, "on"),
         Some(false) => chk(
             "memory_integrity",
             Info,
-            "kapalı (yalnızca bildirilir; Pulsar Seat bunu asla değiştirmez)",
+            "off (reported only; Pulsar Seat never changes it)",
         ),
-        None => chk("memory_integrity", Info, "bilinmiyor"),
+        None => chk("memory_integrity", Info, "unknown"),
     });
     v.push(match env.smart_app_control {
         Some(SmartAppControl::On) => chk(
             "smart_app_control",
             Info,
-            "açık: Pulsar Seat'in imzasız derlemeleri engellenebilir",
+            "on: unsigned Pulsar Seat builds may be blocked",
         ),
-        Some(SmartAppControl::Evaluation) => chk("smart_app_control", Info, "değerlendirme modu"),
-        Some(SmartAppControl::Off) => chk("smart_app_control", Info, "kapalı"),
-        None => chk("smart_app_control", Info, "bilinmiyor"),
+        Some(SmartAppControl::Evaluation) => chk("smart_app_control", Info, "evaluation mode"),
+        Some(SmartAppControl::Off) => chk("smart_app_control", Info, "off"),
+        None => chk("smart_app_control", Info, "unknown"),
     });
     v.push(if env.windows_safe_mode {
         chk(
             "windows_safe_mode",
             Warn,
-            "Windows Güvenli Mod'da çalışıyor: ek koltuklar başlatılmaz",
+            "Windows runs in Safe Mode: extra seats do not start",
         )
     } else {
-        chk("windows_safe_mode", Pass, "normal açılış")
+        chk("windows_safe_mode", Pass, "normal boot")
     });
     v.push(chk(
         "driver_signing",
         Info,
-        "Pulsar Seat sürücüleri henüz imzalı değil: kullanıcı kipi yöntemleri kullanılır",
+        "Pulsar Seat drivers are not signed yet: user-mode methods are used",
     ));
     v.extend(env.coexistence.checks());
     v
@@ -238,24 +238,48 @@ pub fn blocks_install(checks: &[Check]) -> bool {
     checks.iter().any(|c| c.outcome == CheckOutcome::Fail)
 }
 
-/// Turkish title for a check id (installer and logs). Same wording as the manager's
-/// `checks` table in `apps/manager/src/lib/i18n.ts`, which is the UI source.
-pub fn title_tr(id: &str) -> &'static str {
+/// Title of a check id for the installer console (localized). Same wording as the
+/// manager's `checks` table in `apps/manager/src/lib/locales/`, which is the UI source.
+pub fn title(id: &str) -> &'static str {
+    title_text(id).get()
+}
+
+/// English title (setup log, diagnostics).
+pub fn title_en(id: &str) -> &'static str {
+    title_text(id).en
+}
+
+pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
+    use seat_core::i18n::Text;
+    const ADMIN: Text = Text::new("Administrator rights", "Yönetici hakları");
+    const OS_BUILD: Text = Text::new("Windows version", "Windows sürümü");
+    const ARCH_NATIVE: Text = Text::new("Native build", "Yerel derleme");
+    const EDITION: Text = Text::new("Windows edition", "Windows baskısı");
+    const RDSH_ROLE: Text = Text::new("Remote Desktop Session Host role", "Uzak Masaüstü Oturumu Ana Bilgisayarı rolü");
+    const SECURE_BOOT: Text = Text::new("Secure Boot", "Güvenli Önyükleme");
+    const MEMORY_INTEGRITY: Text = Text::new("Memory Integrity", "Bellek Bütünlüğü");
+    const SMART_APP_CONTROL: Text = Text::new("Smart App Control", "Akıllı Uygulama Denetimi");
+    const WINDOWS_SAFE_MODE: Text = Text::new("Safe Mode", "Güvenli Mod");
+    const DRIVER_SIGNING: Text = Text::new("Driver signature", "Sürücü imzası");
+    const REFERENCE_PRODUCT: Text = Text::new("Another multiseat product", "Başka bir çoklu koltuk yazılımı");
+    const TERMSERVICE_STOCK: Text = Text::new("Remote Desktop service is stock", "Uzak Masaüstü hizmeti özgün");
+    const FOREIGN_INPUT_FILTERS: Text = Text::new("Other input filter drivers", "Başka giriş süzgeç sürücüleri");
+    const OTHER: Text = Text::new("Check", "Denetim");
     match id {
-        "admin" => "Yönetici hakları",
-        "os_build" => "Windows sürümü",
-        "arch_native" => "Yerel derleme",
-        "edition" => "Windows baskısı",
-        "rdsh_role" => "Uzak Masaüstü Oturumu Ana Bilgisayarı rolü",
-        "secure_boot" => "Güvenli Önyükleme",
-        "memory_integrity" => "Bellek Bütünlüğü",
-        "smart_app_control" => "Akıllı Uygulama Denetimi",
-        "windows_safe_mode" => "Güvenli Mod",
-        "driver_signing" => "Sürücü imzası",
-        "reference_product" => "Başka bir çoklu koltuk yazılımı",
-        "termservice_stock" => "Uzak Masaüstü hizmeti özgün",
-        "foreign_input_filters" => "Başka giriş süzgeç sürücüleri",
-        _ => "Denetim",
+        "admin" => &ADMIN,
+        "os_build" => &OS_BUILD,
+        "arch_native" => &ARCH_NATIVE,
+        "edition" => &EDITION,
+        "rdsh_role" => &RDSH_ROLE,
+        "secure_boot" => &SECURE_BOOT,
+        "memory_integrity" => &MEMORY_INTEGRITY,
+        "smart_app_control" => &SMART_APP_CONTROL,
+        "windows_safe_mode" => &WINDOWS_SAFE_MODE,
+        "driver_signing" => &DRIVER_SIGNING,
+        "reference_product" => &REFERENCE_PRODUCT,
+        "termservice_stock" => &TERMSERVICE_STOCK,
+        "foreign_input_filters" => &FOREIGN_INPUT_FILTERS,
+        _ => &OTHER,
     }
 }
 
@@ -340,7 +364,10 @@ mod tests {
         let c = evaluate(&Environment::default());
         assert!(!blocks_install(&c), "{c:?}");
         for x in &c {
-            assert_ne!(title_tr(&x.id), "Denetim", "missing title for {}", x.id);
+            assert_ne!(title_en(&x.id), "Check", "missing title for {}", x.id);
+            let t = title_text(&x.id);
+            assert!(seat_core::i18n::check_table(&[(x.id.as_str(), t)]).is_empty(), "{}", x.id);
+            assert_ne!(t.tr, "Denetim", "missing Turkish title for {}", x.id);
         }
     }
 

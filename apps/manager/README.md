@@ -1,6 +1,6 @@
 # Pulsar Seat manager
 
-Tauri 2 + SvelteKit + Svelte 5 (runes), `adapter-static`, Turkish UI. Runs as invoker in
+Tauri 2 + SvelteKit + Svelte 5 (runes), `adapter-static`, English UI with a Turkish locale. Runs as invoker in
 every session. It does no privileged work itself: every change is a request to the
 service over the control pipe (`docs/agents/architecture.md` §5). Behaviour target:
 `spec/local/10-manager.md` (local seats) and `spec/remote/` (remote seats). Since merge step 9
@@ -37,7 +37,8 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src/lib/model.ts` | Pure config edits, effective masks (mirror of `seat_core::assign`), canvas grouping, seat colours, validation mirror |
 | `src/lib/store.svelte.ts` | Window state: service view + unsaved draft, event handling, save flow |
 | `src/lib/api.ts` / `demo.ts` | Tauri API / in-memory demo service with the same interface |
-| `src/lib/i18n.ts`, `warning.ts` | All Turkish copy; the experimental-backend warning (version 1) |
+| `src/lib/locales/en.ts`, `tr.ts` | All UI copy: English (default, the key set: type `Locale`) and Turkish (same keys, `i18n.test.ts`) |
+| `src/lib/i18n.ts`, `warning.ts` | Locale choice (`initLocale`, `applyLocale`, stored per user), label helpers; the experimental-backend warning in both languages |
 | `src/lib/components/` | App shell, tabs (Seats, Basic, Advanced, Network, Status), dialogs, wizard |
 | `src/lib/remote/` | Remote seats tab (from Pulsar Split's manager): `components/RemoteTab.svelte` + seat page, pair dialog (QR), host, logs, DXVK, settings; `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts`, `remote.css` (scoped to `.remote-ui`) |
 | `src-tauri/src/net.rs` | Static IPv4 list (address dialog) and the LAN address order of the pair dialog (`lan_addresses`) |
@@ -91,9 +92,9 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   own seat opens a dialog with "Bir daha gösterme" (per-user pref) and "Oturumu kapat"
   (`relogon_seat`: logs the session off, the seat then starts again). Spec 10 reads the
   other seats' users itself; here the service decides and sends the notice.
-- Pre-flight checks are shown with Turkish text per (id, outcome); the service's `detail`
+- Pre-flight checks are shown with localized text per (id, outcome); the service's `detail`
   is only behind a collapsed "teknik ayrıntı". Fallback notes are parsed
-  (`cat:wanted->used:reason`) and rendered in Turkish.
+  (`cat:wanted->used:reason`) and rendered as text.
 - Gap: the wizard's minimum-resolution precondition (spec 10 §9.2) is not checked by the
   manager yet.
 
@@ -129,3 +130,16 @@ Service buttons (round 4): `StartServiceW` / `ControlService(STOP)` against the 
 the token elevation check, and the wait for the target state (60 s) are untested on
 hardware. Mic state line on the remote seat page (`seat_runtime.stream.mic`) is untested
 against a real host (needs a `pulsar-host` with the `mic` capability).
+
+## Language
+
+English by default; Turkish is a locale with the same keys (`src/lib/locales/`). At start
+`+page.svelte` asks the shell for the Windows UI language (`ui_language`) and applies the
+user's stored choice first (Basic settings > Appearance > Language: Windows display
+language / English / Türkçe; `localStorage`, per user). A change stores the choice, tells the
+shell (`set_ui_language`: tray menu, window titles, file dialogs follow) and reloads the
+window. Add new strings to both `en.ts` and `tr.ts`; `bun run check` fails when `tr.ts` lacks
+a key and `i18n.test.ts` fails on a key that only one side has. HYPOTHESIS (not run on
+hardware): WebView2 reports the Windows display language in `navigator.languages`, and the
+tray relabels at runtime.
+

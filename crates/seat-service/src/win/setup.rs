@@ -18,12 +18,73 @@ use seat_core::store::SecretStore;
 use seat_proto::messages::CheckOutcome;
 use std::path::Path;
 
+/// Console copy of install / uninstall (English default, Turkish locale; `seat_core::i18n`).
+/// The setup log file itself stays English (`seat_compat::setup::InstallReport::log_text`).
+mod copy {
+    use seat_core::i18n::Text;
+    pub const BLOCKED: Text = Text::new("BLOCKED {0}: {1}", "ENGEL {0}: {1}");
+    pub const WARNING: Text = Text::new("WARNING {0}", "UYARI {0}");
+    pub const ERROR: Text = Text::new("Error: {0}", "Hata: {0}");
+    pub const WARNING_LINE: Text = Text::new("Warning: {0}", "Uyarı: {0}");
+    pub const JOURNAL_OPEN_FAILED: Text = Text::new("Error: the change journal could not open: {0}", "Hata: değişiklik günlüğü açılamadı: {0}");
+    pub const JOURNAL_FAILED: Text = Text::new("Error: change journal: {0}", "Hata: değişiklik günlüğü: {0}");
+    pub const SETUP_LOG_FAILED: Text = Text::new("Warning: the setup log could not be written: {0}", "Uyarı: kurulum günlüğü yazılamadı: {0}");
+    pub const INSTALLED: Text = Text::new("Pulsar Seat installed (exit {0}).", "Pulsar Seat kuruldu (çıkış {0}).");
+    pub const UNINSTALLED: Text = Text::new("Pulsar Seat uninstalled.", "Pulsar Seat kaldırıldı.");
+    pub const GATE_DEVICE_SECURITY: Text = Text::new("device access permissions", "aygıt erişim izinleri");
+    pub const GATE_PRINTER_ACL: Text = Text::new("printer permissions", "yazıcı izinleri");
+    pub const GATE_CAMERA_CONSENT: Text = Text::new("camera permissions", "kamera izinleri");
+    pub const GATE_DRIVE_LETTERS: Text = Text::new("session drive letters", "oturum sürücü harfleri");
+    pub const GATE_MINIFILTER: Text = Text::new("storage filter", "depolama filtresi");
+    pub const RDS_SETTINGS: Text = Text::new("Remote Desktop settings", "Uzak Masaüstü ayarları");
+    pub const REMOTE_PARTIAL: Text = Text::new(
+        "Warning: the remote seat changes could not be fully undone (exit {0}); details: {1}",
+        "Uyarı: uzak koltuk değişiklikleri tam geri alınamadı (çıkış {0}); ayrıntılar: {1}",
+    );
+    pub const REVERT_FAILED_IN: Text = Text::new("Could not undo ({0}): {1}", "Geri alınamadı ({0}): {1}");
+    pub const REVERT_FAILED_SEQ: Text = Text::new("Could not undo #{0}: {1}", "Geri alınamadı #{0}: {1}");
+    pub const FIREWALL_RULE_KEPT: Text = Text::new(
+        "Warning: the \"{0}\" firewall rule was left until Remote Desktop Services restart. To remove it after restarting the PC: netsh advfirewall firewall delete rule name=\"{0}\"",
+        "Uyarı: \"{0}\" güvenlik duvarı kuralı, Uzak Masaüstü Hizmetleri yeniden başlayana kadar bırakıldı. Bilgisayarı yeniden başlattıktan sonra kaldırmak için: netsh advfirewall firewall delete rule name=\"{0}\"",
+    );
+    pub const KIOSK_TERMINAL: Text = Text::new(
+        "Warning: the kiosk user's default terminal setting could not be restored ({0}); it can be changed in Settings > System > For developers > Terminal once the user signs in.",
+        "Uyarı: kiosk kullanıcısının varsayılan terminal ayarı geri alınamadı ({0}); kullanıcı oturum açtığında Ayarlar > Sistem > Geliştiriciler için > Terminal'den değiştirilebilir.",
+    );
+    pub const CREDPROV: Text = Text::new("Warning: the credential provider registration could not be deleted: {0}", "Uyarı: kimlik sağlayıcı kaydı silinemedi: {0}");
+    pub const SEAT_PASSWORD: Text = Text::new("Warning: the password of seat {0} could not be deleted: {1}", "Uyarı: {0}. koltuğun parolası silinemedi: {1}");
+    pub const REMOTE_SECRET: Text = Text::new("Warning: the secret of remote seat {0} could not be deleted ({1}).", "Uyarı: {0} uzak koltuğunun gizli bilgisi silinemedi ({1}).");
+    pub const DESKTOP_ACE: Text = Text::new(
+        "Warning: the seat host's desktop permission could not be revoked ({0}); it goes by itself when the session closes.",
+        "Uyarı: koltuk ana makinesinin masaüstü izni geri alınamadı ({0}); oturum kapanınca kendiliğinden kalkar.",
+    );
+    pub const NOT_STOPPED: Text = Text::new(
+        "Warning: the service could not be stopped; the {0} account and desktop permissions were not removed. Stop the service and run the uninstall again.",
+        "Uyarı: hizmet durdurulamadı; {0} hesabı ve masaüstü izinleri kaldırılmadı. Hizmeti durdurup kaldırmayı yeniden çalıştırın.",
+    );
+    pub const STATE_UNKNOWN: Text = Text::new(
+        "Warning: the service state could not be read ({0}); the {1} account and desktop permissions were not removed.",
+        "Uyarı: hizmetin durumu okunamadı ({0}); {1} hesabı ve masaüstü izinleri kaldırılmadı.",
+    );
+    pub const UPDATES_DIR: Text = Text::new("Warning: the update folder could not be deleted: {0}", "Uyarı: güncelleme klasörü silinemedi: {0}");
+    pub const DATA_DIR: Text = Text::new("Warning: the data folder could not be deleted: {0}", "Uyarı: veri klasörü silinemedi: {0}");
+    pub const LEGACY_DIR: Text = Text::new("Warning: the old data folder ({0}) could not be deleted: {1}", "Uyarı: eski veri klasörü ({0}) silinemedi: {1}");
+
+    #[cfg(test)]
+    pub const ALL: &[(&str, &Text)] = seat_core::text_table![
+        BLOCKED, WARNING, ERROR, WARNING_LINE, JOURNAL_OPEN_FAILED, JOURNAL_FAILED, SETUP_LOG_FAILED, INSTALLED, UNINSTALLED,
+        GATE_DEVICE_SECURITY, GATE_PRINTER_ACL, GATE_CAMERA_CONSENT, GATE_DRIVE_LETTERS, GATE_MINIFILTER, RDS_SETTINGS,
+        REMOTE_PARTIAL, REVERT_FAILED_IN, REVERT_FAILED_SEQ, FIREWALL_RULE_KEPT, KIOSK_TERMINAL, CREDPROV, SEAT_PASSWORD,
+        REMOTE_SECRET, DESKTOP_ACE, NOT_STOPPED, STATE_UNKNOWN, UPDATES_DIR, DATA_DIR, LEGACY_DIR
+    ];
+}
+
 fn print_checks(rep: &InstallReport) {
     for c in rep.checks.iter().filter(|c| c.outcome == CheckOutcome::Fail) {
-        println!("ENGEL {}: {}", seat_compat::preflight::title_tr(&c.id), c.detail);
+        println!("{}", copy::BLOCKED.fmt(&[&seat_compat::preflight::title(&c.id), &c.detail]));
     }
     for w in rep.warnings() {
-        println!("UYARI {w}");
+        println!("{}", copy::WARNING.fmt(&[&w]));
     }
 }
 
@@ -56,7 +117,7 @@ pub fn install(exe: &Path, data_dir: &Path, args: &[String]) -> i32 {
     let args = normalize_install_args(args);
     let (opts, _, errors) = InstallOptions::parse(&args);
     if let Some(e) = errors.first() {
-        eprintln!("Hata: {e}");
+        eprintln!("{}", copy::ERROR.fmt(&[&e]));
         return setup::EXIT_FAILED;
     }
     let finish = |code: i32| if opts.msi { setup::msi_exit_code(code) } else { code };
@@ -75,23 +136,23 @@ pub fn install(exe: &Path, data_dir: &Path, args: &[String]) -> i32 {
         super::scm::configure_existing(data_dir)
     };
     if let Err(e) = service_part {
-        eprintln!("Hata: {e}");
+        eprintln!("{}", copy::ERROR.fmt(&[&e]));
         return setup::EXIT_FAILED;
     }
     let j = match Journal::in_data_dir(data_dir) {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("Hata: değişiklik günlüğü açılamadı: {e}");
+            eprintln!("{}", copy::JOURNAL_OPEN_FAILED.fmt(&[&e]));
             return setup::EXIT_FAILED;
         }
     };
     let rep = setup::install(&j, &WinOps, &opts);
     print_checks(&rep);
     if let Err(e) = setup::write_setup_log(data_dir, &rep) {
-        eprintln!("Uyarı: kurulum günlüğü yazılamadı: {e}");
+        eprintln!("{}", copy::SETUP_LOG_FAILED.fmt(&[&e]));
     }
     let code = rep.exit_code();
-    println!("Pulsar Seat kuruldu (çıkış {code}).");
+    println!("{}", copy::INSTALLED.fmt(&[&code]));
     finish(code)
 }
 
@@ -143,13 +204,13 @@ fn revert_gates(make: &dyn Fn(GateBackendKind) -> Arc<dyn DeviceGate>, with_jour
     failed
 }
 
-fn gate_name_tr(kind: GateBackendKind) -> &'static str {
+fn gate_name(kind: GateBackendKind) -> &'static str {
     match kind {
-        GateBackendKind::DeviceSecurity => "aygıt erişim izinleri",
-        GateBackendKind::PrinterAcl => "yazıcı izinleri",
-        GateBackendKind::CameraConsent => "kamera izinleri",
-        GateBackendKind::SessionDriveLetters => "oturum sürücü harfleri",
-        GateBackendKind::StorageMinifilter => "depolama filtresi",
+        GateBackendKind::DeviceSecurity => copy::GATE_DEVICE_SECURITY.get(),
+        GateBackendKind::PrinterAcl => copy::GATE_PRINTER_ACL.get(),
+        GateBackendKind::CameraConsent => copy::GATE_CAMERA_CONSENT.get(),
+        GateBackendKind::SessionDriveLetters => copy::GATE_DRIVE_LETTERS.get(),
+        GateBackendKind::StorageMinifilter => copy::GATE_MINIFILTER.get(),
     }
 }
 
@@ -160,7 +221,7 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     let opts = match UninstallOptions::parse(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("Hata: {e}");
+            eprintln!("{}", copy::ERROR.fmt(&[&e]));
             return setup::EXIT_FAILED;
         }
     };
@@ -180,8 +241,8 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     });
     if remote != setup::EXIT_OK && remote != setup::EXIT_REBOOT {
         eprintln!(
-            "Uyarı: uzak koltuk değişiklikleri tam geri alınamadı (çıkış {remote}); ayrıntılar: {}",
-            data_dir.join(seat_core::consts::LOGS_DIR).join(seat_setup::layout::SETUP_LOG).display()
+            "{}",
+            copy::REMOTE_PARTIAL.fmt(&[&remote, &data_dir.join(seat_core::consts::LOGS_DIR).join(seat_setup::layout::SETUP_LOG).display()])
         );
         code = code.max(setup::EXIT_PARTIAL);
     }
@@ -189,7 +250,7 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     let pnp: Arc<dyn seat_core::pnp::PnpTree> = Arc::new(seat_media::pnp::WinPnpTree::new());
     let make = |kind| seat_media::create_gate_in(kind, pnp.clone(), Some(&run));
     for (kind, e) in revert_gates(&make, gate_journals_present(&run)) {
-        eprintln!("Geri alınamadı ({}): {e}", gate_name_tr(kind));
+        eprintln!("{}", copy::REVERT_FAILED_IN.fmt(&[&gate_name(kind), &e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // Passwordless-seat RDP listener + its firewall rule, then the RDS values (spec 30
@@ -198,16 +259,13 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         Ok(r) if r.firewall_rule_kept => {
             for port in &r.kept_ports {
                 let name = seat_session::loopback_listener::firewall_rule_name(*port);
-                eprintln!(
-                    "Uyarı: \"{name}\" güvenlik duvarı kuralı, Uzak Masaüstü Hizmetleri yeniden başlayana kadar bırakıldı. \
-                     Bilgisayarı yeniden başlattıktan sonra kaldırmak için: netsh advfirewall firewall delete rule name=\"{name}\""
-                );
+                eprintln!("{}", copy::FIREWALL_RULE_KEPT.fmt(&[&name]));
             }
             code = code.max(setup::EXIT_PARTIAL);
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("Geri alınamadı (Uzak Masaüstü ayarları): {e}");
+            eprintln!("{}", copy::REVERT_FAILED_IN.fmt(&[&copy::RDS_SETTINGS.get(), &e]));
             code = code.max(setup::EXIT_PARTIAL);
         }
     }
@@ -215,12 +273,12 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         match Journal::in_data_dir(data_dir).and_then(|j| setup::uninstall(&j, &WinOps)) {
             Ok(r) => {
                 for (seq, why) in &r.failed {
-                    eprintln!("Geri alınamadı #{seq}: {why}");
+                    eprintln!("{}", copy::REVERT_FAILED_SEQ.fmt(&[&seq, &why]));
                 }
                 code = code.max(setup::uninstall_exit_code(&r));
             }
             Err(e) => {
-                eprintln!("Hata: değişiklik günlüğü: {e}");
+                eprintln!("{}", copy::JOURNAL_FAILED.fmt(&[&e]));
                 code = setup::EXIT_PARTIAL;
             }
         }
@@ -230,25 +288,25 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     if let Some(saved) = crate::kiosk_console::load(&kc)
         && let Err(e) = crate::kiosk_console::restore(&kc, &saved, super::console_delegation::set)
     {
-        eprintln!("Uyarı: kiosk kullanıcısının varsayılan terminal ayarı geri alınamadı ({e}); kullanıcı oturum açtığında Ayarlar > Sistem > Geliştiriciler için > Terminal'den değiştirilebilir.");
+        eprintln!("{}", copy::KIOSK_TERMINAL.fmt(&[&e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // Credential provider + filter (registered only while enabled under fast user
     // switching): our four keys go, nothing else.
     if let Err(e) = seat_session::credprov::unregister(&seat_session::win::registry::WinRegistry) {
-        eprintln!("Uyarı: kimlik sağlayıcı kaydı silinemedi: {e}");
+        eprintln!("{}", copy::CREDPROV.fmt(&[&e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // Seat passwords: a null value deletes the LSA secret (a missing one is fine).
     for seat in SeatNumber::range(seat_core::ids::MAX_SEATS) {
         if let Err(e) = super::lsa::LsaSecretStore.set(seat, None) {
-            eprintln!("Uyarı: {}. koltuğun parolası silinemedi: {e}", seat.get());
+            eprintln!("{}", copy::SEAT_PASSWORD.fmt(&[&seat.get(), &e]));
             code = code.max(setup::EXIT_PARTIAL);
         }
     }
     // Remote seats' stream secrets (Pulsar identity, connect password, relay key).
     for (id, e) in crate::remote::delete_remote_secrets(&super::lsa::LsaSecretStore, &remote_ids) {
-        eprintln!("Uyarı: {id} uzak koltuğunun gizli bilgisi silinemedi ({e}).");
+        eprintln!("{}", copy::REMOTE_SECRET.fmt(&[&id, &e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // The seat hosts' account (rights, account, logon-screen entry, LSA password). Only
@@ -259,20 +317,20 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
             // Window-station / desktop ACEs of hosts that ran until the stop: revoked in
             // every session that still exists, then the journal goes.
             for e in super::containment::revoke_all_at_uninstall(&run) {
-                eprintln!("Uyarı: koltuk ana makinesinin masaüstü izni geri alınamadı ({e}); oturum kapanınca kendiliğinden kalkar.");
+                eprintln!("{}", copy::DESKTOP_ACE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
             }
             for e in super::host_account::remove() {
-                eprintln!("Uyarı: {e}");
+                eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
             }
         }
         Ok(false) => {
-            eprintln!("Uyarı: hizmet durdurulamadı; {} hesabı ve masaüstü izinleri kaldırılmadı. Hizmeti durdurup kaldırmayı yeniden çalıştırın.", seat_session::host_account::ACCOUNT_NAME);
+            eprintln!("{}", copy::NOT_STOPPED.fmt(&[&seat_session::host_account::ACCOUNT_NAME]));
             code = code.max(setup::EXIT_PARTIAL);
         }
         Err(e) => {
-            eprintln!("Uyarı: hizmetin durumu okunamadı ({e}); {} hesabı ve masaüstü izinleri kaldırılmadı.", seat_session::host_account::ACCOUNT_NAME);
+            eprintln!("{}", copy::STATE_UNKNOWN.fmt(&[&e, &seat_session::host_account::ACCOUNT_NAME]));
             code = code.max(setup::EXIT_PARTIAL);
         }
     }
@@ -283,7 +341,7 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         super::eventlog::unregister_source().map_err(|e| e.to_string())
     };
     if let Err(e) = service_part {
-        eprintln!("Hata: {e}");
+        eprintln!("{}", copy::ERROR.fmt(&[&e]));
         code = setup::EXIT_FAILED;
     }
     // The update download cache (up to 512 MiB, no configuration) always goes.
@@ -291,13 +349,13 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     if updates.exists()
         && let Err(e) = std::fs::remove_dir_all(&updates)
     {
-        eprintln!("Uyarı: güncelleme klasörü silinemedi: {e}");
+        eprintln!("{}", copy::UPDATES_DIR.fmt(&[&e]));
     }
     if opts.remove_user_data
         && data_dir.exists()
         && let Err(e) = std::fs::remove_dir_all(data_dir)
     {
-        eprintln!("Uyarı: veri klasörü silinemedi: {e}");
+        eprintln!("{}", copy::DATA_DIR.fmt(&[&e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // The shim's data folder before the merge review (`%ProgramData%\PulsarSplit`: journal,
@@ -308,11 +366,11 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
         && legacy.is_dir()
         && let Err(e) = std::fs::remove_dir_all(&legacy)
     {
-        eprintln!("Uyarı: eski veri klasörü ({}) silinemedi: {e}", legacy.display());
+        eprintln!("{}", copy::LEGACY_DIR.fmt(&[&legacy.display(), &e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     if code == setup::EXIT_OK {
-        println!("Pulsar Seat kaldırıldı.");
+        println!("{}", copy::UNINSTALLED.get());
     }
     if opts.msi { setup::EXIT_OK } else { code }
 }
@@ -419,6 +477,12 @@ mod tests {
         let (o, _, errors) = seat_compat::setup::InstallOptions::parse(&normalize_install_args(&args));
         assert!(errors.is_empty(), "{errors:?}");
         o.drivers_dir
+    }
+
+    #[test]
+    fn copy_table_is_complete() {
+        let p = seat_core::i18n::check_table(super::copy::ALL);
+        assert!(p.is_empty(), "{p:?}");
     }
 
     #[test]

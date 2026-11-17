@@ -15,6 +15,7 @@
 //!   process. `--tray` (the installers' Run entry, installer/README.md) or `--autostart`
 //!   (spec 10 §1) starts hidden.
 
+mod copy;
 mod net;
 mod pictures;
 mod pipe_client;
@@ -116,7 +117,7 @@ fn wait_for_parent_exit(_pid: u32) {}
 /// localStorage (view prefs, "don't show again" flags).
 fn build_main_window(app: &tauri::App, info: &AppInfo) -> tauri::Result<()> {
     let mut b = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-        .title("Pulsar Seat Yönetici")
+        .title(copy::WINDOW_TITLE.get())
         .inner_size(1000.0, 700.0)
         .min_inner_size(720.0, 520.0)
         .visible(!info.autostart);
@@ -258,11 +259,20 @@ struct TrayAction {
     action: &'static str,
 }
 
+/// Tray menu items, kept so a language change can relabel them.
+struct TrayItems(Vec<(MenuItem<tauri::Wry>, &'static seat_core::i18n::Text)>);
+
 fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
-    let show = MenuItem::with_id(app, "show", "Pencereyi göster", true, None::<&str>)?;
-    let start = MenuItem::with_id(app, "start_seats", "Koltukları başlat", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle_enabled", "Pulsar Seat'i aç / kapat", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Çıkış", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", copy::TRAY_SHOW.get(), true, None::<&str>)?;
+    let start = MenuItem::with_id(app, "start_seats", copy::TRAY_START.get(), true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle_enabled", copy::TRAY_TOGGLE.get(), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", copy::TRAY_QUIT.get(), true, None::<&str>)?;
+    app.manage(TrayItems(vec![
+        (show.clone(), &copy::TRAY_SHOW),
+        (start.clone(), &copy::TRAY_START),
+        (toggle.clone(), &copy::TRAY_TOGGLE),
+        (quit.clone(), &copy::TRAY_QUIT),
+    ]));
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show, &start, &toggle, &sep, &quit])?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
@@ -318,6 +328,31 @@ fn start_event_thread(app: AppHandle, running: Arc<AtomicBool>) {
             );
         })
         .expect("spawn event thread");
+}
+
+/// Language of the Windows user UI (`en` / `tr`; English for anything else), for the UI's
+/// first start before the user picked one.
+#[tauri::command]
+fn ui_language() -> &'static str {
+    seat_core::i18n::detect().code()
+}
+
+/// The UI's language (the user's choice or the OS language): native copy follows it.
+#[tauri::command]
+fn set_ui_language(app: AppHandle, lang: String) -> Result<(), ProtoError> {
+    let Some(l) = seat_core::i18n::Lang::from_tag(&lang) else {
+        return Err(ProtoError::new(seat_proto::ErrorCode::InvalidValue, "unsupported language"));
+    };
+    seat_core::i18n::set(l);
+    if let Some(items) = app.try_state::<TrayItems>() {
+        for (item, text) in &items.0 {
+            let _ = item.set_text(text.get());
+        }
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(copy::WINDOW_TITLE.get());
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -380,7 +415,9 @@ pub fn run() {
             wizard_page_monitor,
             wizard_last_progress,
             set_ui_dirty,
-            hide_to_tray
+            hide_to_tray,
+            ui_language,
+            set_ui_language
         ])
         .build(tauri::generate_context!())
         .expect("error while building the manager")

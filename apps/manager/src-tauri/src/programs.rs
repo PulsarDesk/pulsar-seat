@@ -75,7 +75,7 @@ mod win {
         FileOpenDialog, IFileOpenDialog, IShellItem, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderItem, SIGDN_FILESYSPATH,
         ShellLink,
     };
-    use windows::core::{HSTRING, Interface, w};
+    use windows::core::{HSTRING, Interface, PCWSTR, w};
 
     fn com_err(what: &str, e: windows::core::Error) -> ProtoError {
         ProtoError::new(ErrorCode::Internal, format!("{what}: {e}"))
@@ -123,14 +123,17 @@ mod win {
             let mut opts = d.GetOptions().map_err(|e| com_err("GetOptions", e))? | FOS_FORCEFILESYSTEM;
             if folders {
                 opts |= FOS_PICKFOLDERS;
-                d.SetTitle(w!("Programları eklenecek klasörü seçin")).map_err(|e| com_err("SetTitle", e))?;
+                d.SetTitle(&HSTRING::from(crate::copy::PICK_FOLDER.get())).map_err(|e| com_err("SetTitle", e))?;
             } else {
                 // Shortcuts come back as the .lnk itself: we read its target and keep its name.
                 opts |= FOS_FILEMUSTEXIST | FOS_NODEREFERENCELINKS;
-                d.SetTitle(w!("Program seçin")).map_err(|e| com_err("SetTitle", e))?;
+                d.SetTitle(&HSTRING::from(crate::copy::PICK_PROGRAM.get())).map_err(|e| com_err("SetTitle", e))?;
+                // The names live until SetFileTypes returns (the dialog copies them).
+                let programs = HSTRING::from(crate::copy::FILTER_PROGRAMS.get());
+                let all = HSTRING::from(crate::copy::FILTER_ALL.get());
                 let spec = [
-                    COMDLG_FILTERSPEC { pszName: w!("Programlar ve kısayollar"), pszSpec: w!("*.exe;*.lnk") },
-                    COMDLG_FILTERSPEC { pszName: w!("Bütün dosyalar"), pszSpec: w!("*.*") },
+                    COMDLG_FILTERSPEC { pszName: PCWSTR(programs.as_ptr()), pszSpec: w!("*.exe;*.lnk") },
+                    COMDLG_FILTERSPEC { pszName: PCWSTR(all.as_ptr()), pszSpec: w!("*.*") },
                 ];
                 d.SetFileTypes(&spec).map_err(|e| com_err("SetFileTypes", e))?;
             }

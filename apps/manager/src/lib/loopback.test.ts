@@ -26,7 +26,7 @@ describe('second listener accounts', () => {
     expect(issues.map((i) => i.code)).toEqual(seats.map(() => 'loopback_no_accounts'));
     expect(issues.every((i) => i.severity === 'warning')).toBe(true);
     expect(localIssues(c, null).map((i) => i.code)).toContain('loopback_no_accounts');
-    expect(issueText.loopback_no_accounts).toContain('ek hesaplar');
+    expect(issueText.loopback_no_accounts).toContain('extra accounts');
   });
 
   it('valid extra accounts or seat accounts clear it; invalid ones do not', () => {

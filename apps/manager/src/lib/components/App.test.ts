@@ -24,7 +24,7 @@ async function setup() {
 describe('App', () => {
   it('shows the product state, seats and the system pool', async () => {
     await setup();
-    expect(screen.getByTestId('product-state')).toHaveTextContent('Kapalı');
+    expect(screen.getByTestId('product-state')).toHaveTextContent('Off');
     expect(screen.getByRole('region', { name: t.canvas.system })).toBeInTheDocument();
     const two = screen.getByRole('region', { name: `2. ${t.seat}` });
     expect(within(two).getByText('Kablosuz klavye')).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('App', () => {
     const { store, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.advanced }));
     expect(screen.getByTestId('input-not-isolated')).toBeInTheDocument();
-    await user.click(screen.getByLabelText(/İstemci Windows’ta çoklu oturum/));
+    await user.click(screen.getByLabelText(/Multiple sessions on client Windows/));
     const dlg = screen.getByRole('alertdialog');
     expect(store.draft?.settings.backends.session).toBe('rds_loopback');
     await user.click(within(dlg).getByRole('checkbox', { name: t.experimental.ack }));

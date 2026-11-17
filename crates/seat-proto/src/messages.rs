@@ -593,7 +593,7 @@ pub enum ResponseBody {
     SwitchTargets(Vec<SeatNumber>),
     // ---- protocol 3 (Pulsar Split v2 bodies) ----
     HostInfo(remote::HostInfo),
-    /// `seat_session::termwrap::TermwrapStatus` plus `warning_text` (Turkish, verbatim).
+    /// `seat_session::termwrap::TermwrapStatus` plus `warning_text` (English) and `warning_text_tr` (Turkish), verbatim.
     TermwrapStatus(serde_json::Value),
     RemoteRuntime(remote::SeatRuntime),
     /// `seat_display::remote::RenderAdapter` values.
@@ -721,7 +721,7 @@ pub struct DriverReport {
 pub struct Check {
     pub id: String,
     pub outcome: CheckOutcome,
-    /// English detail for logs; the manager shows Turkish copy by `id` + `outcome`.
+    /// English detail for logs; the manager shows localized copy by `id` + `outcome`.
     pub detail: String,
 }
 
@@ -1019,7 +1019,7 @@ pub enum AgentTaskKind {
     DefineDriveLetter { letter: char, volume: String },
     RemoveDriveLetter { letter: char },
     SetWallpaper { path: String },
-    /// Show a Turkish notice by code (`same_account_warning`, `seat_starting`, …).
+    /// Show a localized notice by code (`same_account_warning`, `seat_starting`, …).
     ShowNotice { code: String },
     /// Log this session off after a notice (same-account deny).
     LogOff { after_ms: u32 },
@@ -1045,7 +1045,7 @@ pub enum Event {
     ProductState { state: ProductState },
     SeatState { runtime: SeatRuntime },
     ConfigChanged { revision: u64 },
-    /// Turkish copy by `code` (`service_gap_no_input`, `os_build_changed`, …).
+    /// Localized copy by `code` (`service_gap_no_input`, `os_build_changed`, …).
     Notice {
         code: String,
         seat: Option<SeatNumber>,

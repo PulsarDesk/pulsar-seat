@@ -110,7 +110,7 @@
     <div class="row">
       <label class="field">
         <span>{t.dxvk.exe}</span>
-        <input bind:value={exe} placeholder="C:\Oyunlar\oyun.exe" />
+        <input bind:value={exe} placeholder={t.common.examplePath} />
       </label>
       {#if onPickExe}<button type="button" onclick={browse}>{t.dxvk.browse}</button>{/if}
     </div>

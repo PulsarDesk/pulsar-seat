@@ -18,8 +18,8 @@ describe('ExperimentalDialog', () => {
   it('shows the warning and enables only after the explicit acknowledgement', async () => {
     const onEnable = vi.fn(async () => {});
     render(ExperimentalDialog, { status, onEnable, onCancel: vi.fn() });
-    expect(screen.getByTestId('warning-text')).toHaveTextContent('Deneysel özellik');
-    expect(screen.getByTestId('warning-text')).toHaveTextContent('gri bir alandadır');
+    expect(screen.getByTestId('warning-text')).toHaveTextContent('Experimental feature');
+    expect(screen.getByTestId('warning-text')).toHaveTextContent('grey area');
     const enable = screen.getByRole('button', { name: t.experimental.enable });
     expect(enable).toBeDisabled();
     const user = userEvent.setup();

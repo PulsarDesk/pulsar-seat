@@ -86,8 +86,8 @@ describe('kiosk parity 2026-11-17', () => {
     c = setKioskSeatOneDesktop(c, false);
     expect(c.settings.kiosk).toEqual({ seat1_desktop: false, accounts: 'shared' });
     expect(t.kiosk.account.auto('PulsarKiosk02')).toContain('PulsarKiosk02');
-    expect(noteLabel('kiosk_account_fallback')).toContain('1. koltuğun kullanıcısıyla');
-    expect(noteLabel('kiosk_per_seat_accounts')).toContain('kendi Windows');
+    expect(noteLabel('kiosk_account_fallback')).toContain('runs as seat 1’s user');
+    expect(noteLabel('kiosk_per_seat_accounts')).toContain('own Windows');
   });
 });
 
@@ -115,14 +115,14 @@ describe('kiosk audio', () => {
     expect(kioskAudio(c, 2, devices, ['kiosk_audio_shared'])?.state).toBe('unsupported');
   });
 
-  it('has Turkish copy for every state', () => {
-    expect(t.kiosk.audio.routed('Kulaklık', null)).toBe('Ses: çıkış Kulaklık');
-    expect(t.kiosk.audio.routed('A', 'B')).toContain('mikrofon B');
-    expect(t.kiosk.audio.noEndpoint).toContain('1. koltuğun');
+  it('has copy for every state', () => {
+    expect(t.kiosk.audio.routed('Kulaklık', null)).toBe('Sound: output Kulaklık');
+    expect(t.kiosk.audio.routed('A', 'B')).toContain('microphone B');
+    expect(t.kiosk.audio.noEndpoint).toContain('seat 1’s');
     expect(t.kiosk.audio.unsupported).toContain('Windows');
-    expect(t.kiosk.audio.sharedApp([3, 4])).toContain('3, 4. koltukta');
-    expect(t.kiosk.limits).toContain('belgelenmemiş');
-    expect(noteLabel('kiosk_audio_per_app')).toContain('uygulama başına');
+    expect(t.kiosk.audio.sharedApp([3, 4])).toContain('seat 3, 4');
+    expect(t.kiosk.limits).toContain('undocumented');
+    expect(noteLabel('kiosk_audio_per_app')).toContain('per-app');
   });
 });
 
@@ -131,10 +131,10 @@ describe('kiosk copy', () => {
     // Ctrl+Alt+Del and the system hotkeys affect every seat (spec 35 §4 U3).
     expect(t.kiosk.limits).toContain('Ctrl+Alt+Del');
     expect(t.kiosk.limits).toContain('Ctrl+Alt+Home');
-    expect(t.kiosk.limits).toContain('Windows tuşu');
+    expect(t.kiosk.limits).toContain('Windows key');
     // Without the filter the mice leak too; the intro is qualified.
-    expect(t.kiosk.seatOneDesktopHint).toContain('fareleri');
-    expect(t.kiosk.intro).toContain('giriş filtresi');
+    expect(t.kiosk.seatOneDesktopHint).toContain('kiosk mice');
+    expect(t.kiosk.intro).toContain('input filter');
     expect(t.kiosk.backendOnly.length).toBeGreaterThan(0);
   });
 });

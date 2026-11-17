@@ -154,8 +154,14 @@ impl Drop for PowerRequest {
     }
 }
 
-/// Reason shown by `powercfg /requests`.
-const POWER_REASON: &str = "Pulsar Seat: ek koltuklar kullanımda";
+/// Reason shown by `powercfg /requests` (localized).
+const POWER_REASON: seat_core::i18n::Text =
+    seat_core::i18n::Text::new("Pulsar Seat: extra seats in use", "Pulsar Seat: ek koltuklar kullanımda");
+/// Message of the restart the manager asks for.
+const REBOOT_MESSAGE: seat_core::i18n::Text = seat_core::i18n::Text::new(
+    "Pulsar Seat: restarting to finish the configuration",
+    "Pulsar Seat: yapılandırma için yeniden başlatılıyor",
+);
 
 fn tweak_outcomes(v: Vec<(seat_compat::tweaks::TweakId, Result<(), String>)>) -> Vec<TweakOutcome> {
     v.into_iter().map(|(t, result)| TweakOutcome { tweak: t.as_str().to_string(), result }).collect()
@@ -824,7 +830,7 @@ impl Platform for WinPlatform {
         if !enable_privilege("SeShutdownPrivilege") {
             return Err(os_err("privilege", "SeShutdownPrivilege"));
         }
-        let msg = wide("Pulsar Seat: yapılandırma için yeniden başlatılıyor");
+        let msg = wide(REBOOT_MESSAGE.get());
         // SAFETY: local machine, valid message.
         let rc = unsafe {
             InitiateShutdownW(
@@ -1036,7 +1042,7 @@ impl Platform for WinPlatform {
         if slot.is_some() {
             return Ok(());
         }
-        let mut reason = wide(POWER_REASON);
+        let mut reason = wide(POWER_REASON.get());
         let mut ctx = REASON_CONTEXT { Version: 0, Flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING, Reason: Default::default() };
         ctx.Reason.SimpleReasonString = reason.as_mut_ptr();
         // SAFETY: valid context; the string lives across the call (the API copies it).

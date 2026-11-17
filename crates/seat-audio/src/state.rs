@@ -30,16 +30,45 @@ impl AudioState {
         }
     }
 
-    /// Suggested Turkish manager copy (the integrator owns `i18n.ts`).
-    pub fn text_tr(&self) -> &'static str {
+    /// Suggested manager copy (the manager's own locales are the UI source).
+    pub fn text(&self) -> &'static seat_core::i18n::Text {
+        use seat_core::i18n::Text;
         match self {
-            AudioState::Capturing => "Ses aktarılıyor",
-            AudioState::NoDevice => "Ses aygıtı bulunamadı; bu koltukta ses yok",
-            AudioState::BlockedByPolicy => {
-                "Ses yönlendirmesi grup ilkesiyle engellenmiş (fDisableCam); bu koltukta ses yok"
+            AudioState::Capturing => {
+                const T: Text = Text::new(
+                    "Sound is being passed",
+                    "Ses aktarılıyor",
+                );
+                &T
             }
-            AudioState::Disabled => "Ses aktarımı kapalı",
-            AudioState::Unknown => "Ses durumu bilinmiyor",
+            AudioState::NoDevice => {
+                const T: Text = Text::new(
+                    "No sound device found; no sound on this seat",
+                    "Ses aygıtı bulunamadı; bu koltukta ses yok",
+                );
+                &T
+            }
+            AudioState::BlockedByPolicy => {
+                const T: Text = Text::new(
+                    "Sound redirection is blocked by group policy (fDisableCam); no sound on this seat",
+                    "Ses yönlendirmesi grup ilkesiyle engellenmiş (fDisableCam); bu koltukta ses yok",
+                );
+                &T
+            }
+            AudioState::Disabled => {
+                const T: Text = Text::new(
+                    "Sound passing is off",
+                    "Ses aktarımı kapalı",
+                );
+                &T
+            }
+            AudioState::Unknown => {
+                const T: Text = Text::new(
+                    "Sound state unknown",
+                    "Ses durumu bilinmiyor",
+                );
+                &T
+            }
         }
     }
 }
@@ -182,27 +211,58 @@ impl AudioLimitation {
         }
     }
 
-    /// Suggested Turkish manager copy (the integrator owns `i18n.ts`).
-    pub fn text_tr(&self) -> &'static str {
+    /// Suggested manager copy (the manager's own locales are the UI source).
+    pub fn text(&self) -> &'static seat_core::i18n::Text {
+        use seat_core::i18n::Text;
         match self {
-            AudioLimitation::NoMicrophone => "Bu koltuktaki uygulamalar mikrofon göremez.",
+            AudioLimitation::NoMicrophone => {
+                const T: Text = Text::new(
+                    "Apps on this seat cannot see a microphone.",
+                    "Bu koltuktaki uygulamalar mikrofon göremez.",
+                );
+                &T
+            }
             AudioLimitation::NoControllerAudio => {
-                "Kol hoparlörü, kulaklık girişi ve ses tabanlı titreşim koltuklarda çalışmaz."
+                const T: Text = Text::new(
+                    "The pad speaker, headset jack and audio-based haptics do not work on seats.",
+                    "Kol hoparlörü, kulaklık girişi ve ses tabanlı titreşim koltuklarda çalışmaz.",
+                );
+                &T
             }
             AudioLimitation::SteamRemotePlayUnsupported => {
-                "Koltuk içinde Steam Remote Play sesi desteklenmez."
+                const T: Text = Text::new(
+                    "Steam Remote Play audio is not supported inside a seat.",
+                    "Koltuk içinde Steam Remote Play sesi desteklenmez.",
+                );
+                &T
             }
             AudioLimitation::SurroundIsStereo => {
-                "5.1/7.1 istense de ses içeriği stereodur."
+                const T: Text = Text::new(
+                    "Even when 5.1/7.1 is requested, the sound content is stereo.",
+                    "5.1/7.1 istense de ses içeriği stereodur.",
+                );
+                &T
             }
             AudioLimitation::PolicyBlocksAudio => {
-                "Grup ilkesi ses yönlendirmesini engelliyor; ayarı yönetici değiştirmelidir."
+                const T: Text = Text::new(
+                    "A group policy blocks sound redirection; an administrator must change the setting.",
+                    "Grup ilkesi ses yönlendirmesini engelliyor; ayarı yönetici değiştirmelidir.",
+                );
+                &T
             }
             AudioLimitation::MicPolicyBlocked => {
-                "Grup ilkesi mikrofon yönlendirmesini engelliyor (fDisableAudioCapture)."
+                const T: Text = Text::new(
+                    "A group policy blocks microphone redirection (fDisableAudioCapture).",
+                    "Grup ilkesi mikrofon yönlendirmesini engelliyor (fDisableAudioCapture).",
+                );
+                &T
             }
             AudioLimitation::MicNeedsPulsar => {
-                "Mikrofon yalnızca Pulsar istemcisiyle çalışır; Moonlight mikrofon göndermez."
+                const T: Text = Text::new(
+                    "The microphone works only with the Pulsar client; Moonlight does not send a microphone.",
+                    "Mikrofon yalnızca Pulsar istemcisiyle çalışır; Moonlight mikrofon göndermez.",
+                );
+                &T
             }
         }
     }
@@ -382,12 +442,12 @@ mod tests {
     fn serde_codes_match_code_fn() {
         for s in [AudioState::Capturing, AudioState::NoDevice, AudioState::BlockedByPolicy, AudioState::Disabled, AudioState::Unknown] {
             assert_eq!(serde_json::to_string(&s).unwrap(), format!("\"{}\"", s.code()));
-            assert!(!s.text_tr().is_empty());
+            assert!(seat_core::i18n::check_table(&[(s.code(), s.text())]).is_empty());
         }
         use AudioLimitation::*;
         for l in [NoMicrophone, NoControllerAudio, SteamRemotePlayUnsupported, SurroundIsStereo, PolicyBlocksAudio, MicPolicyBlocked, MicNeedsPulsar] {
             assert_eq!(serde_json::to_string(&l).unwrap(), format!("\"{}\"", l.code()));
-            assert!(!l.text_tr().is_empty());
+            assert!(seat_core::i18n::check_table(&[(l.code(), l.text())]).is_empty());
         }
         let st = seat_audio_status(&ON, &open(), None, None, false);
         let j = serde_json::to_value(&st).unwrap();

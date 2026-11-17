@@ -38,7 +38,7 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   (`PBT_APMRESUMEAUTOMATIC` → re-read devices, re-apply ownership, hosts reconfigure) and
   session changes. Session changes and resume are queued and handled in order on one
   worker. Stop runs on a worker and the stop-pending checkpoint advances every 3 s and
-  after each seat. Install sets description (Turkish), recovery actions (restart 5 s,
+  after each seat. Install sets description (localized), recovery actions (restart 5 s,
   30 s, 60 s, then none, reset after 1 day: one restart per allowed crashed start, so the
   third restart enters the crash-loop safe mode with the default `crash_loop_limit` 3),
   unrestricted SID type, required privileges, pre-shutdown timeout, an explicit service
@@ -96,11 +96,11 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   active backend covers; absent saved devices are kept (present = false); a known device
   on a new port gets `moved_from`.
 - Logs: `logs\service.log` (4 MiB, 3 rotations, UTC), errors and start / stop also to the
-  Event Log with our own ids (`src/eventid.rs`): Turkish text per id, English detail
+  Event Log with our own ids (`src/eventid.rs`): localized text per id (`seat_core::i18n`), English detail
   after it. The diagnostic report masks user names (seat table and log tail) and never
   contains a password or token. `get_config` never decrypts secrets ("password set" is
   cached per seat; `has` wipes the LSA buffer without copying it). Passwords are limited
-  to 256 characters. CLI output is Turkish.
+  to 256 characters. CLI output is localized (English default, Turkish locale; `cli::copy`).
 - Boot waits for services with `NotifyServiceStatusChangeW` and alertable waits (no
   polling). A service that does not exist is reported at once (`PlugPlay` does not exist
   on Windows build 28000, the dev box: the boot logs `services not running after wait`).

@@ -194,7 +194,7 @@ pub trait DisplayBinding: Send + Sync {
     /// Give the seat's targets back (they rejoin the console desktop where they came from).
     fn release_seat(&self, seat: SeatNumber) -> BackendResult<()>;
     /// Show / hide a big number on each listed monitor (identification overlay). `label`
-    /// is shown verbatim (Turkish UI text or a number).
+    /// is shown verbatim (localized UI text or a number).
     fn identify(&self, targets: &[(DeviceKey, String)], on: bool) -> BackendResult<()>;
     /// DDC/CI power (idle seats); `Unsupported` when the monitor has no DDC/CI.
     fn set_power(&self, key: &DeviceKey, on: bool) -> BackendResult<()>;
@@ -269,7 +269,7 @@ pub trait FrameSink: Send {
     fn configure(&mut self, outputs: &SeatOutputs) -> BackendResult<()>;
     fn present(&mut self, frame: &FrameRef<'_>) -> BackendResult<()>;
     fn cursor(&mut self, cursor: &CursorState) -> BackendResult<()>;
-    /// Show our idle / "no session" frame (Turkish text drawn by us).
+    /// Show our idle / "no session" frame (localized text drawn by us).
     fn blank(&mut self, message: &str) -> BackendResult<()>;
 
     // ---- zero-copy GPU frames and back-pressure (added 2026-11-14, all optional) ----

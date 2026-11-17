@@ -10,6 +10,8 @@
 //          [--version <x.y.z>]        product version (defaults to tauri.conf.json's)
 //          [--bin <payload dir>]      write a resolved copy of wix/PulsarSeat.wxs next to <out>
 //          [--no-arm64ec]             leave the ARM64EC helper out (test builds only)
+//          [--language <culture>]     MSI culture: en-US (default) or tr-TR; the fragment's
+//                                     strings come from wix/locales/<culture>.wxl
 //          [--remote <dir>]           the remote kind's pinned third-party payload
 //                                     (fetch-deps.ts output: drivers.json, drivers/,
 //                                     stream-server.json, stream-server/), installed to
@@ -209,6 +211,16 @@ export function resolveFragment(wxs: string, bin: string, noArm64ec = false): st
   return out;
 }
 
+/** MSI cultures with a locale file in wix/locales/ (English is the default). */
+export const MSI_LANGUAGES = ['en-US', 'tr-TR'] as const;
+export type MsiLanguage = (typeof MSI_LANGUAGES)[number];
+
+/** Point the WiX build at one culture and its locale file (one MSI per build). */
+export function setLanguage(j: Record<string, any>, language: string): void {
+  if (!(MSI_LANGUAGES as readonly string[]).includes(language)) throw new Error(`unsupported MSI language: ${language}`);
+  j.bundle.windows.wix.language = { [language]: { localePath: `../../../installer/wix/locales/${language}.wxl` } };
+}
+
 /**
  * The bundle config: the snippet + generated fragments (drivers, and the remote payload when
  * `remoteFragmentPath` is given) + optional version override.
@@ -217,7 +229,8 @@ export function buildConfig(
   snippet: unknown,
   fragmentPath: string,
   version?: string,
-  remoteFragmentPath?: string
+  remoteFragmentPath?: string,
+  language?: string
 ): Record<string, unknown> {
   const j = stripComments(snippet) as Record<string, any>;
   const wix = j.bundle.windows.wix;
@@ -231,6 +244,7 @@ export function buildConfig(
     if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`version must be x.y.z: ${version}`);
     j.version = version;
   }
+  if (language) setLanguage(j, language);
   return j;
 }
 
@@ -256,7 +270,8 @@ if (import.meta.main) {
     JSON.parse(await Bun.file(src).text()),
     frag.replace(/\\/g, '/'),
     arg('--version'),
-    remoteFrag.replace(/\\/g, '/')
+    remoteFrag.replace(/\\/g, '/'),
+    arg('--language')
   ) as any;
   const bin = arg('--bin');
   if (bin) {

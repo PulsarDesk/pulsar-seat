@@ -5,7 +5,7 @@
 import type { Config, SeatNumber } from '../types.ts';
 import type { RemoteApi } from './api.ts';
 import type * as R from './types.ts';
-import { WARNING_TR, WARNING_VERSION } from '../warning.ts';
+import { WARNING_EN, WARNING_VERSION } from '../warning.ts';
 
 export function createDemoRemoteApi(
   step: (name: string) => Promise<void>,
@@ -31,7 +31,7 @@ export function createDemoRemoteApi(
     supported: false,
     candidates: [],
     warning_version: WARNING_VERSION,
-    warning_text: WARNING_TR
+    warning_text: WARNING_EN
   };
   let multi = false;
   const remoteSeat = (seat: SeatNumber) => {

@@ -199,8 +199,10 @@ export interface TermwrapStatus {
   supported: boolean;
   candidates: WrapperCandidate[];
   warning_version: number;
-  /** Turkish warning text, verbatim from the service. */
+  /** English warning text, verbatim from the service. */
   warning_text?: string;
+  /** Turkish copy of `warning_text` (the manager shows its own copy in the UI language). */
+  warning_text_tr?: string;
 }
 
 export interface HostWarning {

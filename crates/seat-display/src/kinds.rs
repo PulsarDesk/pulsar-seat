@@ -113,7 +113,7 @@ pub struct DisplayBackendStatus {
     /// HDR output possible on this backend now.
     pub hdr: bool,
     /// Why it is not usable (snake_case code or the backend's English error), for logs; the
-    /// manager maps `id` + `reason` to Turkish copy.
+    /// manager maps `id` + `reason` to localized copy.
     pub reason: Option<String>,
 }
 

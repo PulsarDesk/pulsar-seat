@@ -4,13 +4,29 @@
 // `settings.backends.experimental_ack = EXPERIMENTAL_WARNING_VERSION`; when this text
 // changes in substance, bump `EXPERIMENTAL_WARNING_VERSION` in `types.ts` AND in
 // `seat_core::config` so every admin has to read it again. `WARNING_VERSION` is the same
-// constant. The text is a word-for-word copy of the service's canonical
-// `crates/seat-session/src/termwrap/warning_tr.txt` (`WARNING_TR` in Rust);
-// `warning.test.ts` fails when the two differ.
+// constant. The texts are word-for-word copies of the service's canonical
+// `crates/seat-session/src/termwrap/warning_en.txt` / `warning_tr.txt` (`WARNING_EN` /
+// `WARNING_TR` in Rust); `warning.test.ts` fails when they differ. `warningText()` picks
+// the one of the active UI language.
 
+import { activeLang } from './i18n.ts';
 import { EXPERIMENTAL_WARNING_VERSION } from './types.ts';
 
 export const WARNING_VERSION = EXPERIMENTAL_WARNING_VERSION;
+
+export const WARNING_EN = [
+  "**Experimental feature — read carefully.**",
+  "If you turn this option on, Pulsar Seat itself redirects the Remote Desktop service (TermService) to an open-source wrapper **that you installed**, so that every seat can have its own session at the same time on client editions of Windows (Pro, Enterprise): it points the TermService\\Parameters\\ServiceDll value at the wrapper's DLL file and restarts the service. Pulsar Seat does not contain or install the wrapper; it does not change Windows files on disk and does not touch the kernel or the session manager (LSM).",
+  "- **The wrapper changes the code of the Remote Desktop service (termsrv) in memory while it runs.** Pulsar Seat's own rule is not to touch termsrv; this option is an experimental exception used only when you explicitly acknowledge it.",
+  "- Pulsar Seat also writes two registry values that Microsoft does not document (EnableConcurrentSessions, AllowMultipleTSSessions); when the option is turned off, these values and ServiceDll are restored to their old state.",
+  "- The Remote Desktop service restarts when the option is turned on and off; all open extra seat sessions close.",
+  "- Microsoft's licence terms for client Windows do not allow several users at the same time. This use is a grey area for licensing; the responsibility is yours. The licensed path is Windows Server + the Remote Desktop Session Host role and RDS client access licences (CAL).",
+  "- Windows updates can change the termsrv.dll file. On a version it does not recognise, Pulsar Seat turns the option off by itself; until the wrapper is updated, extra seats do not run and seats fall back to fast user switching.",
+  "- Antivirus software may flag the wrapper as unwanted software.",
+  "- On ARM64 PCs the wrapper must be native ARM64; otherwise it is not used.",
+  "- This option never requires you to change Memory Integrity, Secure Boot or any other Windows security setting.",
+  "Confirm that you understand these risks to continue."
+].join('\n');
 
 export const WARNING_TR = [
   "**Deneysel özellik — dikkatle okuyun.**",
@@ -25,6 +41,11 @@ export const WARNING_TR = [
   "- Bu seçenek Bellek Bütünlüğü, Güvenli Önyükleme ya da başka bir Windows güvenlik ayarını değiştirmenizi asla gerektirmez.",
   "Devam etmek için bu riskleri anladığınızı onaylayın."
 ].join('\n');
+
+/** The warning in the active UI language. */
+export function warningText(): string {
+  return activeLang() === 'tr' ? WARNING_TR : WARNING_EN;
+}
 
 /** `**bold**` segments of one line. */
 export function boldParts(line: string): { text: string; bold: boolean }[] {

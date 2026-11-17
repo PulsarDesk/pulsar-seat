@@ -9,7 +9,7 @@
 //! agent with the session).
 //!
 //! Tasks: per-logon-session drive letters (`DefineDosDeviceW`, `DDD_RAW_TARGET_PATH`, spec
-//! 70 §5.2(3)), wallpaper (`SystemParametersInfoW`), Turkish notices (`MessageBoxW` on its
+//! 70 §5.2(3)), wallpaper (`SystemParametersInfoW`), localized notices (`MessageBoxW` on its
 //! own thread), log-off after a deny notice (`ExitWindowsEx`), the per-user palm-check
 //! value (`HKCU\...\PrecisionTouchPad\AAPThreshold`). **Untested on hardware.**
 //!
@@ -29,26 +29,43 @@ mod pipe;
 
 use seat_proto::{AgentEvent, AgentReport, AgentTask, AgentTaskKind};
 
-/// Turkish text of a notice code (`ShowNotice`).
+/// User-facing copy of the agent (English default, Turkish locale; `seat_core::i18n`).
+mod copy {
+    use seat_core::i18n::Text;
+    pub const SAME_ACCOUNT_WARNING: Text = Text::new(
+        "This Windows account is also signed in on another seat. Using the same account on two seats at once can lose data in open files.",
+        "Bu Windows hesabı başka bir koltukta da açık. Aynı hesabı iki koltukta birden kullanmak açık dosyalarda veri kaybına yol açabilir.",
+    );
+    pub const SAME_ACCOUNT_DENIED: Text = Text::new(
+        "This Windows account is already signed in on another seat. This session will close shortly.",
+        "Bu Windows hesabı başka bir koltukta zaten açık. Bu oturum birazdan kapatılacak.",
+    );
+    pub const SEAT_STARTING: Text = Text::new("The seat is getting ready, please wait.", "Koltuk hazırlanıyor, lütfen bekleyin.");
+    pub const GENERIC: Text = Text::new("Pulsar Seat sent a notice.", "Pulsar Seat bir bildirim gönderdi.");
+    /// `{0}` = seat number.
+    pub const SWITCH_TO: Text = Text::new("Switch to seat {0}", "{0}. koltuğa geç");
+    pub const TRAY_TIP: Text = Text::new("Pulsar Seat: switch seat", "Pulsar Seat: koltuk değiştir");
+    pub const TRAY_EMPTY: Text = Text::new("No other seat to switch to", "Geçilebilecek başka koltuk yok");
+}
+
+/// Text of a notice code (`ShowNotice`).
 fn notice_text(code: &str) -> &'static str {
+    notice_copy(code).get()
+}
+
+fn notice_copy(code: &str) -> &'static seat_core::i18n::Text {
     match code {
-        "same_account_warning" => {
-            "Bu Windows hesabı başka bir koltukta da açık. Aynı hesabı iki koltukta birden kullanmak açık dosyalarda veri kaybına yol açabilir."
-        }
-        "same_account_denied" => "Bu Windows hesabı başka bir koltukta zaten açık. Bu oturum birazdan kapatılacak.",
-        "seat_starting" => "Koltuk hazırlanıyor, lütfen bekleyin.",
-        _ => "Pulsar Seat bir bildirim gönderdi.",
+        "same_account_warning" => &copy::SAME_ACCOUNT_WARNING,
+        "same_account_denied" => &copy::SAME_ACCOUNT_DENIED,
+        "seat_starting" => &copy::SEAT_STARTING,
+        _ => &copy::GENERIC,
     }
 }
 
 /// Menu text of a seat-switch entry in the agent's notification-area menu.
 fn switch_item_text(seat: seat_core::SeatNumber) -> String {
-    format!("{seat}. koltuğa geç")
+    copy::SWITCH_TO.fmt(&[&seat])
 }
-
-/// Tooltip and empty-menu text of the seat-switch icon.
-const TRAY_TIP: &str = "Pulsar Seat: koltuk değiştir";
-const TRAY_EMPTY: &str = "Geçilebilecek başka koltuk yok";
 
 /// Menu command id of a seat entry (and back).
 const MENU_BASE: usize = 1000;
@@ -228,7 +245,7 @@ mod win {
             d.uCallbackMessage = CALLBACK;
             // SAFETY: stock icon, no module.
             d.hIcon = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
-            for (dst, src) in d.szTip.iter_mut().zip(TRAY_TIP.encode_utf16().take(127)) {
+            for (dst, src) in d.szTip.iter_mut().zip(copy::TRAY_TIP.get().encode_utf16().take(127)) {
                 *dst = src;
             }
             d
@@ -293,7 +310,7 @@ mod win {
                     return;
                 }
                 if targets.is_empty() {
-                    let w = wide(TRAY_EMPTY);
+                    let w = wide(copy::TRAY_EMPTY.get());
                     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w.as_ptr());
                 }
                 for s in &targets {
@@ -460,7 +477,7 @@ fn main() {
     std::process::exit(win::run());
     #[cfg(not(windows))]
     {
-        let _ = (notice_text(""), PRECISION_TOUCHPAD, TRAY_TIP, TRAY_EMPTY, switch_item_text, menu_id, menu_seat);
+        let _ = (notice_text(""), PRECISION_TOUCHPAD, copy::TRAY_TIP, copy::TRAY_EMPTY, switch_item_text, menu_id, menu_seat);
         eprintln!("pulsar-seat-agent: needs Windows");
         std::process::exit(1);
     }
@@ -471,15 +488,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notices_are_turkish() {
-        assert!(notice_text("same_account_denied").contains("kapatılacak"));
-        assert_eq!(notice_text("unknown"), "Pulsar Seat bir bildirim gönderdi.");
+    fn notices_in_both_languages() {
+        use seat_core::i18n::Lang;
+        assert!(notice_copy("same_account_denied").pick(Lang::Tr).contains("kapatılacak"));
+        assert!(notice_copy("same_account_denied").pick(Lang::En).contains("close shortly"));
+        assert_eq!(notice_copy("unknown").pick(Lang::En), "Pulsar Seat sent a notice.");
+        assert_eq!(notice_text("unknown"), copy::GENERIC.get());
     }
 
     #[test]
-    fn switch_menu_is_turkish_and_ids_round_trip() {
+    fn copy_table_is_complete() {
+        use copy::*;
+        let p = seat_core::i18n::check_table(seat_core::text_table![
+            SAME_ACCOUNT_WARNING, SAME_ACCOUNT_DENIED, SEAT_STARTING, GENERIC, SWITCH_TO, TRAY_TIP, TRAY_EMPTY
+        ]);
+        assert!(p.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn switch_menu_text_and_ids_round_trip() {
+        use seat_core::i18n::Lang;
         let three = seat_core::SeatNumber::new(3).unwrap();
-        assert_eq!(switch_item_text(three), "3. koltuğa geç");
+        assert_eq!(copy::SWITCH_TO.fmt_in(Lang::Tr, &[&three]), "3. koltuğa geç");
+        assert_eq!(copy::SWITCH_TO.fmt_in(Lang::En, &[&three]), "Switch to seat 3");
+        assert_eq!(switch_item_text(three), copy::SWITCH_TO.fmt(&[&three]));
         assert_eq!(menu_seat(menu_id(three)), Some(three));
         assert_eq!(menu_seat(0), None, "the greyed empty entry");
         assert_eq!(menu_seat(MENU_BASE), None);

@@ -40,11 +40,11 @@ describe('seat kinds', () => {
     expect(s.kind).toBe('local');
   });
 
-  it('new issue and error codes have Turkish copy', () => {
+  it('new issue and error codes have copy', () => {
     for (const code of ['seat_kind_mismatch', 'console_seat_remote', 'device_on_remote_seat', 'remote_seat_invalid', 'session_unavailable']) {
       expect(issueText[code], code).toBeTruthy();
     }
-    expect(errorLabel({ code: 'wrong_seat_kind', message: 'x' })).toContain('koltuk');
-    expect(errorLabel({ code: 'session_unavailable', message: 'x' })).toContain('oturum');
+    expect(errorLabel({ code: 'wrong_seat_kind', message: 'x' })).toContain('seat');
+    expect(errorLabel({ code: 'session_unavailable', message: 'x' })).toContain('session');
   });
 });

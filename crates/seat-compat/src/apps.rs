@@ -14,9 +14,10 @@
 //! Pulsar Seat never renames objects, never injects into apps (no kernel or user-mode
 //! shim; the opt-in shim of §11.1 option 3 needs the maintainer's approval first) and
 //! never opens game processes. This module only **classifies** and **advises**: the
-//! manager shows the Turkish advice for known apps, and our own components use
+//! manager shows the localized advice for known apps, and our own components use
 //! [`local_object_name`] for their single-instance objects.
 
+use seat_core::i18n::Text;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,11 +35,11 @@ pub enum InstanceCase {
 pub struct KnownApp {
     /// Lowercase executable names.
     pub exe: &'static [&'static str],
-    pub name: &'static str,
+    pub name: Text,
     pub cases: &'static [InstanceCase],
     /// Untested assumption (spec HYPOTHESIS) until a hardware test confirms it.
     pub hypothesis: bool,
-    pub advice_tr: &'static str,
+    pub advice: Text,
 }
 
 /// Apps with known multi-seat limits. Filled from real tests (public compatibility list,
@@ -46,31 +47,43 @@ pub struct KnownApp {
 pub const KNOWN_APPS: &[KnownApp] = &[
     KnownApp {
         exe: &["steam.exe", "steamwebhelper.exe"],
-        name: "Steam",
+        name: Text::new("Steam", "Steam"),
         cases: &[InstanceCase::GlobalObject, InstanceCase::MachineService],
         hypothesis: true,
-        advice_tr: "Steam aynı anda yalnızca bir koltukta çalışabilir: ikinci koltuktaki Steam, ilk koltuktakini bulup açılmayabilir. Steam İstemci Hizmeti ve oyun kitaplığı tüm koltuklarca paylaşılır; aynı anda iki koltukta oyun yükleme veya güncelleme sorun çıkarabilir. Pulsar Seat Steam'e müdahale etmez (hile önleme sistemleri nedeniyle).",
+        advice: Text::new(
+            "Steam can run on only one seat at a time: Steam on a second seat may find the one on the first seat and not open. The Steam Client Service and the game library are shared by all seats; installing or updating games on two seats at once can cause problems. Pulsar Seat does not interfere with Steam (because of anti-cheat systems).",
+            "Steam aynı anda yalnızca bir koltukta çalışabilir: ikinci koltuktaki Steam, ilk koltuktakini bulup açılmayabilir. Steam İstemci Hizmeti ve oyun kitaplığı tüm koltuklarca paylaşılır; aynı anda iki koltukta oyun yükleme veya güncelleme sorun çıkarabilir. Pulsar Seat Steam'e müdahale etmez (hile önleme sistemleri nedeniyle).",
+        ),
     },
     KnownApp {
         exe: &["chrome.exe", "msedge.exe", "firefox.exe"],
-        name: "Web tarayıcıları",
+        name: Text::new("Web browsers", "Web tarayıcıları"),
         cases: &[InstanceCase::ProfileLock],
         hypothesis: true,
-        advice_tr: "Aynı Windows hesabıyla iki koltukta açıldığında tarayıcı profili kilitli olabilir. Her koltuk için ayrı bir hesap kullanın.",
+        advice: Text::new(
+            "When opened on two seats with the same Windows account, the browser profile may be locked. Use a separate account for each seat.",
+            "Aynı Windows hesabıyla iki koltukta açıldığında tarayıcı profili kilitli olabilir. Her koltuk için ayrı bir hesap kullanın.",
+        ),
     },
     KnownApp {
         exe: &["outlook.exe", "thunderbird.exe"],
-        name: "E-posta istemcileri",
+        name: Text::new("Email clients", "E-posta istemcileri"),
         cases: &[InstanceCase::ProfileLock],
         hypothesis: true,
-        advice_tr: "Posta veritabanı hesap başına kilitlenir; aynı hesap iki koltukta açıksa ikinci kopya başlamayabilir.",
+        advice: Text::new(
+            "The mail database is locked per account; if the same account is open on two seats, the second copy may not start.",
+            "Posta veritabanı hesap başına kilitlenir; aynı hesap iki koltukta açıksa ikinci kopya başlamayabilir.",
+        ),
     },
     KnownApp {
         exe: &["onedrive.exe", "dropbox.exe"],
-        name: "Bulut eşitleme",
+        name: Text::new("Cloud sync", "Bulut eşitleme"),
         cases: &[InstanceCase::ProfileLock],
         hypothesis: true,
-        advice_tr: "Eşitleme istemcileri hesap başına tek kopya çalışır; aynı hesap iki koltukta açıksa yalnızca biri eşitler.",
+        advice: Text::new(
+            "Sync clients run one copy per account; if the same account is open on two seats, only one of them syncs.",
+            "Eşitleme istemcileri hesap başına tek kopya çalışır; aynı hesap iki koltukta açıksa yalnızca biri eşitler.",
+        ),
     },
 ];
 
@@ -101,11 +114,17 @@ pub fn is_global_name(name: &str) -> bool {
         || n.to_ascii_lowercase().starts_with("basenamedobjects\\")
 }
 
-/// Turkish explanation of the same-account policy (manager help).
-pub const SAME_ACCOUNT_HELP_TR: &str = "Aynı Windows hesabı birden çok koltukta açıldığında, kullanıcı profilini kilitleyen uygulamalar (tarayıcılar, e-posta istemcileri, bulut eşitleme) düzgün çalışmayabilir. Her koltuk için ayrı bir hesap önerilir.";
+/// Explanation of the same-account policy (manager help).
+pub const SAME_ACCOUNT_HELP: Text = Text::new(
+    "When the same Windows account is open on several seats, apps that lock the user profile (browsers, email clients, cloud sync) may not work properly. A separate account for each seat is recommended.",
+    "Aynı Windows hesabı birden çok koltukta açıldığında, kullanıcı profilini kilitleyen uygulamalar (tarayıcılar, e-posta istemcileri, bulut eşitleme) düzgün çalışmayabilir. Her koltuk için ayrı bir hesap önerilir.",
+);
 
-/// Turkish note for the CPU-core limit (manager help, spec 80 §11.2).
-pub const CPU_LIMIT_HELP_TR: &str = "İşlemci çekirdeği sınırı yalnızca Pulsar Seat'in başlattığı programlara ve onların alt süreçlerine uygulanır. Yönetici olarak (UAC ile) başlatılan programlar ve iş nesnesinden ayrılan süreçler sınırın dışında kalır.";
+/// Note for the CPU-core limit (manager help, spec 80 §11.2).
+pub const CPU_LIMIT_HELP: Text = Text::new(
+    "The processor core limit applies only to programs Pulsar Seat starts and their child processes. Programs started as administrator (with UAC) and processes that leave the job object stay outside the limit.",
+    "İşlemci çekirdeği sınırı yalnızca Pulsar Seat'in başlattığı programlara ve onların alt süreçlerine uygulanır. Yönetici olarak (UAC ile) başlatılan programlar ve iş nesnesinden ayrılan süreçler sınırın dışında kalır.",
+);
 
 #[cfg(test)]
 mod tests {
@@ -116,11 +135,16 @@ mod tests {
         assert_eq!(
             classify(r"C:\Program Files (x86)\Steam\Steam.exe")
                 .unwrap()
-                .name,
+                .name
+                .en,
             "Steam"
         );
         assert!(classify("notepad.exe").is_none());
-        assert!(KNOWN_APPS.iter().all(|a| !a.advice_tr.is_empty()));
+        for a in KNOWN_APPS {
+            let p = seat_core::i18n::check_table(&[("name", &a.name), ("advice", &a.advice)]);
+            assert!(p.is_empty(), "{p:?}");
+        }
+        assert!(seat_core::i18n::check_table(seat_core::text_table![SAME_ACCOUNT_HELP, CPU_LIMIT_HELP]).is_empty());
     }
 
     #[test]

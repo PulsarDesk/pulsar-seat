@@ -41,8 +41,8 @@ around that model:
 | Steam drivers | `AudioProbe::steam_devices_present` (report only; never installed/removed) |
 | Phantom-node maintenance (operator-triggered only) | `plan_stale_endpoints` / `plan_stale_nodes`, `rdp_guid_suffixes`, `remove_stale_endpoints`, `EndpointRemover` |
 
-`AudioState::text_tr` / `AudioLimitation::text_tr` give suggested Turkish copy; the
-integrator owns the manager's `i18n.ts`.
+`AudioState::text` / `AudioLimitation::text` give suggested copy (`seat_core::i18n::Text`,
+English + Turkish); the manager's own locales are the UI source.
 
 ## Design
 

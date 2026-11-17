@@ -3,7 +3,7 @@
 <script lang="ts">
   import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
   import type { TermwrapStatus } from '#lib/remote/types.ts';
-  import { WARNING_TR, WARNING_VERSION } from '#lib/warning.ts';
+  import { WARNING_VERSION, warningText } from '#lib/warning.ts';
 
   interface Props {
     status: TermwrapStatus;
@@ -17,7 +17,8 @@
   let error = $state<string | null>(null);
   let wrapper = $state<string>('');
 
-  const text = $derived(status.warning_text ?? WARNING_TR);
+  // The manager's own copy in the UI language (same text as the service's, warning.test.ts).
+  const text = warningText();
   const version = $derived(status.warning_version || WARNING_VERSION);
   const paragraphs = $derived(text.split('\n').filter((l) => l.trim() !== ''));
   $effect(() => {

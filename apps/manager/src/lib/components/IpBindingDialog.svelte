@@ -140,7 +140,7 @@
       <tr>
         <td></td>
         <td><input bind:value={newTitle} placeholder={t.ipDialog.title2} aria-label={t.ipDialog.title2} /></td>
-        <td><input bind:value={newPath} placeholder="C:\Oyunlar\oyun.exe" aria-label={t.ipDialog.path} data-testid="ip-new-path" /></td>
+        <td><input bind:value={newPath} placeholder={t.examplePath} aria-label={t.ipDialog.path} data-testid="ip-new-path" /></td>
         <td><button type="button" onclick={add} disabled={!newPath.trim()}>{t.ipDialog.add}</button></td>
       </tr>
     </tbody>

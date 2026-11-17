@@ -61,7 +61,7 @@ use seat_core::SeatNumber;
 use super::{
     AttachAction, FocusPolicy, Layout, MAX_RUNNING, POLL_MS, SeatDevices, ShellArgs, ShellCommand,
     attach_action, drag_rect, filter_active, audio_notice, focus_policy, idle_text, kiosk_env_value, notices, place,
-    seat_devices, tr,
+    seat_devices, copy,
 };
 use seat_media::kiosk_audio::KioskAudio;
 use crate::pipe;
@@ -700,7 +700,7 @@ impl Shell {
             return;
         }
         let Ok(cmd) = seat_session::launch::command_line(std::path::Path::new(&app.command), &app.args) else {
-            self.error_line = Some(format!("{}: {}", tr::START_FAILED, app.title));
+            self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             return;
         };
         let mut cmd = wide(&cmd);
@@ -732,7 +732,7 @@ impl Shell {
             )
         };
         if ok == 0 {
-            self.error_line = Some(format!("{}: {}", tr::START_FAILED, app.title));
+            self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             redraw(self.bar);
             return;
         }
@@ -809,7 +809,7 @@ impl Shell {
             }
             Err(e) => {
                 klog!("packaged app {aumid} not activated: {e}");
-                self.error_line = Some(format!("{}: {}", tr::START_FAILED, app.title));
+                self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             }
         }
         redraw(self.bar);
@@ -1277,14 +1277,14 @@ impl Shell {
             }
             if let Some(items) = self.layout.bar_items(self.running.len()) {
                 fill(local(items.home), ACCENT);
-                text(local(items.home), tr::HOME, TEXT, center);
+                text(local(items.home), copy::HOME.get(), TEXT, center);
                 for (r, (hw, t)) in items.apps.iter().zip(&self.running) {
                     let c = if self.router.focused_app() == Some(*hw) { ACCENT } else { BUTTON };
                     fill(local(*r), c);
                     text(local(*r), t, TEXT, center);
                 }
                 fill(local(items.logout), BUTTON);
-                text(local(items.logout), tr::LOGOUT, TEXT, center);
+                text(local(items.logout), copy::LOGOUT.get(), TEXT, center);
                 let mut lines: Vec<String> = notices(&self.args.plan, self.filter, self.service_ok, self.have_units, self.stream_ok).into_iter().map(String::from).collect();
                 if let Some(a) = audio_notice(&self.audio) {
                     lines.push(a.to_string());
@@ -1305,18 +1305,18 @@ impl Shell {
                 let w = self.layout.work_rect(0).unwrap_or(m);
                 // SAFETY: as above.
                 unsafe { SelectObject(hdc, self.big_font) };
-                text(local(Rect { x: w.x + 48, y: w.y + 24, width: w.width.saturating_sub(96), height: 56 }), &format!("{} {}", tr::SEAT, self.args.seat), TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                text(local(Rect { x: w.x + 48, y: w.y + 24, width: w.width.saturating_sub(96), height: 56 }), &format!("{} {}", copy::SEAT.get(), self.args.seat), TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 // SAFETY: as above.
                 unsafe { SelectObject(hdc, self.font) };
                 let tiles = self.layout.tiles(self.args.plan.apps.len());
                 if tiles.is_empty() {
-                    text(local(Rect { x: w.x + 48, y: w.y + 96, width: w.width.saturating_sub(96), height: 80 }), tr::NO_APPS, TEXT, DT_LEFT | DT_WORDBREAK);
+                    text(local(Rect { x: w.x + 48, y: w.y + 96, width: w.width.saturating_sub(96), height: 80 }), copy::NO_APPS.get(), TEXT, DT_LEFT | DT_WORDBREAK);
                 }
                 for (r, a) in tiles.iter().zip(&self.args.plan.apps) {
                     fill(local(*r), BUTTON);
                     text(local(*r), &a.title, TEXT, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
                 }
-                text(local(Rect { x: w.x + 48, y: w.y + w.height as i32 - 48, width: w.width.saturating_sub(96), height: 32 }), tr::HINT, TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                text(local(Rect { x: w.x + 48, y: w.y + w.height as i32 - 48, width: w.width.saturating_sub(96), height: 32 }), copy::HINT.get(), TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
         }
         // SAFETY: restore the DC's font.

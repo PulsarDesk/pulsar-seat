@@ -1,74 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Update check UI helpers (spec 90 §11 item 10). The service does the network work, the
 // hash and the signature check; the manager only shows the state and asks the
-// administrator before anything is installed. Turkish copy for the update dialog lives here.
+// administrator before anything is installed. The copy is `t.update` in the locales.
 
+import { activeLang, updateText } from './i18n.ts';
 import type { UpdateState, UpdateStatus } from './types.ts';
 
-export const updateText = {
-  bar: 'Güncellemeler',
-  title: 'Güncellemeler',
-  intro:
-    'Pulsar Seat, isterseniz yeni sürümleri GitHub üzerindeki sürüm sayfasından denetler. Denetim kapalıyken hiçbir bağlantı kurulmaz; bilgisayarınız hakkında hiçbir bilgi gönderilmez.',
-  optIn: 'Yeni sürümleri denetle (GitHub)',
-  weekly: 'Haftada bir kendiliğinden denetle (yalnızca bildirir, indirmez)',
-  current: (v: string, arch: string) => `Kurulu sürüm: ${v}${arch ? ` (${arch.toUpperCase()})` : ''}`,
-  lastChecked: (when: string) => `Son denetim: ${when}`,
-  never: 'Henüz denetlenmedi.',
-  check: 'Şimdi denetle',
-  download: 'İndir ve doğrula',
-  install: 'Kur…',
-  page: 'Sürüm sayfası',
-  pageHint: (url: string) => `Sürüm notları: ${url}`,
-  state: {
-    idle: 'Denetim yapılmadı.',
-    checking: 'Denetleniyor…',
-    up_to_date: 'Pulsar Seat güncel.',
-    available: (v: string) => `Yeni sürüm var: ${v}`,
-    downloading: (pct: number | null) => (pct === null ? 'İndiriliyor…' : `İndiriliyor… %${pct}`),
-    ready: (v: string, signer: string) => `${v} indirildi ve doğrulandı (imzalayan: ${signer}).`,
-    installing:
-      'Kurulum paketi yeniden doğrulanıyor ve kuruluyor. Pulsar Seat hizmeti kurulum sırasında yeniden başlar; yönetici bağlantısı kısa süre kopabilir.',
-    failed: 'Son adım başarısız oldu.'
-  },
-  confirmTitle: 'Güncelleme kurulsun mu?',
-  confirmBody: (v: string) =>
-    `Pulsar Seat ${v} kurulacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak. Ayarlarınız ve koltuk parolaları korunur. Gerekirse kurulumdan sonra yeniden başlatmanız istenir.`,
-  confirmYes: 'Kur',
-  confirmNo: 'Vazgeç',
-  needsOptIn: 'Denetim için önce yukarıdaki seçeneği açın.',
-  reasons: {
-    disabled: 'Güncelleme denetimi kapalı.',
-    network: 'Sürüm sayfasına bağlanılamadı. İnternet bağlantısını denetleyin.',
-    feed: 'Sürüm bilgisi okunamadı.',
-    no_asset: 'Yeni sürümde bu bilgisayarın mimarisi için kurulum paketi yok.',
-    no_checksum: 'Yeni sürümün sağlama toplamı (SHA-256) yayımlanmamış; güvenle indirilemez.',
-    hash_mismatch: 'İndirilen dosyanın sağlama toplamı tutmuyor; dosya silindi.',
-    unsigned: 'Kurulum paketi imzalı değil ya da imzası doğrulanamadı; kurulmayacak.',
-    untrusted_signer: 'Kurulum paketi tanınmayan bir yayıncı tarafından imzalanmış; kurulmayacak.',
-    // Release signature of SHA256SUMS.txt (minisign), not the installer's Authenticode.
-    sums_unsigned:
-      'Sürüm imzası (SHA256SUMS.txt.minisig) eksik veya doğrulanamadı; güncelleme sunulmuyor.',
-    sums_untrusted:
-      'Sürüm imzası bu derlemenin tanıdığı bir sürüm anahtarına ait değil ya da geçersiz; güncelleme sunulmuyor.',
-    sums_mismatch: 'Sürüm imzası bu sürüme ait değil; güncelleme sunulmuyor.',
-    sums_rollback:
-      'Sunulan sürümün imzası, bu bilgisayarın daha önce kabul ettiği bir imzadan eski; güncelleme sunulmuyor.',
-    no_release_key: 'Bu derlemede sürüm imza anahtarı yok; güncelleme denetimi devre dışı.',
-    too_large: 'Kurulum paketi beklenenden büyük; indirilmedi.',
-    launch: 'Kurulum başlatılamadı.',
-    install_failed:
-      'Kurulum tamamlanamadı (başka bir kurulum sürüyor olabilir). Ayrıntılar: %ProgramData%\\Pulsar Seat\\logs\\update-msi.log. İndirilen paket saklandı; yeniden deneyebilirsiniz.',
-    install_timeout:
-      'Kurulum bir saat içinde bitmedi. Ayrıntılar: %ProgramData%\\Pulsar Seat\\logs\\update-msi.log. Yeniden deneyebilirsiniz.',
-    busy: 'Başka bir güncelleme adımı sürüyor.',
-    not_ready: 'Önce yeni sürümü denetleyin ve indirin.',
-    not_confirmed: 'Kurulum onaylanmadı.',
-    unsupported: 'Bu sürümde güncelleme denetimi kullanılamıyor.'
-  } as Record<string, string>
-};
+export { updateText };
 
-/** Turkish line for the current state. */
+/** Text line for the current state. */
 export function describeUpdate(s: UpdateStatus): string {
   const st: UpdateState = s.state;
   switch (st) {
@@ -108,5 +48,5 @@ export function canInstall(s: UpdateStatus | null): boolean {
 
 export function formatChecked(unixS: number | null | undefined): string {
   if (!unixS) return updateText.never;
-  return updateText.lastChecked(new Date(unixS * 1000).toLocaleString('tr-TR'));
+  return updateText.lastChecked(new Date(unixS * 1000).toLocaleString(activeLang() === 'tr' ? 'tr-TR' : 'en-GB'));
 }

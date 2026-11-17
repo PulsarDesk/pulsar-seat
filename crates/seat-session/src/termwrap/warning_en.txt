@@ -1,0 +1,11 @@
+**Experimental feature — read carefully.**
+If you turn this option on, Pulsar Seat itself redirects the Remote Desktop service (TermService) to an open-source wrapper **that you installed**, so that every seat can have its own session at the same time on client editions of Windows (Pro, Enterprise): it points the TermService\Parameters\ServiceDll value at the wrapper's DLL file and restarts the service. Pulsar Seat does not contain or install the wrapper; it does not change Windows files on disk and does not touch the kernel or the session manager (LSM).
+- **The wrapper changes the code of the Remote Desktop service (termsrv) in memory while it runs.** Pulsar Seat's own rule is not to touch termsrv; this option is an experimental exception used only when you explicitly acknowledge it.
+- Pulsar Seat also writes two registry values that Microsoft does not document (EnableConcurrentSessions, AllowMultipleTSSessions); when the option is turned off, these values and ServiceDll are restored to their old state.
+- The Remote Desktop service restarts when the option is turned on and off; all open extra seat sessions close.
+- Microsoft's licence terms for client Windows do not allow several users at the same time. This use is a grey area for licensing; the responsibility is yours. The licensed path is Windows Server + the Remote Desktop Session Host role and RDS client access licences (CAL).
+- Windows updates can change the termsrv.dll file. On a version it does not recognise, Pulsar Seat turns the option off by itself; until the wrapper is updated, extra seats do not run and seats fall back to fast user switching.
+- Antivirus software may flag the wrapper as unwanted software.
+- On ARM64 PCs the wrapper must be native ARM64; otherwise it is not used.
+- This option never requires you to change Memory Integrity, Secure Boot or any other Windows security setting.
+Confirm that you understand these risks to continue.

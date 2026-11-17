@@ -89,7 +89,7 @@ pub fn create_backend_with(kind: SessionBackendKind, deps: SessionDeps, desktops
 /// The kind the service falls back to when the configured one is not available.
 pub const FALLBACK_KIND: SessionBackendKind = SessionBackendKind::FastUserSwitch;
 
-/// Turkish warning text for the experimental backend (`None` without the feature).
-pub fn experimental_warning_tr() -> Option<&'static str> {
-    backends::termsrv_wrapper::TermsrvWrapperBackend::warning_text()
+/// Warning text for the experimental backend in `lang` (`None` without the feature).
+pub fn experimental_warning(lang: seat_core::i18n::Lang) -> Option<&'static str> {
+    backends::termsrv_wrapper::TermsrvWrapperBackend::warning_text(lang)
 }

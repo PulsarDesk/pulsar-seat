@@ -53,9 +53,11 @@ use seat_core::backend::session::RdpConnection;
 use seat_core::device::Rect;
 use seat_input::rdp::{RdpInputEvent, kbdflags, ptrflags};
 
-/// Turkish texts the control shows while (dis)connecting.
-pub const CONNECTING_TEXT_TR: &str = "Koltuk oturumuna bağlanılıyor…";
-pub const DISCONNECTED_TEXT_TR: &str = "Koltuk oturumu bağlantısı kesildi.";
+/// Texts the control shows while (dis)connecting (`seat_core::i18n`).
+pub const CONNECTING_TEXT: seat_core::i18n::Text =
+    seat_core::i18n::Text::new("Connecting to the seat session…", "Koltuk oturumuna bağlanılıyor…");
+pub const DISCONNECTED_TEXT: seat_core::i18n::Text =
+    seat_core::i18n::Text::new("The seat session was disconnected.", "Koltuk oturumu bağlantısı kesildi.");
 
 /// A property value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,8 +156,8 @@ pub fn settings_for(c: &RdpConnection, user: &str, domain: &str, policy: &Client
         s("", "DesktopWidth", Value::I4(w as i32), false),
         s("", "DesktopHeight", Value::I4(h as i32), false),
         s("", "ColorDepth", Value::I4(32), true),
-        s("", "ConnectingText", Value::Str(CONNECTING_TEXT_TR.into()), true),
-        s("", "DisconnectedText", Value::Str(DISCONNECTED_TEXT_TR.into()), true),
+        s("", "ConnectingText", Value::Str(CONNECTING_TEXT.get().into()), true),
+        s("", "DisconnectedText", Value::Str(DISCONNECTED_TEXT.get().into()), true),
         s("advanced", "RDPPort", Value::I4(i32::from(c.port)), false),
         // NLA / CredSSP with the seat's credentials (spec 30 §6.1.1 point 3).
         s("advanced", "EnableCredSspSupport", Value::Bool(true), true),

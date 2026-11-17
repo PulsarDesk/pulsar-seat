@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import { applyLocale } from '../i18n.ts';
 import { avatarSrc, initial } from './avatar.ts';
 import { gpuWarnings } from './gpu.ts';
 import type { RenderAdapter } from './types.ts';
@@ -12,8 +13,11 @@ describe('avatar', () => {
     expect(avatarSrc({ mime: 'image/png', data: 'a"onerror' })).toBeNull();
     expect(avatarSrc(null)).toBeNull();
   });
-  it('uses the first letter, Turkish upper case', () => {
+  it('uses the first letter in the upper case of the UI language', () => {
+    expect(initial('istasyon')).toBe('I');
+    applyLocale('tr');
     expect(initial('istasyon')).toBe('İ');
+    applyLocale('en');
     expect(initial('  salon')).toBe('S');
     expect(initial('')).toBe('?');
   });

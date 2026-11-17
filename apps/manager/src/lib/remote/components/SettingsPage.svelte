@@ -166,7 +166,7 @@
         {/each}
       </ul>
       <div class="row">
-        <input bind:value={newTarget} placeholder="oyun.exe" aria-label={t.settings.targets} />
+        <input bind:value={newTarget} placeholder={t.common.exampleExe} aria-label={t.settings.targets} />
         <button type="button" disabled={passive || !newTarget.trim()} onclick={addTarget}>{t.settings.addTarget}</button>
       </div>
 
@@ -183,7 +183,7 @@
         {/each}
       </ul>
       <div class="row">
-        <input bind:value={newMask} placeholder="C:\Games\oyun.exe" aria-label={t.settings.maskApps} />
+        <input bind:value={newMask} placeholder={t.common.examplePath} aria-label={t.settings.maskApps} />
         <button type="button" disabled={passive || !newMask.trim()} onclick={addMask}>{t.settings.addTarget}</button>
       </div>
     {/if}

@@ -31,10 +31,10 @@ describe('seat redirection model', () => {
     expect(r.drives).toBe('off');
   });
 
-  it('notes and refusals are Turkish', () => {
-    expect(noteLabel('clipboard_shared_with_host_session')).toContain('ana oturum');
+  it('notes and refusals have text', () => {
+    expect(noteLabel('clipboard_shared_with_host_session')).toContain('host session');
     expect(noteLabel('drive_acl_volume_refused')).toContain('NTFS');
-    expect(refusalLabel({ channel: 'smartcard', reason: 'reader_not_assigned', suppressed: 2 })).toBe('Akıllı kart: okuyucu bu koltuğa ait değil (+2)');
+    expect(refusalLabel({ channel: 'smartcard', reason: 'reader_not_assigned', suppressed: 2 })).toBe('Smart card: the reader does not belong to this seat (+2)');
     expect(refusalLabel({ channel: 'x', reason: 'unknown_reason' })).toBe('x: unknown_reason');
   });
 });
@@ -46,12 +46,12 @@ describe('printer redirection', () => {
     const c2 = setRedirect(c, 2, on);
     expect(c2.seats.find((s) => s.number === 2)?.local?.redirect?.printers).toBe('seat');
     expect(redirectOn(seatRedirect(c2, 2))).toBe(true);
-    expect(t.redirect.summary('kapalı', 'Kapalı', false, t.redirect.printersShort.seat)).toBe('Yazıcı: koltuğun');
+    expect(t.redirect.summary(t.redirect.short.off, t.redirect.driveModes.off, false, t.redirect.printersShort.seat)).toBe('Printer: the seat’s');
     const s2 = c.seats.find((s) => s.number === 2)!;
     s2.local = { redirect: { clipboard: { direction: 'off' }, drives: 'off', smartcards: false } as never };
     expect(seatRedirect(c, 2).printers).toBe('off');
-    expect(noteLabel('printers_print_as_host')).toContain('arka plan hesabı');
-    expect(refusalLabel({ channel: 'printers', reason: 'printer_not_redirected' })).toBe('Yazıcı: yazıcı bu koltuğa yönlendirilmemiş');
+    expect(noteLabel('printers_print_as_host')).toContain('background account');
+    expect(refusalLabel({ channel: 'printers', reason: 'printer_not_redirected' })).toBe('Printer: the printer is not redirected to this seat');
   });
 
   it('the dialog sets the printer mode and warns for every queue', async () => {

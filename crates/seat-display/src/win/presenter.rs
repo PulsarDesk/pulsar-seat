@@ -30,7 +30,7 @@
 //!   (Win+Shift+arrow, drag, restored positions) back to the console;
 //! - `WM_DISPLAYCHANGE` / `WM_DPICHANGED` re-resolve each output by (adapter LUID, target
 //!   id) through CCD, move the windows and report the new layout to the host (RDP monitor
-//!   layout update), or mark the output lost (Turkish idle text) until it comes back.
+//!   layout update), or mark the output lost (localized idle text) until it comes back.
 //!
 //! Known limits (shown in the manager, spec 40 §6.3.7): the console's lock screen, UAC and
 //! Ctrl+Alt+Del replace the console desktop and blank these windows; the console user can
@@ -73,8 +73,8 @@ const IDENTIFY_CLASS: &str = "PulsarSeatIdentify";
 fn is_seat_class(c: &str) -> bool {
     c == PRESENTER_CLASS || c == RDP_HOST_CLASS
 }
-/// Turkish idle text when a seat's monitor is gone or no session is attached.
-pub const TEXT_NO_DISPLAY: &str = "Ekran bağlantısı yok";
+/// Idle text when a seat's monitor is gone or no session is attached.
+pub const TEXT_NO_DISPLAY: seat_core::i18n::Text = seat_core::i18n::Text::new("No display connection", "Ekran bağlantısı yok");
 
 const WM_APP_RECONFIGURE: u32 = WM_APP + 1;
 const WM_APP_RELAYOUT: u32 = WM_APP + 2;
@@ -1043,7 +1043,7 @@ fn relayout(shared: &Arc<Mutex<Shared>>) {
                 }
                 None => {
                     o.lost = true;
-                    o.blank = Some(TEXT_NO_DISPLAY.to_string());
+                    o.blank = Some(TEXT_NO_DISPLAY.get().to_string());
                     moves.push((hwnds.get(i).copied().unwrap_or(0), None));
                     layout.push(None);
                 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "provider.h"
 
+#include "copy.h"
+
 #include "log.h"
 #include "pack.h"
 
@@ -25,11 +27,11 @@ constexpr ULONGLONG kFilterMaxAgeMs = 2'000;
 const wchar_t* LabelOf(DWORD field) {
     switch (field) {
         case kFieldTitle: return L"Pulsar Seat";
-        case kFieldAccount: return L"Hesap";
-        case kFieldPassword: return L"Parola";
-        case kFieldSubmit: return L"Gönder";
+        case kFieldAccount: return copy::Get(copy::kAccount);
+        case kFieldPassword: return copy::Get(copy::kPassword);
+        case kFieldSubmit: return copy::Get(copy::kSubmit);
         case kFieldImage: return L"Pulsar Seat";
-        default: return L"Koltuk değiştir";
+        default: return copy::Get(copy::kSwitchSeat);
     }
 }
 
@@ -210,12 +212,16 @@ void Notifier::Run() {
     }
 }
 
-std::wstring SwitchLinkText(int seat) {
-    // Dative suffix after the spoken number's last word (bir'e, iki'ye, altı'ya, dokuz'a, on'a, ...).
+std::wstring SwitchLinkText(int seat) { return SwitchLinkTextIn(seat, copy::Current()); }
+
+std::wstring SwitchLinkTextIn(int seat, copy::Lang lang) {
+    if (lang == copy::Lang::En) return std::wstring(copy::kSwitchToPrefix.en) + std::to_wstring(seat);
+    // Turkish: dative suffix after the spoken number's last word (bir'e, iki'ye, altı'ya,
+    // dokuz'a, on'a, ...).
     static const wchar_t* units[10] = {L"", L"'e", L"'ye", L"'e", L"'e", L"'e", L"'ya", L"'ye", L"'e", L"'a"};
     static const wchar_t* tens[10] = {L"'a", L"'a", L"'ye", L"'a", L"'a", L"'ye", L"'a", L"'e", L"'e", L"'a"};
     const wchar_t* suffix = (seat % 10 != 0) ? units[seat % 10] : tens[(seat / 10) % 10];
-    return L"Koltuk " + std::to_wstring(seat) + suffix + L" geç";
+    return std::wstring(copy::kSwitchToPrefix.tr) + std::to_wstring(seat) + suffix + L" geç";
 }
 
 void ApplyFilter(bool hide, const CLSID& ours, const GUID* providers, BOOL* allow, DWORD count) {
@@ -283,10 +289,10 @@ Credential::Credential(Kind kind, CREDENTIAL_PROVIDER_USAGE_SCENARIO cpus, const
     DllAddRef();
     if (notifier_) notifier_->AddRef();
     if (kind_ == Kind::Seat) {
-        title_ = L"Koltuk " + std::to_wstring(info_.seat);
+        title_ = copy::Get(copy::kSeat) + std::to_wstring(info_.seat);
         autoPending_ = info_.autoSubmit && cpus_ == CPUS_LOGON;
     } else {
-        title_ = L"Koltuk değiştir";
+        title_ = copy::Get(copy::kSwitchSeat);
         autoPending_ = false;
     }
 }
@@ -371,7 +377,7 @@ IFACEMETHODIMP Credential::GetStringValue(DWORD field, LPWSTR* value) {
     if (field == kFieldTitle) return DupString(title_.c_str(), value);
     if (field == kFieldAccount) {
         if (kind_ == Kind::Seat) return DupString(info_.account.c_str(), value);
-        return DupString(L"Ekranı başka bir koltuğa verin", value);
+        return DupString(copy::Get(copy::kSwitchHint), value);
     }
     if (field >= kFieldLink0) {
         size_t i = field - kFieldLink0;
@@ -429,9 +435,9 @@ IFACEMETHODIMP Credential::CommandLinkClicked(DWORD field) {
     const int seat = info_.switchTargets[i];
     Log(L"CommandLinkClicked: switch to seat %d", seat);
     if (ServiceClient::Switch(seat)) {
-        SetTitle(L"Koltuk " + std::to_wstring(seat) + L" açılıyor…");
+        SetTitle(copy::Get(copy::kStartingPrefix) + std::to_wstring(seat) + copy::Get(copy::kStartingSuffix));
     } else {
-        SetTitle(L"Geçilemedi: Pulsar Seat hizmeti isteği kabul etmedi");
+        SetTitle(copy::Get(copy::kSwitchRefused));
     }
     return S_OK;
 }
@@ -466,7 +472,7 @@ IFACEMETHODIMP Credential::GetSerialization(CREDENTIAL_PROVIDER_GET_SERIALIZATIO
     } else {
         if (typed_.Empty()) {
             if (statusText) {
-                DupString(autoFailed ? L"Kayıtlı parola alınamadı. Parolayı girin." : L"Parolayı girin.", statusText);
+                DupString(autoFailed ? copy::Get(copy::kSavedPasswordUnavailable) : copy::Get(copy::kEnterPassword), statusText);
             }
             if (statusIcon) *statusIcon = CPSI_WARNING;
             return S_OK;
@@ -504,7 +510,7 @@ IFACEMETHODIMP Credential::ReportResult(NTSTATUS status, NTSTATUS subStatus, LPW
         submittedAuto_ = false;
         ServiceClient::Report(status, subStatus);
         if (status != 0) {
-            if (statusText) DupString(L"Kayıtlı parola kabul edilmedi. Parolayı girin.", statusText);
+            if (statusText) DupString(copy::Get(copy::kSavedPasswordRejected), statusText);
             if (statusIcon) *statusIcon = CPSI_ERROR;
             // The service dropped the grant: refresh the cached answer (no hiding any
             // more) and tell LogonUI. Whether LogonUI then re-runs the filter and shows the

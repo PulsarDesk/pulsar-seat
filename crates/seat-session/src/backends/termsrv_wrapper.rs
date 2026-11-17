@@ -97,12 +97,15 @@ impl TermsrvWrapperBackend {
         Ok(Vec::new())
     }
 
-    /// The Turkish warning the manager shows before the ack.
-    pub fn warning_text() -> Option<&'static str> {
+    /// The warning the manager shows before the ack, in `lang`.
+    pub fn warning_text(lang: seat_core::i18n::Lang) -> Option<&'static str> {
         #[cfg(feature = "experimental-client-sku")]
-        return Some(crate::termwrap::WARNING_TR);
+        return Some(crate::termwrap::warning(lang));
         #[cfg(not(feature = "experimental-client-sku"))]
-        None
+        {
+            let _ = lang;
+            None
+        }
     }
 }
 

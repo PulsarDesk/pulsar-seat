@@ -20,6 +20,7 @@
 //   (HYPOTHESIS, untested on hardware), so the other tiles may stay hidden until then.
 #pragma once
 
+#include "copy.h"
 #include "common.h"
 #include "pipe.h"
 
@@ -209,7 +210,9 @@ private:
 // Hides everything but `ours` only when `hide` is set and `ours` is in the list.
 void ApplyFilter(bool hide, const CLSID& ours, const GUID* providers, BOOL* allow, DWORD count);
 
-// "Koltuk N'ye geç" with the Turkish dative suffix of the number.
+// Switch link text in the UI language: "Switch to seat N" / "Koltuk N'ye geç" (Turkish
+// dative suffix of the number).
 std::wstring SwitchLinkText(int seat);
+std::wstring SwitchLinkTextIn(int seat, copy::Lang lang);
 
 }  // namespace pulsar

@@ -97,7 +97,7 @@ describe('network tab', () => {
     await user.click(within(dlg).getByTestId('ip-browse'));
     await user.click(within(dlg).getByTestId('ip-add-folder'));
     await user.click(within(dlg).getByRole('button', { name: t.save }));
-    expect(store.draft?.settings.ip_programs?.map((p) => p.path)).toEqual(['C:\\Oyunlar\\oyun.exe', 'C:\\Oyunlar\\baslat.exe']);
+    expect(store.draft?.settings.ip_programs?.map((p) => p.path)).toEqual(['C:\\Games\\game.exe', 'C:\\Games\\launcher.exe']);
   });
 });
 
@@ -137,7 +137,7 @@ describe('dialogs', () => {
     const loadUser = vi.fn(async () => [{ name: 'benim.png', data_url: 'data:image/png;base64,AA==' }]);
     render(PictureDialog, { device: kbd, loadUser, onSave, onCancel: vi.fn() });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('radio', { name: /Kısa klavye/ }));
+    await user.click(screen.getByRole('radio', { name: /Compact keyboard/ }));
     await user.click(await screen.findByRole('radio', { name: /benim\.png/ }));
     await user.click(screen.getByRole('button', { name: t.picture.choose }));
     expect(loadUser).toHaveBeenCalledWith('keyboard');

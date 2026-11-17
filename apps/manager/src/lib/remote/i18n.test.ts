@@ -10,7 +10,7 @@ const reasons = [
   'backend_pulsar', 'backend_sunshine'
 ];
 
-describe('Turkish copy', () => {
+describe('remote copy', () => {
   it('has a text for every seat failure reason', () => {
     for (const r of reasons) expect(t.failure[r], r).toBeTruthy();
     expect(failureText('client_auth')).toBe(t.failure.client_auth);
@@ -19,8 +19,8 @@ describe('Turkish copy', () => {
 
   it('prefers the package reason over the generic code', () => {
     expect(errorMessage({ code: 'service_unavailable', message: 'x', reason: 'client_auth' })).toBe(t.failure.client_auth);
-    expect(errorMessage({ code: 'wrong_pin', message: 'x' })).toBe('PIN yanlış.');
-    expect(errorMessage('boom')).toBe('Beklenmeyen bir hata oluştu.');
+    expect(errorMessage({ code: 'wrong_pin', message: 'x' })).toBe('Wrong PIN.');
+    expect(errorMessage('boom')).toBe('An unexpected error occurred.');
   });
 
   it('maps every HDR reason and display backend', () => {

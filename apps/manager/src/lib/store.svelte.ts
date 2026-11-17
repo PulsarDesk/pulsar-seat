@@ -4,7 +4,7 @@
 // turns pushed events into state. All privileged work is a request to the service.
 
 import type { Api, TrayAction, Unlisten } from './api.ts';
-import { errorCodeTag, errorLabel, noticeLabel, seatList, t } from './i18n.ts';
+import { errorCodeTag, errorLabel, initLocale, noticeLabel, seatList, storeLangPref, t, type LangPref } from './i18n.ts';
 import {
   buildCanvas,
   clone,
@@ -286,7 +286,7 @@ export class ManagerStore {
           this.status = { ...this.status, seats };
         }
         if (r.state.state === 'error') {
-          this.toast('error', `${r.seat}. koltuk: ${errorLabel({ code: 'internal', message: '', reason: r.state.reason })}`, r.state.reason);
+          this.toast('error', `${t.seatN(r.seat)}: ${errorLabel({ code: 'internal', message: '', reason: r.state.reason })}`, r.state.reason);
         }
         break;
       }
@@ -303,7 +303,7 @@ export class ManagerStore {
           if (!this.prefs.hideSameAccountWarning) this.sameAccountSeat = this.hello?.caller.seat ?? null;
           break;
         }
-        this.toast('info', ev.data.seat ? `${ev.data.seat}. koltuk: ${noticeLabel(ev.data.code)}` : noticeLabel(ev.data.code));
+        this.toast('info', ev.data.seat ? `${t.seatN(ev.data.seat)}: ${noticeLabel(ev.data.code)}` : noticeLabel(ev.data.code));
         break;
       case 'device_arrived': {
         const v = ev.data.view;
@@ -391,6 +391,15 @@ export class ManagerStore {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** Language choice (Basic settings): stored per user, then the window reloads so every
+   *  table is read in the new language (`reload` is injectable for tests). */
+  changeLanguage(pref: LangPref, reload: () => void = () => globalThis.location?.reload()): void {
+    storeLangPref(pref);
+    const lang = initLocale();
+    void this.api.setUiLanguage(lang).catch(() => {});
+    reload();
   }
 
   setPref<K extends keyof Prefs>(k: K, v: Prefs[K]): void {

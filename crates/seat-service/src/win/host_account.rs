@@ -201,11 +201,11 @@ impl AccountOps for WinAccountOps {
         };
         // Only the account Pulsar created (its comment) is ours to maintain or delete.
         let ours = if seat_session::kiosk_account::is_kiosk_account_name(name) {
-            seat_session::kiosk_account::KIOSK_COMMENT
+            &seat_session::kiosk_account::KIOSK_COMMENT
         } else {
-            seat_session::host_account::ACCOUNT_COMMENT
+            &seat_session::host_account::ACCOUNT_COMMENT
         };
-        if comment != ours {
+        if !ours.matches(&comment) {
             return Ok(Lookup::Foreign);
         }
         sid.map(Lookup::User).ok_or_else(|| "user SID not readable".into())
@@ -381,7 +381,7 @@ impl AccountOps for WinAccountOps {
             NetApiBufferFree(buf as *const _);
             c
         };
-        if comment != GROUP_COMMENT {
+        if !GROUP_COMMENT.matches(&comment) {
             return Ok(GroupLookup::Foreign);
         }
         group_sid(&w).map(GroupLookup::Ours)

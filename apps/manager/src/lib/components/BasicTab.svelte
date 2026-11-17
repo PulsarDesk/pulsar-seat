@@ -7,7 +7,7 @@
   import KioskShellDialog from './KioskShellDialog.svelte';
   import RedirectDialog from './RedirectDialog.svelte';
   import GpuPreferenceDialog from './GpuPreferenceDialog.svelte';
-  import { seatLabel, t } from '#lib/i18n.ts';
+  import { LANGS, seatLabel, storedLangPref, t, type LangPref } from '#lib/i18n.ts';
   import { addSeat, clone, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setGpuPreference, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, setPadIgnoreDevices, parsePadIgnoreList, seatRedirect } from '#lib/model.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
@@ -261,7 +261,14 @@
 
 <fieldset>
   <legend>{t.basic.theme}</legend>
-  <p class="hint">{t.basic.language}</p>
+  <label class="field">
+    <span>{t.basic.language}</span>
+    <select data-testid="language" value={storedLangPref()} onchange={(e) => store.changeLanguage(e.currentTarget.value as LangPref)}>
+      <option value="system">{t.basic.languageSystem}</option>
+      {#each LANGS as l (l)}<option value={l}>{t.basic.languageNames[l]}</option>{/each}
+    </select>
+  </label>
+  <p class="hint">{t.basic.languageRestart}</p>
   <div class="row">
     {#each [['system', t.basic.themeSystem], ['light', t.basic.themeLight], ['dark', t.basic.themeDark]] as [v, label] (v)}
       <label class="toggle">

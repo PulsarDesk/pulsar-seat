@@ -62,7 +62,7 @@ fn start_writes_files_and_launches_in_session() {
     r.s.start(3).unwrap();
     assert_eq!(r.fs.dir_sddl(&d.root).as_deref(), Some(crate::seatdir::SEAT_DIR_SDDL));
     assert_eq!(r.fs.get_string(&d.conf).unwrap(), "port = 48100\n");
-    assert!(r.fs.get_string(&d.apps).unwrap().contains("Masaüstü"));
+    assert!(r.fs.get_string(&d.apps).unwrap().contains(seat_core::remote::streamconf::DESKTOP_APP.get()));
     assert!(r.fs.get(&d.log).is_none(), "log rotated before start");
     assert_eq!(r.fs.get_string(&crate::seatdir::rotated_names(&d.log, 3)[0]).unwrap(), "previous run\n");
     let calls = r.l.calls();

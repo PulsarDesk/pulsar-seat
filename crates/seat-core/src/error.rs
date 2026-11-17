@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Machine-readable error. The manager maps `reason` (if set) or `code` to Turkish copy;
+/// Machine-readable error. The manager maps `reason` (if set) or `code` to localized copy;
 /// `message` is an English diagnostic for logs only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 #[error("{code:?}: {message}")]

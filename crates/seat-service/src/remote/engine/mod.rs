@@ -1719,13 +1719,15 @@ pub fn redact(l: &str) -> String {
     let lower = l.to_lowercase();
     // Whole words only: "otp" is also inside "hotplug".
     let pin_word = lower.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "pin" | "pins" | "otp" | "totp"));
-    if pin_word || MARKERS.iter().any(|m| lower.contains(m)) { "[satır gizlendi]".to_string() } else { l.trim_end().to_string() }
+    if pin_word || MARKERS.iter().any(|m| lower.contains(m)) { seat_stream::seatdir::REDACTED_LINE.to_string() } else { l.trim_end().to_string() }
 }
 
 fn termwrap_json(s: &seat_session::termwrap::TermwrapStatus) -> serde_json::Value {
     let mut v = json(s);
     if let Some(o) = v.as_object_mut() {
-        o.insert("warning_text".into(), serde_json::Value::String(seat_session::termwrap::WARNING_TR.into()));
+        // English text (the manager shows its own copy in the UI language; same files).
+        o.insert("warning_text".into(), serde_json::Value::String(seat_session::termwrap::WARNING_EN.into()));
+        o.insert("warning_text_tr".into(), serde_json::Value::String(seat_session::termwrap::WARNING_TR.into()));
     }
     v
 }

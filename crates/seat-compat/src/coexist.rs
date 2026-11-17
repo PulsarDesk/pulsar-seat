@@ -94,14 +94,14 @@ impl Coexistence {
             Check {
                 id: "reference_product".into(),
                 outcome: CheckOutcome::Pass,
-                detail: "kurulu değil".into(),
+                detail: "not installed".into(),
             }
         } else {
             Check {
                 id: "reference_product".into(),
                 outcome: CheckOutcome::Fail,
                 detail: format!(
-                    "başka bir çoklu koltuk yazılımı kurulu (hizmet anahtarları: {})",
+                    "another multiseat product is installed (service keys: {})",
                     self.reference_services.join(", ")
                 ),
             }
@@ -110,15 +110,15 @@ impl Coexistence {
             Check {
                 id: "termservice_stock".into(),
                 outcome: CheckOutcome::Pass,
-                detail: "TermService, Windows'un termsrv.dll dosyasını kullanıyor".into(),
+                detail: "TermService uses Windows' termsrv.dll".into(),
             }
         } else {
             Check {
                 id: "termservice_stock".into(),
                 outcome: CheckOutcome::Warn,
                 detail: format!(
-                    "TermService ServiceDll değeri Windows varsayılanı değil: {}",
-                    self.termservice_dll.as_deref().unwrap_or("(yok)")
+                    "the TermService ServiceDll value is not the Windows default: {}",
+                    self.termservice_dll.as_deref().unwrap_or("(none)")
                 ),
             }
         });
@@ -130,8 +130,8 @@ impl Coexistence {
                     "{} ({}): {}",
                     c.class_name,
                     match c.position {
-                        FilterPosition::Upper => "üst",
-                        FilterPosition::Lower => "alt",
+                        FilterPosition::Upper => "upper",
+                        FilterPosition::Lower => "lower",
                     },
                     c.filters.join(", ")
                 )
@@ -146,14 +146,14 @@ impl Coexistence {
             Check {
                 id: "foreign_input_filters".into(),
                 outcome: CheckOutcome::Pass,
-                detail: "yok".into(),
+                detail: "none".into(),
             }
         } else {
             Check {
                 id: "foreign_input_filters".into(),
                 outcome: CheckOutcome::Warn,
                 detail: format!(
-                    "başka giriş süzgeçleri var (dokunulmadı): {}",
+                    "other input filters present (left untouched): {}",
                     foreign.join("; ")
                 ),
             }

@@ -3,6 +3,8 @@
 // PC/AT set-1 make code (`settings.input.switch_hotkey_scan`). The dialog reads
 // `KeyboardEvent.code` (layout independent, i.e. the physical key) and maps it here.
 
+import { t } from './i18n.ts';
+
 const CODE_TO_SCAN: Record<string, number> = {
   Escape: 0x01,
   Digit1: 0x02,
@@ -99,10 +101,7 @@ export function scanFromCode(code: string): number | null {
 
 const SPECIAL_NAMES: Record<string, string> = {
   Escape: 'Esc',
-  Backspace: 'Geri',
-  Tab: 'Sekme',
   Enter: 'Enter',
-  Space: 'Boşluk',
   Minus: '-',
   Equal: '=',
   BracketLeft: '[',
@@ -123,6 +122,7 @@ const SPECIAL_NAMES: Record<string, string> = {
 
 /** Human-readable name of a key code (physical US-layout position). */
 export function codeName(code: string): string {
+  if (t.keyNames[code]) return t.keyNames[code];
   if (SPECIAL_NAMES[code]) return SPECIAL_NAMES[code];
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);

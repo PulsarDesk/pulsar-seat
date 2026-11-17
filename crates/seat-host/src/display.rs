@@ -115,7 +115,7 @@ impl SeatDisplay {
         let clones = clone_cover(outputs);
         if clones.iter().any(|&c| c) {
             p.configure_subset(outputs, &clones)?;
-            p.blank(TEXT_NO_CLONE)?;
+            p.blank(TEXT_NO_CLONE.get())?;
         } else {
             p.guard_only(outputs)?;
         }
@@ -124,7 +124,8 @@ impl SeatDisplay {
 }
 
 /// Shown on clone monitors when the RDP client draws its own window (no frames to copy).
-pub const TEXT_NO_CLONE: &str = "Bu RDP istemcisi ekran yansıtmayı desteklemiyor";
+pub const TEXT_NO_CLONE: seat_core::i18n::Text =
+    seat_core::i18n::Text::new("This RDP client does not support mirroring the screen", "Bu RDP istemcisi ekran yansıtmayı desteklemiyor");
 
 /// Outputs the ActiveX client cannot cover: clones on console-desktop targets.
 pub fn clone_cover(outputs: &SeatOutputs) -> Vec<bool> {

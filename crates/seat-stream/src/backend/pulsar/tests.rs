@@ -171,7 +171,7 @@ fn handshake_sends_secrets_config_and_apps_never_argv() {
     assert_eq!(cfg["node_port"], 48100);
     assert_eq!(cfg["port_mapping"], false);
     assert_eq!(cfg["access"], "approve_or_password");
-    assert_eq!(sent[3]["body"]["apps"][0]["name"], "Masaüstü");
+    assert_eq!(sent[3]["body"]["apps"][0]["name"], seat_core::remote::streamconf::DESKTOP_APP.get());
     assert!(sent[3]["body"]["apps"][0].get("cmd").is_none(), "command lines stay in the service");
     let args = &w.launcher.calls()[0].args;
     assert!(!args.iter().any(|a| a.contains(identity.as_str())));

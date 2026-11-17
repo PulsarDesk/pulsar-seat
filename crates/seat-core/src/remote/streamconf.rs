@@ -71,11 +71,15 @@ pub fn generate_conf(seat: &RemoteSeatRecord, global: &RemoteSettings, files: &S
     )
 }
 
+/// Name of the built-in desktop entry, shown in the stream client's app list (UI copy;
+/// written in the service's language when the list is created).
+pub const DESKTOP_APP: crate::i18n::Text = crate::i18n::Text::new("Desktop", "Masaüstü");
+
 /// Default `<seat>_apps.json`, written only when the file does not exist yet.
 pub fn default_apps_json() -> String {
     let v = serde_json::json!({
         "env": {},
-        "apps": [ { "name": "Masaüstü", "image-path": "desktop.png" } ]
+        "apps": [ { "name": DESKTOP_APP.get(), "image-path": "desktop.png" } ]
     });
     serde_json::to_string_pretty(&v).expect("static json")
 }
@@ -150,6 +154,8 @@ mod tests {
     fn default_apps_is_valid_json_with_desktop() {
         let v: serde_json::Value = serde_json::from_str(&default_apps_json()).unwrap();
         assert_eq!(v["apps"].as_array().unwrap().len(), 1);
+        assert_eq!(v["apps"][0]["name"], DESKTOP_APP.get());
+        assert!(crate::i18n::check_table(&[("desktop", &DESKTOP_APP)]).is_empty());
     }
 
     #[test]

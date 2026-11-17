@@ -92,6 +92,13 @@ impl FirewallRuleSpec {
 
 /// Parse a COM `LocalPorts` string (`"1,2,3"`, `"*"`); ranges are not used by our rules
 /// and make the rule "foreign" (returns `None`).
+/// Firewall rule descriptions (shown in Windows' firewall UI; English default, Turkish locale).
+pub mod copy {
+    pub const RULE_SEAT: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: stream connections of seat \"{0}\"", "Pulsar Seat: \"{0}\" koltuğunun akış bağlantıları");
+    pub const RULE_RDP_BLOCK: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: Remote Desktop port {0} is used from this PC only", "Pulsar Seat: uzak masaüstü bağlantı noktası {0} yalnızca bu bilgisayardan kullanılır");
+    pub const RULE_PULSAR: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: Pulsar connection of seat \"{0}\"", "Pulsar Seat: \"{0}\" koltuğunun Pulsar bağlantısı");
+}
+
 pub fn parse_ports(s: &str) -> Option<Vec<u16>> {
     let s = s.trim();
     if s.is_empty() || s == "*" {
@@ -119,8 +126,8 @@ pub fn seat_rules(seat_id: &str, display_name: &str, base: u16, program: &Path, 
     let mk = |proto: FwProto, local_ports: Vec<u16>| FirewallRuleSpec {
         name: seat_rule_name(seat_id, proto),
         group: GROUP.into(),
-        // Shown in Windows' firewall UI: Turkish copy.
-        description: format!("Pulsar Split: \"{display_name}\" koltuğunun akış bağlantıları"),
+        // Shown in Windows' firewall UI: localized copy (`copy`).
+        description: copy::RULE_SEAT.fmt(&[&display_name]),
         program: program.to_path_buf(),
         protocol: proto,
         local_ports,
@@ -137,7 +144,7 @@ pub fn rdp_block_rules(port: u16) -> [FirewallRuleSpec; 2] {
     let mk = |proto: FwProto, p: &str| FirewallRuleSpec {
         name: format!("PulsarSplit RDP {port} block {p}"),
         group: GROUP.into(),
-        description: format!("Pulsar Split: uzak masaüstü bağlantı noktası {port} yalnızca bu bilgisayardan kullanılır"),
+        description: copy::RULE_RDP_BLOCK.fmt(&[&port]),
         program: PathBuf::new(),
         protocol: proto,
         local_ports: vec![port],
@@ -214,7 +221,7 @@ pub fn pulsar_seat_rule(seat_id: &str, display_name: &str, node_port: u16, progr
     FirewallRuleSpec {
         name: seat_rule_name(seat_id, FwProto::Udp),
         group: GROUP.into(),
-        description: format!("Pulsar Split: \"{display_name}\" koltuğunun Pulsar bağlantısı"),
+        description: copy::RULE_PULSAR.fmt(&[&display_name]),
         program: program.to_path_buf(),
         protocol: FwProto::Udp,
         // 0 = ephemeral node port: program-scoped rule on any port.
@@ -324,6 +331,12 @@ mod tests {
     use crate::fake::{FakeFirewall, MemJournal};
 
     const ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+    #[test]
+    fn rule_descriptions_are_complete() {
+        let p = seat_core::i18n::check_table(seat_core::text_table![copy::RULE_SEAT, copy::RULE_RDP_BLOCK, copy::RULE_PULSAR]);
+        assert!(p.is_empty(), "{p:?}");
+    }
 
     #[test]
     fn seat_rules_ports_never_include_web_ui() {

@@ -1111,7 +1111,7 @@ export function seatOneFirstMonitorAdvice(c: Config, views: DeviceView[]): Devic
     .map((v) => v.device)
     .filter((d) => d.kind === 'monitor' && d.present && d.details.type === 'display');
   if (monitors.length < 2) return null;
-  const first = [...monitors].sort((a, b) => (a.label ?? a.key).localeCompare(b.label ?? b.key, 'tr', { numeric: true }))[0];
+  const first = [...monitors].sort((a, b) => (a.label ?? a.key).localeCompare(b.label ?? b.key, 'en', { numeric: true }))[0];
   const eff = effectiveMasks(c, views.map((v) => v.device));
   return M.contains(eff.get(first.key)!.mask, 1) ? null : first.key;
 }

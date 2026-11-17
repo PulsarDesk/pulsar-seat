@@ -23,7 +23,7 @@ describe('AssignDialog', () => {
     render(AssignDialog, { device: kbd, mask: 1, seats, onSave, onCancel: vi.fn() });
     expect(screen.getByText(t.assign.exclusiveHint)).toBeInTheDocument();
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText('2. koltuk — Misafir'));
+    await user.click(screen.getByLabelText('Seat 2 — Misafir'));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenCalledWith(2);
   });
@@ -33,7 +33,7 @@ describe('AssignDialog', () => {
     const spk = inv.find((d) => d.kind === 'audio_render')!;
     render(AssignDialog, { device: spk, mask: 1, seats, onSave, onCancel: vi.fn() });
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText('3. koltuk'));
+    await user.click(screen.getByLabelText('Seat 3'));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenLastCalledWith(0b101);
     await user.click(screen.getByRole('button', { name: t.assign.allSeats }));
@@ -51,7 +51,7 @@ describe('AssignDialog targets', () => {
     const user = userEvent.setup();
     await user.click(screen.getByLabelText(t.canvas.assignPort));
     expect(screen.getByText(t.assign.targetHint)).toBeInTheDocument();
-    await user.click(screen.getByLabelText('2. koltuk — Misafir'));
+    await user.click(screen.getByLabelText('Seat 2 — Misafir'));
     await user.click(screen.getByRole('button', { name: t.save }));
     // The port had no assignment yet: the choice starts empty.
     expect(onSaveTarget).toHaveBeenCalledWith('port;loc=X#USB(4)', 'usb_hub', 0b010);
@@ -136,8 +136,8 @@ describe('ExperimentalDialog', () => {
   it('shows the warning and accepts only after the acknowledgement', async () => {
     const onAccept = vi.fn();
     render(ExperimentalDialog, { onAccept, onCancel: vi.fn() });
-    expect(screen.getByTestId('warning-text')).toHaveTextContent('Deneysel özellik');
-    expect(screen.getByTestId('warning-text')).toHaveTextContent('lisans');
+    expect(screen.getByTestId('warning-text')).toHaveTextContent('Experimental feature');
+    expect(screen.getByTestId('warning-text')).toHaveTextContent('licence');
     const accept = screen.getByRole('button', { name: t.experimental.enable });
     expect(accept).toBeDisabled();
     const user = userEvent.setup();

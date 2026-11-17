@@ -7,35 +7,40 @@
 // "In use" / "not in use" pairs (spec 10 §3.1): a user file `name_off.ext` is the "not in
 // use" picture of `name.ext`; when it is missing, the default picture is drawn instead.
 
+import { t } from './i18n.ts';
 import type { DeviceKind, UserPicture } from './types.ts';
 
 export interface BuiltinPicture {
   id: string;
   kind: DeviceKind;
-  label: string;
+}
+
+/** Display name of a built-in picture (`t.pictureNames`). */
+export function pictureLabel(id: string): string {
+  return t.pictureNames[id] ?? id;
 }
 
 /** Built-in alternatives per category (the plain category picture is the default). */
 export const BUILTIN_PICTURES: BuiltinPicture[] = [
-  { id: 'monitor-speakers', kind: 'monitor', label: 'Hoparlörlü ekran' },
-  { id: 'monitor-curved', kind: 'monitor', label: 'Kavisli ekran' },
-  { id: 'tv', kind: 'monitor', label: 'Televizyon' },
-  { id: 'laptop', kind: 'monitor', label: 'Dizüstü ekranı' },
-  { id: 'keyboard-compact', kind: 'keyboard', label: 'Kısa klavye' },
-  { id: 'keyboard-numpad', kind: 'keyboard', label: 'Sayı tuşlu klavye' },
-  { id: 'keyboard-laptop', kind: 'keyboard', label: 'Dizüstü klavyesi' },
-  { id: 'mouse-wireless', kind: 'mouse', label: 'Kablosuz fare' },
-  { id: 'mouse-vertical', kind: 'mouse', label: 'Dikey fare' },
-  { id: 'trackball', kind: 'mouse', label: 'İztopu' },
-  { id: 'touchpad', kind: 'hid', label: 'Dokunmatik yüzey' },
-  { id: 'trackpoint', kind: 'hid', label: 'İşaret çubuğu' },
-  { id: 'pen', kind: 'hid', label: 'Kalem' },
-  { id: 'touchscreen', kind: 'hid', label: 'Dokunmatik ekran' },
-  { id: 'gamepad', kind: 'hid', label: 'Oyun kumandası' },
-  { id: 'headphones', kind: 'audio_render', label: 'Kulaklık' },
-  { id: 'speaker-single', kind: 'audio_render', label: 'Tek hoparlör' },
-  { id: 'headset', kind: 'audio_capture', label: 'Mikrofonlu kulaklık' },
-  { id: 'webcam-clip', kind: 'webcam', label: 'Ekran üstü kamera' }
+  { id: 'monitor-speakers', kind: 'monitor' },
+  { id: 'monitor-curved', kind: 'monitor' },
+  { id: 'tv', kind: 'monitor' },
+  { id: 'laptop', kind: 'monitor' },
+  { id: 'keyboard-compact', kind: 'keyboard' },
+  { id: 'keyboard-numpad', kind: 'keyboard' },
+  { id: 'keyboard-laptop', kind: 'keyboard' },
+  { id: 'mouse-wireless', kind: 'mouse' },
+  { id: 'mouse-vertical', kind: 'mouse' },
+  { id: 'trackball', kind: 'mouse' },
+  { id: 'touchpad', kind: 'hid' },
+  { id: 'trackpoint', kind: 'hid' },
+  { id: 'pen', kind: 'hid' },
+  { id: 'touchscreen', kind: 'hid' },
+  { id: 'gamepad', kind: 'hid' },
+  { id: 'headphones', kind: 'audio_render' },
+  { id: 'speaker-single', kind: 'audio_render' },
+  { id: 'headset', kind: 'audio_capture' },
+  { id: 'webcam-clip', kind: 'webcam' }
 ];
 
 /** User picture folder of a device kind (spec 10 §3.1), or null when the kind has none. */

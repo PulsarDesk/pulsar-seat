@@ -63,14 +63,25 @@ use seat_core::backend::{BackendError, ErrorKind};
 /// Journal package name (`journal\termwrap.jsonl`).
 pub const PACKAGE: &str = "termwrap";
 
-/// Manager warning text (Turkish UI copy). Shown before the admin may select the backend.
-/// Single source of truth: `warning_tr.txt` next to this file. The manager's
-/// `apps/manager/src/lib/warning.ts` holds the same text and its test compares it with
-/// this file word for word. When the text changes in substance, bump
-/// `seat_core::config::EXPERIMENTAL_WARNING_VERSION` and `types.ts`.
+/// Manager warning text (UI copy, English). Shown before the admin may select the
+/// backend. Single source of truth: `warning_en.txt` / `warning_tr.txt` next to this file.
+/// The manager's `apps/manager/src/lib/warning.ts` holds the same texts and its test
+/// compares them with these files word for word. When the text changes in substance,
+/// change both languages and bump `seat_core::config::EXPERIMENTAL_WARNING_VERSION` and
+/// `types.ts`.
+pub const WARNING_EN: &str = include_str!("warning_en.txt");
+/// The same warning in Turkish (locale).
 pub const WARNING_TR: &str = include_str!("warning_tr.txt");
 
-/// Bump together with [`WARNING_TR`]; the ack is per version.
+/// The warning in `lang`.
+pub fn warning(lang: seat_core::i18n::Lang) -> &'static str {
+    match lang {
+        seat_core::i18n::Lang::En => WARNING_EN,
+        seat_core::i18n::Lang::Tr => WARNING_TR,
+    }
+}
+
+/// Bump together with [`WARNING_EN`] / [`WARNING_TR`]; the ack is per version.
 pub const WARNING_VERSION: u32 = seat_core::config::EXPERIMENTAL_WARNING_VERSION;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,7 +290,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn warning_text_is_turkish_and_complete() {
+    fn warning_text_is_complete_in_both_languages() {
+        assert!(WARNING_EN.starts_with("**Experimental feature"));
+        for needle in [
+            "licen",
+            "grey area",
+            "termsrv.dll",
+            "Antivirus",
+            "restarts",
+            "CAL",
+            "LSM",
+            "in memory",
+            "does not document",
+            "EnableConcurrentSessions",
+            "AllowMultipleTSSessions",
+            "ServiceDll",
+            "itself redirects",
+            "to continue.",
+        ] {
+            assert!(WARNING_EN.contains(needle), "{needle}");
+        }
+        assert_eq!(WARNING_EN.lines().count(), WARNING_TR.lines().count(), "same paragraphs");
+        assert_eq!(warning(seat_core::i18n::Lang::Tr), WARNING_TR);
         assert!(WARNING_TR.starts_with("**Deneysel özellik"));
         for needle in [
             "lisans",
