@@ -1,0 +1,1022 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pulsar Seat <pulsar-seat@invalid>
+Date: Tue, 17 Nov 2026 08:08:29 +0300
+Subject: [PATCH 4/6] pulsar: pulsar_pad gamepad backend
+
+gamepad = pulsar_ds4 | pulsar_ds5 | pulsar_ds5e | pulsar_xone (and auto without ViGEmBus on a Pulsar seat): pad.wanted / pad.released events, pad.attach / pad.denied / pad.detach requests, USB-layout input reports into the per-pad shared channel (protocol 1 seqlock) and rumble, trigger rumble, adaptive triggers and lightbar from the output ring back to the client. SPDX-License-Identifier: GPL-3.0-only
+---
+ cmake/compile_definitions/windows.cmake |   2 +
+ src/platform/windows/input.cpp          |  47 +-
+ src/platform/windows/pulsar_pad.cpp     | 806 ++++++++++++++++++++++++
+ src/platform/windows/pulsar_pad.h       |  43 ++
+ src/pulsar/control.cpp                  |   1 +
+ 5 files changed, 898 insertions(+), 1 deletion(-)
+ create mode 100644 src/platform/windows/pulsar_pad.cpp
+ create mode 100644 src/platform/windows/pulsar_pad.h
+
+diff --git a/cmake/compile_definitions/windows.cmake b/cmake/compile_definitions/windows.cmake
+index 9316b0f..e24b206 100644
+--- a/cmake/compile_definitions/windows.cmake
++++ b/cmake/compile_definitions/windows.cmake
+@@ -71,6 +71,8 @@ set(PLATFORM_TARGET_FILES
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_ram.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_pulsar_idd.cpp"
++        "${CMAKE_SOURCE_DIR}/src/platform/windows/pulsar_pad.cpp"
++        "${CMAKE_SOURCE_DIR}/src/platform/windows/pulsar_pad.h"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
+diff --git a/src/platform/windows/input.cpp b/src/platform/windows/input.cpp
+index f7fb328..52bb556 100644
+--- a/src/platform/windows/input.cpp
++++ b/src/platform/windows/input.cpp
+@@ -18,7 +18,9 @@
+ // local includes
+ #include "keylayout.h"
+ #include "misc.h"
++#include "pulsar_pad.h"
+ #include "src/config.h"
++#include "src/pulsar/control.h"
+ #include "src/globals.h"
+ #include "src/logging.h"
+ #include "src/platform/common.h"
+@@ -1168,6 +1170,12 @@ namespace platf {
+   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
+     auto raw = (input_raw_t *) input.get();
+ 
++    // Pulsar Seat: Pulsar pads by choice, or for `auto` when ViGEmBus is missing on a Pulsar seat.
++    if (pulsar_pad::is_pulsar_gamepad(config::input.gamepad) ||
++        (config::input.gamepad == "auto"sv && !raw->vigem && pulsar_pad::available())) {
++      return pulsar_pad::alloc(id, metadata, std::move(feedback_queue), config::input.gamepad);
++    }
++
+     if (!raw->vigem) {
+       return 0;
+     }
+@@ -1222,6 +1230,11 @@ namespace platf {
+   void free_gamepad(input_t &input, int nr) {
+     auto raw = (input_raw_t *) input.get();
+ 
++    if (pulsar_pad::owns(nr)) {
++      pulsar_pad::free(nr);
++      return;
++    }
++
+     if (!raw->vigem) {
+       return;
+     }
+@@ -1480,6 +1493,11 @@ namespace platf {
+    * @param gamepad_state The gamepad button/axis state sent from the client.
+    */
+   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
++    if (pulsar_pad::owns(nr)) {
++      pulsar_pad::update(nr, gamepad_state);
++      return;
++    }
++
+     auto vigem = ((input_raw_t *) input.get())->vigem;
+ 
+     // If there is no gamepad support
+@@ -1512,6 +1530,11 @@ namespace platf {
+    * @param touch The touch event.
+    */
+   void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
++    if (pulsar_pad::owns(touch.id.globalIndex)) {
++      pulsar_pad::touch(touch);
++      return;
++    }
++
+     auto vigem = ((input_raw_t *) input.get())->vigem;
+ 
+     // If there is no gamepad support
+@@ -1618,6 +1641,11 @@ namespace platf {
+    * @param motion The motion event.
+    */
+   void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
++    if (pulsar_pad::owns(motion.id.globalIndex)) {
++      pulsar_pad::motion(motion);
++      return;
++    }
++
+     auto vigem = ((input_raw_t *) input.get())->vigem;
+ 
+     // If there is no gamepad support
+@@ -1645,6 +1673,11 @@ namespace platf {
+    * @param battery The battery event.
+    */
+   void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
++    if (pulsar_pad::owns(battery.id.globalIndex)) {
++      pulsar_pad::battery(battery);
++      return;
++    }
++
+     auto vigem = ((input_raw_t *) input.get())->vigem;
+ 
+     // If there is no gamepad support
+@@ -1724,6 +1757,10 @@ namespace platf {
+         supported_gamepad_t {"auto", true, ""},
+         supported_gamepad_t {"x360", false, ""},
+         supported_gamepad_t {"ds4", false, ""},
++        supported_gamepad_t {"pulsar_ds4", false, ""},
++        supported_gamepad_t {"pulsar_ds5", false, ""},
++        supported_gamepad_t {"pulsar_ds5e", false, ""},
++        supported_gamepad_t {"pulsar_xone", false, ""},
+       };
+ 
+       return gps;
+@@ -1732,12 +1769,20 @@ namespace platf {
+     auto vigem = ((input_raw_t *) input)->vigem;
+     auto enabled = vigem != nullptr;
+     auto reason = enabled ? "" : "gamepads.vigem-not-available";
++    // Pulsar Seat: Pulsar pads need a seat pipe; the service creates the devices.
++    pulsar_pad::init();
++    auto pulsar_enabled = pulsar::pipe_enabled();
++    auto pulsar_reason = pulsar_enabled ? "" : "gamepads.pulsar-seat-only";
+ 
+     // ds4 == ps4
+     static std::vector gps {
+       supported_gamepad_t {"auto", true, reason},
+       supported_gamepad_t {"x360", enabled, reason},
+-      supported_gamepad_t {"ds4", enabled, reason}
++      supported_gamepad_t {"ds4", enabled, reason},
++      supported_gamepad_t {"pulsar_ds4", pulsar_enabled, pulsar_reason},
++      supported_gamepad_t {"pulsar_ds5", pulsar_enabled, pulsar_reason},
++      supported_gamepad_t {"pulsar_ds5e", pulsar_enabled, pulsar_reason},
++      supported_gamepad_t {"pulsar_xone", pulsar_enabled, pulsar_reason},
+     };
+ 
+     for (auto &[name, is_enabled, reason_disabled] : gps) {
+diff --git a/src/platform/windows/pulsar_pad.cpp b/src/platform/windows/pulsar_pad.cpp
+new file mode 100644
+index 0000000..2fefc87
+--- /dev/null
++++ b/src/platform/windows/pulsar_pad.cpp
+@@ -0,0 +1,806 @@
++/**
++ * @file src/platform/windows/pulsar_pad.cpp
++ * @brief Pulsar Seat: virtual pads of the Pulsar Seat pad driver (see pulsar_pad.h).
++ *
++ * SPDX-License-Identifier: GPL-3.0-only
++ *
++ * Report layouts are the public USB HID layouts of the DualShock 4 (report 0x01, 64 bytes),
++ * DualSense / DualSense Edge (report 0x01, 64 bytes) and the Xbox HID layout declared by the
++ * Pulsar Seat pad driver's own descriptor (report 0x01, 62 bytes). Shared-memory layout:
++ * protocol 1 of the Pulsar Seat pad channel.
++ */
++// standard includes
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cmath>
++#include <cstring>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <optional>
++#include <string>
++#include <thread>
++
++// platform includes
++#include <winsock2.h>
++#include <windows.h>
++
++// local includes
++#include "pulsar_pad.h"
++#include "src/config.h"
++#include "src/logging.h"
++#include "src/pulsar/control.h"
++
++using namespace std::literals;
++
++namespace pulsar_pad {
++  namespace {
++    // ---- channel layout, protocol 1 ----
++    constexpr std::size_t SECTION_SIZE = 4096;
++    constexpr std::uint32_t IN_MAGIC = 0x4E495050;  // "PPIN"
++    constexpr std::uint32_t OUT_MAGIC = 0x554F5050;  // "PPOU"
++    constexpr std::size_t IN_OFF_MAGIC = 0;
++    constexpr std::size_t IN_OFF_KIND = 8;
++    constexpr std::size_t IN_OFF_SEQ = 12;
++    constexpr std::size_t IN_OFF_REPORT_LEN = 16;
++    constexpr std::size_t IN_OFF_FLAGS = 18;
++    constexpr std::size_t IN_OFF_QPC = 24;
++    constexpr std::size_t IN_OFF_REPORT = 64;
++    constexpr std::size_t IN_REPORT_MAX = 128;
++    constexpr std::uint16_t IN_FLAG_MOTION = 1;
++    constexpr std::size_t OUT_OFF_MAGIC = 0;
++    constexpr std::size_t OUT_OFF_WRITE_INDEX = 12;
++    constexpr std::size_t OUT_OFF_ENTRIES = 64;
++    constexpr std::uint32_t OUT_ENTRY_COUNT = 16;
++    constexpr std::size_t OUT_ENTRY_SIZE = 96;
++    constexpr std::size_t ENTRY_OFF_SEQ = 0;
++    constexpr std::size_t ENTRY_OFF_LEN = 4;
++    constexpr std::size_t ENTRY_OFF_PAYLOAD = 16;
++    constexpr std::size_t ENTRY_PAYLOAD_MAX = 80;
++    constexpr std::string_view CHANNEL_PREFIX = "Global\\PulsarSplit_Pad_"sv;
++    constexpr std::size_t CHANNEL_MAX_LEN = 96;
++
++    enum class kind_e {
++      xone = 0,
++      ds4 = 1,
++      ds5 = 2,
++      ds5e = 3,
++    };
++
++    constexpr float EARTH_G = 9.80665f;
++
++    struct touch_point_t {
++      bool down = false;
++      std::uint8_t id = 0;
++      std::uint16_t x = 0;
++      std::uint16_t y = 0;
++    };
++
++    struct pad_t {
++      int nr = -1;
++      std::uint8_t client_index = 0;
++      std::uint32_t generation = 0;
++      kind_e kind = kind_e::xone;
++      platf::feedback_queue_t feedback_queue;
++
++      // Last state from the client.
++      platf::gamepad_state_t state {};
++      std::array<std::int16_t, 3> gyro {};
++      std::array<std::int16_t, 3> accel {};
++      bool motion = false;
++      std::array<touch_point_t, 2> touch {};
++      std::map<std::uint32_t, int> pointer_slots;
++      std::uint8_t touch_id = 0;
++      std::uint8_t battery_percent = 100;
++      std::uint8_t battery_state = LI_BATTERY_STATE_FULL;
++
++      // Report counters.
++      std::uint8_t report_counter = 0;
++      std::uint8_t touch_packet = 0;
++      std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
++
++      // Channel (after pad.attach).
++      HANDLE in_section = nullptr;
++      std::uint8_t *in_view = nullptr;
++      HANDLE in_event = nullptr;
++      HANDLE out_section = nullptr;
++      std::uint8_t *out_view = nullptr;
++      HANDLE out_event = nullptr;
++      std::uint32_t out_next = 0;
++      std::shared_ptr<std::atomic_bool> stop;
++      std::thread feedback_thread;
++      bool denied = false;
++
++      ~pad_t() {
++        close_channel();
++      }
++
++      bool attached() const {
++        return in_view != nullptr;
++      }
++
++      void close_channel() {
++        if (stop) {
++          *stop = true;
++        }
++        if (out_event) {
++          SetEvent(out_event);
++        }
++        if (feedback_thread.joinable()) {
++          feedback_thread.join();
++        }
++        stop.reset();
++        for (auto *view : {in_view, out_view}) {
++          if (view) {
++            UnmapViewOfFile(view);
++          }
++        }
++        in_view = out_view = nullptr;
++        for (auto h : {in_section, in_event, out_section, out_event}) {
++          if (h) {
++            CloseHandle(h);
++          }
++        }
++        in_section = in_event = out_section = out_event = nullptr;
++      }
++    };
++
++    std::recursive_mutex pads_mutex;
++    std::map<int, std::unique_ptr<pad_t>> pads;
++    std::uint32_t generation_counter = 0;
++    std::once_flag init_once;
++
++    // ---- report builders ----
++
++    std::uint8_t stick8(std::int16_t v) {
++      return (std::uint8_t) (((int) v + 32768) >> 8);
++    }
++
++    std::uint8_t stick8_inv(std::int16_t v) {
++      return (std::uint8_t) (255 - stick8(v));
++    }
++
++    void put16(std::uint8_t *b, std::size_t at, std::uint16_t v) {
++      b[at] = (std::uint8_t) v;
++      b[at + 1] = (std::uint8_t) (v >> 8);
++    }
++
++    std::uint8_t hat(std::uint32_t f) {
++      bool up = f & platf::DPAD_UP;
++      bool down = f & platf::DPAD_DOWN;
++      bool left = f & platf::DPAD_LEFT;
++      bool right = f & platf::DPAD_RIGHT;
++      if (up && down) {
++        up = down = false;
++      }
++      if (left && right) {
++        left = right = false;
++      }
++      if (up) {
++        return right ? 1 : left ? 7 :
++                                  0;
++      }
++      if (down) {
++        return right ? 3 : left ? 5 :
++                                  4;
++      }
++      if (right) {
++        return 2;
++      }
++      if (left) {
++        return 6;
++      }
++      return 8;
++    }
++
++    std::uint8_t bit(std::uint32_t f, std::uint32_t mask, std::uint8_t out) {
++      return (f & mask) ? out : 0;
++    }
++
++    void touch_bytes(const touch_point_t &t, std::uint32_t w, std::uint32_t h, std::uint8_t *out) {
++      if (!t.down) {
++        out[0] = 0x80;
++        out[1] = out[2] = out[3] = 0;
++        return;
++      }
++      std::uint32_t x = (std::uint32_t) t.x * (w - 1) / 65535;
++      std::uint32_t y = (std::uint32_t) t.y * (h - 1) / 65535;
++      out[0] = t.id & 0x7F;
++      out[1] = (std::uint8_t) (x & 0xFF);
++      out[2] = (std::uint8_t) (((x >> 8) & 0x0F) | ((y & 0x0F) << 4));
++      out[3] = (std::uint8_t) (y >> 4);
++    }
++
++    std::uint8_t face(std::uint32_t f) {
++      return hat(f) | bit(f, platf::X, 0x10) | bit(f, platf::A, 0x20) | bit(f, platf::B, 0x40) | bit(f, platf::Y, 0x80);
++    }
++
++    std::uint8_t shoulders(std::uint32_t f, std::uint8_t l2, std::uint8_t r2) {
++      return bit(f, platf::LEFT_BUTTON, 0x01) | bit(f, platf::RIGHT_BUTTON, 0x02) | (l2 ? 0x04 : 0) | (r2 ? 0x08 : 0) |
++             bit(f, platf::BACK, 0x10) | bit(f, platf::START, 0x20) | bit(f, platf::LEFT_STICK, 0x40) | bit(f, platf::RIGHT_STICK, 0x80);
++    }
++
++    std::uint32_t motion_us(const pad_t &p) {
++      return (std::uint32_t) std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - p.started).count();
++    }
++
++    std::size_t ds4_report(pad_t &p, std::uint8_t *r) {
++      auto &s = p.state;
++      std::memset(r, 0, 64);
++      r[0] = 0x01;
++      r[1] = stick8(s.lsX);
++      r[2] = stick8_inv(s.lsY);
++      r[3] = stick8(s.rsX);
++      r[4] = stick8_inv(s.rsY);
++      r[5] = face(s.buttonFlags);
++      r[6] = shoulders(s.buttonFlags, s.lt, s.rt);
++      r[7] = bit(s.buttonFlags, platf::HOME, 0x01) | bit(s.buttonFlags, platf::TOUCHPAD_BUTTON | platf::MISC_BUTTON, 0x02) | ((p.report_counter & 0x3F) << 2);
++      p.report_counter = (p.report_counter + 1) & 0x3F;
++      r[8] = s.lt;
++      r[9] = s.rt;
++      put16(r, 10, (std::uint16_t) ((std::uint64_t) motion_us(p) * 3 / 16));
++      for (int i = 0; i < 3; ++i) {
++        put16(r, 13 + 2 * i, (std::uint16_t) p.gyro[i]);
++        put16(r, 19 + 2 * i, (std::uint16_t) p.accel[i]);
++      }
++      std::uint8_t level = p.battery_state == LI_BATTERY_STATE_FULL ? 11 : std::min<std::uint8_t>(p.battery_percent / 10, 10);
++      bool cable = p.battery_state != LI_BATTERY_STATE_DISCHARGING;
++      r[30] = level | (cable ? 0x10 : 0);
++      r[33] = 1;
++      r[34] = p.touch_packet;
++      touch_bytes(p.touch[0], 1920, 942, r + 35);
++      touch_bytes(p.touch[1], 1920, 942, r + 39);
++      return 64;
++    }
++
++    std::size_t ds5_report(pad_t &p, std::uint8_t *r, bool edge) {
++      auto &s = p.state;
++      std::memset(r, 0, 64);
++      r[0] = 0x01;
++      r[1] = stick8(s.lsX);
++      r[2] = stick8_inv(s.lsY);
++      r[3] = stick8(s.rsX);
++      r[4] = stick8_inv(s.rsY);
++      r[5] = s.lt;
++      r[6] = s.rt;
++      r[7] = p.report_counter++;
++      r[8] = face(s.buttonFlags);
++      r[9] = shoulders(s.buttonFlags, s.lt, s.rt);
++      r[10] = bit(s.buttonFlags, platf::HOME, 0x01) | bit(s.buttonFlags, platf::TOUCHPAD_BUTTON, 0x02) | bit(s.buttonFlags, platf::MISC_BUTTON, 0x04);
++      if (edge) {
++        r[10] |= bit(s.buttonFlags, platf::PADDLE1 | platf::PADDLE3, 0x40) | bit(s.buttonFlags, platf::PADDLE2 | platf::PADDLE4, 0x80);
++      }
++      for (int i = 0; i < 3; ++i) {
++        put16(r, 16 + 2 * i, (std::uint16_t) p.gyro[i]);
++        put16(r, 22 + 2 * i, (std::uint16_t) p.accel[i]);
++      }
++      std::uint32_t ts = motion_us(p) * 3;
++      std::memcpy(r + 28, &ts, 4);
++      touch_bytes(p.touch[0], 1920, 1080, r + 33);
++      touch_bytes(p.touch[1], 1920, 1080, r + 37);
++      std::uint8_t charge = p.battery_state == LI_BATTERY_STATE_FULL ? 2 : p.battery_state == LI_BATTERY_STATE_CHARGING ? 1 :
++                                                                                                                          0;
++      r[53] = std::min<std::uint8_t>(p.battery_percent / 10, 10) | (charge << 4);
++      r[54] = 0x08 | 0x10;
++      return 64;
++    }
++
++    std::size_t xone_report(pad_t &p, std::uint8_t *r) {
++      auto &s = p.state;
++      std::memset(r, 0, 62);
++      r[0] = 0x01;
++      auto u = [](std::int16_t v) {
++        return (std::uint16_t) ((int) v + 32768);
++      };
++      auto ui = [](std::int16_t v) {
++        return (std::uint16_t) (65535 - ((int) v + 32768));
++      };
++      put16(r, 1, u(s.lsX));
++      put16(r, 3, ui(s.lsY));
++      put16(r, 5, u(s.rsX));
++      put16(r, 7, ui(s.rsY));
++      put16(r, 9, (std::uint16_t) ((s.lt << 2) | (s.lt >> 6)));
++      put16(r, 11, (std::uint16_t) ((s.rt << 2) | (s.rt >> 6)));
++      auto h = hat(s.buttonFlags);
++      r[13] = h == 8 ? 0 : h + 1;
++      static constexpr std::uint32_t order[] {
++        platf::A,
++        platf::B,
++        platf::X,
++        platf::Y,
++        platf::LEFT_BUTTON,
++        platf::RIGHT_BUTTON,
++        platf::BACK,
++        platf::START,
++        platf::LEFT_STICK,
++        platf::RIGHT_STICK,
++        platf::HOME,
++        platf::MISC_BUTTON,
++        platf::PADDLE1,
++        platf::PADDLE2,
++        platf::PADDLE3,
++        platf::PADDLE4,
++      };
++      std::uint16_t btn = 0;
++      for (int i = 0; i < 16; ++i) {
++        if (s.buttonFlags & order[i]) {
++          btn |= (std::uint16_t) (1u << i);
++        }
++      }
++      put16(r, 14, btn);
++      return 62;
++    }
++
++    // ---- shared memory ----
++
++    std::uint32_t load32(std::uint8_t *base, std::size_t off) {
++      return std::atomic_ref<std::uint32_t>(*reinterpret_cast<std::uint32_t *>(base + off)).load(std::memory_order_acquire);
++    }
++
++    void store32(std::uint8_t *base, std::size_t off, std::uint32_t v) {
++      std::atomic_ref<std::uint32_t>(*reinterpret_cast<std::uint32_t *>(base + off)).store(v, std::memory_order_release);
++    }
++
++    void write_bytes(std::uint8_t *base, std::size_t off, const void *src, std::size_t n) {
++      auto s = (const std::uint8_t *) src;
++      for (std::size_t i = 0; i < n; ++i) {
++        ((volatile std::uint8_t *) base)[off + i] = s[i];
++      }
++    }
++
++    /// Seqlock write of one input report (the server is the single writer).
++    void write_input(pad_t &p) {
++      if (!p.attached()) {
++        return;
++      }
++      std::uint8_t report[IN_REPORT_MAX];
++      std::size_t len = 0;
++      switch (p.kind) {
++        case kind_e::ds4:
++          len = ds4_report(p, report);
++          break;
++        case kind_e::ds5:
++          len = ds5_report(p, report, false);
++          break;
++        case kind_e::ds5e:
++          len = ds5_report(p, report, true);
++          break;
++        case kind_e::xone:
++          len = xone_report(p, report);
++          break;
++      }
++      auto v = p.in_view;
++      auto seq = load32(v, IN_OFF_SEQ);
++      auto odd = (seq % 2 == 0) ? seq + 1 : seq + 2;
++      store32(v, IN_OFF_SEQ, odd);
++      std::atomic_thread_fence(std::memory_order_seq_cst);
++      std::uint16_t l = (std::uint16_t) len;
++      std::uint16_t flags = p.motion ? IN_FLAG_MOTION : 0;
++      LARGE_INTEGER qpc;
++      QueryPerformanceCounter(&qpc);
++      std::uint64_t q = (std::uint64_t) qpc.QuadPart;
++      write_bytes(v, IN_OFF_REPORT_LEN, &l, 2);
++      write_bytes(v, IN_OFF_FLAGS, &flags, 2);
++      write_bytes(v, IN_OFF_QPC, &q, 8);
++      write_bytes(v, IN_OFF_REPORT, report, len);
++      std::atomic_thread_fence(std::memory_order_seq_cst);
++      store32(v, IN_OFF_SEQ, odd + 1);
++      SetEvent(p.in_event);
++    }
++
++    std::uint16_t scale8(std::uint8_t v) {
++      return (std::uint16_t) ((v << 8) | v);
++    }
++
++    std::uint16_t scale_pct(std::uint8_t v) {
++      return (std::uint16_t) (std::min<std::uint32_t>(v, 100) * 65535 / 100);
++    }
++
++    /// Turns one output report of the game into client feedback.
++    void route_output(pad_t &p, const std::uint8_t *r, std::size_t len) {
++      auto idx = p.client_index;
++      auto &q = p.feedback_queue;
++      switch (p.kind) {
++        case kind_e::ds4:
++          if (len >= 9 && r[0] == 0x05) {
++            if (r[1] & 0x01) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rumble(idx, scale8(r[5]), scale8(r[4])));
++            }
++            if (r[1] & 0x02) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rgb_led(idx, r[6], r[7], r[8]));
++            }
++          }
++          break;
++        case kind_e::ds5:
++        case kind_e::ds5e:
++          if (len >= 48 && r[0] == 0x02) {
++            auto pl = r + 1;
++            if (pl[0] & 0x03) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rumble(idx, scale8(pl[3]), scale8(pl[2])));
++            }
++            if (pl[0] & 0x0C) {
++              std::array<std::uint8_t, 10> right {};
++              std::array<std::uint8_t, 10> left {};
++              std::memcpy(right.data(), pl + 11, 10);
++              std::memcpy(left.data(), pl + 22, 10);
++              q->raise(platf::gamepad_feedback_msg_t::make_adaptive_triggers(idx, pl[0] & 0x0C, pl[21], pl[10], left, right));
++            }
++            if (pl[1] & 0x04) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rgb_led(idx, pl[44], pl[45], pl[46]));
++            }
++          }
++          break;
++        case kind_e::xone:
++          if (len >= 6 && r[0] == 0x03) {
++            if (r[1] & 0x0C) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rumble_triggers(idx, scale_pct(r[2]), scale_pct(r[3])));
++            }
++            if (r[1] & 0x03) {
++              q->raise(platf::gamepad_feedback_msg_t::make_rumble(idx, scale_pct(r[4]), scale_pct(r[5])));
++            }
++          }
++          break;
++      }
++    }
++
++    /// Reads the output ring of one pad until stopped.
++    void feedback_loop(pad_t *p, std::shared_ptr<std::atomic_bool> stop) {
++      platf::set_thread_name("pulsar_pad_fb");
++      while (!*stop) {
++        WaitForSingleObject(p->out_event, 250);
++        if (*stop) {
++          break;
++        }
++        auto v = p->out_view;
++        if (load32(v, OUT_OFF_MAGIC) != OUT_MAGIC) {
++          continue;
++        }
++        auto wi = load32(v, OUT_OFF_WRITE_INDEX);
++        if (wi - p->out_next > OUT_ENTRY_COUNT) {
++          p->out_next = wi - OUT_ENTRY_COUNT;
++        }
++        while (p->out_next != wi) {
++          auto off = OUT_OFF_ENTRIES + (p->out_next % OUT_ENTRY_COUNT) * OUT_ENTRY_SIZE;
++          std::uint8_t payload[ENTRY_PAYLOAD_MAX];
++          for (int tries = 0; tries < 8; ++tries) {
++            auto s1 = load32(v, off + ENTRY_OFF_SEQ);
++            if (s1 % 2) {
++              continue;
++            }
++            std::atomic_thread_fence(std::memory_order_seq_cst);
++            std::uint16_t len;
++            std::memcpy(&len, v + off + ENTRY_OFF_LEN, 2);
++            len = std::min<std::uint16_t>(len, ENTRY_PAYLOAD_MAX);
++            std::memcpy(payload, v + off + ENTRY_OFF_PAYLOAD, len);
++            std::atomic_thread_fence(std::memory_order_seq_cst);
++            if (load32(v, off + ENTRY_OFF_SEQ) == s1) {
++              if (len > 0) {
++                route_output(*p, payload, len);
++              }
++              break;
++            }
++          }
++          ++p->out_next;
++        }
++      }
++    }
++
++    template<class T>
++    T *map_section(const std::string &name, DWORD access, HANDLE &section) {
++      std::wstring w(name.begin(), name.end());
++      section = OpenFileMappingW(access, FALSE, w.c_str());
++      if (!section) {
++        return nullptr;
++      }
++      return (T *) MapViewOfFile(section, access, 0, 0, SECTION_SIZE);
++    }
++
++    HANDLE open_event(const std::string &name, DWORD access) {
++      std::wstring w(name.begin(), name.end());
++      return OpenEventW(access, FALSE, w.c_str());
++    }
++
++    std::string kind_wire(kind_e k) {
++      switch (k) {
++        case kind_e::ds4:
++          return "ds4";
++        case kind_e::ds5:
++          return "ds5";
++        case kind_e::ds5e:
++          return "ds5e";
++        default:
++          return "xone";
++      }
++    }
++
++    std::optional<kind_e> kind_from_wire(const std::string &s) {
++      if (s == "ds4") {
++        return kind_e::ds4;
++      }
++      if (s == "ds5") {
++        return kind_e::ds5;
++      }
++      if (s == "ds5e") {
++        return kind_e::ds5e;
++      }
++      if (s == "xone") {
++        return kind_e::xone;
++      }
++      return std::nullopt;
++    }
++
++    pad_t *find_slot(int slot, std::uint32_t generation) {
++      auto it = pads.find(slot);
++      if (it == pads.end() || it->second->generation != generation) {
++        return nullptr;
++      }
++      return it->second.get();
++    }
++
++    std::optional<nlohmann::json> on_attach(const nlohmann::json &body, pulsar::responder_t) {
++      auto slot = body.value("slot", -1);
++      auto generation = body.value("generation", 0u);
++      auto channel = body.value("channel", ""s);
++      auto protocol = body.value("protocol", 0u);
++      std::lock_guard lg {pads_mutex};
++      auto p = find_slot(slot, generation);
++      if (!p) {
++        throw pulsar::error_t {"not_found", "no pad wanted in this slot / generation"};
++      }
++      if (protocol != 1 && protocol != 2) {
++        throw pulsar::error_t {"bad_request", "unsupported pad channel protocol"};
++      }
++      if (channel.size() > CHANNEL_MAX_LEN || !channel.starts_with(CHANNEL_PREFIX) || channel.find_first_of("/\\", CHANNEL_PREFIX.size()) != std::string::npos) {
++        throw pulsar::error_t {"bad_request", "bad channel name"};
++      }
++      if (auto k = kind_from_wire(body.value("kind", ""s))) {
++        p->kind = *k;
++      }
++      p->close_channel();
++      p->in_view = map_section<std::uint8_t>(channel + "_In", FILE_MAP_READ | FILE_MAP_WRITE, p->in_section);
++      p->in_event = open_event(channel + "_InEvt", EVENT_MODIFY_STATE);
++      p->out_view = map_section<std::uint8_t>(channel + "_Out", FILE_MAP_READ, p->out_section);
++      p->out_event = open_event(channel + "_OutEvt", SYNCHRONIZE);
++      if (!p->in_view || !p->in_event || !p->out_view || !p->out_event || load32(p->in_view, IN_OFF_MAGIC) != IN_MAGIC) {
++        p->close_channel();
++        throw pulsar::error_t {"internal", "cannot open the pad channel"};
++      }
++      std::uint32_t kind_value;
++      std::memcpy(&kind_value, p->in_view + IN_OFF_KIND, 4);
++      if (kind_value <= 3) {
++        p->kind = (kind_e) kind_value;
++      }
++      p->out_next = load32(p->out_view, OUT_OFF_WRITE_INDEX);
++      p->stop = std::make_shared<std::atomic_bool>(false);
++      p->feedback_thread = std::thread(feedback_loop, p, p->stop);
++      BOOST_LOG(info) << "pulsar_pad: pad "sv << slot << " attached as "sv << kind_wire(p->kind);
++      write_input(*p);
++      if (p->kind != kind_e::xone) {
++        // Ask the client for motion data, as the DS4 path does.
++        p->feedback_queue->raise(platf::gamepad_feedback_msg_t::make_motion_event_state(p->client_index, LI_MOTION_TYPE_ACCEL, 100));
++        p->feedback_queue->raise(platf::gamepad_feedback_msg_t::make_motion_event_state(p->client_index, LI_MOTION_TYPE_GYRO, 100));
++      }
++      return nlohmann::json::object();
++    }
++
++    std::optional<nlohmann::json> on_denied(const nlohmann::json &body, pulsar::responder_t) {
++      auto slot = body.value("slot", -1);
++      auto generation = body.value("generation", 0u);
++      std::lock_guard lg {pads_mutex};
++      if (auto p = find_slot(slot, generation)) {
++        p->denied = true;
++        BOOST_LOG(warning) << "pulsar_pad: no pad for slot "sv << slot << ": "sv << body.value("code", ""s) << ' ' << body.value("detail", ""s);
++      }
++      return nlohmann::json::object();
++    }
++
++    std::optional<nlohmann::json> on_detach(const nlohmann::json &body, pulsar::responder_t) {
++      auto slot = body.value("slot", -1);
++      auto generation = body.value("generation", 0u);
++      std::lock_guard lg {pads_mutex};
++      if (auto p = find_slot(slot, generation)) {
++        p->close_channel();
++      }
++      return nlohmann::json::object();
++    }
++
++    std::int16_t clamp16(float v) {
++      return (std::int16_t) std::clamp<float>(v, INT16_MIN, INT16_MAX);
++    }
++  }  // namespace
++
++  bool is_pulsar_gamepad(std::string_view name) {
++    return name == "pulsar_ds4"sv || name == "pulsar_ds5"sv || name == "pulsar_ds5e"sv || name == "pulsar_xone"sv;
++  }
++
++  void init() {
++    std::call_once(init_once, []() {
++      pulsar::register_handler("pad.attach", on_attach);
++      pulsar::register_handler("pad.denied", on_denied);
++      pulsar::register_handler("pad.detach", on_detach);
++    });
++  }
++
++  bool available() {
++    return pulsar::pipe_enabled() && pulsar::connected();
++  }
++
++  int alloc(const platf::gamepad_id_t &id, const platf::gamepad_arrival_t &metadata, platf::feedback_queue_t feedback_queue, std::string_view gamepad) {
++    init();
++    if (!available()) {
++      BOOST_LOG(warning) << "pulsar_pad: no seat pipe connected; gamepad "sv << id.globalIndex << " is not available"sv;
++      return -1;
++    }
++    kind_e kind;
++    if (gamepad == "pulsar_ds4"sv) {
++      kind = kind_e::ds4;
++    } else if (gamepad == "pulsar_ds5"sv) {
++      kind = kind_e::ds5;
++    } else if (gamepad == "pulsar_ds5e"sv) {
++      kind = kind_e::ds5e;
++    } else if (gamepad == "pulsar_xone"sv) {
++      kind = kind_e::xone;
++    } else {
++      // `auto`: PlayStation clients get a DualSense, everything else an Xbox pad.
++      kind = metadata.type == LI_CTYPE_PS ? kind_e::ds5 : kind_e::xone;
++    }
++
++    nlohmann::json caps = nlohmann::json::array();
++    auto c = metadata.capabilities;
++    if (c & LI_CCAP_RUMBLE) {
++      caps.push_back("rumble");
++    }
++    if (c & LI_CCAP_TRIGGER_RUMBLE) {
++      caps.push_back("trigger_rumble");
++    }
++    if (c & LI_CCAP_TOUCHPAD) {
++      caps.push_back("touchpad");
++    }
++    if (c & LI_CCAP_ACCEL) {
++      caps.push_back("accel");
++    }
++    if (c & LI_CCAP_GYRO) {
++      caps.push_back("gyro");
++    }
++    if (c & LI_CCAP_BATTERY_STATE) {
++      caps.push_back("battery");
++    }
++    if (c & LI_CCAP_RGB_LED) {
++      caps.push_back("rgb_led");
++    }
++    std::string client_type = metadata.type == LI_CTYPE_XBOX ? "xbox" : metadata.type == LI_CTYPE_PS ? "ps" :
++                                                                      metadata.type == LI_CTYPE_NINTENDO ? "nintendo" :
++                                                                                                          "unknown";
++
++    std::uint32_t generation;
++    {
++      std::lock_guard lg {pads_mutex};
++      generation = ++generation_counter;
++      auto p = std::make_unique<pad_t>();
++      p->nr = id.globalIndex;
++      p->client_index = id.clientRelativeIndex;
++      p->generation = generation;
++      p->kind = kind;
++      p->feedback_queue = std::move(feedback_queue);
++      pads[id.globalIndex] = std::move(p);
++    }
++    BOOST_LOG(info) << "Gamepad "sv << id.globalIndex << " will be a Pulsar "sv << kind_wire(kind) << " pad"sv;
++    pulsar::emit("pad.wanted", {
++                                 {"slot", id.globalIndex},
++                                 {"kind", kind_wire(kind)},
++                                 {"client_type", client_type},
++                                 {"caps", caps},
++                                 {"generation", generation},
++                               });
++    return 0;
++  }
++
++  bool owns(int nr) {
++    std::lock_guard lg {pads_mutex};
++    return pads.contains(nr);
++  }
++
++  void free(int nr) {
++    std::unique_ptr<pad_t> p;
++    {
++      std::lock_guard lg {pads_mutex};
++      auto it = pads.find(nr);
++      if (it == pads.end()) {
++        return;
++      }
++      p = std::move(it->second);
++      pads.erase(it);
++    }
++    pulsar::emit("pad.released", {{"slot", nr}, {"generation", p->generation}, {"reason", "controller_removed"}});
++    p->close_channel();
++  }
++
++  void update(int nr, const platf::gamepad_state_t &state) {
++    std::lock_guard lg {pads_mutex};
++    auto it = pads.find(nr);
++    if (it == pads.end()) {
++      return;
++    }
++    it->second->state = state;
++    write_input(*it->second);
++  }
++
++  void touch(const platf::gamepad_touch_t &t) {
++    std::lock_guard lg {pads_mutex};
++    auto it = pads.find(t.id.globalIndex);
++    if (it == pads.end()) {
++      return;
++    }
++    auto &p = *it->second;
++    if (p.kind == kind_e::xone) {
++      return;
++    }
++    if (t.eventType == LI_TOUCH_EVENT_CANCEL_ALL) {
++      p.touch[0].down = p.touch[1].down = false;
++      p.pointer_slots.clear();
++    } else {
++      int slot;
++      auto ps = p.pointer_slots.find(t.pointerId);
++      if (ps != p.pointer_slots.end()) {
++        slot = ps->second;
++      } else if (t.eventType == LI_TOUCH_EVENT_DOWN) {
++        slot = !p.touch[0].down ? 0 : !p.touch[1].down ? 1 :
++                                                         -1;
++        if (slot < 0) {
++          return;
++        }
++        p.pointer_slots[t.pointerId] = slot;
++        p.touch[slot].id = (p.touch_id++) & 0x7F;
++      } else {
++        return;
++      }
++      auto &tp = p.touch[slot];
++      if (t.eventType == LI_TOUCH_EVENT_UP || t.eventType == LI_TOUCH_EVENT_CANCEL) {
++        tp.down = false;
++        p.pointer_slots.erase(t.pointerId);
++      } else {
++        tp.down = true;
++        tp.x = (std::uint16_t) std::clamp(t.x * 65535.0f, 0.0f, 65535.0f);
++        tp.y = (std::uint16_t) std::clamp(t.y * 65535.0f, 0.0f, 65535.0f);
++      }
++    }
++    p.touch_packet++;
++    write_input(p);
++  }
++
++  void motion(const platf::gamepad_motion_t &m) {
++    std::lock_guard lg {pads_mutex};
++    auto it = pads.find(m.id.globalIndex);
++    if (it == pads.end()) {
++      return;
++    }
++    auto &p = *it->second;
++    if (p.kind == kind_e::xone) {
++      return;
++    }
++    if (m.motionType == LI_MOTION_TYPE_ACCEL) {
++      p.accel = {clamp16(m.x / EARTH_G * 8192), clamp16(m.y / EARTH_G * 8192), clamp16(m.z / EARTH_G * 8192)};
++    } else if (m.motionType == LI_MOTION_TYPE_GYRO) {
++      p.gyro = {clamp16(m.x * 16), clamp16(m.y * 16), clamp16(m.z * 16)};
++    } else {
++      return;
++    }
++    p.motion = true;
++    write_input(p);
++  }
++
++  void battery(const platf::gamepad_battery_t &b) {
++    std::lock_guard lg {pads_mutex};
++    auto it = pads.find(b.id.globalIndex);
++    if (it == pads.end()) {
++      return;
++    }
++    auto &p = *it->second;
++    p.battery_state = b.state;
++    if (b.percentage != LI_BATTERY_PERCENTAGE_UNKNOWN) {
++      p.battery_percent = std::min<std::uint8_t>(b.percentage, 100);
++    }
++    write_input(p);
++  }
++}  // namespace pulsar_pad
+diff --git a/src/platform/windows/pulsar_pad.h b/src/platform/windows/pulsar_pad.h
+new file mode 100644
+index 0000000..12ef658
+--- /dev/null
++++ b/src/platform/windows/pulsar_pad.h
+@@ -0,0 +1,43 @@
++/**
++ * @file src/platform/windows/pulsar_pad.h
++ * @brief Pulsar Seat: `gamepad = pulsar_ds4 | pulsar_ds5 | pulsar_ds5e | pulsar_xone`.
++ *
++ * SPDX-License-Identifier: GPL-3.0-only
++ *
++ * Virtual pads of the Pulsar Seat pad driver. The server asks the Pulsar Seat service for a
++ * pad over the seat pipe (`pad.wanted`); the service creates the device bound to the seat's
++ * session and answers `pad.attach` with the name of a per-pad shared channel. The server
++ * then writes USB-layout input reports into `<channel>_In` (seqlock, protocol 1) and reads
++ * the game's output reports (rumble, lightbar, triggers) from the `<channel>_Out` ring.
++ */
++#pragma once
++
++// standard includes
++#include <cstdint>
++#include <string_view>
++
++// local includes
++#include "src/platform/common.h"
++
++namespace pulsar_pad {
++  /// True when `name` is one of the Pulsar gamepad ids.
++  bool is_pulsar_gamepad(std::string_view name);
++
++  /// Installs the seat-pipe handlers once (no-op without a seat pipe).
++  void init();
++
++  /// Usable: a Pulsar seat with a connected service.
++  bool available();
++
++  /// Asks the service for a pad in `id.globalIndex`; input is kept until it is attached.
++  int alloc(const platf::gamepad_id_t &id, const platf::gamepad_arrival_t &metadata, platf::feedback_queue_t feedback_queue, std::string_view gamepad);
++
++  /// True when the pad in `nr` belongs to this backend.
++  bool owns(int nr);
++
++  void free(int nr);
++  void update(int nr, const platf::gamepad_state_t &state);
++  void touch(const platf::gamepad_touch_t &touch);
++  void motion(const platf::gamepad_motion_t &motion);
++  void battery(const platf::gamepad_battery_t &battery);
++}  // namespace pulsar_pad
+diff --git a/src/pulsar/control.cpp b/src/pulsar/control.cpp
+index dc24ad7..206cabc 100644
+--- a/src/pulsar/control.cpp
++++ b/src/pulsar/control.cpp
+@@ -51,6 +51,7 @@ namespace pulsar {
+       "pair_timeout",
+ #ifdef _WIN32
+       "pulsar_idd",
++      "pulsar_pad",
+ #endif
+     };
+     std::string state = "starting";

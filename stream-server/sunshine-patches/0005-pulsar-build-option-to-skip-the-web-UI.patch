@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pulsar Seat <pulsar-seat@invalid>
+Date: Tue, 17 Nov 2026 08:09:31 +0300
+Subject: [PATCH 5/6] pulsar: build option to skip the web UI
+
+SUNSHINE_BUILD_WEB_UI=OFF leaves out the npm web-ui target; Pulsar Seat servers run with pulsar_web_ui = disabled and never ship the web UI. SPDX-License-Identifier: GPL-3.0-only
+---
+ cmake/prep/options.cmake   | 3 +++
+ cmake/targets/common.cmake | 4 +++-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/cmake/prep/options.cmake b/cmake/prep/options.cmake
+index 50bca32..420e1bc 100644
+--- a/cmake/prep/options.cmake
++++ b/cmake/prep/options.cmake
+@@ -18,6 +18,9 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
+ 
+ option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
+ 
++# Pulsar Seat: build without the browser web UI (no npm / Node.js needed).
++option(SUNSHINE_BUILD_WEB_UI "Build the browser web UI (needs npm)." ON)
++
+ option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
+ option(SUNSHINE_SYSTEM_WAYLAND_PROTOCOLS "Use system installation of wayland-protocols rather than the submodule." OFF)
+ 
+diff --git a/cmake/targets/common.cmake b/cmake/targets/common.cmake
+index d55e1f6..2b290cf 100644
+--- a/cmake/targets/common.cmake
++++ b/cmake/targets/common.cmake
+@@ -46,7 +46,8 @@ else()
+     set(NPM_BUILD_HOMEBREW "")
+ endif()
+ 
+-#WebUI build
++#WebUI build (Pulsar Seat: SUNSHINE_BUILD_WEB_UI=OFF skips it; seat servers never ship the web UI)
++if(SUNSHINE_BUILD_WEB_UI)
+ find_program(NPM npm REQUIRED)
+ 
+ set(NPM_INSTALL_FLAGS "--ignore-scripts")
+@@ -61,6 +62,7 @@ add_custom_target(web-ui ALL
+         COMMAND "${CMAKE_COMMAND}" -E env "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" "$<$<BOOL:${WIN32}>:cmd;/C>" "${NPM}" run build  # cmake-lint: disable=C0301
+         COMMAND_EXPAND_LISTS
+         VERBATIM)
++endif()
+ 
+ # docs
+ if(BUILD_DOCS)

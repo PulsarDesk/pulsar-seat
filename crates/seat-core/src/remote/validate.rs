@@ -102,6 +102,7 @@ pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         return Err(err(ErrorCode::InvalidValue, "stream.min_fps", "minimum fps must be 1-240"));
     }
     rdp_client_name(&seat.rdp_client_name)?;
+    pulsar_options(&seat.pulsar)?;
     for app in &seat.autostart {
         if app.path.trim().is_empty() || app.path.chars().any(char::is_control) {
             return Err(err(ErrorCode::InvalidValue, "autostart.path", "autostart path must not be empty"));
@@ -109,6 +110,65 @@ pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         if app.arguments.chars().any(|c| c == '\0') {
             return Err(err(ErrorCode::InvalidValue, "autostart.arguments", "NUL in arguments"));
         }
+    }
+    Ok(())
+}
+
+/// `pulsar.max_clients`.
+pub const PULSAR_MAX_CLIENTS: (u8, u8) = (1, 4);
+/// Lowest fixed Pulsar node port.
+pub const PULSAR_NODE_PORT_MIN: u16 = 1024;
+
+/// Relay address: `host` or `host:port`, host a DNS name, IPv4 address or `[IPv6]`.
+/// Empty = the built-in default relay.
+pub fn relay_address(relay: &str) -> Result<(), ProtoError> {
+    if relay.is_empty() {
+        return Ok(());
+    }
+    let bad = || err(ErrorCode::InvalidValue, "pulsar.relay", "relay must be host or host:port");
+    if relay.len() > 260 {
+        return Err(bad());
+    }
+    let (host, port) = if let Some(rest) = relay.strip_prefix('[') {
+        let (h, tail) = rest.split_once(']').ok_or_else(bad)?;
+        if h.is_empty() || !h.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.') {
+            return Err(bad());
+        }
+        match tail {
+            "" => (h, None),
+            t => (h, Some(t.strip_prefix(':').ok_or_else(bad)?)),
+        }
+    } else {
+        match relay.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (relay, None),
+        }
+    };
+    if !relay.starts_with('[') {
+        let label_ok = |l: &str| {
+            !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        };
+        if host.is_empty() || host.len() > 253 || !host.split('.').all(label_ok) {
+            return Err(bad());
+        }
+    }
+    if let Some(p) = port {
+        match p.parse::<u16>() {
+            Ok(n) if n > 0 && p.bytes().all(|b| b.is_ascii_digit()) => {}
+            _ => return Err(bad()),
+        }
+    }
+    Ok(())
+}
+
+/// Pulsar backend options of a seat (checked for every seat, used for Pulsar seats).
+pub fn pulsar_options(p: &crate::remote::PulsarSeatOptions) -> Result<(), ProtoError> {
+    relay_address(&p.relay)?;
+    if p.node_port_mode == crate::remote::PulsarNodePort::Fixed && p.node_port < PULSAR_NODE_PORT_MIN {
+        return Err(err(ErrorCode::InvalidPort, "pulsar.node_port", "node port must be 1024-65535"));
+    }
+    if !(PULSAR_MAX_CLIENTS.0..=PULSAR_MAX_CLIENTS.1).contains(&p.max_clients) {
+        return Err(err(ErrorCode::InvalidValue, "pulsar.max_clients", "clients at the same time must be 1-4"));
     }
     Ok(())
 }
@@ -141,6 +201,14 @@ pub fn seat_against(seat: &RemoteSeatRecord, others: &[RemoteSeatRecord]) -> Res
         }
         if !seat.rdp_client_name.is_empty() && o.rdp_client_name.eq_ignore_ascii_case(&seat.rdp_client_name) {
             return Err(err(ErrorCode::DuplicateName, "rdp_client_name", format!("client name used by seat '{}'", o.name)));
+        }
+        // A fixed Pulsar node port must stay out of every other seat's port block.
+        if seat.stream_backend == crate::remote::StreamBackendKind::Pulsar
+            && seat.pulsar.node_port_mode == crate::remote::PulsarNodePort::Fixed
+            && ports::is_valid_base(o.port)
+            && (u32::from(o.port).saturating_sub(5)..=u32::from(o.port) + 21).contains(&u32::from(seat.pulsar.node_port))
+        {
+            return Err(err(ErrorCode::PortOverlap, "pulsar.node_port", format!("node port is in the port block of seat '{}'", o.name)));
         }
     }
     Ok(())
@@ -340,5 +408,53 @@ mod tests {
         ] {
             assert_eq!(user_for_start(&s, true, facts, None).unwrap_err().code, ErrorCode::InvalidUser);
         }
+    }
+
+    #[test]
+    fn relay_addresses() {
+        for ok in ["", "relay.example.net", "relay.example.net:21116", "10.0.0.5", "10.0.0.5:9000", "[fd00::1]", "[fd00::1]:21116", "relay"] {
+            assert!(relay_address(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "relay.example.net:0",
+            "relay.example.net:65536",
+            "relay.example.net:",
+            "-relay.example.net",
+            "relay..example",
+            "http://relay",
+            "relay example",
+            "[fd00::1",
+            "[fd00::1]x",
+            "relay:+80",
+            "rélay.example",
+        ] {
+            let e = relay_address(bad).unwrap_err();
+            assert_eq!(e.field.as_deref(), Some("pulsar.relay"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pulsar_options_ranges() {
+        use crate::remote::{PulsarNodePort, PulsarSeatOptions, StreamBackendKind};
+        assert!(pulsar_options(&PulsarSeatOptions::default()).is_ok());
+        let fixed_low = PulsarSeatOptions { node_port_mode: PulsarNodePort::Fixed, node_port: 80, ..Default::default() };
+        assert_eq!(pulsar_options(&fixed_low).unwrap_err().code, ErrorCode::InvalidPort);
+        // An ephemeral or base node port ignores the stored number.
+        assert!(pulsar_options(&PulsarSeatOptions { node_port: 80, ..Default::default() }).is_ok());
+        for n in [0, 5] {
+            let o = PulsarSeatOptions { max_clients: n, ..Default::default() };
+            assert_eq!(pulsar_options(&o).unwrap_err().field.as_deref(), Some("pulsar.max_clients"));
+        }
+        // A fixed node port inside another seat's block is refused.
+        let mut a = seat("a", 48100, "");
+        a.stream_backend = StreamBackendKind::Pulsar;
+        a.pulsar = PulsarSeatOptions { node_port_mode: PulsarNodePort::Fixed, node_port: 48210, ..Default::default() };
+        let b = seat("b", 48200, "");
+        assert_eq!(seat_against(&a, std::slice::from_ref(&b)).unwrap_err().code, ErrorCode::PortOverlap);
+        a.pulsar.node_port = 48300;
+        assert!(seat_against(&a, &[b]).is_ok());
+        let mut bad_relay = seat("c", 48400, "");
+        bad_relay.pulsar.relay = "bad relay".into();
+        assert!(seat_alone(&bad_relay).is_err());
     }
 }

@@ -239,6 +239,8 @@ fn map_remote(e: WireError) -> StreamError {
         "wrong_pin" => StreamError::WrongPin,
         "no_pending_request" => StreamError::NoPendingRequest,
         "unsupported_protocol" => StreamError::ControlPipe("unsupported_protocol".into()),
+        // A build without this request (older patch set): callers fall back like upstream.
+        "bad_request" if e.detail == "unknown request type" => StreamError::Unsupported(e.detail),
         _ => StreamError::Remote { code: e.code, detail: e.detail },
     }
 }

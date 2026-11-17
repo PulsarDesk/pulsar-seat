@@ -591,7 +591,9 @@ fn pulsar_seat_runs_pulsar_host_and_approves_requests() {
     assert_eq!(calls[0].args[..2], ["--split-seat".to_string(), SEAT_ID.to_string()]);
     assert!(w.fs.get_string(Path::new(r"C:\ProgramData\PulsarSplitTest\seats\0f8fad5b-d9cb-469f-a165-70867728950e\server.conf")).is_none());
     assert!(w.secrets.value(SEAT_ID, SecretKind::Identity).is_some());
-    assert_eq!(w.firewall.rules().len(), 1, "one UDP rule");
+    // The node's UDP rule and the LAN discovery rule (option on by default, 2026-11-17).
+    assert_eq!(w.firewall.rules().len(), 2, "UDP node rule + discovery rule");
+    assert!(w.firewall.rules().iter().any(|r| r.name.ends_with(" discovery")));
     // Handshake at the first tick.
     w.engine.tick(w.clock.advance(1_000));
     let st = w.engine.pair_state(&pulsar_seat());
@@ -657,7 +659,9 @@ fn switching_backend_keeps_one_rule_set_and_removal_clears_secrets() {
     wait_for(&w, |e| *e == SeatEvent::Stopped);
     assert_eq!(w.firewall.rules().len(), 2);
     start_seat_ok(&w, pulsar_seat());
-    assert_eq!(w.firewall.rules().len(), 1, "Sunshine TCP rule removed");
+    // Sunshine TCP rule removed; the Pulsar seat has its UDP rule + discovery rule.
+    assert_eq!(w.firewall.rules().len(), 2, "Sunshine TCP rule removed");
+    assert!(w.firewall.rules().iter().all(|r| !r.name.ends_with(" TCP")));
     w.engine.stop_seat(&pulsar_seat()).unwrap();
     wait_for(&w, |e| *e == SeatEvent::Stopped);
     w.engine.regenerate_identity(&pulsar_seat()).unwrap();

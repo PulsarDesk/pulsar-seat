@@ -16,6 +16,10 @@ struct Rig {
 }
 
 fn rig(flavour: ServerFlavour) -> Rig {
+    rig_with(flavour, |_| {})
+}
+
+fn rig_with(flavour: ServerFlavour, edit: impl FnOnce(&mut SeatServerConfig)) -> Rig {
     let fs = Arc::new(MemFs::default());
     let l = FakeLauncher::default();
     let c = FakeConnector::default();
@@ -38,7 +42,11 @@ fn rig(flavour: ServerFlavour) -> Rig {
         default_apps_json: crate::apps::render_apps_json(&crate::apps::default_apps(), &Default::default()),
         service_version: "0.1.0".into(),
         verify_binary: false,
+        conf_for_caps: None,
+        upstream_conf_text: None,
     };
+    let mut cfg = cfg;
+    edit(&mut cfg);
     let s = SeatServer::new(
         cfg,
         fs.clone(),
@@ -348,4 +356,74 @@ fn reload_apps_paths() {
     r.s.poll(r.clock.now_ms());
     assert_eq!(r.s.reload_apps().unwrap(), AppsReload::Deferred);
     assert_eq!(r.l.calls().len(), 1);
+}
+
+/// A Pulsar build that lists its capabilities without `pulsar_idd`: the config falls back to
+/// the stock capture and the server is restarted once; the next `hello` changes nothing.
+#[test]
+fn fork_capabilities_drive_a_one_time_config_fallback() {
+    let mut r = rig_with(ServerFlavour::PulsarFork, |c| {
+        c.conf_text = "capture = pulsar_idd\n".into();
+        c.conf_for_caps = Some(Arc::new(|caps: &[String]| {
+            Ok(if caps.iter().any(|c| c == caps::PULSAR_IDD) { "capture = pulsar_idd\n".into() } else { "port = 48100\n".into() })
+        }));
+    });
+    r.c.set_template(|s| s.capabilities = vec!["control_pipe".into(), "apps_reload".into(), "pulsar_pad".into(), "pair_timeout".into()]);
+    r.s.start(3).unwrap();
+    let t0 = r.clock.now_ms();
+    let n = r.s.poll(t0);
+    assert_eq!(n, [StreamNotice::Fallback { missing: vec!["pulsar_idd".into()] }, StreamNotice::Running]);
+    assert_eq!(r.l.calls().len(), 2, "restarted once");
+    assert_eq!(r.fs.get_string(&dir().conf).unwrap(), "port = 48100\n");
+    let n = r.s.poll(r.clock.now_ms());
+    assert!(matches!(n.as_slice(), [StreamNotice::ControlReady { .. }]), "{n:?}");
+    assert_eq!(r.l.calls().len(), 2, "no restart loop");
+    assert!(!r.s.fell_back());
+
+    // A build that reports everything keeps its config and is not restarted.
+    let mut r = rig_with(ServerFlavour::PulsarFork, |c| {
+        c.conf_text = "capture = pulsar_idd\n".into();
+        c.conf_for_caps = Some(Arc::new(|_: &[String]| Ok("capture = pulsar_idd\n".into())));
+    });
+    r.c.set_template(|s| s.capabilities = vec!["pulsar_idd".into()]);
+    r.s.start(3).unwrap();
+    let n = r.s.poll(r.clock.now_ms());
+    assert!(matches!(n.as_slice(), [StreamNotice::ControlReady { .. }]), "{n:?}");
+    assert_eq!(r.l.calls().len(), 1);
+}
+
+/// A Pulsar build that never opens its seat pipe is driven like upstream: upstream config,
+/// per-start web-UI credentials, loopback control; no crash loop.
+#[test]
+fn fork_without_pipe_falls_back_to_upstream_when_possible() {
+    let mut r = rig_with(ServerFlavour::PulsarFork, |c| c.upstream_conf_text = Some("origin_web_ui_allowed = pc\n".into()));
+    r.c.fail_first(1000);
+    r.s.start(3).unwrap();
+    assert!(r.fs.get(&dir().state).is_none(), "Pulsar build: no web-UI credentials");
+    let t0 = r.clock.now_ms();
+    let mut t = t0;
+    let mut notices = Vec::new();
+    while t <= t0 + CONNECT_WINDOW_MS {
+        notices.extend(r.s.poll(t));
+        t += 1000;
+    }
+    assert_eq!(notices, [StreamNotice::Fallback { missing: vec!["control_pipe".into()] }, StreamNotice::Running]);
+    assert!(r.s.fell_back());
+    assert_eq!(r.s.flavour(), ServerFlavour::Upstream);
+    assert_eq!(r.fs.get_string(&dir().conf).unwrap(), "origin_web_ui_allowed = pc\n");
+    let st: serde_json::Value = serde_json::from_slice(&r.fs.get(&dir().state).unwrap()).unwrap();
+    assert_eq!(st["username"], crate::control::upstream::WEB_UI_USER, "upstream credentials written");
+    assert_eq!(r.l.calls().len(), 2);
+    assert!(r.l.terminated().len() <= 1);
+}
+
+/// `apps_reload` missing from a listed capability set: restart-when-idle like upstream.
+#[test]
+fn reload_without_capability_uses_the_upstream_path() {
+    let mut r = rig(ServerFlavour::PulsarFork);
+    r.c.set_template(|s| s.capabilities = vec!["control_pipe".into()]);
+    r.s.start(3).unwrap();
+    r.s.poll(r.clock.now_ms());
+    assert_eq!(r.s.reload_apps().unwrap(), AppsReload::Restarted);
+    assert!(!r.c.control(0).state().calls.iter().any(|c| c == "apps_reload"));
 }

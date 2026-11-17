@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pulsar Seat <pulsar-seat@invalid>
+Date: Tue, 17 Nov 2026 08:01:03 +0300
+Subject: [PATCH 2/6] pulsar: pairing timeout
+
+pulsar_pair_timeout (10-600 s, default 120): a pending /pair request older than this is failed towards the client and reported as pair.ended timeout. SPDX-License-Identifier: GPL-3.0-only
+---
+ src/config.cpp         |  3 +++
+ src/nvhttp.cpp         | 25 +++++++++++++++++++++++++
+ src/nvhttp.h           |  6 ++++++
+ src/pulsar/control.cpp |  3 +++
+ 4 files changed, 37 insertions(+)
+
+diff --git a/src/config.cpp b/src/config.cpp
+index bfca2c6..757bc92 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -1343,6 +1343,9 @@ namespace config {
+       if (!pipe.empty()) {
+         pulsar::config.control_pipe = pipe == "enabled"sv;
+       }
++
++      // A pending `/pair` request older than this is failed towards the client.
++      int_between_f(vars, "pulsar_pair_timeout", pulsar::config.pair_timeout, {10, 600});
+     }
+ 
+     int port = sunshine.port;
+diff --git a/src/nvhttp.cpp b/src/nvhttp.cpp
+index 98e0bd6..3fab1cb 100644
+--- a/src/nvhttp.cpp
++++ b/src/nvhttp.cpp
+@@ -1422,4 +1422,29 @@ namespace nvhttp {
+     }
+     return false;
+   }
++
++  int pulsar_pair_expire(std::chrono::seconds timeout) {
++    std::unique_lock lg {pulsar_pair_mutex};
++    auto now = std::chrono::steady_clock::now();
++    int expired = 0;
++    for (auto it = map_id_sess.begin(); it != map_id_sess.end();) {
++      auto &sess = it->second;
++      if (sess.pulsar_request_id == 0 || now - sess.pulsar_created < timeout) {
++        ++it;
++        continue;
++      }
++      pt::ptree tree;
++      tree.put("root.paired", 0);
++      tree.put("root.<xmlattr>.status_code", 408);
++      tree.put("root.<xmlattr>.status_message", "Pairing request timed out");
++      pulsar_answer_held(sess, tree);
++      pulsar_finish(sess, "timeout"sv);
++      it = map_id_sess.erase(it);
++      ++expired;
++    }
++    if (expired > 0) {
++      BOOST_LOG(info) << "Pairing request timed out after "sv << timeout.count() << " s"sv;
++    }
++    return expired;
++  }
+ }  // namespace nvhttp
+diff --git a/src/nvhttp.h b/src/nvhttp.h
+index f98251c..a91f470 100644
+--- a/src/nvhttp.h
++++ b/src/nvhttp.h
+@@ -153,6 +153,12 @@ namespace nvhttp {
+    */
+   bool pulsar_pair_cancel(std::optional<std::uint32_t> request_id);
+ 
++  /**
++   * @brief Pulsar Seat: fail pending requests older than `timeout` (`pair.ended` `timeout`).
++   * @return Number of requests that expired.
++   */
++  int pulsar_pair_expire(std::chrono::seconds timeout);
++
+   /**
+    * @brief removes the temporary pairing session
+    * @param sess
+diff --git a/src/pulsar/control.cpp b/src/pulsar/control.cpp
+index a861fa4..f8726c9 100644
+--- a/src/pulsar/control.cpp
++++ b/src/pulsar/control.cpp
+@@ -48,6 +48,7 @@ namespace pulsar {
+       "session_close",
+       "graceful_shutdown",
+       "log_level",
++      "pair_timeout",
+     };
+     std::string state = "starting";
+     std::string capture_error_code;
+@@ -329,6 +330,8 @@ namespace pulsar {
+           emit("stream.ended", {{"reason", "client_disconnected"}});
+         }
+         last = now;
++        // Pairing timeout (`pulsar_pair_timeout`): checked twice a second.
++        nvhttp::pulsar_pair_expire(std::chrono::seconds(config.pair_timeout));
+       }
+     }
+ 

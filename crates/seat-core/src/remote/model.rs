@@ -245,6 +245,108 @@ impl Default for SeatStreamSettings {
     }
 }
 
+/// How a Pulsar seat reaches its clients (`config.apply` `network_mode`,
+/// docs/split/agents/pulsar-host-backend.md §3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PulsarNetworkMode {
+    /// Direct (peer-to-peer) first, relay when needed.
+    #[default]
+    Auto,
+    P2pOnly,
+    RelayOnly,
+}
+
+impl PulsarNetworkMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::P2pOnly => "p2p-only",
+            Self::RelayOnly => "relay-only",
+        }
+    }
+}
+
+/// Which UDP port the seat's Pulsar node binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PulsarNodePort {
+    /// The seat's base port (`RemoteSeatRecord::port`).
+    #[default]
+    Base,
+    /// Any free port (the firewall rule is then program-scoped on any port).
+    Ephemeral,
+    /// `PulsarSeatOptions::node_port`.
+    Fixed,
+}
+
+/// Who may connect to a Pulsar seat (`config.apply` `access`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PulsarAccess {
+    /// Every connection is approved by the operator.
+    Approve,
+    /// Operator approval, or the seat's connect password / one-time password.
+    #[default]
+    ApproveOrPassword,
+}
+
+impl PulsarAccess {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::ApproveOrPassword => "approve_or_password",
+        }
+    }
+}
+
+/// Seat options of the Pulsar backend (`pulsar-host`): relay, ports, discovery, access.
+/// Added 2026-11-17 (additive; a seat without it gets these defaults).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PulsarSeatOptions {
+    /// Relay `host[:port]` (port default 21116); empty = the host's built-in default relay.
+    pub relay: String,
+    pub network_mode: PulsarNetworkMode,
+    pub node_port_mode: PulsarNodePort,
+    /// UDP node port for [`PulsarNodePort::Fixed`] (1024-65535).
+    pub node_port: u16,
+    /// Ask the router for a port mapping (UPnP / NAT-PMP).
+    pub port_mapping: bool,
+    /// Announce the seat on the LAN (UDP 21117 beacon). Needs the seat's discovery firewall
+    /// rule, which the service creates and removes with this option.
+    pub lan_discovery: bool,
+    pub access: PulsarAccess,
+    /// Clients at the same time (1-4).
+    pub max_clients: u8,
+}
+
+impl Default for PulsarSeatOptions {
+    fn default() -> Self {
+        Self {
+            relay: String::new(),
+            network_mode: PulsarNetworkMode::Auto,
+            node_port_mode: PulsarNodePort::Base,
+            node_port: 0,
+            port_mapping: false,
+            lan_discovery: true,
+            access: PulsarAccess::ApproveOrPassword,
+            max_clients: 1,
+        }
+    }
+}
+
+impl PulsarSeatOptions {
+    /// The UDP node port for `config.apply` (0 = ephemeral).
+    pub fn effective_node_port(&self, base: u16) -> u16 {
+        match self.node_port_mode {
+            PulsarNodePort::Base => base,
+            PulsarNodePort::Ephemeral => 0,
+            PulsarNodePort::Fixed => self.node_port,
+        }
+    }
+}
+
 /// Stream server a seat runs (contracts §7.4, docs/split/agents/pulsar-host-backend.md). Each
 /// seat runs exactly one. Missing in a v2 config = `sunshine`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -311,6 +413,9 @@ pub struct RemoteSeatRecord {
     /// Stream server of this seat; `sunshine` when missing (v2 configs). Changing it needs
     /// the seat stopped (the whole config is locked while the seat is active).
     pub stream_backend: StreamBackendKind,
+    /// Options of the Pulsar backend (used when `stream_backend = pulsar`). Added
+    /// 2026-11-17 (additive).
+    pub pulsar: PulsarSeatOptions,
     /// Last display mode a client asked for and the display applied (contracts §3.3,
     /// spec 40 §4.4). Service-owned: the manager cannot change it; used for the session
     /// size at the next seat start.

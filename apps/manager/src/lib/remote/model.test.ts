@@ -7,6 +7,8 @@ import type { Config, EventFrame, SeatRuntime } from '../types.ts';
 import {
   addRemoteSeat,
   applyRecord,
+  defaultPulsar,
+  relayValid,
   issueError,
   localSeatsOf,
   mapFrame,
@@ -252,5 +254,27 @@ describe('remote edit errors', () => {
     expect(remoteSessionsUnavailable(c, st('fast_user_switch'))).toBe(true);
     c.settings.backends.session = 'desktops';
     expect(remoteSessionsUnavailable(c, null)).toBe(true);
+  });
+});
+
+describe('Pulsar seat options', () => {
+  it('validates relay addresses like the service', () => {
+    for (const ok of ['', 'relay.example.net', 'relay.example.net:21116', '10.0.0.5:9000', '[fd00::1]', '[fd00::1]:21116']) {
+      expect(relayValid(ok), ok).toBe(true);
+    }
+    for (const bad of ['relay.example.net:0', 'relay.example.net:65536', 'relay.example.net:', '-relay', 'a..b', 'http://relay', 'a b', '[fd00::1', '[fd00::1]x']) {
+      expect(relayValid(bad), bad).toBe(false);
+    }
+  });
+
+  it('gives new seats the defaults and keeps edited options', () => {
+    const c = withRemote();
+    const s = remoteSeatsOf(c)[0];
+    expect(toRecord(s).pulsar).toEqual(defaultPulsar());
+    const edited = applyRecord(s, { ...toRecord(s), pulsar: { ...defaultPulsar(), relay: 'r.example', max_clients: 2 } });
+    expect(edited.remote?.pulsar).toMatchObject({ relay: 'r.example', max_clients: 2, lan_discovery: true });
+    // A seat stored before the options existed reads as the defaults.
+    const old = { ...s, remote: { ...s.remote, pulsar: undefined } };
+    expect(toRecord(old).pulsar).toEqual(defaultPulsar());
   });
 });

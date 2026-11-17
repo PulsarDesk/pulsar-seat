@@ -11,12 +11,41 @@ import {
   infProblems,
   isDroppedPath,
   isWebUiPath,
+  localServerDist,
   packagesFor,
+  type ServerDist,
   serverDist,
   sha256Hex,
   validateDrivers,
+  validateLocalBuild,
   validateStream,
 } from "./fetch-deps.ts";
+
+describe("fetch-deps local Pulsar build (--stream-local)", () => {
+  const m: StreamManifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "remote", "stream-server.json"), "utf8"));
+  const sha = "b".repeat(64);
+  const local: ServerDist = {
+    flavour: "pulsar_fork",
+    version: `${m.version}-pulsar.1`,
+    file: "sunshine.exe",
+    sha256: sha,
+    source_url: `https://github.com/SunshineStream/Sunshine/tree/${m.version} + stream-server/sunshine-patches`,
+    licence: "GPL-3.0-only",
+  };
+
+  test("accepts the output of build-sunshine.ps1", () => {
+    expect(validateLocalBuild(m, local, sha)).toEqual([]);
+    expect(localServerDist(local, "stream-server/sunshine.exe")).toEqual({ ...local, file: "stream-server\\sunshine.exe" });
+  });
+
+  test("refuses a changed exe, another version or flavour", () => {
+    expect(validateLocalBuild(m, local, "c".repeat(64)).join()).toContain("sha256");
+    expect(validateLocalBuild(m, { ...local, version: "v1.0.0-pulsar.1" }, sha).join()).toContain("not a Pulsar build");
+    expect(validateLocalBuild(m, { ...local, flavour: "upstream" }, sha).join()).toContain("pulsar_fork");
+    expect(validateLocalBuild(m, { ...local, file: "other.exe" }, sha).join()).toContain("sunshine.exe");
+    expect(validateLocalBuild(m, { ...local, licence: "MIT" }, sha).join()).toContain("GPL-3.0-only");
+  });
+});
 
 const root = join(import.meta.dir, "..", "remote");
 

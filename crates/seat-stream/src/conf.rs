@@ -95,7 +95,8 @@ pub struct ConfInputs<'a> {
     pub audio_keys: Vec<(String, String)>,
     /// `minimum_fps_target`; spec default 1.
     pub min_fps: u32,
-    /// `pulsar_pair_timeout` (fork only), 10–600.
+    /// `pulsar_pair_timeout` (fork only), 10–600; 0 = key not written (a build without the
+    /// pairing-timeout patch would log it as unknown).
     pub pair_timeout_s: u32,
 }
 
@@ -139,7 +140,7 @@ pub fn generate(i: &ConfInputs<'_>) -> Result<String, StreamError> {
     if !seat_core::remote::ports::is_valid_base(i.seat.port) {
         return Err(StreamError::invalid("port", "outside 1029-65514"));
     }
-    if !PAIR_TIMEOUT_RANGE_S.contains(&i.pair_timeout_s) {
+    if i.pair_timeout_s != 0 && !PAIR_TIMEOUT_RANGE_S.contains(&i.pair_timeout_s) {
         return Err(StreamError::invalid("pair_timeout_s", "outside 10-600"));
     }
     let capture = match i.capture {
@@ -185,7 +186,9 @@ pub fn generate(i: &ConfInputs<'_>) -> Result<String, StreamError> {
     if fork {
         kv.push(("pulsar_web_ui", "disabled".into()));
         kv.push(("pulsar_control_pipe", "enabled".into()));
-        kv.push(("pulsar_pair_timeout", i.pair_timeout_s.to_string()));
+        if i.pair_timeout_s != 0 {
+            kv.push(("pulsar_pair_timeout", i.pair_timeout_s.to_string()));
+        }
     }
 
     let mut seen: Vec<&str> = Vec::new();

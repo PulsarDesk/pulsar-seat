@@ -1,0 +1,51 @@
+{
+  "$comment": "SPDX-License-Identifier: GPL-3.0-only. Pins of the Pulsar Seat stream-server build (stream-server/build-sunshine.ps1, docs in stream-server/README.md). Upstream source is fetched by commit SHA (tag only for humans) into target/wf/sunshine-src; sunshine-patches/*.patch apply in name order. Every download is pinned by URL + SHA-256 (GitHub release asset digests, read with the GitHub REST API on 2026-11-17). MSYS2 packages come from the MSYS2 repositories at build time (pacman verifies the MSYS2 package signatures; the repositories are rolling, so the exact package versions are recorded in the build record, not pinned).",
+  "upstream": {
+    "repo": "https://github.com/SunshineStream/Sunshine.git",
+    "tag": "v2026.516.143833",
+    "commit": "14ffa6fdaa53f7b51512be2b3d24f3939695403c",
+    "submodules": [
+      "third-party/build-deps",
+      "third-party/googletest",
+      "third-party/libdisplaydevice",
+      "third-party/moonlight-common-c",
+      "third-party/nanors",
+      "third-party/nv-codec-headers",
+      "third-party/nvapi",
+      "third-party/Simple-Web-Server",
+      "third-party/tray",
+      "third-party/ViGEmClient"
+    ],
+    "no_recursion": ["third-party/build-deps"]
+  },
+  "patch_version": 1,
+  "msys2": {
+    "url": "https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.tar.xz",
+    "sha256": "ea2f31a0b6ade63914ce441ffb022f0f6aa96982bfefa2326460a26d5fb01322"
+  },
+  "arches": {
+    "x64": {
+      "msystem": "UCRT64",
+      "toolchain": "ucrt-x86_64",
+      "packages": ["boost", "cmake", "cppwinrt", "curl-winssl", "MinHook", "miniupnpc", "ninja", "nlohmann-json", "onevpl", "openssl", "opus", "toolchain"],
+      "ffmpeg": {
+        "url": "https://github.com/LizardByte/build-deps/releases/download/v2026.516.30821/Windows-AMD64-ffmpeg.tar.gz",
+        "sha256": "2f7a2c2fc6be9b96de3c6f654389f73a5e5d369d7e802d017894fae96247661d",
+        "cmake_processor": "AMD64"
+      }
+    },
+    "arm64": {
+      "msystem": "CLANGARM64",
+      "toolchain": "clang-aarch64",
+      "$cxx_flags": "upstream's libdisplaydevice submodule misses <vector> / <type_traits> / <iterator> includes that newer libc++ no longer pulls in transitively; force-included here because patches cannot reach submodule files",
+      "cxx_flags": "-include vector -include type_traits -include iterator",
+      "packages": ["boost", "cmake", "cppwinrt", "curl-winssl", "miniupnpc", "ninja", "nlohmann-json", "onevpl", "openssl", "opus", "toolchain"],
+      "ffmpeg": {
+        "url": "https://github.com/LizardByte/build-deps/releases/download/v2026.516.30821/Windows-ARM64-ffmpeg.tar.gz",
+        "sha256": "0675898a1c7175e133b8f0e9cdb737038c53b9bd86d1a5b63fe2ea88a974d2e6",
+        "cmake_processor": "ARM64"
+      }
+    }
+  },
+  "ffmpeg_tag": "v2026.516.30821"
+}

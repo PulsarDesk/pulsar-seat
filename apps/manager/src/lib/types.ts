@@ -268,6 +268,7 @@ export interface RemoteSeat {
   audio?: R.SeatAudioSettings;
   stream?: R.SeatStreamSettings;
   stream_backend?: R.StreamBackendKind;
+  pulsar?: R.PulsarSeatOptions;
   /** Service-owned. */
   last_mode?: { width: number; height: number; hz: number };
 }

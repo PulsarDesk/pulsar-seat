@@ -6,6 +6,8 @@
 // run check-payload on the result.
 //
 //   bun installer/scripts/fetch-deps.ts --arch x64|arm64 [--out target/installer-deps] [--only drivers|stream]
+//     [--stream-local target/wf/sunshine-out/<arch>]   use the Pulsar build of the stream server
+//                                                     (stream-server/build-sunshine.ps1) for the exe
 //
 // Output (per arch; build-installer.ps1 copies <out>/<arch>/remote into the payload, and
 // bundle-config.ts turns it into the generated WiX fragment PulsarSeatRemote.wxs):
@@ -164,6 +166,28 @@ export function validateStream(m: StreamManifest): string[] {
   return errs;
 }
 
+/**
+ * `--stream-local <dir>`: the output of stream-server/build-sunshine.ps1 (the Pulsar build
+ * of the stream server). Its `stream-server.json` must describe a `pulsar_fork` build of the
+ * pinned upstream version whose exe hash matches the file next to it. The upstream payload
+ * (assets, shaders) stays; only the exe is replaced. Returns the problems found.
+ */
+export function validateLocalBuild(m: StreamManifest, local: ServerDist, exeSha256: string): string[] {
+  const errs: string[] = [];
+  if (local.flavour !== "pulsar_fork") errs.push(`local build flavour must be pulsar_fork: ${local.flavour}`);
+  if (!local.version.startsWith(`${m.version}-pulsar.`)) errs.push(`local build ${local.version} is not a Pulsar build of ${m.version}`);
+  if (!isHex64(local.sha256) || local.sha256 !== exeSha256) errs.push("local build exe does not match its manifest sha256");
+  if (local.file.toLowerCase() !== m.exe.toLowerCase()) errs.push(`local build file must be ${m.exe}: ${local.file}`);
+  if (local.licence !== "GPL-3.0-only") errs.push(`local build licence must be GPL-3.0-only: ${local.licence}`);
+  if (!local.source_url.includes(`/tree/${m.version}`)) errs.push(`local build source_url must name ${m.version}`);
+  return errs;
+}
+
+/** Runtime manifest of the payload with the local Pulsar build's exe. */
+export function localServerDist(local: ServerDist, exeRelPath: string): ServerDist {
+  return { ...local, file: exeRelPath.replace(/\//g, "\\") };
+}
+
 export function serverDist(m: StreamManifest, exeRelPath: string, exeSha256: string): ServerDist {
   return {
     flavour: m.flavour,
@@ -245,7 +269,7 @@ async function fetchDrivers(root: string, arch: Arch, out: string, cache: string
   writeFileSync(join(out, "drivers.json"), JSON.stringify(resolved, null, 2) + "\n");
 }
 
-async function fetchStream(root: string, arch: Arch, out: string, cache: string): Promise<void> {
+async function fetchStream(root: string, arch: Arch, out: string, cache: string, localDir?: string): Promise<void> {
   const m: StreamManifest = JSON.parse(readFileSync(join(root, "installer", "remote", "stream-server.json"), "utf8"));
   const errs = validateStream(m);
   if (errs.length) throw new Error(errs.join("\n"));
@@ -274,7 +298,17 @@ async function fetchStream(root: string, arch: Arch, out: string, cache: string)
   rmSync(tmp, { recursive: true, force: true });
   console.log(`stream server: dropped ${dropped} web UI / installer file(s)`);
   const exeRel = `${m.install_dir}/${basename(exe)}`;
-  const dist = serverDist(m, exeRel, sha256Hex(readFileSync(join(out, exeRel))));
+  let dist = serverDist(m, exeRel, sha256Hex(readFileSync(join(out, exeRel))));
+  if (localDir) {
+    // The Pulsar build (stream-server/build-sunshine.ps1) replaces the upstream exe.
+    const local: ServerDist = JSON.parse(readFileSync(join(localDir, "stream-server.json"), "utf8").replace(/^﻿/, ""));
+    const bytes = readFileSync(join(localDir, local.file));
+    const errs = validateLocalBuild(m, local, sha256Hex(bytes));
+    if (errs.length) throw new Error(errs.join("\n"));
+    writeFileSync(join(out, exeRel), bytes);
+    dist = localServerDist(local, exeRel);
+    console.log(`stream server: Pulsar build ${local.version} from ${localDir}`);
+  }
   writeFileSync(join(out, "stream-server.json"), JSON.stringify(dist, null, 2) + "\n");
 }
 
@@ -293,7 +327,8 @@ async function main(): Promise<void> {
   const only = arg("--only");
   mkdirSync(out, { recursive: true });
   if (!only || only === "drivers") await fetchDrivers(root, arch, out, cache);
-  if (!only || only === "stream") await fetchStream(root, arch, out, cache);
+  const local = arg("--stream-local");
+  if (!only || only === "stream") await fetchStream(root, arch, out, cache, local ? resolve(root, local) : undefined);
   // The same rules as the whole MSI payload, on the folder as it will sit in it.
   const found = checkDirs([join(base, arch)], arch, { allowDrivers: false });
   for (const v of found) console.error(`${v.severity.toUpperCase()} ${v.rule}: ${v.path}${v.detail ? ` (${v.detail})` : ""}`);

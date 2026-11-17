@@ -43,6 +43,7 @@ when you add a doc.
 | Behaviour spec (analyst-written): `spec/local/`, `spec/remote/` | [spec/README.md](spec/README.md) |
 | `pulsar-host` pipe contract (remote seats on the Pulsar backend; still binding) | [docs/split/agents/pulsar-host-backend.md](docs/split/agents/pulsar-host-backend.md) |
 | Third-party drivers / stream server / RDP libs (remote kind, verified table) | [docs/split/agents/third-party.md](docs/split/agents/third-party.md) |
+| Pulsar build of the stream server (Sunshine patch set, MSYS2 build script, pins) | [stream-server/README.md](stream-server/README.md) |
 | Pulsar Split history before the merge (superseded, not updated) | [docs/split/README.md](docs/split/README.md) |
 | Manager (both kinds; remote pages in `src/lib/remote/`) | [apps/manager/README.md](apps/manager/README.md) |
 | Credential provider + filter | [credprov/README.md](credprov/README.md) |

@@ -69,6 +69,26 @@ export interface SeatStreamSettings {
 /** Stream server of a seat (`sunshine` = Moonlight clients, `pulsar` = Pulsar clients). */
 export type StreamBackendKind = 'sunshine' | 'pulsar';
 
+export type PulsarNetworkMode = 'auto' | 'p2p-only' | 'relay-only';
+export type PulsarNodePort = 'base' | 'ephemeral' | 'fixed';
+export type PulsarAccess = 'approve' | 'approve_or_password';
+
+/** `seat_core::remote::PulsarSeatOptions`: options of the Pulsar backend. */
+export interface PulsarSeatOptions {
+  /** `host[:port]`; empty = the built-in default relay. */
+  relay: string;
+  network_mode: PulsarNetworkMode;
+  node_port_mode: PulsarNodePort;
+  /** Used with `node_port_mode = fixed` (1024-65535). */
+  node_port: number;
+  port_mapping: boolean;
+  /** LAN beacon (UDP 21117); its firewall rule follows this option. */
+  lan_discovery: boolean;
+  access: PulsarAccess;
+  /** 1-4. */
+  max_clients: number;
+}
+
 /** `get_stream_backends`: installed (manifest + hash ok) or missing with a reason code. */
 export interface StreamBackendInfo {
   backend: StreamBackendKind;
@@ -92,6 +112,8 @@ export interface SeatConfig {
   stream: SeatStreamSettings;
   /** Missing in older configs = `sunshine`. Change only while the seat is stopped. */
   stream_backend?: StreamBackendKind;
+  /** Pulsar backend options; missing in older configs = defaults. */
+  pulsar?: PulsarSeatOptions;
   /** Service-owned: last applied client display mode (used at the next start). */
   last_mode?: { width: number; height: number; hz: number };
 }

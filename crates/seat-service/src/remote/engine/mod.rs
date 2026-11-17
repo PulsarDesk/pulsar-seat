@@ -1039,6 +1039,11 @@ impl Engine {
             StreamNotice::ControlUnavailable { reason } => {
                 self.notice(seat_id, "host_warning", serde_json::json!({"kind": "control_unavailable", "reason": reason}));
             }
+            StreamNotice::Fallback { missing } => {
+                // The Pulsar stream-server build lacks some patched features (or its seat
+                // pipe): the seat keeps streaming with upstream behaviour for them.
+                self.notice(seat_id, "host_warning", serde_json::json!({"kind": "stream_fallback", "missing": missing}));
+            }
             StreamNotice::Running | StreamNotice::ControlReady { .. } | StreamNotice::Restarting { .. } => {}
             StreamNotice::Event(ev) => self.server_event(seat_id, server, ev),
             StreamNotice::Peer(p) => self.peer_event(seat_id, server, p),

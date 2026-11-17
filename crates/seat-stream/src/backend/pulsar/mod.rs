@@ -68,17 +68,19 @@ pub fn host_args(seat_id: &str, data_dir: &Path, log: &Path) -> Result<Vec<Strin
     Ok(vec!["--split-seat".into(), seat_id.into(), "--data-dir".into(), abs(data_dir, "data_dir")?, "--log".into(), abs(log, "log")?])
 }
 
-/// `config.apply` from the seat record (§2, §3.3). Seat options for relay, network mode,
-/// port mapping and discovery are not in the seat record yet: contract defaults.
+/// `config.apply` from the seat record (§2, §3.3), including the seat's Pulsar options
+/// (`RemoteSeatRecord::pulsar`: relay, network mode, node port, port mapping, discovery,
+/// access, clients at the same time).
 pub fn host_config(seat: &RemoteSeatRecord) -> HostConfig {
+    let p = &seat.pulsar;
     HostConfig {
         display_name: seat.display_name.clone(),
-        relay: None,
-        network_mode: "auto".into(),
-        node_port: seat.port,
-        port_mapping: false,
-        lan_discovery: true,
-        access: "approve_or_password".into(),
+        relay: Some(p.relay.trim()).filter(|r| !r.is_empty()).map(str::to_string),
+        network_mode: p.network_mode.as_str().into(),
+        node_port: p.effective_node_port(seat.port),
+        port_mapping: p.port_mapping,
+        lan_discovery: p.lan_discovery,
+        access: p.access.as_str().into(),
         transmit_audio: seat.audio.stream_audio,
         audio_endpoint_id: None,
         render_adapter_luid: None,
@@ -91,7 +93,7 @@ pub fn host_config(seat: &RemoteSeatRecord) -> HostConfig {
         }
         .into(),
         codecs: Vec::new(),
-        max_clients: 1,
+        max_clients: p.max_clients.clamp(1, 4),
         mic: false,
     }
 }
@@ -241,6 +243,7 @@ impl StreamBackend for PulsarHostBackend {
             cfg.node_port,
             &exe,
             seat.stream.firewall_domain,
+            cfg.lan_discovery,
         ) {
             log::warn!("seat '{}': firewall rule not applied: {e}", seat.name);
             warnings.push(serde_json::json!({"kind": "firewall", "reason": e.code()}));

@@ -1694,7 +1694,27 @@ const rt = {
     backendStopFirst: 'Stop the seat first to change the stream server.',
     relayId: 'Pulsar ID',
     relayState: (s: string) =>
-      (({ ok: 'connected', auth_required: 'waiting for sign-in', unreachable: 'unreachable', version_mismatch: 'version mismatch' }) as Record<string, string>)[s] ?? s
+      (({ ok: 'connected', auth_required: 'waiting for sign-in', unreachable: 'unreachable', version_mismatch: 'version mismatch' }) as Record<string, string>)[s] ?? s,
+    pulsarOptions: 'Pulsar connection',
+    pulsarRelay: 'Relay server',
+    pulsarRelayHint: 'host or host:port; empty uses the default relay.',
+    pulsarRelayInvalid: 'Enter a host name or address, optionally with :port.',
+    pulsarNetworkMode: 'Connection type',
+    pulsarNetworkAuto: 'Direct when possible, otherwise through the relay',
+    pulsarNetworkP2p: 'Direct only',
+    pulsarNetworkRelay: 'Relay only',
+    pulsarNodePort: 'Network port (UDP)',
+    pulsarNodePortBase: (p: number) => `Seat port (${p})`,
+    pulsarNodePortEphemeral: 'Any free port',
+    pulsarNodePortFixed: 'This port:',
+    pulsarNodePortInvalid: 'The port must be 1024-65535.',
+    pulsarPortMapping: 'Ask the router to open the port (UPnP)',
+    pulsarDiscovery: 'Show this seat to devices on the local network',
+    pulsarDiscoveryHint: 'Opens UDP 21117 for the local subnet in the firewall while the seat runs with this option.',
+    pulsarAccess: 'Who can connect',
+    pulsarAccessApprove: 'Every connection needs approval here',
+    pulsarAccessPassword: 'Approval here, or the seat’s password',
+    pulsarMaxClients: 'Devices at the same time'
   },
   seatState: {
     stopped: 'Stopped',
@@ -1788,7 +1808,8 @@ const rt = {
     adapter_fallback: 'The chosen graphics card was not found; the default is used.',
     firewall: 'The firewall rules could not be added; devices on the LAN may not reach the seat.',
     control_unavailable: 'The stream server’s control channel could not open; pairing is not available on this seat.',
-    capture_error: 'The stream server could not capture the screen.'
+    capture_error: 'The stream server could not capture the screen.',
+    stream_fallback: 'This stream-server build lacks some Pulsar features; the seat uses the standard behaviour for them.'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Another multiseat product is installed.',

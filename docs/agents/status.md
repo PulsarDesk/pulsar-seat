@@ -2190,3 +2190,50 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       changing TermService / LSM, kernel patching / BYOVD / DSE workarounds, signing with
       real certificates.
     - Refused by the model provider's safety system: none recorded in this round.
+- 2026-11-17 (parity round, package sunshine). The Pulsar stream-server patch set and its
+  build, closing the "not built" item of the review-fixes entry. Built and unit-tested;
+  nothing ran in a seat session (runtime claims are HYPOTHESIS, list in
+  `stream-server/README.md`):
+  - **Patch set** `stream-server/sunshine-patches/0001-0006` against Sunshine
+    `v2026.516.143833` (`14ffa6fd`): seat control pipe (SYSTEM only, first instance, hello
+    first; status, pair.submit with client name and uuid answer, pair.cancel, clients.*,
+    apps.reload, session.close, server.shutdown, log.level; events pair.pending / ended,
+    stream.started / ended, capture.error, audio.state) with `pulsar_web_ui = disabled`;
+    `pulsar_pair_timeout`; `capture = pulsar_idd` (spec 40 §6.4 frame channel: named textures
+    and fence on the header's LUID, heartbeats, HDR metadata, mode request over the pipe);
+    `gamepad = pulsar_ds4 | ds5 | ds5e | xone` (pad.wanted / attach / denied / detach /
+    released, USB-layout reports into the pad channel, feedback back to the client); build
+    option without the web UI (no npm); OpenSSL 4 build fix. `git apply --check` clean.
+  - **Build:** `stream-server/build-sunshine.ps1` + pins `stream-server/sunshine.json`
+    (upstream by SHA, msys2-base 2026-09-27 URL + SHA-256 extracted to `target\wf\msys2`,
+    FFmpeg of upstream's build-deps tag URL + SHA-256, ARM64 force-includes for a submodule).
+    On the ARM64 dev box: **x64 built** (UCRT64, GCC 16.2; sha256 `8ca6024f...ca92`, PE 0x8664)
+    and **ARM64 built** (CLANGARM64; sha256 `763a3ed4...8866`, PE 0xAA64, plus upstream's
+    minhook-detours DLL); both run `--help`. CI job `stream-server` (check + build + artifact).
+    `fetch-deps.ts --stream-local` puts the build into the MSI payload (exe + manifest
+    checked). No published pinned release of this build yet: the default MSI still ships
+    upstream until the maintainer pins one.
+  - **Service side:** `seat_stream::supervise` uses patched features only when `hello`
+    reports them (`conf_for_caps` + one restart, `StreamNotice::Fallback`, manager warning
+    `stream_fallback`), drives a Pulsar build without a seat pipe like upstream
+    (`upstream_conf_text`), gates `apps.reload` / `pair.cancel`; `conf` may omit
+    `pulsar_pair_timeout`.
+  - **Pulsar backend options:** `RemoteSeatRecord::pulsar` (relay, network mode, node port
+    base / ephemeral / fixed, port mapping, LAN discovery, access, max clients) validated in
+    seat-core, sent in `config.apply`, edited on the manager seat page ("Pulsar connection",
+    en + tr); per-seat LAN discovery rule `PulsarSplit seat <id> discovery` (UDP 21117,
+    local subnet) created / removed with the option and the seat.
+  - Gates: cargo test --workspace 1784 passed / 6 ignored (one clean run; earlier runs were
+    disturbed by other worktrees replacing binaries in the shared target dir), clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, shim tests
+    (1 + 8 + 3) + check x86_64 / i686 / aarch64, manager 222 tests / check 0 errors / build,
+    bun test installer/scripts 65, workflow lint ok. Drivers not touched. No test deleted;
+    changed on purpose (the discovery rule is on by default): seat-stream
+    `firewall_is_one_udp_rule_and_replaces_a_sunshine_pair`, seat-service
+    `pulsar_seat_runs_pulsar_host_and_approves_requests` and
+    `switching_backend_keeps_one_rule_set_and_removal_clears_secrets` now expect the node rule
+    plus the discovery rule.
+  - Open (HYPOTHESIS / hardware): every runtime path of the patches (pipe against the real
+    service, Moonlight pairing, pulsar_idd against the remote IDD role, which still has no
+    provider creating its device, pulsar_pad against the unsigned pad driver, audio.state);
+    `pulsar-host` options against a real `pulsar-host`; MSYS2 packages are rolling (recorded,
+    not pinned); a published, pinned release of the build for the default installer.

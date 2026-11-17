@@ -97,6 +97,7 @@ pub mod copy {
     pub const RULE_SEAT: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: stream connections of seat \"{0}\"", "Pulsar Seat: \"{0}\" koltuğunun akış bağlantıları");
     pub const RULE_RDP_BLOCK: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: Remote Desktop port {0} is used from this PC only", "Pulsar Seat: uzak masaüstü bağlantı noktası {0} yalnızca bu bilgisayardan kullanılır");
     pub const RULE_PULSAR: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: Pulsar connection of seat \"{0}\"", "Pulsar Seat: \"{0}\" koltuğunun Pulsar bağlantısı");
+    pub const RULE_DISCOVERY: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat: LAN discovery of seat \"{0}\"", "Pulsar Seat: \"{0}\" koltuğunun yerel ağda bulunması");
 }
 
 pub fn parse_ports(s: &str) -> Option<Vec<u16>> {
@@ -211,6 +212,8 @@ pub fn apply_seat_rules(
     if !seat_core::remote::ports::is_valid_base(base) {
         return Err(StreamError::invalid("port", "outside 1029-65514"));
     }
+    // A seat that ran on the Pulsar backend before leaves no discovery rule behind.
+    remove_named(fw, journal, &[discovery_rule_name(seat_id)])?;
     apply_rules(fw, journal, &seat_rules(seat_id, display_name, base, program, domain))
 }
 
@@ -232,7 +235,34 @@ pub fn pulsar_seat_rule(seat_id: &str, display_name: &str, node_port: u16, progr
     }
 }
 
-/// Create / update the Pulsar seat rule and remove a TCP rule left by a Sunshine run.
+/// UDP port of the Pulsar LAN beacon (pulsar-host-backend.md §3.6).
+pub const PULSAR_DISCOVERY_PORT: u16 = 21117;
+
+/// `PulsarSplit seat <seat-id> discovery`.
+pub fn discovery_rule_name(seat_id: &str) -> String {
+    format!("PulsarSplit seat {seat_id} discovery")
+}
+
+/// The seat's LAN discovery rule: inbound UDP 21117 for `pulsar-host.exe`, local subnet
+/// only, same profiles as the seat rule. One per seat with discovery on (several seats may
+/// listen on the shared beacon port; each rule is created and removed with its seat).
+pub fn pulsar_discovery_rule(seat_id: &str, display_name: &str, program: &Path, domain: bool) -> FirewallRuleSpec {
+    FirewallRuleSpec {
+        name: discovery_rule_name(seat_id),
+        group: GROUP.into(),
+        description: copy::RULE_DISCOVERY.fmt(&[&display_name]),
+        program: program.to_path_buf(),
+        protocol: FwProto::Udp,
+        local_ports: vec![PULSAR_DISCOVERY_PORT],
+        profiles: FwProfiles { domain, private: true, public: false },
+        action: FwAction::Allow,
+        remote_scope: FwScope::LocalSubnet,
+    }
+}
+
+/// Create / update the Pulsar seat rule, create or remove its discovery rule, and remove a
+/// TCP rule left by a Sunshine run.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_pulsar_seat_rules(
     fw: &dyn Firewall,
     journal: &dyn RestoreLog,
@@ -241,10 +271,18 @@ pub fn apply_pulsar_seat_rules(
     node_port: u16,
     program: &Path,
     domain: bool,
+    lan_discovery: bool,
 ) -> Result<(), StreamError> {
     crate::validate_seat_id(seat_id)?;
-    remove_named(fw, journal, &[seat_rule_name(seat_id, FwProto::Tcp)])?;
-    apply_rules(fw, journal, &[pulsar_seat_rule(seat_id, display_name, node_port, program, domain)])
+    let mut stale = vec![seat_rule_name(seat_id, FwProto::Tcp)];
+    let mut rules = vec![pulsar_seat_rule(seat_id, display_name, node_port, program, domain)];
+    if lan_discovery {
+        rules.push(pulsar_discovery_rule(seat_id, display_name, program, domain));
+    } else {
+        stale.push(discovery_rule_name(seat_id));
+    }
+    remove_named(fw, journal, &stale)?;
+    apply_rules(fw, journal, &rules)
 }
 
 fn remove_named(fw: &dyn Firewall, journal: &dyn RestoreLog, names: &[String]) -> Result<(), StreamError> {
@@ -259,11 +297,11 @@ fn remove_named(fw: &dyn Firewall, journal: &dyn RestoreLog, names: &[String]) -
     Ok(())
 }
 
-/// Remove a seat's rule pair (seat deletion).
+/// Remove a seat's rules (seat deletion): the TCP / UDP pair and the discovery rule.
 pub fn remove_seat_rules(fw: &dyn Firewall, journal: &dyn RestoreLog, seat_id: &str) -> Result<(), StreamError> {
     let existing = fw.list_group(GROUP)?;
-    for proto in [FwProto::Tcp, FwProto::Udp] {
-        let name = seat_rule_name(seat_id, proto);
+    let names = [seat_rule_name(seat_id, FwProto::Tcp), seat_rule_name(seat_id, FwProto::Udp), discovery_rule_name(seat_id)];
+    for name in names {
         let Some(prev) = existing.iter().find(|e| e.name == name) else { continue };
         let rec = record_for(prev, Some(prev), None);
         let seq = journal.intent(&rec)?;
@@ -334,7 +372,7 @@ mod tests {
 
     #[test]
     fn rule_descriptions_are_complete() {
-        let p = seat_core::i18n::check_table(seat_core::text_table![copy::RULE_SEAT, copy::RULE_RDP_BLOCK, copy::RULE_PULSAR]);
+        let p = seat_core::i18n::check_table(seat_core::text_table![copy::RULE_SEAT, copy::RULE_RDP_BLOCK, copy::RULE_PULSAR, copy::RULE_DISCOVERY]);
         assert!(p.is_empty(), "{p:?}");
     }
 
@@ -400,6 +438,37 @@ mod tests {
         restore_all(&fw, &j).unwrap();
         assert!(fw.rules().is_empty());
         assert!(apply_seat_rules(&fw, &j, "bad", "S", 48100, exe, false).is_err());
+    }
+
+    #[test]
+    fn pulsar_discovery_rule_follows_the_option_and_the_seat() {
+        let fw = FakeFirewall::default();
+        let j = MemJournal::default();
+        let exe = Path::new(r"C:\pf\pulsar-host.exe");
+        apply_pulsar_seat_rules(&fw, &j, ID, "Salon", 48100, exe, false, true).unwrap();
+        let rules = fw.rules();
+        let d = rules.iter().find(|r| r.name == discovery_rule_name(ID)).expect("discovery rule");
+        assert_eq!(d.local_ports, [PULSAR_DISCOVERY_PORT]);
+        assert_eq!(d.protocol, FwProto::Udp);
+        assert_eq!(d.remote_scope, FwScope::LocalSubnet);
+        assert_eq!(d.profiles, FwProfiles { domain: false, private: true, public: false });
+        assert_eq!(d.program, exe);
+        assert!(d.description.contains("Salon"));
+        assert_eq!(rules.len(), 2);
+        // Option off: the discovery rule goes, the node rule stays.
+        apply_pulsar_seat_rules(&fw, &j, ID, "Salon", 48100, exe, false, false).unwrap();
+        assert!(fw.rules().iter().all(|r| r.name != discovery_rule_name(ID)));
+        assert_eq!(fw.rules().len(), 1);
+        // Back on, then the seat switches to Sunshine: no discovery rule left.
+        apply_pulsar_seat_rules(&fw, &j, ID, "Salon", 48100, exe, true, true).unwrap();
+        apply_seat_rules(&fw, &j, ID, "Salon", 48100, Path::new(r"C:\pf\s.exe"), false).unwrap();
+        assert!(fw.rules().iter().all(|r| r.name != discovery_rule_name(ID)));
+        // Seat deletion removes everything, and the journal restores the start state.
+        apply_pulsar_seat_rules(&fw, &j, ID, "Salon", 48100, exe, false, true).unwrap();
+        remove_seat_rules(&fw, &j, ID).unwrap();
+        assert!(fw.rules().is_empty());
+        restore_all(&fw, &j).unwrap();
+        assert!(fw.rules().is_empty());
     }
 
     #[test]

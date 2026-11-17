@@ -57,6 +57,51 @@ export function defaultDisplay(): R.DisplaySettings {
 }
 
 const defaultAudio = (): R.SeatAudioSettings => ({ stream_audio: true, microphone: false });
+
+/** `seat_core::remote::PulsarSeatOptions::default()`. */
+export function defaultPulsar(): R.PulsarSeatOptions {
+  return {
+    relay: '',
+    network_mode: 'auto',
+    node_port_mode: 'base',
+    node_port: 0,
+    port_mapping: false,
+    lan_discovery: true,
+    access: 'approve_or_password',
+    max_clients: 1
+  };
+}
+
+/** `host` or `host:port` (DNS name, IPv4 or `[IPv6]`), as `validate::relay_address`. Empty is valid. */
+export function relayValid(relay: string): boolean {
+  if (relay === '') return true;
+  if (relay.length > 260) return false;
+  let host: string;
+  let port: string | null = null;
+  if (relay.startsWith('[')) {
+    const end = relay.indexOf(']');
+    if (end < 0) return false;
+    host = relay.slice(1, end);
+    if (!host || !/^[0-9a-fA-F:.]+$/.test(host)) return false;
+    const tail = relay.slice(end + 1);
+    if (tail) {
+      if (!tail.startsWith(':')) return false;
+      port = tail.slice(1);
+    }
+  } else {
+    const i = relay.lastIndexOf(':');
+    host = i >= 0 ? relay.slice(0, i) : relay;
+    port = i >= 0 ? relay.slice(i + 1) : null;
+    const label = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)$/;
+    if (!host || host.length > 253 || !host.split('.').every((l) => label.test(l))) return false;
+  }
+  if (port !== null) {
+    if (!/^[0-9]{1,5}$/.test(port)) return false;
+    const n = Number(port);
+    if (n < 1 || n > 65535) return false;
+  }
+  return true;
+}
 const defaultStream = (): R.SeatStreamSettings => ({
   gamepad: 'auto',
   capture: 'default',
@@ -96,7 +141,8 @@ export function toRecord(s: SeatConfig): R.SeatConfig {
     rdp_client_name: r.rdp_client_name ?? '',
     audio: r.audio ? { ...r.audio } : defaultAudio(),
     stream: r.stream ? { ...r.stream } : defaultStream(),
-    stream_backend: r.stream_backend ?? 'sunshine'
+    stream_backend: r.stream_backend ?? 'sunshine',
+    pulsar: r.pulsar ? { ...r.pulsar } : defaultPulsar()
   };
   if (r.last_mode) rec.last_mode = { ...r.last_mode };
   return rec;
@@ -122,7 +168,8 @@ export function applyRecord(s: SeatConfig, rec: R.SeatConfig): SeatConfig {
     rdp_client_name: old.rdp_client_name ?? rec.rdp_client_name,
     audio: { ...rec.audio },
     stream: { ...rec.stream },
-    stream_backend: rec.stream_backend ?? 'sunshine'
+    stream_backend: rec.stream_backend ?? 'sunshine',
+    pulsar: rec.pulsar ? { ...rec.pulsar } : defaultPulsar()
   };
   if (old.last_mode) out.remote.last_mode = old.last_mode;
   if (!out.remote.apps?.length) delete out.remote.apps;
@@ -149,7 +196,8 @@ export function newRemoteSeat(number: SeatNumber, name: string): SeatConfig {
       rdp_client_name: '',
       audio: defaultAudio(),
       stream: defaultStream(),
-      stream_backend: 'sunshine'
+      stream_backend: 'sunshine',
+      pulsar: defaultPulsar()
     }
   };
 }
