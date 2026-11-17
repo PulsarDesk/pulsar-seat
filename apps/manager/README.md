@@ -55,6 +55,30 @@ into the installer's `THIRD-PARTY-NOTICES-JS.md` by `installer/scripts/js-notice
 
 - Space Grotesk, Hanken Grotesk, JetBrains Mono: SIL OFL 1.1, woff2 latin + latin-ext subsets
   from @fontsource-variable 5.2.5, `src/lib/ui/fonts/OFL-*.txt`.
+- Lucide icon geometry (ISC, Feather portions MIT): path data only, in `src/lib/ui/icons.ts`
+  (no npm package), `src/lib/ui/LUCIDE-LICENSE.txt`.
+
+## Component kit (`src/lib/ui/`)
+
+Import from `#lib/ui/index.ts`. Every value comes from `tokens.css`; rules in
+`target/redesign/final/DESIGN.md`. Dev-only gallery: `bun run dev`, then `/ui`
+(`?theme=dark`, `?lang=tr`, `?show=modal|confirm|menu|pick`); production builds render nothing
+there. Tests: `src/lib/ui/ui.test.ts` (fixtures in `src/lib/test/ui/`; `src/lib/test/setup.ts`
+stubs `HTMLDialogElement.showModal` for jsdom).
+
+- `Button` (`kind`, `compact`, `icon`, `label`, `disabled`, `disabledReason`, `reasonId`,
+  `busy`; aria-disabled, never opacity; warns in dev on a trailing "…"), `IconButton`
+  (`icon`, `label` required).
+- `Status` (`kind` ok / off / warn / danger, `plainOk`), `StatusLine`, `Notice`, `Notices`
+  (one region per page), `EmptyState`, `Spinner`, `Toasts` (confirmations only, 4 s).
+- `Section`, `Group`, `Row` (`lead`, `control` snippets, `stack`), `LinkRow`, `SubLabel`,
+  `PageHead`, `Breadcrumb`, `Toc` (inside `.with-toc`), `ListTable`.
+- `ChoiceList`, `Field`, `Select`, `Switch`, `Checkbox`, `Segmented`, `Disclosure`,
+  `LockedValue`, `Kbd`.
+- `Menu` (APG menu button, top layer, groups / hints / submenus, no icons), `Modal` (native
+  `<dialog>`, sizes sm / md / lg, footer order primary → secondaries → Cancel),
+  `ConfirmDialog` (danger → focus on Cancel, typed confirmation), `SaveBar` (docked).
+- `Icon`, `Mark`, `PulseRings`; types in `types.ts`.
 
 ## Tauri surface
 

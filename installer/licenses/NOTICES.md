@@ -31,6 +31,7 @@ licence texts sit next to them and are copied into `THIRD-PARTY-NOTICES-JS.md`
 | Space Grotesk (woff2, latin + latin-ext, from @fontsource-variable 5.2.5) | SIL OFL 1.1 | `fonts/OFL-space-grotesk.txt` | https://fontsource.org/fonts/space-grotesk |
 | Hanken Grotesk (same) | SIL OFL 1.1 | `fonts/OFL-hanken-grotesk.txt` | https://fontsource.org/fonts/hanken-grotesk |
 | JetBrains Mono (same) | SIL OFL 1.1 | `fonts/OFL-jetbrains-mono.txt` | https://fontsource.org/fonts/jetbrains-mono |
+| Lucide icon geometry (path data in `icons.ts`, no package) | ISC (Feather portions: MIT) | `LUCIDE-LICENSE.txt` | https://lucide.dev |
 
 H.264 is decoded by Windows Media Foundation (part of Windows); no OpenH264 / Cisco
 binary is shipped, and the optional OpenH264 support of `ironrdp-egfx` is not enabled.

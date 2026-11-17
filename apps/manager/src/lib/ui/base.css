@@ -70,6 +70,10 @@ h3.sub { font-size: var(--fs-body); line-height: var(--lh-body); margin-bottom: 
   .app { grid-template-columns: var(--nav-w-collapsed) minmax(0, 1fr); }
 }
 
+/* Sub-page with a sticky contents list (<Toc>) beside the sections; one column below 1100px */
+.with-toc { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: var(--sp-6); align-items: start; }
+@media (max-width: 1100px) { .with-toc { grid-template-columns: minmax(0, 1fr); } }
+
 /* ---------- Sections and groups (no fieldsets; one card level) ---------- */
 .section + .section { margin-top: var(--sp-6); }
 .section-head { display: flex; align-items: flex-end; gap: var(--sp-3); margin-bottom: var(--sp-3); }
@@ -98,6 +102,20 @@ a.row:hover, button.row:hover { background: var(--surface-2); }
 .row > .lead { flex: none; display: inline-flex; color: var(--text-muted); }
 .row > .lead.warn { color: var(--warn-ink); }
 .row > .lead.info { color: var(--text-muted); }
+
+/* ---------- Text inputs: global, because <Field> wraps markup its caller writes ---------- */
+.input, .textarea {
+  min-height: var(--h-control); min-width: 0; width: 100%; margin: 0; padding: 0 12px;
+  border: var(--bw-input) solid var(--border-input); border-radius: var(--r-sm); background: var(--surface); color: var(--text);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.textarea { padding: 8px 12px; min-height: 96px; resize: vertical; line-height: var(--lh-body); }
+.input.mono, .textarea.mono { font-family: var(--font-mono); font-size: var(--fs-help); }
+.input::placeholder, .textarea::placeholder { color: var(--text-faint); }
+.input:hover, .textarea:hover { border-color: var(--text-muted); }
+.input:focus-visible, .textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; border-color: var(--focus); border-radius: var(--r-sm); }
+.input[aria-invalid='true'], .textarea[aria-invalid='true'] { border-color: var(--danger-ink); }
+.input.narrow { width: 120px; } .input.port { width: 110px; }
 
 /* ---------- Shared form layout utilities ---------- */
 .fields { display: grid; gap: var(--sp-4); }

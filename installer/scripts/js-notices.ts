@@ -50,6 +50,13 @@ export const BUNDLED_ASSETS: BundledAsset[] = [
     source: "https://fontsource.org/fonts/jetbrains-mono",
     licenseFile: "src/lib/ui/fonts/OFL-jetbrains-mono.txt",
   },
+  {
+    name: "Lucide (icon geometry)",
+    version: "path data of about 75 icons in src/lib/ui/icons.ts",
+    license: "ISC (portions from Feather: MIT)",
+    source: "https://lucide.dev",
+    licenseFile: "src/lib/ui/LUCIDE-LICENSE.txt",
+  },
 ];
 
 export interface AssetNotice extends BundledAsset {

@@ -2606,3 +2606,45 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   x86_64 / i686 / aarch64, lint-ci --local ok, repo-scan 0 / 0. No driver touched.
   - Open: the remote-idd-hdr HYPOTHESIS list above (Windows Server + RDSH run) and the
     missing virtual channels on provider sessions are unchanged.
+
+- 2026-11-17 (redesign P0 + P0b + P1, manager): the foundation of the approved redesign
+  (`target/redesign/final/IMPLEMENTATION.md`) on main, one commit per package.
+  - **P0** (4d437e5): `apps/manager/src/lib/ui/tokens.css` (copy of the final tokens, local
+    font URLs), `base.css` (base, focus, selection, scrollbars, reduced motion, layout classes,
+    sections / groups / rows, text inputs, `.with-toc`), bundled OFL fonts (Space Grotesk,
+    Hanken Grotesk, JetBrains Mono). `app.css` imports both and keeps TEMP aliases
+    (`--panel`, `--muted`, `--line`) plus the old element / class rules under `:where()` for
+    screens not yet moved (remove in P8). `--warn` is **not** aliased to `--warn-ink` (the
+    plan said so) because the new token uses `--warn` for the status dot; old screens show
+    warn text in the dot colour until their package lands. `app.html`: title, color-scheme,
+    `lang="en"` (i18n sets it at runtime). Fonts and Lucide are listed in
+    `installer/licenses/NOTICES.md` and written into `THIRD-PARTY-NOTICES-JS.md` by
+    `js-notices.ts` (`BUNDLED_ASSETS`, 2 new tests).
+  - **P0b** (27baf19): copy groups in en.ts / tr.ts: `nav`, `power`, `saveBar`, `notices`,
+    `service`, `device`, `move`, `slot`, `seatCard`, `startup`, `settingsPage`,
+    `advancedPage`, `statusPage`, `outputTech`, `archNames`; `rt.home`, `rt.seatView`,
+    `rt.pair.{pinWhy,request}`, `rt.hostClass.client`, `wizard.{keysIntro,moreKeys,keysList}`,
+    canvas move hint / empty-board copy. Ellipsis Rule applied to button labels (menu items
+    and progress text keep "…"); update confirm is now "Install now" / "Şimdi kur" (it shared
+    the name of the button that opens it). Turkish: Hizmet, bağlantı noktası, oyun kumandası
+    throughout. Helpers `archLabel`, `outputTechLabel`. Demo fallback note uses the real
+    `cat:wanted->used:reason` shape. Plan key names differ where a key already existed:
+    `t.seat` is a string, so seat-card copy is `t.seatCard.*`; Ayarlar copy is
+    `t.settingsPage.*` (not `basic.*`).
+  - **P1**: component kit in `src/lib/ui/` (Button, IconButton, Status, StatusLine, Notice,
+    Notices, Section, Group, Row, LinkRow, SubLabel, ChoiceList, Field, Select, Switch,
+    Checkbox, Segmented, Disclosure, LockedValue, Menu, Modal, ConfirmDialog, SaveBar,
+    Toasts, PageHead, Breadcrumb, Kbd, Spinner, ListTable, EmptyState, Toc, Icon, Mark,
+    PulseRings; `icons.ts` 75 Lucide icons as data, `types.ts`, `index.ts`), `ui.test.ts`
+    (21 tests), jsdom `showModal` stub in `src/lib/test/setup.ts`, dev-only gallery
+    `/ui` (`$app/env` `dev` guard). README lists the API.
+  - Visual check: gallery on port 5361, headless Edge, light + dark, 1280x800 + 1024x700,
+    compared with shots 01 / 02 / 10 / 53 / 56 component looks (structure, hierarchy, copy).
+    Detector (`bunx impeccable detect --json --no-config`): only `overused-font: Space
+    Grotesk` (accepted).
+  - Gates: manager 271 tests (was 245; +5 i18n P0b, +21 ui kit), check 0 errors / 0
+    warnings, build OK; installer scripts 89 (was 87). No Rust, Tauri or driver code touched
+    (cargo / shim / driver gates not needed). No test deleted.
+  - Next: P2 (app shell) in order, then P3-P7, P8 cleanup. The three behaviour changes
+    (startup modal removal, restart-required on the seat card, remote staged save) are not in
+    these packages; they stay "needs maintainer test before push" when P2 / P6 land.
