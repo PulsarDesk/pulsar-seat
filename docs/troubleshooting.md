@@ -487,6 +487,36 @@ Kiosk column shows the seat's device.
 5. If an old entry is left on the Windows Settings > System > Sound > Volume mixer (app
    volume and device preferences) page, you can clear it there with "Reset".
 
+## 10a. Steam or another program runs on only one seat
+
+- **Steam:** turn on *Advanced > Compatibility > Steam on every seat*, put `steam.exe` on
+  the per-process patching target list, and give every seat its own Steam account. Seat 1
+  keeps Steam's normal behaviour. Two seats that share one Steam install also share its
+  game library: installing or updating the same game on two seats at once can fail. A seat
+  that needs its own library gets its own Steam install folder (add that `steam.exe` to
+  the seat's startup apps).
+- **Old Steam add-on:** if the pre-flight list shows *Old Steam add-on DLL*, a
+  `version.dll` from an old "multibox" tool sits next to `steam.exe`. *Advanced >
+  Compatibility > Old Steam add-on DLL > Look for it* lets you move it into Pulsar Seat's
+  quarantine folder (and back). Pulsar Seat never deletes it.
+- **Other single-instance programs:** add the program under *Single-instance programs*
+  with the name of the object it uses to find a running copy (the program's vendor or its
+  documentation names it; tools such as Sysinternals Handle show named objects). The
+  program must also be on the per-process patching target list. Never add games with
+  anti-cheat. Programs that talk to one machine-wide service (case 3 in the spec) cannot be
+  split this way.
+- **Settings that should differ per seat:** seat menu *Environment and sign-in…* sets
+  environment variables for that seat's user only (for example a profile folder a game
+  reads from a variable).
+
+## 10b. Windows Update, fast startup, Defender on a seat PC
+
+All three are optional and off by default (*Advanced > Compatibility*). Each writes only
+documented settings, is recorded and comes back when you turn it off, turn Pulsar Seat off
+or uninstall it. Windows Update settings delay updates and set active hours; they never
+block updates, and Windows Home ignores them. If Defender exclusions report
+`defender_unavailable`, another antivirus product is active: add the exclusions there.
+
 ## 11. Language
 
 The manager follows the Windows display language (English, or Turkish on a Turkish

@@ -488,6 +488,36 @@ altındaki "Ses:" satırı koltuğun aygıtını gösterir.
 5. Windows Ayarlar > Sistem > Ses > Uygulama ses düzeyi ve cihaz tercihleri sayfasında
    kalmış bir kayıt varsa oradan "Sıfırla" ile temizleyebilirsiniz.
 
+## 10a. Steam ya da başka bir program yalnızca bir koltukta çalışıyor
+
+- **Steam:** *Gelişmiş > Uyumluluk > Her koltukta Steam* seçeneğini açın, `steam.exe`'yi
+  işlem başına yama hedef listesine ekleyin ve her koltuğa kendi Steam hesabını verin. 1.
+  koltuk Steam'in olağan davranışını korur. Tek bir Steam kurulumunu paylaşan iki koltuk
+  oyun kitaplığını da paylaşır: aynı oyunu iki koltukta aynı anda kurmak ya da güncellemek
+  başarısız olabilir. Kendi kitaplığı gereken koltuk kendi Steam kurulum klasörünü alır (o
+  `steam.exe`'yi koltuğun başlangıç uygulamalarına ekleyin).
+- **Eski Steam eklentisi:** ön denetim listesinde *Eski Steam eklenti DLL'si* görünürse,
+  `steam.exe`'nin yanında eski bir "multibox" aracından kalma bir `version.dll` vardır.
+  *Gelişmiş > Uyumluluk > Eski Steam eklenti DLL'si > Ara* ile onu Pulsar Seat'in karantina
+  klasörüne taşıyabilir (ve geri koyabilirsiniz). Pulsar Seat onu asla silmez.
+- **Diğer tek kopyalı programlar:** programı *Tek kopyalı programlar* altına, çalışan bir
+  kopyayı bulmak için kullandığı nesnenin adıyla ekleyin (adı programın üreticisi ya da
+  belgeleri verir; Sysinternals Handle gibi araçlar adlandırılmış nesneleri gösterir).
+  Program işlem başına yama hedef listesinde de olmalıdır. Hile koruması olan oyunları asla
+  eklemeyin. Bilgisayar genelinde tek bir hizmetle konuşan programlar bu yolla ayrılamaz.
+- **Koltuğa göre değişmesi gereken ayarlar:** koltuk menüsündeki *Ortam ve oturum açma…*
+  yalnızca o koltuğun kullanıcısı için ortam değişkenleri ayarlar (ör. bir oyunun bir
+  değişkenden okuduğu profil klasörü).
+
+## 10b. Koltuk bilgisayarında Windows Update, hızlı başlatma, Defender
+
+Üçü de isteğe bağlıdır ve varsayılan olarak kapalıdır (*Gelişmiş > Uyumluluk*). Her biri
+yalnızca belgelenmiş ayarları yazar, kaydedilir ve kapattığınızda, Pulsar Seat'i
+kapattığınızda ya da kaldırdığınızda geri gelir. Windows Update ayarları güncellemeleri
+erteler ve etkin saatleri ayarlar; güncellemeleri asla engellemez, Windows Home da bu
+ayarları yok sayar. Defender dışlamaları `defender_unavailable` bildirirse başka bir
+virüsten koruma ürünü etkindir: dışlamaları orada ekleyin.
+
 ## 11. Dil
 
 Yönetici uygulaması Windows görüntüleme dilini izler (İngilizce; Türkçe Windows'ta Türkçe).

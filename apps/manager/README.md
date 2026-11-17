@@ -35,6 +35,7 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src-tauri/src/lib.rs` | Tauri commands, main window (built in code: an elevated copy gets its own WebView2 data folder `<app_local_data>/elevated`), tray icon + menu, close-to-tray, `--autostart` (hidden start), wait for the unelevated parent PID before the single-instance check, event thread |
 | `src/lib/types.ts` | TS mirror of the seat-proto / seat-core wire types |
 | `src/lib/model.ts` | Pure config edits, effective masks (mirror of `seat_core::assign`), canvas grouping, seat colours, validation mirror |
+| `src/lib/compat.ts`, `docks.ts` | Compatibility options (2026-11-17): validation mirror of seat-core `compat_checks`, "device kinds no seat uses", USB dock detection and assignment |
 | `src/lib/store.svelte.ts` | Window state: service view + unsaved draft, event handling, save flow |
 | `src/lib/api.ts` / `demo.ts` | Tauri API / in-memory demo service with the same interface |
 | `src/lib/locales/en.ts`, `tr.ts` | All UI copy: English (default, the key set: type `Locale`) and Turkish (same keys, `i18n.test.ts`) |
@@ -70,7 +71,17 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
 - Advanced tab: backend picker with availability and notes from `get_backends`;
   the experimental client-SKU session backend only after the warning dialog (stores
   `experimental_ack`); host topology with the `input_not_isolated` note; timings, safety,
-  hotkey, devices, reversible tweaks, CPU sets.
+  hotkey, devices (class-level default descriptors switch with its classes), reversible
+  tweaks, CPU sets; Compatibility (`CompatSettings.svelte`, 2026-11-17): fast startup off,
+  Windows Update deferral / active hours / no restart while signed in, device-install deny
+  classes (with the "no seat uses" suggestion), Defender exclusions, Steam per seat,
+  single-instance program rules, the Steam add-on DLL report (`steam_proxy_dll`:
+  quarantine / put back). Every option is off by default and explained in place.
+- Seat menu "Environment and sign-in…" (`SeatCompatDialog.svelte`): per-seat environment
+  variables and "Deny log on locally" (offered only where the seat signs in through Remote
+  Desktop). System menu "USB dock wizard…" (`UsbDockWizard.svelte`, spec 10 §8.8): finds
+  multi-seat USB docks, waits for a stable count, pre-selects a seat per dock (or a new
+  seat) and assigns every device of the dock in the draft.
 - Status tab: product / seat states, degradations, fallback notes, backends, our drivers,
   pre-flight checks.
 - Bottom bar: save (validate → conflicts dialog → `apply_config` with `base_revision`),
@@ -95,8 +106,8 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
 - Pre-flight checks are shown with localized text per (id, outcome); the service's `detail`
   is only behind a collapsed "teknik ayrıntı". Fallback notes are parsed
   (`cat:wanted->used:reason`) and rendered as text.
-- Gap: the wizard's minimum-resolution precondition (spec 10 §9.2) is not checked by the
-  manager yet.
+- The wizard's minimum-resolution precondition (spec 10 §9.2) is checked by the manager
+  (`wizard.ts` `resolutionCheck`; the wizard is not offered below it).
 
 - HYPOTHESIS: during the wizard the service numbers monitors in `list_devices` order
   (present monitors, 1-based) and draws the per-monitor pages itself; the manager's number
@@ -106,12 +117,15 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   tabs, so nothing is lost on a tab switch; the question is asked before quitting, before
   the wizard and before other actions that replace the draft.
 - Devices are listed row by row in a container (spec: column-major).
-- Built since the first phases (stale "not built" list removed 2026-11-17): per-seat IP
-  binding (`IpBindingDialog`), video-output assignment (`OutputsDialog`), custom device
-  pictures (`PictureDialog`), webcam preview (`CameraPreview`), log verbosity
-  (`LogLevelDialog`); parity review: seat menu "Restart the graphics driver" and "Delete the
+- Nothing of spec 10 is listed as "not built" any more (the old list was stale and is
+  gone). Built since the first phases: per-seat IP binding (`IpBindingDialog`),
+  video-output assignment (`OutputsDialog`), custom device pictures (`PictureDialog`),
+  webcam preview (`CameraPreview`), log verbosity (`LogLevelDialog`), Hyper-V helper
+  (Network tab); parity review: seat menu "Restart the graphics driver" and "Delete the
   seat's kiosk user…", CPU dialog column "Whole session", GameInputSvc hint on the shim
-  targets list.
+  targets list; compat-tweaks (2026-11-17): the Compatibility section, the class-level
+  default descriptors switch (was greyed out), the seat environment / deny-logon dialog,
+  the USB dock wizard (spec 10 §8.8; ours is generic, not vendor-specific).
 
 ## Untested on hardware
 
@@ -134,6 +148,11 @@ Service buttons (round 4): `StartServiceW` / `ControlService(STOP)` against the 
 the token elevation check, and the wait for the target state (60 s) are untested on
 hardware. Mic state line on the remote seat page (`seat_runtime.stream.mic`) is untested
 against a real host (needs a `pulsar-host` with the `mic` capability).
+
+Compatibility options (2026-11-17): every effect on Windows (policies, Defender, logon
+rights, environment, the DPI read-back, the USB dock detection against real docks) is
+HYPOTHESIS until run on hardware; the manager side is covered by `compat.test.ts` and the
+App flow test.
 
 ## Language
 
