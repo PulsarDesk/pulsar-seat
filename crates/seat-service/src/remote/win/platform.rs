@@ -109,6 +109,12 @@ impl Platform for WindowsPlatform {
         Ok(())
     }
 
+    fn seat_users_changed(&mut self, users: &[String]) {
+        if let Some(e) = &self.engine {
+            e.set_seat_users(users, &self.global);
+        }
+    }
+
     fn client_name_for(&self, seat_id: &str, taken: &[String]) -> String {
         seat_session::remote::discover::unique_client_name(seat_id, taken)
     }

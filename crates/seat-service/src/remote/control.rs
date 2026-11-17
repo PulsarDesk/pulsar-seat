@@ -68,6 +68,9 @@ pub trait Platform: Send {
     fn submit_pin(&mut self, seat: &RemoteSeatRecord, pin: &Secret, client_name: &str, request_id: Option<u32>) -> Result<(), ProtoError>;
     /// Apply global settings that live outside our store (service start type, isolation).
     fn apply_global(&mut self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError>;
+    /// The remote seats' user names after `apply_config` changed the seat list: the
+    /// protocol provider listener admits exactly these accounts.
+    fn seat_users_changed(&mut self, _users: &[String]) {}
     fn list_local_users(&self) -> Result<Vec<LocalUser>, ProtoError>;
     fn user_facts(&self, user: &str) -> UserFacts;
     /// User logged on at the physical console, if any.
@@ -853,6 +856,13 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         self.platform.apply_global(old, new)
     }
 
+    /// `apply_config` changed the seat list: hand the remote seats' accounts to the
+    /// platform (provider registration), before any `global_changed` of the same save.
+    pub fn seats_changed(&mut self) {
+        let users = self.seat_users();
+        self.platform.seat_users_changed(&users);
+    }
+
     fn set_multi_session(&mut self, enabled: bool) -> Result<HostInfo, ProtoError> {
         if self.platform.passive() {
             return Err(passive_err());
@@ -1090,6 +1100,8 @@ pub(crate) mod tests {
         pub(crate) removed_ids: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         /// `apply_global` calls (the new settings), shared like `removed_ids`.
         pub(crate) globals: std::sync::Arc<std::sync::Mutex<Vec<RemoteSettings>>>,
+        /// `seat_users_changed` calls, shared like `globals`.
+        pub(crate) user_sets: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>>,
     }
 
     impl Platform for FakePlatform {
@@ -1117,6 +1129,9 @@ pub(crate) mod tests {
         fn apply_global(&mut self, _: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
             self.globals.lock().unwrap().push(new.clone());
             Ok(())
+        }
+        fn seat_users_changed(&mut self, users: &[String]) {
+            self.user_sets.lock().unwrap().push(users.to_vec());
         }
         fn list_local_users(&self) -> Result<Vec<LocalUser>, ProtoError> {
             Ok(vec![LocalUser { name: "ali".into(), enabled: true }])

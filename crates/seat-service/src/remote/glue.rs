@@ -365,6 +365,12 @@ impl Service {
         }
     }
 
+    /// After `apply_config` changed the seat list: the worker refreshes the remote seat
+    /// accounts the protocol provider admits (VM round 2, 2026-11-17).
+    pub(crate) fn remote_seats_changed(&self) {
+        let _ = self.with_remote(|w| w.seats_changed());
+    }
+
     /// `stop_seat` on a remote seat.
     pub(crate) fn stop_remote_seat(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
         if self.is_vm_seat(seat) {

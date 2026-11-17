@@ -627,9 +627,20 @@ impl Service {
         };
         log::info(&format!("config revision {rev} applied"));
         self.forget_remote_seats(&removed_remote);
-        if old.settings.remote != cfg.settings.remote {
-            let (o, n) = ((*old.settings.remote).clone(), (*cfg.settings.remote).clone());
-            self.spawn(move |s| s.remote_global_changed(&o, &n));
+        // Seat accounts first, so a display-backend change of the same save registers the
+        // provider for the seats it adds (one task keeps that order).
+        let seats_changed = old.seats != cfg.seats;
+        let remote_changed = (old.settings.remote != cfg.settings.remote)
+            .then(|| ((*old.settings.remote).clone(), (*cfg.settings.remote).clone()));
+        if seats_changed || remote_changed.is_some() {
+            self.spawn(move |s| {
+                if seats_changed {
+                    s.remote_seats_changed();
+                }
+                if let Some((o, n)) = &remote_changed {
+                    s.remote_global_changed(o, n);
+                }
+            });
         }
         // A session-backend change prepares the new backend itself (restore + prepare).
         let prepared = old.settings.backends != cfg.settings.backends && self.reselect_backends();

@@ -101,6 +101,28 @@ fn provider_path_runs_the_seat_on_our_display() {
     assert!(w.session.wts.logoffs().is_empty(), "provider sessions end through the provider port");
 }
 
+/// VM round 2 run 3: a remote seat added by `apply_config` registers the provider at once
+/// (no seat start, no service restart); the same set again does not re-sync; an empty set
+/// syncs the listener down to no account.
+#[test]
+fn seat_users_from_the_config_sync_the_provider_once_per_change() {
+    let f = FakeWrds::usable();
+    let w = world_idd(f.clone());
+    let before = lock(&f.synced).len();
+    w.engine.set_seat_users(&["seat3".to_string()], &idd_global());
+    {
+        let s = lock(&f.synced);
+        assert_eq!(s.len(), before + 1);
+        assert_eq!(s[before], (true, vec!["seat3".to_string()]));
+    }
+    w.engine.set_seat_users(&["SEAT3".to_string()], &idd_global());
+    assert_eq!(lock(&f.synced).len(), before + 1, "same accounts (case-insensitive): no re-sync");
+    w.engine.set_seat_users(&[], &idd_global());
+    let s = lock(&f.synced);
+    assert_eq!(s.len(), before + 2);
+    assert!(s[before + 1].1.is_empty());
+}
+
 #[test]
 fn provider_not_ready_falls_back_to_rdp_session() {
     let f = Arc::new(FakeWrds::default());

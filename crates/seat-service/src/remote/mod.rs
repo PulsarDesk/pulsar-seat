@@ -73,6 +73,9 @@ pub trait RemoteWorker: Send {
     /// `apply_config` changed `settings.remote`: apply what lives outside the document
     /// (isolation, pad preference, Bluetooth rule, protocol provider registration).
     fn global_changed(&mut self, old: &seat_core::remote::RemoteSettings, new: &seat_core::remote::RemoteSettings) -> Result<(), ProtoError>;
+    /// `apply_config` changed the seat list: refresh the remote seat accounts outside the
+    /// document (protocol provider listener).
+    fn seats_changed(&mut self);
 }
 
 impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<S, P> {
@@ -117,6 +120,9 @@ impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<
     }
     fn global_changed(&mut self, old: &seat_core::remote::RemoteSettings, new: &seat_core::remote::RemoteSettings) -> Result<(), ProtoError> {
         control::Controller::global_changed(self, old, new)
+    }
+    fn seats_changed(&mut self) {
+        control::Controller::seats_changed(self)
     }
 }
 

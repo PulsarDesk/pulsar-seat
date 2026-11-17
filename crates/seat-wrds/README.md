@@ -89,8 +89,12 @@ only registration and loading were exercised:
   until the hello arrives.
 - Setting the display backend back removed both keys at once; TermService keeps the DLL
   loaded until it restarts. MSI uninstall removed everything and the DLL was unloaded.
-- The engine registers only once it knows a remote seat account (service start or the
-  seat's first start); a remote seat added later without a start leaves it unregistered.
+- The engine registers only once it knows a remote seat account. Run 1: a remote seat
+  added by `apply_config` stayed unknown until its first start (or a service restart), so
+  the provider stayed unregistered (`wrds_not_registered`). Fixed in run 3: a seat-list
+  change hands the remote seats' accounts to the engine (`Engine::set_seat_users`), and the
+  save that adds the seat and sets `pulsar_idd` registered the provider at once; setting
+  the display back removed both keys, setting it again re-registered (`RDP-Tcp` untouched).
 
 ## HYPOTHESIS (nothing ran: needs Windows Server with the RD Session Host role)
 

@@ -2411,6 +2411,42 @@ fn remote_settings_saved_with_apply_config_reach_the_worker() {
     assert_eq!(g[0].display_backend, Some(seat_core::remote::DisplayBackendPref::PulsarIdd));
 }
 
+/// VM round 2 run 3 (2026-11-17): a remote seat added with `apply_config` was unknown to
+/// the engine until its first start, so `pulsar_idd` left the protocol provider
+/// unregistered. A seat-list change hands the remote seats' accounts to the worker; an
+/// apply that changes neither seats nor `settings.remote` does not.
+#[test]
+fn seat_list_saved_with_apply_config_reaches_the_worker() {
+    let users: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let shared = users.clone();
+    let remote = crate::service::RemoteDeps {
+        worker: Box::new(move |doc| {
+            Box::new(crate::remote::control::Controller::new(
+                doc,
+                crate::remote::control::tests::FakePlatform { user_sets: shared, ..Default::default() },
+                "t",
+                true,
+            ))
+        }),
+        host: None,
+    };
+    let h = harness_full(remote_ready_config(), None, Some(remote));
+    h.s.boot();
+    let mut a = admin();
+    let apply = |a: &mut Caller, f: &dyn Fn(&mut Config)| {
+        let ResponseBody::Config(view) = call(&h, a, RequestBody::GetConfig).unwrap() else { panic!() };
+        let mut cfg = view.config.clone();
+        f(&mut cfg);
+        call(&h, a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: view.config.revision, force: false }).unwrap();
+    };
+    apply(&mut a, &|c| c.settings.tweaks.lock_screen_image = !c.settings.tweaks.lock_screen_image);
+    assert!(users.lock().unwrap().is_empty(), "no seat change");
+    apply(&mut a, &|c| c.seats[0].name = "renamed".into());
+    let u = users.lock().unwrap();
+    assert_eq!(u.len(), 1);
+    assert!(!u[0].is_empty(), "remote seat accounts handed over: {u:?}");
+}
+
 #[test]
 fn deleting_a_remote_seat_with_apply_config_stops_first_then_removes_files() {
     let mut c = remote_ready_config();

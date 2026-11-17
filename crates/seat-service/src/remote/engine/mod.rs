@@ -514,6 +514,24 @@ impl Engine {
         }
     }
 
+    /// The remote seats' accounts as the config now names them (`apply_config` added,
+    /// removed or re-pointed a seat). VM round 2 (2026-11-17): a remote seat added after
+    /// service start stayed unknown until its first start, so `pulsar_idd` left the
+    /// provider unregistered (`wrds_not_registered`). Re-syncs only on a real change.
+    pub fn set_seat_users(&self, users: &[String], global: &RemoteSettings) {
+        let changed = {
+            let mut u = lock(&self.0.seat_users);
+            let same = u.len() == users.len() && users.iter().all(|x| u.iter().any(|y| y.eq_ignore_ascii_case(x)));
+            if !same {
+                *u = users.to_vec();
+            }
+            !same
+        };
+        if changed {
+            self.sync_wrds(global);
+        }
+    }
+
     /// A seat account the provider listener must admit (seat added after service start).
     fn note_seat_user(&self, user: &str, global: &RemoteSettings) {
         let added = {
