@@ -298,6 +298,18 @@ export function kindLabel(k: DeviceKind): string {
   return t.kinds[k] ?? k;
 }
 
+/** Processor architecture for people: `aarch64` → ARM64, `x86_64` → x64 (raw codes never reach the screen). */
+export function archLabel(arch: string | null | undefined): string {
+  if (!arch) return t.none;
+  return t.archNames[arch] ?? arch;
+}
+
+/** Monitor connector kind (`DisplayInfo.output_technology`): `internal` → built-in screen, `hdmi` → HDMI. */
+export function outputTechLabel(kind: string | null | undefined): string {
+  if (!kind) return t.outputTech.other;
+  return t.outputTech[kind] ?? t.outputTech.other;
+}
+
 /** Text for a package reason code; unknown codes fall back to a generic text. */
 export function remoteFailureText(reason: string | null | undefined): string {
   if (!reason) return rt.failure.unsupported;

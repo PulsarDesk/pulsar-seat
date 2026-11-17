@@ -278,7 +278,7 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       audio: state.config.settings.backends.audio,
       gates: state.config.settings.backends.gates
     },
-    fallback_notes: state.config.settings.backends.session === 'rds_loopback' ? ['rds_loopback: edition_unsupported'] : [],
+    fallback_notes: state.config.settings.backends.session === 'rds_loopback' ? ['session:rds_loopback->fast_user_switch:edition_unsupported'] : [],
     config_revision: state.config.revision,
     reboot_pending: false,
     os_build_changed: false,

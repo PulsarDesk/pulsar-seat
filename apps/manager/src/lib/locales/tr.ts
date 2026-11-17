@@ -95,7 +95,7 @@ const t = {
     hypervIntro:
       'Bir koltuk, iç bir Hyper-V anahtarı üzerinde koltuğun adresini taşıyan kendi sanal ağ bağdaştırıcısını alabilir. Anahtar ve bağdaştırıcılar “Pulsar Seat…” adını taşır ve Pulsar Seat kaldırılınca silinir.',
     hypervFeature: (s: string) => `Hyper-V: ${({ enabled: 'açık', disabled: 'kapalı', enable_pending: 'açılıyor (yeniden başlatma gerekli)', unavailable: 'bu Windows sürümünde yok' } as Record<string, string>)[s] ?? s}`,
-    hypervEnable: 'Hyper-V’yi aç…',
+    hypervEnable: 'Hyper-V’yi aç',
     hypervEnableConfirm: 'Windows Hyper-V özelliği açılsın mı? Bu bir sistem değişikliğidir ve ardından Windows’un yeniden başlatılması gerekir.',
     hypervRefresh: 'Denetle',
     hypervCreate: 'Bağdaştırıcı oluştur',
@@ -121,7 +121,7 @@ const t = {
     address: 'IP adresi',
     rule: 'Kural',
     notAssigned: 'Atanmadı',
-    edit: 'Düzenle…',
+    edit: 'Düzenle',
     programs: 'Program listesi (bütün koltuklar için ortak)',
     programsCount: (n: number) => `${n} program`,
     addressHelp: 'Ek adres almak için: Ağ bağlantılarında bağdaştırıcıya ikinci bir adres ekleyin ya da Aygıt Yöneticisi’nden sanal bir ağ bağdaştırıcısı ekleyin.'
@@ -143,7 +143,7 @@ const t = {
     title2: 'Başlık',
     path: 'Program ya da klasör yolu',
     pathHint: 'Bir klasör, içindeki bütün programlar demektir.',
-    browse: 'Gözat…',
+    browse: 'Gözat',
     browseHint: 'Bir program ya da kısayol seçin (Başlat menüsü, masaüstü ya da herhangi bir sürücü); kısayolun gösterdiği program eklenir.',
     addFolder: 'Klasördeki programları ekle',
     folderEmpty: 'Seçilen klasörde program bulunamadı.',
@@ -229,9 +229,232 @@ const t = {
     noSeat: 'Koltuk bilinmiyor'
   },
 
+  // Redesign copy (2026-11-17, target/redesign/final): rail, status line, save bar, notices,
+  // seats board, settings pages. Buttons and link rows never end in "…"; menu items that open
+  // a dialog do (the Ellipsis Rule, DESIGN.md).
+  nav: {
+    app: 'Uygulama',
+    sections: 'Bölümler',
+    seats: 'Koltuklar',
+    remote: 'Uzak koltuklar',
+    settings: 'Ayarlar',
+    status: 'Durum',
+    statusOk: ': hizmet çalışıyor',
+    statusDown: ': hizmete ulaşılamıyor',
+    count: (n: number) => `${n} koltuk`,
+    version: (v: string) => `Sürüm ${v}`,
+    location: 'Konum',
+    onThisPage: 'Bu sayfada'
+  },
+
+  power: {
+    on: 'Pulsar Seat açık',
+    off: 'Pulsar Seat kapalı',
+    summary: (running: number, blocked: string) => `${running} yerel koltuk çalışıyor${blocked ? `, ${blocked} başlatılamıyor` : ''}`,
+    firstOnly: '1. koltuk çalışıyor, başka koltuk yok',
+    offSummary: 'Koltuklar ayarlandı. Açınca başlatma biçimine göre çalışırlar.',
+    openAndStart: 'Aç ve başlat',
+    startAll: 'Koltukları başlat',
+    stopAll: 'Bütün koltukları durdur',
+    close: 'Pulsar Seat’i kapat…'
+  },
+
+  saveBar: {
+    region: 'Kaydedilmemiş değişiklikler',
+    count: (n: number) => `${n} değişiklik kaydedilmedi`,
+    undo: 'Geri al',
+    save: 'Kaydet',
+    shortcut: 'Ctrl+Shift+S',
+    moved: (device: string, seat: string) => `${device} ${seat} koltuğuna taşındı.`,
+    restarts: (seats: string) => `Kaydedince ${seats} koltuğu yeniden başlar.`,
+    nextBoot: 'Bir sonraki açılışta geçerli olur.',
+    nextStart: 'Koltuk bir sonraki başlatılışta yeni ayarla açılır.',
+    changed: (what: string) => `${what} değişti.`
+  },
+
+  notices: {
+    region: 'Bildirimler',
+    count: (n: number) => `${n} bildirim`,
+    summary: 'Gözden geçirmeniz gereken değişiklikler',
+    linkLost: 'Hizmetle bağlantı koptu, yeniden bağlanılıyor…',
+    ok: 'Tamam',
+    compare: 'Karşılaştır'
+  },
+
+  service: {
+    downTitle: 'Hizmete ulaşılamıyor',
+    downBody: 'Pulsar Seat hizmeti çalışmıyor ya da bir güvenlik yazılımı onu durdurmuş olabilir.',
+    start: 'Hizmeti başlat',
+    restart: 'Hizmeti yeniden başlat',
+    stop: 'Hizmeti durdur',
+    diagnostics: 'Tanı raporu'
+  },
+
+  device: {
+    moved: 'Taşındı, kaydedilmedi',
+    shared: 'Ortak: bütün koltuklar kullanır',
+    unplugged: 'Takılı değil',
+    actions: (name: string) => `${name}: taşı ya da bilgi`,
+    faceActions: (name: string, id: string) => `${name} (${id}): taşı ya da bilgi`,
+    identify: 'Göster (tanıt)',
+    infoMenu: 'Aygıt bilgileri…'
+  },
+
+  move: {
+    title: 'Taşı',
+    toPool: 'Boştaki aygıtlara',
+    share: 'Bütün koltuklarla paylaş',
+    seatHint: (n: number) => `${n}. koltuk`,
+    announce: (name: string, seat: string) => `${name} ${seat} koltuğuna taşındı. Kaydedilmedi.`,
+    announcePool: (name: string) => `${name} boştaki aygıtlara taşındı. Kaydedilmedi.`,
+    announceShare: (name: string) => `${name} artık bütün koltuklarca paylaşılıyor. Kaydedilmedi.`
+  },
+
+  slot: {
+    keyboardTitle: 'Klavye yok.',
+    keyboard: 'Bu koltuk klavye olmadan başlatılamaz. Boştaki aygıtlardan birini buraya sürükleyin.',
+    displayTitle: 'Ekran yok.',
+    display: 'Bu koltuk ekran olmadan başlatılamaz. Boştaki aygıtlardan birini buraya sürükleyin.',
+    mouseTitle: 'Fare yok.',
+    mouse: 'Fare olmadan koltuk yalnızca klavyeyle kullanılabilir.',
+    audio: 'Ses aygıtı yok (isteğe bağlı).'
+  },
+
+  seatCard: {
+    running: 'Çalışıyor',
+    blocked: 'Başlatılamıyor',
+    off: 'Kapalı',
+    restartNeeded: 'Yeniden başlatılmalı',
+    restart: 'Yeniden başlat',
+    actions: (name: string) => `${name}: koltuk işlemleri`,
+    kioskMenu: 'Kiosk koltuğu…',
+    ipMenu: 'IP adresi…',
+    removeMenu: 'Koltuğu sil…',
+    atLogon: 'oturum açma ekranında'
+  },
+
+  startup: {
+    recommended: 'ilk kurulumda önerilir',
+    question: 'Pulsar Seat açıkken ek koltuklar ne zaman başlasın?'
+  },
+
+  settingsPage: {
+    title: 'Ayarlar',
+    intro: 'Çoğu kurulum için varsayılanlar yeterlidir.',
+    startup: 'Başlatma',
+    seats: 'Koltuklar',
+    seatsHelp:
+      'Kendiliğinden başlayan koltuklar yukarıdaki başlatma biçimini izler. Başlangıç programları, kiosk, yönlendirme ve IP adresi her koltuğun menüsündedir.',
+    autoStart: 'Kendiliğinden başlar',
+    autoStartFor: (seat: string) => `Kendiliğinden başlasın: ${seat}`,
+    alwaysOn: 'Her zaman açılır',
+    account: 'Hesap',
+    accountFor: (seat: string) => `Oturum hesabı: ${seat}`,
+    seatMore: (seat: string) => `${seat}: diğer koltuk ayarları`,
+    startupAppsMenu: 'Başlangıç programları…',
+    kioskMenu: 'Kiosk…',
+    redirectMenu: 'Yönlendirme…',
+    ipMenu: 'IP adresi…',
+    cpuMenu: 'İşlemci çekirdekleri…',
+    padsOn: 'Sanal oyun kumandasını aç',
+    padsOff: 'Sanal oyun kumandasını kapat',
+    behaviour: 'Davranış',
+    appearance: 'Görünüm',
+    theme: 'Tema',
+    language: 'Dil',
+    sameAccountHelp: 'Aynı hesabı iki koltukta açmak dosya ve ayarları bozabilir.',
+    maintenance: 'Bakım',
+    diagnostics: 'Tanı raporu',
+    diagnosticsHelp: 'Sorun bildirirken ekleyin. Bu bilgisayara kaydedilir, hiçbir yere gönderilmez.',
+    updates: 'Güncellemeler',
+    updatesHelp: (version: string) => `Sürüm ${version}`,
+    import: 'Başka bir yapılandırmayı içe aktar',
+    importHelp: 'Başka bir çoklu koltuk yazılımının aygıt atama dosyası',
+    advanced: 'Gelişmiş ayarlar',
+    advancedHelp: 'Çalışma yöntemleri, zamanlamalar, ağ adresleri, işlemci çekirdekleri. Deneyimli kullanıcılar için.',
+    reset: 'Sıfırlama',
+    clearPictures: 'Bütün özel resimleri temizle',
+    clearPicturesHelp: 'Aygıtlara verdiğiniz resimler silinir; varsayılan resimler kalır.',
+    clear: 'Temizle',
+    resetAll: 'Bütün ayarları sıfırla',
+    resetAllHelp: 'Koltuklar, atamalar, kayıtlı parolalar ve sistem ayarları varsayılana döner. Geri alınamaz.',
+    resetButton: 'Sıfırla'
+  },
+
+  advancedPage: {
+    title: 'Gelişmiş',
+    intro: 'Bu ayarlar deneyimli kullanıcılar içindir. Emin olmadığınız ayarı değiştirmeyin; her değişiklik Kaydet’e basana kadar uygulanmaz.',
+    toc: 'Bu sayfada',
+    methods: 'Çalışma yöntemleri',
+    sessionMethod: 'Oturum yöntemi',
+    otherMethods: 'Diğer yöntemler',
+    experimental: 'deneysel',
+    unavailable: (why: string) => `Kullanılamaz: ${why}`,
+    timings: 'Zamanlamalar',
+    safety: 'Güvenlik',
+    devices: 'Aygıtlar',
+    network: 'Ağ adresleri',
+    networkHelp:
+      'Bazı ağ programları ve yerel ağ oyunları her koltuğun kendi IP adresini ister. Her koltuğa bu bilgisayarın sabit IPv4 adreslerinden birini verebilirsiniz.',
+    programList: 'Program listesi',
+    programListHelp: 'Bütün koltuklar için ortak. Bir klasör, içindeki bütün programlar demektir.',
+    loopback: 'Parolasız koltuklar için ayrı bağlantı noktası',
+    tweaks: 'İsteğe bağlı sistem ayarları',
+    unitMs: 'ms',
+    unitS: 'sn',
+    unitMin: 'dk',
+    unitTimes: 'kez',
+    notYet: 'Henüz kullanılamaz',
+    hotkeyChange: 'Değiştir',
+    hotkeyChangeLabel: 'Geçiş kısayolunu değiştir',
+    ipEdit: 'Düzenle',
+    ipEditFor: (seat: string) => `IP adresi: ${seat}`,
+    notAssigned: 'Atanmadı',
+    allPrograms: 'Bütün programlar',
+    listedOnly: 'Yalnızca listedeki programlar',
+    allButListed: 'Listedekiler dışındaki bütün programlar',
+    outputsHelp: 'Her ekranı besleyecek ekran kartı çıkışı, klonlama, yazılım imleci',
+    cpuHelp: 'Koltuk başına çekirdek sınırı',
+    cpuAll: 'Hepsi bütün çekirdekleri kullanıyor',
+    logLevelHelp: 'Hatalar ve uyarılar her zaman yazılır. Ek ayrıntı sorun ararken işe yarar.'
+  },
+
+  statusPage: {
+    intro: 'Hizmetin, koltukların ve sürücülerin şu anki durumu.',
+    restrictions: 'Kısıtlar',
+    restrictionsHelp: 'Seçili yöntemlerin bu bilgisayardaki sınırları.',
+    fallbackTo: (method: string) => `Yedek: ${method}`,
+    ok: 'Uygun',
+    remoteSeat: (name: string) => `${name} (uzak)`
+  },
+
+  /** `DisplayInfo.output_technology` (seat_display::model::output_technology_name). */
+  outputTech: {
+    vga: 'VGA',
+    dvi: 'DVI',
+    hdmi: 'HDMI',
+    internal: 'Dahili ekran',
+    displayport: 'DisplayPort',
+    miracast: 'Miracast (kablosuz)',
+    indirect: 'Dolaylı ekran',
+    other: 'Diğer'
+  } as Record<string, string>,
+
+  /** `AppInfo.arch` / update `arch`: Rust target arch names. */
+  archNames: { aarch64: 'ARM64', x86_64: 'x64', x86: 'x86' } as Record<string, string>,
+
   canvas: {
-    system: 'Ortak ve boştaki aygıtlar',
-    systemHint: 'Buradaki aygıtlar ya hiçbir koltuğa verilmemiştir (boşta) ya da bütün koltuklarca paylaşılır. Bir aygıtı koltuğa vermek için sürükleyip koltuğun üzerine bırakın.',
+    system: 'Boştaki aygıtlar',
+    systemHint: 'Hiçbir koltuğa verilmemiş ya da bütün koltuklarca paylaşılan aygıtlar.',
+    moveHint: 'Sürüklemeden taşımak için aygıta gelip Enter’a basın ve “Taşı” menüsünden koltuğu seçin.',
+    moved: (name: string, seat: string) => `${name} ${seat} koltuğuna taşındı. Kaydedilmedi.`,
+    remoteHint: 'Uzak koltuklara aygıt atanmaz; ayarları kendi sayfalarındadır.',
+    addSecondTitle: 'İkinci koltuğu ekleyin',
+    addSecondBody: 'Sihirbaz her ekranı bir koltuğa çevirir ve her koltuğun klavyesini ve faresini siz bir tuşa basınca bulur. Aşağı yukarı iki dakika sürer.',
+    startWizard: 'Kurulum sihirbazını başlat',
+    addEmpty: 'Boş koltuk ekle',
+    more: 'Koltuklar: diğer işlemler',
+    windowsSettings: 'Windows ayarları',
     emptySeat: 'Bu koltuğa henüz aygıt verilmedi.',
     addSeat: 'Koltuk ekle',
     seatLimit: 'Koltuk sınırına ulaşıldı (16).',
@@ -283,7 +506,7 @@ const t = {
     picture: 'Resmini değiştir…',
     outputs: 'Görüntü çıkışları…',
     preview: 'Kamera önizlemesi',
-    moveHere: 'Atamayı bu porta taşı'
+    moveHere: 'Atamayı bu bağlantı noktasına taşı'
   },
 
   seatMenu: {
@@ -337,7 +560,7 @@ const t = {
     usb_hub: 'USB göbeği',
     storage: 'Depolama',
     printer: 'Yazıcı',
-    serial_port: 'Seri port',
+    serial_port: 'Seri bağlantı noktası',
     network: 'Ağ bağdaştırıcısı',
     other: 'Diğer aygıt'
   } as Record<DeviceKind, string>,
@@ -399,13 +622,13 @@ const t = {
     colAccount: 'Oturum hesabı',
     colStart: 'Kendiliğinden başlat',
     colWallpaper: 'Koltuk duvar kağıdı',
-    colVirtualPads: 'Sanal oyun kolu',
+    colVirtualPads: 'Sanal oyun kumandası',
     colGpu: 'Ekran kartı tercihi',
     virtualPadsHint:
-      'Sanal oyun kolu: bu koltuğa atanan oyun kolu (PlayStation, Switch Pro, Xbox ya da başka bir HID kolu) için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kol oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). “Fiziksel kolları koltuğa kilitle” açıkken gerçek kol yalnızca bu koltukta açılır.',
-    colPadIgnore: 'SDL’nin yok sayacağı kollar',
+      'Sanal oyun kumandası: bu koltuğa atanan oyun kumandası (PlayStation, Switch Pro, Xbox ya da başka bir HID kumandası) için yalnızca bu koltuğun kullanıcısının açabildiği bir sanal kumanda oluşturulur. ViGEmBus ya da usbip-win2 kurulu olmalıdır (Pulsar Seat bunları kurmaz). “Fiziksel oyun kumandalarını koltuğa kilitle” açıkken gerçek kumanda yalnızca bu koltukta açılır.',
+    colPadIgnore: 'SDL’nin yok sayacağı kumandalar',
     padIgnoreHint:
-      'Bu koltukta SDL kullanan oyunların görmezden geleceği kollar, 0xVVVV/0xPPPP biçiminde, virgülle ayrılmış. Başka koltuklara verilmiş kollar kendiliğinden eklenir.',
+      'Bu koltukta SDL kullanan oyunların görmezden geleceği kumandalar, 0xVVVV/0xPPPP biçiminde, virgülle ayrılmış. Başka koltuklara verilmiş kumandalar kendiliğinden eklenir.',
     padIgnorePlaceholder: '0x045E/0x0B09',
     colState: 'Şu anki durum',
     logonScreen: 'Oturum açma ekranı',
@@ -557,11 +780,11 @@ const t = {
     crashLimit: 'Hizmet art arda bu kadar kez çökerse güvenli kipte kal',
     hotkey: 'Klavye/fare geçiş kısayolu',
     hotkeyOff: 'Kapalı',
-    hotkeyChange: 'Değiştir…',
+    hotkeyChange: 'Değiştir',
     systemButtons: 'Ek koltuklardaki güç ve uyku tuşları bütün bilgisayarı etkileyebilsin',
-    padDeviceScope: 'Fiziksel oyun kollarını koltuğa kilitle',
+    padDeviceScope: 'Fiziksel oyun kumandalarını koltuğa kilitle',
     padDeviceScopeHint:
-      'Bir koltuğa verilen kol yalnızca o koltuğun kullanıcısı tarafından açılabilir; uzak koltuklar çalışırken diğer kollar yalnızca bu bilgisayarın başındaki kullanıcıya kalır. Varsayılan olarak kapalıdır (sistem değişikliği): kolların aygıt düğümlerinin güvenlik ayarını değiştirir ve onları bağlı oldukları aygıtla birlikte yeniden başlatır (kolu içinde olan bir kulaklık ya da klavye de yeniden başlar). Değişiklikler hizmet durunca ya da bu kapatılınca geri alınır.',
+      'Bir koltuğa verilen kumanda yalnızca o koltuğun kullanıcısı tarafından açılabilir; uzak koltuklar çalışırken diğer kumandalar yalnızca bu bilgisayarın başındaki kullanıcıya kalır. Varsayılan olarak kapalıdır (sistem değişikliği): kumandaların aygıt düğümlerinin güvenlik ayarını değiştirir ve onları bağlı oldukları aygıtla birlikte yeniden başlatır (kumandası içinde olan bir kulaklık ya da klavye de yeniden başlar). Değişiklikler hizmet durunca ya da bu kapatılınca geri alınır.',
     devices: 'Aygıtlar',
     adminsBypass: 'Yöneticiler bütün koltukların aygıtlarına erişebilsin',
     classDefaults: 'Sınıf düzeyinde varsayılan erişim tanımları (sistem değişikliği)',
@@ -587,7 +810,7 @@ const t = {
     palmCheck: 'Dokunmatik yüzey avuç algılama eşiği',
     palmCheckOff: 'Windows varsayılanı',
     cpu: 'İşlemci çekirdekleri',
-    cpuOpen: 'Koltuk başına çekirdekleri düzenle…',
+    cpuOpen: 'Koltuk başına çekirdekleri düzenle',
     inputNotIsolated: 'Bu düzende diğer koltukların klavye girişleri 1. koltuğun öndeki penceresine de ulaşabilir. Tam yalıtım için “Ayrılmış sunucu oturumu” düzenini seçin ya da imzalı giriş sürücüsünü bekleyin.',
     gpuHint: 'Bir koltukta birden fazla ekran olabilir ve koltuklar aynı ekran kartını paylaşabilir.',
     loopbackTitle: 'Parolasız koltuklar için ayrı bağlantı noktası',
@@ -602,7 +825,7 @@ const t = {
       `Oturum açma ekranındaki koltuklar (${seats}) için izinli hesap yok; bu koltuklar başlayamaz. Yukarıya bu koltuklarda oturum açacak hesapları yazın.`,
     loopbackBinding:
       'Windows bir Uzak Masaüstü bağlantı noktasını yalnızca bir ağ bağdaştırıcısına bağlayabilir, geri döngü adresine bağlayamaz; bu bağlantı noktasını bilgisayarın içinde tutan güvenlik duvarı kuralıdır.',
-    restartTs: 'Uzak Masaüstü Hizmetlerini yeniden başlat…',
+    restartTs: 'Uzak Masaüstü Hizmetlerini yeniden başlat',
     restartTsHint: 'Yeni ya da değişen bağlantı noktası hemen yüklenir. Çalışan koltuklar önce durdurulur.',
     restartTsTitle: 'Uzak Masaüstü Hizmetleri yeniden başlatılsın mı?',
     restartTsBody:
@@ -969,7 +1192,7 @@ const t = {
     title: 'Kaydedilmemiş değişiklikler',
     body: 'Yaptığınız değişiklikler henüz kaydedilmedi.',
     save: 'Kaydet',
-    discard: 'Kaydetme',
+    discard: 'Kaydetmeden devam et',
     cancel: 'Vazgeç'
   },
 
@@ -1059,8 +1282,8 @@ const t = {
     now: (v: string) => `şimdi: ${v}`,
     restore: 'Kayıtlı atamaya dön',
     newMonitorsSpare: 'Yeni ekranları boşa çıkar',
-    moveAssignment: 'Atamayı yeni porta taşı',
-    movedFrom: 'Bu aygıt başka bir porta takılmış görünüyor.'
+    moveAssignment: 'Atamayı yeni bağlantı noktasına taşı',
+    movedFrom: 'Bu aygıt başka bir bağlantı noktasına takılmış görünüyor.'
   },
 
   cpu: {
@@ -1157,6 +1380,17 @@ const t = {
     done: 'Bütün koltuklar tanıtıldı.',
     cancelled: 'Sihirbaz kaydetmeden kapatıldı.',
     keys: 'Herhangi bir klavyede: Enter bu koltuğu onaylar · Geri bu koltuğu sıfırlar · Shift+Enter hepsini kaydeder · Shift+Geri hepsini sıfırlar · Shift+Esc ya da Alt+F4 kaydetmeden çıkar',
+    keysIntro: 'Herhangi bir klavyede:',
+    moreKeys: 'Diğer kısayollar',
+    /** The legend: `enter` and `shiftEsc` stay visible, the rest sit under `moreKeys`. */
+    keysList: {
+      enter: { keys: 'Enter', does: 'bu koltuğu onaylar' },
+      shiftEsc: { keys: 'Shift+Esc', does: 'kaydetmeden çıkar' },
+      back: { keys: 'Geri', does: 'bu koltuğu sıfırlar' },
+      shiftEnter: { keys: 'Shift+Enter', does: 'hepsini kaydeder' },
+      shiftBack: { keys: 'Shift+Geri', does: 'hepsini sıfırlar' },
+      altF4: { keys: 'Alt+F4', does: 'kaydetmeden çıkar' }
+    },
     confirmSeat: 'Bu koltuğu onayla',
     resetSeat: 'Bu koltuğu sıfırla',
     resetAll: 'Hepsini sıfırla',
@@ -1216,7 +1450,7 @@ const t = {
     adapter: (v: string) => `Ekran kartı: ${v}`,
     connection: (v: string) => `Bağlantı: ${v}`,
     resolution: (w: number, h: number, hz: string) => `Çözünürlük: ${w}×${h}, ${hz} Hz`,
-    ports: (n: number) => `Port sayısı: ${n}`,
+    ports: (n: number) => `Bağlantı noktası sayısı: ${n}`,
     plugged: (v: string) => `Takılı: ${v}`,
     bus: (v: string, builtIn: boolean) => `Bağlantı türü: ${v}${builtIn ? ' (yerleşik)' : ''}`,
     letters: (v: string) => `Sürücü harfleri: ${v}`,
@@ -1263,7 +1497,7 @@ const t = {
     never: 'Henüz denetlenmedi.',
     check: 'Şimdi denetle',
     download: 'İndir ve doğrula',
-    install: 'Kur…',
+    install: 'Kur',
     page: 'Sürüm sayfası',
     pageHint: (url: string) => `Sürüm notları: ${url}`,
     state: {
@@ -1280,7 +1514,7 @@ const t = {
     confirmTitle: 'Güncelleme kurulsun mu?',
     confirmBody: (v: string) =>
       `Pulsar Seat ${v} kurulacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak. Ayarlarınız ve koltuk parolaları korunur. Gerekirse kurulumdan sonra yeniden başlatmanız istenir.`,
-    confirmYes: 'Kur',
+    confirmYes: 'Şimdi kur',
     confirmNo: 'Vazgeç',
     needsOptIn: 'Denetim için önce yukarıdaki seçeneği açın.',
     reasons: {
@@ -1378,7 +1612,7 @@ const t = {
     steamProxyQuarantine: 'Karantinaya taşı',
     steamProxyRestore: 'Geri koy',
     steamProxyQuarantined: (orig: string) => `Karantinada (önceki yeri ${orig})`,
-    usbWizard: 'USB yuva sihirbazı…'
+    usbWizard: 'USB yuva sihirbazı'
   },
 
   seatCompat: {
@@ -1526,13 +1760,13 @@ const issueText: Record<string, string> = {
   seat_without_mouse: 'Koltuğun faresi yok.',
   child_of_other_seat_hub: 'Aygıt, başka bir koltuğa verilmiş bir USB göbeğine takılı.',
   same_account_on_seats: 'Aynı hesap birden fazla koltukta ve buna izin verilmiyor.',
-  key_collision: 'İki aygıt ayırt edilemiyor; farklı portlara takın.',
+  key_collision: 'İki aygıt ayırt edilemiyor; farklı bağlantı noktalarına takın.',
   monitor_hub_mismatch: 'Ekranın kendi USB göbeği bir koltuğa verilmiş, ekran ise o koltukta değil.',
   cpu_unknown_id: 'Seçilen çekirdeklerden bazıları bu bilgisayarda yok; yok sayılır.',
   cpu_no_core: 'Koltuğa hiç çekirdek kalmıyor; kaydedilemez.',
   cpu_only_efficiency_cores: 'Koltuğa yalnızca verimlilik çekirdekleri verilmiş; yavaş çalışabilir.',
   invalid_ip_address: 'IP adresi geçersiz.',
-  invalid_pad_ignore_device: 'Yok sayılacak kol listesinde 0xVVVV/0xPPPP biçiminde olmayan bir girdi var (ya da liste çok uzun).',
+  invalid_pad_ignore_device: 'Yok sayılacak kumanda listesinde 0xVVVV/0xPPPP biçiminde olmayan bir girdi var (ya da liste çok uzun).',
   invalid_seat_environment: 'Bir koltuk ortam değişkeni geçersiz (ad, değer, yineleme ya da 32’den fazla).',
   deny_local_logon_unsupported: '“Yerel oturum açmayı reddet” yalnızca hesabı olan ve Uzak Masaüstü ile oturum açan koltuklarda çalışır; koltuk kendi kullanıcısını dışarıda bırakırdı.',
   invalid_windows_update_policy: 'Windows Update ayarları aralık dışında.',
@@ -1627,9 +1861,9 @@ const rt = {
   appTitle: 'Pulsar Seat Yönetici',
   nav: {
     newSeat: 'Yeni uzak koltuk',
-    startService: 'Servisi başlat',
-    restartService: 'Servisi yeniden başlat',
-    stopService: 'Servisi durdur',
+    startService: 'Hizmeti başlat',
+    restartService: 'Hizmeti yeniden başlat',
+    stopService: 'Hizmeti durdur',
     settings: 'Ayarlar',
     host: 'Ana bilgisayar',
     logs: 'Günlükler',
@@ -1642,6 +1876,35 @@ const rt = {
     sessionUnavailable: 'Başlatılamaz: eşzamanlı oturum yok',
     sessionUnavailableHint:
       'Uzak koltuklar aynı anda birden fazla Windows oturumu gerektirir. Bu bilgisayarda çalışan oturum yöntemi bunu sağlamıyor (örneğin Windows istemci sürümü ya da hızlı kullanıcı değiştirme). Koltuk başlatılamaz.'
+  },
+  /** Remote seats root page and sub-pages (redesign 2026-11-17). */
+  home: {
+    intro: 'Televizyon, telefon ya da başka bir bilgisayardan Pulsar veya Moonlight ile ağ üzerinden kullanılan koltuklar.',
+    thisPc: 'Bu bilgisayar',
+    thisPcHelp: 'Bütün uzak koltuklar için ortak.',
+    hostHelp: 'Windows sürümü, çoklu koltuk hazırlığı, sürücüler',
+    settings: 'Uzak koltuk ayarları',
+    settingsHelp: 'Yalıtım, oyun kumandaları, sanal ekran',
+    dxvkHelp: 'Eski Direct3D oyunlarını Vulkan üzerinden çalıştırma',
+    logsHelp: 'Hizmet ve koltuk günlükleri',
+    vmHelp: 'Kendi Hyper-V sanal makinesinde çalışan koltuklar',
+    seatNumber: (n: number) => `${n}. koltuk`,
+    streamWith: (backend: string) => `${backend} ile akış`,
+    pairedCount: (n: number) => `${n} eşleşmiş cihaz`
+  },
+  seatView: {
+    locked: 'Koltuk çalışırken ayarları değiştirilemez. Değiştirmek için koltuğu durdurun.',
+    runtime: 'Çalışma durumu',
+    removal: 'Kaldırma',
+    passwordSaved: 'Kayıtlı',
+    test: 'Sına',
+    testLabel: 'Şifreyi sına',
+    change: 'Değiştir',
+    changeLabel: 'Şifreyi değiştir',
+    regenerate: 'Kimliği yenile',
+    regenerateRow: 'Koltuk kimliğini yenile',
+    copyAddress: 'Adresi kopyala',
+    portRange: (from: number, to: number) => `Kullanılan aralık: ${from}–${to}.`
   },
   vm: {
     title: 'VM koltukları',
@@ -1738,7 +2001,7 @@ const rt = {
     games: 'Oyunlar',
     noGames: 'Henüz DXVK açılmış oyun yok.',
     exe: 'Oyun dosyası (.exe)',
-    browse: 'Gözat…',
+    browse: 'Gözat',
     pickTitle: 'Oyunun .exe dosyasını seçin',
     dlls: 'Yönlendirilecek Direct3D sürümleri',
     enable: 'DXVK aç',
@@ -1755,22 +2018,22 @@ const rt = {
   logs: {
     title: 'Günlükler',
     source: 'Kaynak',
-    service: 'Servis',
+    service: 'Hizmet',
     seat: 'Koltuk',
     refresh: 'Yenile',
     redacted: 'Şifre, PIN ya da anahtar içerebilecek satırlar gizlenir.',
     empty: 'Günlükte satır yok.'
   },
   service: {
-    title: 'Servis',
-    reachable: 'Servise bağlı',
-    unreachable: 'Servise ulaşılamıyor',
+    title: 'Hizmet',
+    reachable: 'Hizmete bağlı',
+    unreachable: 'Hizmete ulaşılamıyor',
     consoleMode: 'geliştirici (konsol) modu',
     version: 'Sürüm',
-    starting: 'Servis başlatılıyor…',
-    stopping: 'Servis durduruluyor…',
-    restarting: 'Servis yeniden başlatılıyor…',
-    pendingHint: 'Servis şu an durum değiştiriyor, biraz bekleyin.'
+    starting: 'Hizmet başlatılıyor…',
+    stopping: 'Hizmet durduruluyor…',
+    restarting: 'Hizmet yeniden başlatılıyor…',
+    pendingHint: 'Hizmet şu an durum değiştiriyor, biraz bekleyin.'
   },
   serviceState: {
     not_installed: 'Kurulu değil',
@@ -1827,9 +2090,9 @@ const rt = {
     pair: 'Yeni cihaz eşleştir',
     general: 'Koltuk ayarları',
     displayName: 'Görünen ad',
-    port: 'Port',
-    portHint: (p: number) => `Kullanılan port aralığı: ${p - 5}–${p + 21}`,
-    startWithService: 'Servisle birlikte başlat',
+    port: 'Bağlantı noktası',
+    portHint: (p: number) => `Kullanılan bağlantı noktası aralığı: ${p - 5}–${p + 21}`,
+    startWithService: 'Hizmetle birlikte başlat',
     stopAction: 'Durdurunca oturum',
     stopLogOff: 'Oturumu kapat',
     stopDisconnect: 'Bağlantıyı kes, oturumu açık bırak',
@@ -1916,7 +2179,7 @@ const rt = {
       failed: 'Mikrofon kanalı açılamadı',
       closed: 'Bağlı değil'
     } as Record<string, string>,
-    browse: 'Gözat…',
+    browse: 'Gözat',
     pickAutostart: 'Başlatılacak programı seçin',
     gpuNoHardware: 'Donanım ekran kartı bulunamadı: görüntü işlemcide kodlanır, yayın yavaş olabilir.',
     gpuNoEncoder: (name: string) => `${name} için donanım video kodlayıcısı bilinmiyor; kodlama işlemciye düşebilir.`,
@@ -1925,7 +2188,7 @@ const rt = {
     streamSection: 'Akış',
     gamepad: 'Kumanda türü',
     gamepadAuto: 'Otomatik',
-    gamepadPulsar: (kind: string) => `${kind} (Pulsar kolu, yalıtılmış)`,
+    gamepadPulsar: (kind: string) => `${kind} (Pulsar kumandası, yalıtılmış)`,
     capturePulsarIdd: 'Pulsar sanal ekranı (HDR)',
     pulsarBuildOnly: 'Yayın sunucusunun Pulsar derlemesini gerektirir; standart derlemede sunucunun varsayılanı kullanılır.',
     capture: 'Görüntü yakalama',
@@ -1997,7 +2260,7 @@ const rt = {
     audioCleanupHint:
       'Biten Uzak Masaüstü oturumlarından kalan, artık bağlı olmayan "Uzak Ses" aygıt kayıtlarını siler. Bağlı aygıtlara ve konsol aygıtlarına dokunmaz.',
     audioCleanupRun: 'Eski ses aygıtlarını temizle',
-    audioCleanupConfirm: 'Kalan aygıt kayıtları kalıcı olarak silinsin mi? Her silme servis günlüğüne yazılır.',
+    audioCleanupConfirm: 'Kalan aygıt kayıtları kalıcı olarak silinsin mi? Her silme hizmet günlüğüne yazılır.',
     audioCleanupYes: 'Evet, temizle',
     audioCleanupNo: 'Vazgeç',
     audioCleanupDone: (removed: number, failed: number) =>
@@ -2007,7 +2270,7 @@ const rt = {
     rdsReady: 'Uzak Masaüstü hizmeti',
     ready: 'Hazır',
     notReady: 'Hazır değil',
-    port: 'RDP portu',
+    port: 'RDP bağlantı noktası',
     maxSeats: 'Aynı anda en fazla koltuk',
     unlimited: 'Sınırsız',
     licensing: 'RDS lisanslama',
@@ -2046,7 +2309,7 @@ const rt = {
       foreign_active: 'Başka bir araç Uzak Masaüstü hizmetini yönlendirmiş; Pulsar Seat dokunmaz.',
       blocked: 'Otomatik kapatıldı (desteklenmeyen sürüm ya da sarmalayıcı sorunu)'
     } as Record<string, string>,
-    twEnable: 'Aç…',
+    twEnable: 'Aç',
     twDisable: 'Kapat',
     twNoCandidate: 'Kurulu bir sarmalayıcı bulunamadı.',
     refresh: 'Yenile'
@@ -2055,7 +2318,8 @@ const rt = {
     home: 'Windows Home: çoklu koltuk desteklenmiyor.',
     client_multi_session_unavailable: 'Windows istemci sürümü: aynı anda yalnızca bir uzak oturum.',
     server_without_rdsh: 'Windows Server, Uzak Masaüstü Oturumu Ana Bilgisayarı rolü yok: yalnızca bir deneme koltuğu.',
-    server_rdsh: 'Windows Server + Uzak Masaüstü Oturumu Ana Bilgisayarı: çoklu koltuk hazır.'
+    server_rdsh: 'Windows Server + Uzak Masaüstü Oturumu Ana Bilgisayarı: çoklu koltuk hazır.',
+    client: 'Deneysel çoklu oturum gerekiyor'
   } as Record<string, string>,
   hostWarning: {
     rdsh_missing: 'Uzak Masaüstü Oturumu Ana Bilgisayarı rolü kurulu değil.',
@@ -2091,7 +2355,7 @@ const rt = {
     defender_exclusions: 'Microsoft Defender dışlamaları bulundu.',
     ref_firewall_rules: 'Başka bir ürünün güvenlik duvarı kuralları var.',
     rds_residue: 'Uzak Masaüstü ayarlarında kalıntı var.',
-    upstream_sunshine: 'Ayrıca kurulmuş bir Sunshine var (port çakışabilir).',
+    upstream_sunshine: 'Ayrıca kurulmuş bir Sunshine var (bağlantı noktası çakışabilir).',
     vigem_present: 'ViGEmBus sürücüsü kurulu.'
   } as Record<string, string>,
   modeStatus: {
@@ -2177,7 +2441,7 @@ const rt = {
     stream_server: 'Akış sunucusu tekrar tekrar çöktü.',
     server_binary_missing: 'Akış sunucusu kurulu değil.',
     server_hash_mismatch: 'Akış sunucusu dosyası doğrulanamadı.',
-    port_in_use: 'Koltuğun portlarından biri kullanımda.',
+    port_in_use: 'Koltuğun bağlantı noktalarından biri kullanımda.',
     firewall: 'Güvenlik duvarı kuralları eklenemedi.',
     multi_session_off: 'Önce “Ana bilgisayar” sayfasında çoklu koltuğu açın.',
     shim_foreign: 'Başka bir ürünün işlem yamalaması açık.',
@@ -2224,7 +2488,7 @@ const rt = {
     cancel: 'Vazgeç'
   },
   pair: {
-    title: (n: string) => `${n} için cihaz eşleştirme`,
+    title: (n: string) => `${n} için cihaz eşleştir`,
     waiting: 'Cihazdan eşleştirme isteği bekleniyor…',
     pending: (d: string) => `“${d}” eşleşmek istiyor. Cihazdaki PIN’i yazın.`,
     paired: 'Cihaz eşleştirildi.',
@@ -2241,6 +2505,8 @@ const rt = {
     step4: 'PIN’i buraya yazıp gönderin.',
     addresses: 'Adresler',
     recommended: 'önerilen',
+    pinWhy: 'İstek gelince PIN’i yazabilirsiniz.',
+    request: (name: string) => `“${name}” eşleşmek istiyor`,
     qr: (a: string) => `Adres için QR kodu: ${a}`,
     qrHint: 'Telefonla okutarak adresi kopyalayabilirsiniz.',
     noAddress: 'Yerel ağ adresi bulunamadı.',
@@ -2356,12 +2622,12 @@ const remoteFieldErrorText: Record<RemoteFieldError, string> = {
   name_duplicate: 'Bu adda bir koltuk zaten var.',
   display_name: 'Görünen ad boş olamaz, başında ya da sonunda boşluk olamaz.',
   display_name_duplicate: 'Bu görünen ad başka bir koltukta kullanılıyor.',
-  port: 'Port 1029 ile 65514 arasında bir sayı olmalı.',
-  port_overlap: 'Bu port aralığı başka bir koltukla çakışıyor.'
+  port: 'Bağlantı noktası 1029 ile 65514 arasında bir sayı olmalı.',
+  port_overlap: 'Bu bağlantı noktası aralığı başka bir koltukla çakışıyor.'
 };
 
 const remoteErrorText: Record<RemoteErrorCode, string> = {
-  version_mismatch: 'Yönetici ile servisin sürümleri uyuşmuyor.',
+  version_mismatch: 'Yönetici ile hizmetin sürümleri uyuşmuyor.',
   bad_request: 'Geçersiz istek.',
   not_found: 'Koltuk bulunamadı.',
   invalid_name: remoteFieldErrorText.name_chars,
@@ -2369,7 +2635,7 @@ const remoteErrorText: Record<RemoteErrorCode, string> = {
   invalid_display_name: remoteFieldErrorText.display_name,
   invalid_port: remoteFieldErrorText.port,
   port_overlap: remoteFieldErrorText.port_overlap,
-  no_free_port: 'Boş port aralığı kalmadı.',
+  no_free_port: 'Boş bağlantı noktası aralığı kalmadı.',
   invalid_value: 'Geçersiz değer.',
   invalid_user: 'Windows kullanıcısı kullanılamıyor (yok, devre dışı, kilitli ya da şifresinin süresi dolmuş).',
   user_in_use: 'Bu kullanıcı başka bir koltukta ya da konsolda kullanılıyor.',
@@ -2377,7 +2643,7 @@ const remoteErrorText: Record<RemoteErrorCode, string> = {
   seat_running: 'Koltuk çalışırken bu değiştirilemez.',
   not_implemented: 'Bu özellik henüz hazır değil (sonraki aşamada gelecek).',
   store: 'Ayarlar kaydedilemedi.',
-  service_unavailable: 'Servise ya da koltuğun akış sunucusuna ulaşılamıyor.',
+  service_unavailable: 'Hizmete ya da koltuğun akış sunucusuna ulaşılamıyor.',
   internal: 'Beklenmeyen bir hata oluştu.',
   unsupported: 'Bu özellik bu bilgisayarda kullanılamıyor.',
   edition_unsupported: 'Bu Windows sürümü çoklu koltuğu desteklemiyor.',

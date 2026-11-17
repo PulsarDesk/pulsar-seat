@@ -95,7 +95,7 @@ const t = {
     hypervIntro:
       'A seat can get its own virtual network adapter on an internal Hyper-V switch, with the seat’s address on it. The switch and adapters are named “Pulsar Seat…” and are removed when Pulsar Seat is uninstalled.',
     hypervFeature: (s: string) => `Hyper-V: ${({ enabled: 'on', disabled: 'off', enable_pending: 'turning on (restart needed)', unavailable: 'not available on this Windows edition' } as Record<string, string>)[s] ?? s}`,
-    hypervEnable: 'Turn Hyper-V on…',
+    hypervEnable: 'Turn Hyper-V on',
     hypervEnableConfirm: 'Turn on the Windows Hyper-V feature? This is a system change and Windows must restart afterwards.',
     hypervRefresh: 'Check',
     hypervCreate: 'Create adapter',
@@ -121,7 +121,7 @@ const t = {
     address: 'IP address',
     rule: 'Rule',
     notAssigned: 'Not assigned',
-    edit: 'Edit…',
+    edit: 'Edit',
     programs: 'Program list (shared by all seats)',
     programsCount: (n: number) => (n === 1 ? '1 program' : `${n} programs`),
     addressHelp: 'To get more addresses: add a second address to the adapter in Network Connections, or add a virtual network adapter in Device Manager.'
@@ -143,7 +143,7 @@ const t = {
     title2: 'Title',
     path: 'Program or folder path',
     pathHint: 'A folder means every program inside it.',
-    browse: 'Browse…',
+    browse: 'Browse',
     browseHint: 'Pick a program or a shortcut (Start menu, desktop or any drive); the program the shortcut points to is added.',
     addFolder: 'Add the programs in a folder',
     folderEmpty: 'No program was found in the chosen folder.',
@@ -229,9 +229,233 @@ const t = {
     noSeat: 'Seat unknown'
   },
 
+  // Redesign copy (2026-11-17, target/redesign/final): rail, status line, save bar, notices,
+  // seats board, settings pages. Buttons and link rows never end in "…"; menu items that open
+  // a dialog do (the Ellipsis Rule, DESIGN.md).
+  nav: {
+    app: 'Application',
+    sections: 'Sections',
+    seats: 'Seats',
+    remote: 'Remote seats',
+    settings: 'Settings',
+    status: 'Status',
+    statusOk: ': service running',
+    statusDown: ': service unreachable',
+    count: (n: number) => (n === 1 ? '1 seat' : `${n} seats`),
+    version: (v: string) => `Version ${v}`,
+    location: 'Location',
+    onThisPage: 'On this page'
+  },
+
+  power: {
+    on: 'Pulsar Seat is on',
+    off: 'Pulsar Seat is off',
+    summary: (running: number, blocked: string) =>
+      `${running === 1 ? '1 local seat is' : `${running} local seats are`} running${blocked ? `, ${blocked} cannot start` : ''}`,
+    firstOnly: 'Seat 1 is running, no other seat yet',
+    offSummary: 'The seats are set up. Once on, they run according to the start mode.',
+    openAndStart: 'Turn on and start',
+    startAll: 'Start seats',
+    stopAll: 'Stop all seats',
+    close: 'Turn Pulsar Seat off…'
+  },
+
+  saveBar: {
+    region: 'Unsaved changes',
+    count: (n: number) => (n === 1 ? '1 unsaved change' : `${n} unsaved changes`),
+    undo: 'Undo',
+    save: 'Save',
+    shortcut: 'Ctrl+Shift+S',
+    moved: (device: string, seat: string) => `${device} moved to ${seat}.`,
+    restarts: (seats: string) => `Saving restarts ${seats}.`,
+    nextBoot: 'Takes effect the next time Windows starts.',
+    nextStart: 'The seat uses the new settings the next time it starts.',
+    changed: (what: string) => `${what} changed.`
+  },
+
+  notices: {
+    region: 'Notices',
+    count: (n: number) => (n === 1 ? '1 notice' : `${n} notices`),
+    summary: 'Changes you should review',
+    linkLost: 'The link to the service was lost; reconnecting…',
+    ok: 'OK',
+    compare: 'Compare'
+  },
+
+  service: {
+    downTitle: 'The service cannot be reached',
+    downBody: 'The Pulsar Seat service is not running, or security software may have stopped it.',
+    start: 'Start service',
+    restart: 'Restart service',
+    stop: 'Stop service',
+    diagnostics: 'Diagnostic report'
+  },
+
+  device: {
+    moved: 'Moved, not saved',
+    shared: 'Shared: every seat uses it',
+    unplugged: 'Not plugged in',
+    actions: (name: string) => `${name}: move or details`,
+    faceActions: (name: string, id: string) => `${name} (${id}): move or details`,
+    identify: 'Show (identify)',
+    infoMenu: 'Device details…'
+  },
+
+  move: {
+    title: 'Move',
+    toPool: 'To unassigned devices',
+    share: 'Share with all seats',
+    seatHint: (n: number) => `Seat ${n}`,
+    announce: (name: string, seat: string) => `${name} moved to ${seat}. Not saved yet.`,
+    announcePool: (name: string) => `${name} moved to the unassigned devices. Not saved yet.`,
+    announceShare: (name: string) => `${name} is now shared by all seats. Not saved yet.`
+  },
+
+  slot: {
+    keyboardTitle: 'No keyboard.',
+    keyboard: 'This seat cannot start without a keyboard. Drag one here from the unassigned devices.',
+    displayTitle: 'No screen.',
+    display: 'This seat cannot start without a screen. Drag one here from the unassigned devices.',
+    mouseTitle: 'No mouse.',
+    mouse: 'Without a mouse the seat can only be used with the keyboard.',
+    audio: 'No sound device (optional).'
+  },
+
+  seatCard: {
+    running: 'Running',
+    blocked: 'Cannot start',
+    off: 'Off',
+    restartNeeded: 'Restart required',
+    restart: 'Restart',
+    actions: (name: string) => `${name}: seat actions`,
+    kioskMenu: 'Kiosk seat…',
+    ipMenu: 'IP address…',
+    removeMenu: 'Delete seat…',
+    atLogon: 'at the sign-in screen'
+  },
+
+  startup: {
+    recommended: 'recommended for the first setup',
+    question: 'When should the extra seats start while Pulsar Seat is on?'
+  },
+
+  settingsPage: {
+    title: 'Settings',
+    intro: 'The defaults suit most setups.',
+    startup: 'Start',
+    seats: 'Seats',
+    seatsHelp:
+      'Seats that start automatically follow the start mode above. Startup programs, kiosk, redirection and the IP address are in each seat’s menu.',
+    autoStart: 'Starts automatically',
+    autoStartFor: (seat: string) => `Start automatically: ${seat}`,
+    alwaysOn: 'Always starts',
+    account: 'Account',
+    accountFor: (seat: string) => `Sign-in account: ${seat}`,
+    seatMore: (seat: string) => `${seat}: more seat settings`,
+    startupAppsMenu: 'Startup programs…',
+    kioskMenu: 'Kiosk…',
+    redirectMenu: 'Redirection…',
+    ipMenu: 'IP address…',
+    cpuMenu: 'Processor cores…',
+    padsOn: 'Turn the virtual gamepad on',
+    padsOff: 'Turn the virtual gamepad off',
+    behaviour: 'Behaviour',
+    appearance: 'Appearance',
+    theme: 'Theme',
+    language: 'Language',
+    sameAccountHelp: 'Signing in with the same account on two seats can damage files and settings.',
+    maintenance: 'Maintenance',
+    diagnostics: 'Diagnostic report',
+    diagnosticsHelp: 'Add it when you report a problem. It is saved on this PC and sent nowhere.',
+    updates: 'Updates',
+    updatesHelp: (version: string) => `Version ${version}`,
+    import: 'Import another configuration',
+    importHelp: 'The device assignment file of another multiseat program',
+    advanced: 'Advanced settings',
+    advancedHelp: 'Methods, timings, network addresses, processor cores. For experienced users.',
+    reset: 'Reset',
+    clearPictures: 'Clear all custom pictures',
+    clearPicturesHelp: 'The pictures you gave devices are deleted; the default pictures stay.',
+    clear: 'Clear',
+    resetAll: 'Reset all settings',
+    resetAllHelp: 'Seats, assignments, saved passwords and system settings return to their defaults. This cannot be undone.',
+    resetButton: 'Reset'
+  },
+
+  advancedPage: {
+    title: 'Advanced',
+    intro: 'These settings are for experienced users. Do not change a setting you are not sure about; nothing applies until you press Save.',
+    toc: 'On this page',
+    methods: 'Methods',
+    sessionMethod: 'Session method',
+    otherMethods: 'Other methods',
+    experimental: 'experimental',
+    unavailable: (why: string) => `Not available: ${why}`,
+    timings: 'Timings',
+    safety: 'Safety',
+    devices: 'Devices',
+    network: 'Network addresses',
+    networkHelp:
+      'Some network programs and LAN games want each seat to use its own IP address. You can give each seat one of this PC’s static IPv4 addresses.',
+    programList: 'Program list',
+    programListHelp: 'Shared by all seats. A folder means every program in it.',
+    loopback: 'Separate port for seats without a password',
+    tweaks: 'Optional system settings',
+    unitMs: 'ms',
+    unitS: 's',
+    unitMin: 'min',
+    unitTimes: 'times',
+    notYet: 'Not available yet',
+    hotkeyChange: 'Change',
+    hotkeyChangeLabel: 'Change the switch shortcut',
+    ipEdit: 'Edit',
+    ipEditFor: (seat: string) => `IP address: ${seat}`,
+    notAssigned: 'Not assigned',
+    allPrograms: 'All programs',
+    listedOnly: 'Only the listed programs',
+    allButListed: 'All programs except the listed ones',
+    outputsHelp: 'The graphics card output that feeds each monitor, cloning, software cursor',
+    cpuHelp: 'Core limit per seat',
+    cpuAll: 'Every seat uses all cores',
+    logLevelHelp: 'Errors and warnings are always written. More detail helps when looking for a problem.'
+  },
+
+  statusPage: {
+    intro: 'The current state of the service, the seats and the drivers.',
+    restrictions: 'Limitations',
+    restrictionsHelp: 'Limits of the chosen methods on this PC.',
+    fallbackTo: (method: string) => `Fallback: ${method}`,
+    ok: 'OK',
+    remoteSeat: (name: string) => `${name} (remote)`
+  },
+
+  /** `DisplayInfo.output_technology` (seat_display::model::output_technology_name). */
+  outputTech: {
+    vga: 'VGA',
+    dvi: 'DVI',
+    hdmi: 'HDMI',
+    internal: 'Built-in screen',
+    displayport: 'DisplayPort',
+    miracast: 'Miracast (wireless)',
+    indirect: 'Indirect display',
+    other: 'Other'
+  } as Record<string, string>,
+
+  /** `AppInfo.arch` / update `arch`: Rust target arch names. */
+  archNames: { aarch64: 'ARM64', x86_64: 'x64', x86: 'x86' } as Record<string, string>,
+
   canvas: {
-    system: 'Shared and spare devices',
-    systemHint: 'Devices here are either given to no seat (spare) or shared by all seats. To give a device to a seat, drag it and drop it on the seat.',
+    system: 'Unassigned devices',
+    systemHint: 'Devices that no seat has, or that all seats share.',
+    moveHint: 'To move a device without dragging, focus it, press Enter and choose the seat in the “Move” menu.',
+    moved: (name: string, seat: string) => `${name} moved to ${seat}. Not saved yet.`,
+    remoteHint: 'Remote seats get no devices; their settings are on their own pages.',
+    addSecondTitle: 'Add a second seat',
+    addSecondBody: 'The wizard turns each screen into a seat and finds each seat’s keyboard and mouse when you press a key. It takes about two minutes.',
+    startWizard: 'Start the setup wizard',
+    addEmpty: 'Add an empty seat',
+    more: 'Seats: more actions',
+    windowsSettings: 'Windows settings',
     emptySeat: 'No device has been given to this seat yet.',
     addSeat: 'Add seat',
     seatLimit: 'Seat limit reached (16).',
@@ -557,7 +781,7 @@ const t = {
     crashLimit: 'Stay in safe mode if the service crashes this many times in a row',
     hotkey: 'Keyboard/mouse switch shortcut',
     hotkeyOff: 'Off',
-    hotkeyChange: 'Change…',
+    hotkeyChange: 'Change',
     systemButtons: 'Power and sleep buttons on extra seats may affect the whole PC',
     padDeviceScope: 'Lock physical gamepads to their seat',
     padDeviceScopeHint:
@@ -587,7 +811,7 @@ const t = {
     palmCheck: 'Touchpad palm detection threshold',
     palmCheckOff: 'Windows default',
     cpu: 'Processor cores',
-    cpuOpen: 'Edit cores per seat…',
+    cpuOpen: 'Edit cores per seat',
     inputNotIsolated: 'In this layout, keyboard input of the other seats can also reach seat 1’s foreground window. For full isolation choose the “Dedicated host session” layout or wait for the signed input driver.',
     gpuHint: 'A seat can have several monitors, and seats can share the same graphics card.',
     loopbackTitle: 'Separate port for seats without a password',
@@ -602,7 +826,7 @@ const t = {
       `No account is allowed for the seats on the sign-in screen (${seats}); these seats cannot start. Enter above the accounts that will sign in on these seats.`,
     loopbackBinding:
       'Windows can bind a Remote Desktop port only to a network adapter, not to the loopback address, so the firewall rule is what keeps this port inside the PC.',
-    restartTs: 'Restart Remote Desktop Services…',
+    restartTs: 'Restart Remote Desktop Services',
     restartTsHint: 'Loads a new or changed port at once. Running seats are stopped first.',
     restartTsTitle: 'Restart Remote Desktop Services?',
     restartTsBody:
@@ -968,7 +1192,7 @@ const t = {
     title: 'Unsaved changes',
     body: 'Your changes are not saved yet.',
     save: 'Save',
-    discard: 'Don’t save',
+    discard: 'Continue without saving',
     cancel: 'Cancel'
   },
 
@@ -1156,6 +1380,17 @@ const t = {
     done: 'All seats are identified.',
     cancelled: 'The wizard closed without saving.',
     keys: 'On any keyboard: Enter confirms this seat · Backspace resets this seat · Shift+Enter saves all · Shift+Backspace resets all · Shift+Esc or Alt+F4 quits without saving',
+    keysIntro: 'On any keyboard:',
+    moreKeys: 'Other shortcuts',
+    /** The legend: `enter` and `shiftEsc` stay visible, the rest sit under `moreKeys`. */
+    keysList: {
+      enter: { keys: 'Enter', does: 'confirms this seat' },
+      shiftEsc: { keys: 'Shift+Esc', does: 'quits without saving' },
+      back: { keys: 'Backspace', does: 'resets this seat' },
+      shiftEnter: { keys: 'Shift+Enter', does: 'saves all' },
+      shiftBack: { keys: 'Shift+Backspace', does: 'resets all' },
+      altF4: { keys: 'Alt+F4', does: 'quits without saving' }
+    },
     confirmSeat: 'Confirm this seat',
     resetSeat: 'Reset this seat',
     resetAll: 'Reset all',
@@ -1262,7 +1497,7 @@ const t = {
     never: 'Not checked yet.',
     check: 'Check now',
     download: 'Download and verify',
-    install: 'Install…',
+    install: 'Install',
     page: 'Release page',
     pageHint: (url: string) => `Release notes: ${url}`,
     state: {
@@ -1279,7 +1514,7 @@ const t = {
     confirmTitle: 'Install the update?',
     confirmBody: (v: string) =>
       `Pulsar Seat ${v} will be installed. All running seats will stop and the sessions on the seats will close. Your settings and seat passwords are kept. If needed, you are asked to restart after the installation.`,
-    confirmYes: 'Install',
+    confirmYes: 'Install now',
     confirmNo: 'Cancel',
     needsOptIn: 'Turn on the option above first to check.',
     reasons: {
@@ -1377,7 +1612,7 @@ const t = {
     steamProxyQuarantine: 'Move to quarantine',
     steamProxyRestore: 'Put back',
     steamProxyQuarantined: (orig: string) => `In quarantine (was ${orig})`,
-    usbWizard: 'USB dock wizard…'
+    usbWizard: 'USB dock wizard'
   },
 
   seatCompat: {
@@ -1642,6 +1877,35 @@ const rt = {
     sessionUnavailableHint:
       'Remote seats need several Windows sessions at the same time. The session method running on this PC does not provide that (for example a client edition of Windows or fast user switching). The seat cannot start.'
   },
+  /** Remote seats root page and sub-pages (redesign 2026-11-17). */
+  home: {
+    intro: 'Seats used over the network from a TV, a phone or another computer, with Pulsar or Moonlight.',
+    thisPc: 'This PC',
+    thisPcHelp: 'Shared by all remote seats.',
+    hostHelp: 'Windows edition, multiseat readiness, drivers',
+    settings: 'Remote seat settings',
+    settingsHelp: 'Isolation, gamepads, virtual display',
+    dxvkHelp: 'Run old Direct3D games through Vulkan',
+    logsHelp: 'Service and seat logs',
+    vmHelp: 'Seats that run in their own Hyper-V virtual machine',
+    seatNumber: (n: number) => `Seat ${n}`,
+    streamWith: (backend: string) => `streaming with ${backend}`,
+    pairedCount: (n: number) => (n === 1 ? '1 paired device' : `${n} paired devices`)
+  },
+  seatView: {
+    locked: 'Settings cannot change while the seat runs. Stop the seat to change them.',
+    runtime: 'Runtime state',
+    removal: 'Removal',
+    passwordSaved: 'Saved',
+    test: 'Test',
+    testLabel: 'Test the password',
+    change: 'Change',
+    changeLabel: 'Change the password',
+    regenerate: 'Renew identity',
+    regenerateRow: 'Renew the seat identity',
+    copyAddress: 'Copy the address',
+    portRange: (from: number, to: number) => `Range in use: ${from}–${to}.`
+  },
   vm: {
     title: 'VM seats',
     intro:
@@ -1737,7 +2001,7 @@ const rt = {
     games: 'Games',
     noGames: 'No game has DXVK turned on yet.',
     exe: 'Game file (.exe)',
-    browse: 'Browse…',
+    browse: 'Browse',
     pickTitle: 'Choose the game’s .exe file',
     dlls: 'Direct3D versions to redirect',
     enable: 'Turn DXVK on',
@@ -1915,7 +2179,7 @@ const rt = {
       failed: 'The microphone channel could not open',
       closed: 'Not connected'
     } as Record<string, string>,
-    browse: 'Browse…',
+    browse: 'Browse',
     pickAutostart: 'Choose the program to start',
     gpuNoHardware: 'No hardware graphics card found: video is encoded on the processor, the stream may be slow.',
     gpuNoEncoder: (name: string) => `No hardware video encoder is known for ${name}; encoding may fall back to the processor.`,
@@ -2045,7 +2309,7 @@ const rt = {
       foreign_active: 'Another tool redirected the Remote Desktop service; Pulsar Seat does not touch it.',
       blocked: 'Turned off automatically (unsupported version or wrapper problem)'
     } as Record<string, string>,
-    twEnable: 'Turn on…',
+    twEnable: 'Turn on',
     twDisable: 'Turn off',
     twNoCandidate: 'No installed wrapper was found.',
     refresh: 'Refresh'
@@ -2054,7 +2318,8 @@ const rt = {
     home: 'Windows Home: multiseat is not supported.',
     client_multi_session_unavailable: 'Client edition of Windows: only one remote session at a time.',
     server_without_rdsh: 'Windows Server without the Remote Desktop Session Host role: one trial seat only.',
-    server_rdsh: 'Windows Server + Remote Desktop Session Host: multiseat ready.'
+    server_rdsh: 'Windows Server + Remote Desktop Session Host: multiseat ready.',
+    client: 'Needs the experimental multi-session feature'
   } as Record<string, string>,
   hostWarning: {
     rdsh_missing: 'The Remote Desktop Session Host role is not installed.',
@@ -2240,6 +2505,8 @@ const rt = {
     step4: 'Type the PIN here and send it.',
     addresses: 'Addresses',
     recommended: 'recommended',
+    pinWhy: 'You can type the PIN once a request arrives.',
+    request: (name: string) => `“${name}” wants to pair`,
     qr: (a: string) => `QR code for the address: ${a}`,
     qrHint: 'Scan it with a phone to copy the address.',
     noAddress: 'No LAN address found.',

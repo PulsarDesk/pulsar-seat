@@ -23,6 +23,16 @@ describe('remote copy', () => {
     expect(errorMessage('boom')).toBe('An unexpected error occurred.');
   });
 
+  it('has the remote root, seat page and pair copy of the redesign', () => {
+    expect(t.home.thisPc).toBe('This PC');
+    expect(t.home.pairedCount(1)).toBe('1 paired device');
+    expect(t.seatView.portRange(47984, 48010)).toBe('Range in use: 47984–48010.');
+    expect(t.pair.pinWhy).toBeTruthy();
+    expect(t.pair.request('TV')).toContain('“TV”');
+    // Buttons carry no ellipsis (DESIGN.md Ellipsis Rule).
+    for (const s of [t.dxvk.browse, t.seat.browse, t.host.twEnable]) expect(s.endsWith('…')).toBe(false);
+  });
+
   it('maps every HDR reason and display backend', () => {
     for (const k of ['force_sdr', 'rdp_display', 'os_too_old', 'iddcx_too_old', 'driver_no_fp16', 'gpu_unsupported', 'driver_not_installed', 'server_needs_whql'])
       expect(t.hdrReason[k], k).toBeTruthy();

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   activeLang,
   applyLocale,
+  archLabel,
   availabilityLabel,
   checkText,
   errorLabel,
@@ -12,6 +13,7 @@ import {
   langFromTags,
   loopbackNoteLabel,
   noteLabel,
+  outputTechLabel,
   parseLangPref,
   productLabel,
   resolveLang,
@@ -184,6 +186,68 @@ describe('locales', () => {
     expect(t.seats).toBe('Seats');
     storeLangPref('system');
     expect(storedLangPref()).toBe('system');
+  });
+});
+
+/** Every string leaf of a table with its key path (functions called with sample arguments). */
+function leaves(table: object): [string, string][] {
+  return strings(table).map(([k, s]) => [k.replace(/^\./, ''), s]);
+}
+
+describe('redesign copy (P0b)', () => {
+  /** Keys whose value is a menu item that opens a dialog: these keep the trailing "…". */
+  const menuGroups = ['deviceMenu.', 'seatMenu.', 'systemMenu.', 'seatCompat.menu', 'seatCard.', 'device.infoMenu', 'settingsPage.', 'power.close'];
+  /** Progress / status text, not a label: "Loading…", "Starting the service…". */
+  const progress = /(loading|starting|stopping|restarting|queued|checking|downloading|scanning|waiting|Waiting|progress|pending|working|linkLost)$/;
+
+  it('only menu items and progress text end in an ellipsis (the Ellipsis Rule)', () => {
+    for (const [name, table] of [['en', en], ['tr', tr]] as const) {
+      const bad = leaves(table.t)
+        .concat(leaves(table.rt).map(([k, s]) => [`rt.${k}`, s] as [string, string]))
+        .filter(([k, s]) => s.trimEnd().endsWith('…') && !menuGroups.some((g) => k.startsWith(g)) && !progress.test(k));
+      expect(bad, name).toEqual([]);
+    }
+  });
+
+  it('uses one Turkish term per concept in the remote pages: Hizmet, bağlantı noktası, oyun kumandası', () => {
+    const remote = leaves(tr.rt).map(([, s]) => s);
+    expect(remote.filter((s) => /servis/i.test(s))).toEqual([]);
+    expect(remote.filter((s) => /\bport/i.test(s))).toEqual([]);
+    const all = leaves(tr.t).map(([, s]) => s);
+    expect(all.filter((s) => /\boyun kol|\bkollar/i.test(s))).toEqual([]);
+    expect(tr.t.basic.colVirtualPads).toBe('Sanal oyun kumandası');
+  });
+
+  it('has the shell, save bar and notice copy in both languages', () => {
+    applyLocale('tr');
+    expect(t.nav.status + t.nav.statusOk).toBe('Durum: hizmet çalışıyor');
+    expect(t.saveBar.count(2)).toBe('2 değişiklik kaydedilmedi');
+    expect(t.saveBar.count(1).endsWith('.')).toBe(false);
+    expect(t.notices.count(2)).toBe('2 bildirim');
+    expect(t.power.summary(2, 'Çocuk odası')).toBe('2 yerel koltuk çalışıyor, Çocuk odası başlatılamıyor');
+    expect(t.canvas.system).toBe('Boştaki aygıtlar');
+    expect(t.unsaved.discard).toBe('Kaydetmeden devam et');
+    expect(rt.pair.title('Salon')).toBe('Salon için cihaz eşleştir');
+    expect(rt.pair.request('Salon TV')).toBe('“Salon TV” eşleşmek istiyor');
+    applyLocale('en');
+    expect(t.saveBar.count(1)).toBe('1 unsaved change');
+    expect(t.saveBar.count(3)).toBe('3 unsaved changes');
+    expect(t.power.summary(1, '')).toBe('1 local seat is running');
+    expect(t.wizard.keysList.shiftEsc.keys).toBe('Shift+Esc');
+  });
+
+  it('translates raw codes: architecture, connector kind, host class', () => {
+    expect(archLabel('aarch64')).toBe('ARM64');
+    expect(archLabel('x86_64')).toBe('x64');
+    expect(archLabel(null)).toBe(t.none);
+    expect(outputTechLabel('hdmi')).toBe('HDMI');
+    expect(outputTechLabel('internal')).toBe('Built-in screen');
+    expect(outputTechLabel('weird_new_kind')).toBe('Other');
+    expect(rt.hostClass.client).toBeTruthy();
+    applyLocale('tr');
+    expect(outputTechLabel('internal')).toBe('Dahili ekran');
+    expect(rt.hostClass.client).toBe('Deneysel çoklu oturum gerekiyor');
+    applyLocale('en');
   });
 });
 
