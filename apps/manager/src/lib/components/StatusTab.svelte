@@ -182,7 +182,7 @@
   const outcomeKind: Record<CheckOutcome, StatusKind> = { pass: 'ok', info: 'ok', warn: 'warn', fail: 'danger' };
 </script>
 
-<div class="page" data-testid="status-page">
+<div data-testid="status-page">
   <PageHead title={t.nav.status}>
     {#snippet status()}
       <p>{t.statusPage.intro}</p>

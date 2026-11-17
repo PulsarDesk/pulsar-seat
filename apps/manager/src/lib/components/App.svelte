@@ -1,32 +1,56 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Main window (spec 10 §2): title line, global messages (§2.3), tabs, bottom button bar,
-     tray actions (§2.2) and the flows of §8. Our own neutral layout; the maintainer
-     redesigns the look later. -->
+<!-- Main window (spec 10 §2), redesign P2 (target/redesign/final DESIGN.md "Layout"): the rail,
+     then `main` = a scroll area (one notice region + the page) and the docked save bar. Tray
+     actions (§2.2), the flows of §8 and the app-level dialogs live here.
+     Views: seats | remote | settings | advanced (a sub-page of Settings) | status.
+     Page prop contracts (P3-P7 code against these; see docs/agents/status.md):
+       SeatsTab   { store, commands } + commands.enable(on), startAll(), stopAll(), openSettings()
+       BasicTab   { store, onAdvanced, onDialog(kind) } kind: diagnostics|updates|import|reset1|clearPictures
+       AdvancedTab{ store, onBack, onHotkey, onCpu, onOutputs, onIp(seat) }
+       StatusTab  { store, onDiagnostics, onServiceAction(kind) }
+       RemoteTab  { store, initialSeat, onSeatsChanged }
+     App renders `.scroll > .page`; a page renders from its page head down. The props are
+     passed as spread objects so a page that does not declare a prop yet still type-checks. -->
+<script module lang="ts">
+  /** Dialogs a settings page asks App to open (`BasicTab.onDialog`). */
+  export type PageDialog = 'diagnostics' | 'updates' | 'import' | 'reset1' | 'clearPictures';
+</script>
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import AdvancedTab from './AdvancedTab.svelte';
   import BasicTab from './BasicTab.svelte';
-  import ConfirmDialog from './ConfirmDialog.svelte';
   import ConflictDialog from './ConflictDialog.svelte';
   import CpuSetsDialog from './CpuSetsDialog.svelte';
   import DiagnosticDialog from './DiagnosticDialog.svelte';
-  import UpdateDialog from './UpdateDialog.svelte';
-  import { updateText } from '#lib/update.ts';
   import HotkeyDialog from './HotkeyDialog.svelte';
   import ImportDialog from './ImportDialog.svelte';
-  import Modal from './Modal.svelte';
-  import NetworkTab from './NetworkTab.svelte';
-  import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
-  import SeatsTab from './SeatsTab.svelte';
-  import ServiceControl from './ServiceControl.svelte';
+  import IpBindingDialog from './IpBindingDialog.svelte';
+  import OutputsDialog from './OutputsDialog.svelte';
+  import Rail from './Rail.svelte';
+  import SeatsTab, { type SeatsTabCommands } from './SeatsTab.svelte';
   import StatusTab from './StatusTab.svelte';
-  import Toasts from './Toasts.svelte';
+  import UpdateDialog from './UpdateDialog.svelte';
   import Wizard from './Wizard.svelte';
-  import { productLabel, safeModeText, t } from '#lib/i18n.ts';
-  import { clone, setCpuSets } from '#lib/model.ts';
+  import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
+  import { summarizeChanges } from '#lib/changes.ts';
+  import { safeModeText, t } from '#lib/i18n.ts';
+  import {
+    clearAllPictures,
+    clone,
+    setCpuSets,
+    setDisplayOption,
+    setIpBinding,
+    setIpPrograms,
+    setMonitorOutputs,
+    setOutputSettings,
+    setSoftwareCursor
+  } from '#lib/model.ts';
   import type { Tab } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { Issue, SeatNumber } from '#lib/types.ts';
+  import type { IpBinding, IpProgram, Issue, SeatNumber, ServiceAction } from '#lib/types.ts';
+  import { Button, ConfirmDialog, EmptyState, Modal, Notices, PageHead, SaveBar, Toasts, type NoticeItem } from '#lib/ui/index.ts';
+  import { NoticeHost, provideNoticeHost } from '#lib/ui/notice-host.svelte.ts';
 
   interface Props {
     store: ManagerStore;
@@ -44,44 +68,52 @@
     | { kind: 'reset2' }
     | { kind: 'hotkey' }
     | { kind: 'cpu' }
+    | { kind: 'outputs' }
+    | { kind: 'ip'; seat: SeatNumber }
     | { kind: 'import' }
     | { kind: 'diagnostics' }
     | { kind: 'updates' }
-    | { kind: 'firstRun' }
-    | { kind: 'offerEnable' };
+    | { kind: 'service'; action: 'stop' | 'restart' };
 
   let dialog = $state<Dialog | null>(null);
   let wizardOpen = $state(false);
-  let firstRunAsked = false;
-  let offerAsked = false;
+  /** "Windows was updated" notice acknowledged for this run (the service keeps the flag). */
+  let osBuildSeen = $state(false);
 
   const tab = $derived(store.prefs.tab);
   const status = $derived(store.status);
   const product = $derived(status?.product);
   const caller = $derived(store.hello?.caller);
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'seats', label: t.tabs.seats },
-    { id: 'basic', label: t.tabs.basic },
-    { id: 'advanced', label: t.tabs.advanced },
-    { id: 'network', label: t.tabs.network },
-    { id: 'remote', label: t.tabs.remote },
-    { id: 'status', label: t.tabs.status }
-  ];
-  /** Seat whose IP dialog the network tab opens with (seat menu "assign an IP address"). */
-  let ipSeat = $state<SeatNumber | null>(null);
-  let ipOpen = $state(0);
-  /** Remote seat the remote seats tab opens with (seats tab "edit"). */
+  /** Remote seat the remote seats view opens with (seats board "edit"). */
   let remoteSeat = $state<SeatNumber | null>(null);
   let remoteOpen = $state(0);
 
-  /** Leaving a tab with unsaved changes asks save / discard / cancel (spec 10 §2.3). */
-  function selectTab(id: Tab) {
-    if (id === tab) return;
-    guard(() => {
-      ipSeat = null;
+  const seats = $derived(store.saved?.seats ?? []);
+  const localCount = $derived(store.saved ? seats.filter((s) => s.kind !== 'remote').length : null);
+  const remoteCount = $derived(store.saved ? seats.filter((s) => s.kind === 'remote').length : null);
+  const serviceLink = $derived<'ok' | 'link' | 'down'>(store.serviceDown ? 'down' : store.link ? 'ok' : 'link');
+
+  const viewTitle: Record<Tab, string> = {
+    seats: t.nav.seats,
+    remote: t.nav.remote,
+    settings: t.nav.settings,
+    advanced: t.nav.settings,
+    status: t.nav.status
+  };
+
+  // ------------------------------------------------------------ navigation
+
+  /** Leaving a view with unsaved changes asks save / discard / cancel (spec 10 §2.3). Settings
+   *  and its Advanced sub-page edit the same draft, so moving between them needs no question. */
+  function navigate(to: Tab) {
+    if (to === tab) return;
+    const sub = (a: Tab, b: Tab) => (a === 'settings' && b === 'advanced') || (a === 'advanced' && b === 'settings');
+    const go = () => {
       remoteSeat = null;
-      store.setPref('tab', id);
-    });
+      store.setPref('tab', to);
+    };
+    if (sub(tab, to)) go();
+    else guard(go);
   }
 
   function openRemote(n: SeatNumber) {
@@ -92,14 +124,19 @@
     });
   }
 
+  /** Per-seat IP address (seat menus, Advanced > Network addresses): a dialog over any view. */
   function openIp(n: SeatNumber) {
-    const go = () => {
-      ipSeat = n;
-      ipOpen++;
-      store.setPref('tab', 'network');
-    };
-    if (tab === 'network') go();
-    else guard(go);
+    dialog = { kind: 'ip', seat: n };
+  }
+
+  function pageDialog(kind: PageDialog) {
+    if (kind === 'clearPictures') store.edit((c) => clearAllPictures(c));
+    else if (kind === 'import' || kind === 'reset1' || kind === 'diagnostics' || kind === 'updates') dialog = { kind };
+  }
+
+  function serviceAction(a: ServiceAction) {
+    if (a === 'start') void store.controlService('start');
+    else dialog = { kind: 'service', action: a };
   }
 
   // The shell asks before closing the window while something is unsaved.
@@ -109,7 +146,7 @@
   });
 
   onMount(() => {
-    // Tray items get the same gating as the bottom bar's buttons.
+    // Tray items get the same gating as the page actions.
     store.onTrayAction((a) => {
       if (a === 'start_seats') {
         if (adminGate()) requestStart(null);
@@ -134,19 +171,9 @@
     }
   });
 
-  // First start on an unconfigured PC (spec 10 §8.1) and "configured but disabled" (§2.3).
-  $effect(() => {
-    const d = store.saved;
-    if (!d || !store.isAdmin || !status || dialog || wizardOpen) return;
-    const unconfigured = d.seats.length === 1 && d.devices.length === 0;
-    if (unconfigured && !firstRunAsked) {
-      firstRunAsked = true;
-      dialog = { kind: 'firstRun' };
-    } else if (!unconfigured && status.product.state === 'disabled' && d.seats.length > 1 && !offerAsked) {
-      offerAsked = true;
-      dialog = { kind: 'offerEnable' };
-    }
-  });
+  // BEHAVIOUR (redesign P2, needs a maintainer test): no modal opens on launch. The
+  // "configured but off" offer is the seats status line (Turn on and start, which opens the
+  // enable question) and the first-run offer is the seats board's empty state (P3).
 
   /** Ask save / discard / cancel when there are unsaved changes (spec 10 §2.3). */
   function guard(then: () => void) {
@@ -160,7 +187,7 @@
     return r.kind === 'saved';
   }
 
-  /** Status known and caller is an admin; otherwise explain (elevation banner / toast). */
+  /** Status known and caller is an admin; otherwise explain (elevation notice / error). */
   function adminGate(): boolean {
     if (!status) {
       store.toast('error', t.start.noStatus);
@@ -174,7 +201,7 @@
     return true;
   }
 
-  function requestStart(seats: SeatNumber[] | null) {
+  function requestStart(list: SeatNumber[] | null) {
     if (product?.state === 'safe_mode') {
       store.toast('error', t.start.safeMode);
       return;
@@ -183,21 +210,24 @@
       store.toast('error', t.start.disabled);
       return;
     }
-    if (seats === null && store.prefs.askOnManualStart) dialog = { kind: 'start', seats };
-    else void store.startSeats(seats);
+    if (list === null && store.prefs.askOnManualStart) dialog = { kind: 'start', seats: list };
+    else void store.startSeats(list);
   }
 
+  /** Turn on (then start the seats, like the former startup offer) or off, after the question. */
   async function setEnabled(on: boolean) {
     dialog = null;
     const ok = await store.setEnabled(on);
-    if (ok && store.status?.reboot_pending) dialog = { kind: 'reboot' };
+    if (ok && store.status?.reboot_pending) {
+      // A pending reboot comes first (spec 10 §2.3): seats start after the restart.
+      dialog = { kind: 'reboot' };
+      return;
+    }
+    if (ok && on && store.enabled) requestStart(null);
   }
 
-  function keys(e: KeyboardEvent) {
-    if (e.ctrlKey && e.shiftKey && (e.key === 'S' || e.key === 's')) {
-      e.preventDefault();
-      if (store.dirty) void save();
-    }
+  function askEnable(on: boolean) {
+    if (adminGate()) dialog = { kind: 'enable', on };
   }
 
   function openWizard() {
@@ -214,108 +244,156 @@
   function moveAssignment(from: string, to: string) {
     guard(() => void store.moveAssignment(from, to));
   }
+
+  // ------------------------------------------------------------ page props (contracts)
+
+  const seatCommands: SeatsTabCommands & {
+    enable: (on: boolean) => void;
+    startAll: () => void;
+    stopAll: () => void;
+    openSettings: () => void;
+    restartSeat: (n: SeatNumber) => void;
+  } = {
+    startSeat: (n) => requestStart([n]),
+    wizard: openWizard,
+    reset: () => (dialog = { kind: 'reset1' }),
+    importConfig: () => (dialog = { kind: 'import' }),
+    cpu: () => (dialog = { kind: 'cpu' }),
+    hotkey: () => (dialog = { kind: 'hotkey' }),
+    moveAssignment,
+    ipBinding: openIp,
+    openRemote,
+    enable: askEnable,
+    startAll: () => requestStart(null),
+    stopAll: () => void store.stopAllSeats(),
+    openSettings: () => navigate('settings'),
+    restartSeat: (n) => void store.restartSeat(n)
+  };
+  const basicProps = $derived({ store, onAdvanced: () => navigate('advanced'), onDialog: pageDialog });
+  const advancedProps = $derived({
+    store,
+    onBack: () => navigate('settings'),
+    onHotkey: () => (dialog = { kind: 'hotkey' }),
+    onCpu: () => (dialog = { kind: 'cpu' }),
+    onOutputs: () => (dialog = { kind: 'outputs' }),
+    onIp: openIp
+  });
+  const statusProps = $derived({ store, onDiagnostics: () => (dialog = { kind: 'diagnostics' }), onServiceAction: serviceAction });
+  const remoteProps = $derived({ store, initialSeat: remoteSeat, onSeatsChanged: () => void store.refreshStatus() });
+
+  // ------------------------------------------------------------ notices, save bar, toasts
+
+  const notices = $derived.by<NoticeItem[]>(() => {
+    const out: NoticeItem[] = [];
+    if (store.serviceDown) return out;
+    if (!store.link) out.push({ kind: 'warn', icon: 'refresh', text: t.notices.linkLost });
+    if (product?.state === 'safe_mode') out.push({ kind: 'danger', text: safeModeText[product.reason] ?? product.reason });
+    if (store.restricted) out.push({ kind: 'info', icon: 'lock', text: t.restricted });
+    if (store.needsElevation && !store.isAdmin) {
+      out.push({ kind: 'info', icon: 'shield', text: t.adminNeeded, action: { label: t.restartElevated, onclick: restartElevated } });
+    }
+    if (status?.reboot_pending && store.isAdmin) {
+      out.push({ kind: 'warn', text: t.saved.reboot, action: { label: t.enable.rebootNow, onclick: () => (dialog = { kind: 'reboot' }) } });
+    }
+    if (status?.os_build_changed && !osBuildSeen) {
+      out.push({ kind: 'warn', text: t.osBuildChanged, action: { label: t.notices.ok, onclick: () => (osBuildSeen = true) } });
+    }
+    if (store.configChangedElsewhere) {
+      out.push({ kind: 'warn', text: t.changedElsewhere, action: { label: t.reload, onclick: () => void store.refreshConfig(true) } });
+    }
+    // Failures stay until read: a danger notice with OK, never a toast that disappears.
+    for (const m of store.toasts) {
+      if (m.kind !== 'error') continue;
+      const id = m.id;
+      out.push({
+        kind: 'danger',
+        text: m.code ? `${m.text} (${m.code})` : m.text,
+        action: { label: t.notices.ok, onclick: () => store.dismiss(id) }
+      });
+    }
+    return out;
+  });
+
+  // One notice region per page: under the page head when the page has a PageHead, else on top.
+  const noticeHost = provideNoticeHost(new NoticeHost());
+  $effect(() => {
+    noticeHost.items = notices;
+  });
+
+  const toastItems = $derived(store.toasts.filter((m) => m.kind !== 'error').map((m) => ({ id: m.id, text: m.text, kind: m.kind })));
+  const showSaveBar = $derived(store.dirty && tab !== 'remote' && !store.serviceDown);
+  const changes = $derived(summarizeChanges(store.saved, store.draft, Object.keys(store.pendingPasswords).length));
+  const saveDetail = $derived.by(() => {
+    const m = changes.moved;
+    if (!m) return undefined;
+    if (m.to === 'pool') return t.saveBar.moved(m.name, t.canvas.system);
+    const seat = store.draft?.seats.find((s) => s.number === m.to);
+    return t.saveBar.moved(m.name, seat?.name || t.seatN(m.to));
+  });
 </script>
 
-<svelte:window onkeydown={keys} />
+<div class="app">
+  <Rail
+    current={tab}
+    seatCount={localCount}
+    {remoteCount}
+    service={serviceLink}
+    version={store.info?.version ?? null}
+    ownSeat={caller?.seat ?? null}
+    onNavigate={navigate}
+  />
 
-<div class="shell">
-  <header class="top">
-    <div>
-      <h1>{t.appTitle}</h1>
-      <p class="hint">
-        {store.info ? `v${store.info.version}` : ''}
-        {#if caller}· {caller.seat ? t.title.onSeat(caller.seat) : t.title.noSeat}{/if}
-        {#if product}· {t.product}: <strong data-testid="product-state">{productLabel(product)}</strong>{/if}
-      </p>
+  <main class="main" id="main">
+    <div class="scroll">
+      <div class="page" data-view={tab}>
+        {#if store.serviceDown && tab !== 'status'}
+          <PageHead title={viewTitle[tab]} />
+          <EmptyState icon="alert-circle" danger title={t.service.downTitle} body={t.service.downBody}>
+            {#snippet actions()}
+              <Button
+                kind="primary"
+                icon="play"
+                label={t.service.start}
+                busy={store.serviceAction === 'start'}
+                disabledReason={store.service?.elevated ? undefined : t.svc.needElevated}
+                onclick={() => void store.controlService('start')}
+              />
+              <Button label={t.service.diagnostics} onclick={() => (dialog = { kind: 'diagnostics' })} />
+            {/snippet}
+          </EmptyState>
+        {:else}
+          {#if noticeHost.heads === 0}<Notices items={notices} />{/if}
+          {#if tab === 'seats'}
+            <SeatsTab {store} commands={seatCommands} />
+          {:else if tab === 'settings'}
+            <BasicTab {...basicProps} />
+          {:else if tab === 'advanced'}
+            <AdvancedTab {...advancedProps} />
+          {:else if tab === 'remote'}
+            {#key remoteOpen}
+              <RemoteTab {...remoteProps} />
+            {/key}
+          {:else}
+            <StatusTab {...statusProps} />
+          {/if}
+        {/if}
+      </div>
     </div>
-    <ServiceControl {store} />
-    {#if !store.link && !store.serviceDown}<span class="hint" title={t.linkDown}>○</span>{/if}
-  </header>
-
-  {#if store.serviceDown}
-    <p class="banner error" role="alert">{t.serviceDown}</p>
-  {/if}
-  {#if product?.state === 'safe_mode'}
-    <p class="banner warn" role="alert">{safeModeText[product.reason]}</p>
-  {/if}
-  {#if store.restricted}
-    <p class="banner warn">{t.restricted}</p>
-  {/if}
-  {#if store.needsElevation && !store.isAdmin}
-    <p class="banner info">
-      {t.adminNeeded}
-      <button type="button" onclick={restartElevated}>{t.restartElevated}</button>
-    </p>
-  {/if}
-  {#if status?.os_build_changed}
-    <p class="banner warn">{t.osBuildChanged}</p>
-  {/if}
-  {#if store.configChangedElsewhere}
-    <p class="banner warn">
-      {t.changedElsewhere}
-      <button type="button" onclick={() => store.refreshConfig(true)}>{t.reload}</button>
-    </p>
-  {/if}
-
-  <div class="tabs" role="tablist">
-    {#each tabs as x (x.id)}
-      <button type="button" role="tab" aria-selected={tab === x.id} class:active={tab === x.id} onclick={() => selectTab(x.id)}>{x.label}</button>
-    {/each}
-  </div>
-
-  <main class="content">
-    {#if tab === 'seats'}
-      <SeatsTab
-        {store}
-        commands={{
-          startSeat: (n) => requestStart([n]),
-          wizard: openWizard,
-          reset: () => (dialog = { kind: 'reset1' }),
-          importConfig: () => (dialog = { kind: 'import' }),
-          cpu: () => (dialog = { kind: 'cpu' }),
-          hotkey: () => (dialog = { kind: 'hotkey' }),
-          moveAssignment,
-          ipBinding: openIp,
-          openRemote
-        }}
+    {#if showSaveBar}
+      <SaveBar
+        count={Math.max(1, changes.count)}
+        detail={saveDetail}
+        busy={store.busy}
+        saveDisabledReason={store.isAdmin ? undefined : t.notAdmin}
+        shortcut
+        onSave={() => void save()}
+        onUndo={() => store.discard()}
       />
-    {:else if tab === 'basic'}
-      <BasicTab {store} />
-    {:else if tab === 'advanced'}
-      <AdvancedTab {store} onHotkey={() => (dialog = { kind: 'hotkey' })} onCpu={() => (dialog = { kind: 'cpu' })} />
-    {:else if tab === 'network'}
-      {#key ipOpen}
-        <NetworkTab {store} initialSeat={ipSeat} />
-      {/key}
-    {:else if tab === 'remote'}
-      {#key remoteOpen}
-        <RemoteTab {store} initialSeat={remoteSeat} />
-      {/key}
-    {:else}
-      <StatusTab {store} />
     {/if}
   </main>
-
-  <footer class="bar">
-    <button type="button" class="primary" disabled={!store.dirty || store.busy || !store.isAdmin} title={t.bar.saveHint} onclick={() => save()}>
-      {t.bar.save}
-    </button>
-    <button type="button" disabled={!store.dirty || store.busy} onclick={() => store.discard()}>{t.bar.discard}</button>
-    {#if store.dirty}<span class="hint">{t.bar.unsaved}</span>{/if}
-    <span class="spacer"></span>
-    <button type="button" disabled={!status || !store.isAdmin || store.busy} onclick={() => (dialog = { kind: 'enable', on: !store.enabled })}>
-      {store.enabled ? t.bar.disable : t.bar.enable}
-    </button>
-    <button type="button" disabled={!store.enabled || !store.isAdmin || store.busy || product?.state === 'safe_mode'} onclick={() => requestStart(null)}>
-      {t.bar.start}
-    </button>
-    <button type="button" disabled={!status?.reboot_pending || !store.isAdmin} onclick={() => (dialog = { kind: 'reboot' })}>{t.bar.reboot}</button>
-    <button type="button" disabled={!store.isAdmin} onclick={() => (dialog = { kind: 'diagnostics' })}>{t.bar.support}</button>
-    <button type="button" disabled={!store.isAdmin} onclick={() => (dialog = { kind: 'updates' })}>{updateText.bar}</button>
-  </footer>
 </div>
 
-<Toasts {store} />
+<Toasts items={toastItems} onDismiss={(id) => store.dismiss(Number(id))} raised={showSaveBar} />
 
 {#if store.pendingInputMove !== null && store.isAdmin && !dialog}
   <ConfirmDialog
@@ -355,8 +433,9 @@
   <ConfirmDialog
     title={on ? t.enable.enableTitle : t.enable.disableTitle}
     body={on ? t.enable.enableBody : t.enable.disableBody}
-    confirmLabel={on ? t.bar.enable : t.bar.disable}
+    confirmLabel={on ? t.power.openAndStart : t.bar.disable}
     danger={!on}
+    busy={store.busy}
     onConfirm={() => setEnabled(on)}
     onCancel={() => (dialog = null)}
   />
@@ -373,17 +452,31 @@
     onCancel={() => (dialog = null)}
   />
 {:else if dialog?.kind === 'start'}
-  {@const seats = dialog.seats}
+  {@const list = dialog.seats}
   <ConfirmDialog
     title={t.start.confirmTitle}
     body={t.start.confirmBody}
     confirmLabel={t.bar.start}
     dontAskLabel={t.start.dontAsk}
     onConfirm={(dontAsk) => {
-      const list = seats;
+      const seatsToStart = list;
       if (dontAsk) store.setPref('askOnManualStart', false);
       dialog = null;
-      void store.startSeats(list);
+      void store.startSeats(seatsToStart);
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'service'}
+  {@const action = dialog.action}
+  <ConfirmDialog
+    title={action === 'stop' ? t.svc.confirmStopTitle : t.svc.confirmRestartTitle}
+    body={action === 'stop' ? t.svc.confirmStop : t.svc.confirmRestart}
+    confirmLabel={action === 'stop' ? t.svc.stop : t.svc.restart}
+    danger
+    onConfirm={() => {
+      const a = action;
+      dialog = null;
+      void store.controlService(a);
     }}
     onCancel={() => (dialog = null)}
   />
@@ -399,28 +492,30 @@
   />
 {:else if dialog?.kind === 'unsaved'}
   {@const then = dialog.then}
-  <Modal title={t.unsaved.title} alert onClose={() => (dialog = null)}>
+  <Modal title={t.unsaved.title} size="sm" alert initialFocus="primary" onClose={() => (dialog = null)}>
     <p>{t.unsaved.body}</p>
-    {#snippet buttons()}
-      <button
-        type="button"
-        class="primary"
+    {#if saveDetail}<p class="help">{saveDetail}</p>{/if}
+    {#snippet foot()}
+      <Button
+        kind="primary"
+        label={t.unsaved.save}
+        disabled={!store.isAdmin}
         onclick={async () => {
           const next = then;
           dialog = null;
           if (await save()) next();
-        }}>{t.unsaved.save}</button
-      >
-      <button
-        type="button"
+        }}
+      />
+      <Button
+        label={t.unsaved.discard}
         onclick={() => {
           const next = then;
           store.discard();
           dialog = null;
           next();
-        }}>{t.unsaved.discard}</button
-      >
-      <button type="button" onclick={() => (dialog = null)}>{t.unsaved.cancel}</button>
+        }}
+      />
+      <Button label={t.unsaved.cancel} onclick={() => (dialog = null)} />
     {/snippet}
   </Modal>
 {:else if dialog?.kind === 'quit'}
@@ -462,6 +557,44 @@
     }}
     onCancel={() => (dialog = null)}
   />
+{:else if dialog?.kind === 'outputs' && store.draft}
+  <OutputsDialog
+    config={store.draft}
+    devices={store.devices.map((v) => v.device)}
+    onSave={(r) => {
+      store.edit((c) => {
+        let n = setOutputSettings(c, r.settings);
+        for (const m of r.monitors) {
+          const mask = store.devices.find((v) => v.device.key === m.device.key)?.effective ?? 1;
+          const o = n.devices.find((a) => a.key === m.device.key)?.options;
+          if (JSON.stringify(o?.outputs ?? []) !== JSON.stringify(m.outputs)) n = setMonitorOutputs(n, m.device, m.outputs, mask);
+          if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
+          if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
+          if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
+        }
+        return n;
+      });
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'ip' && store.draft}
+  {@const n = dialog.seat}
+  <IpBindingDialog
+    seat={n}
+    binding={store.draft.seats.find((s) => s.number === n)?.ip_binding}
+    programs={store.draft.settings.ip_programs ?? []}
+    loadAddresses={() => store.api.listAddresses()}
+    pickProgram={() => store.api.pickProgram()}
+    pickFolder={() => store.api.pickProgramFolder()}
+    onOpenNetwork={() => store.api.openPanel('network_connections').catch((e) => store.fail(e))}
+    onOpenDevices={() => store.api.openPanel('device_manager').catch((e) => store.fail(e))}
+    onSave={(b: IpBinding | null, list?: IpProgram[]) => {
+      store.edit((c) => (list ? setIpPrograms(setIpBinding(c, n, b), list) : setIpBinding(c, n, b)));
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
 {:else if dialog?.kind === 'import'}
   <ImportDialog onImport={(json) => store.importReference(json)} onClose={() => (dialog = null)} />
 {:else if dialog?.kind === 'diagnostics'}
@@ -475,82 +608,4 @@
     setSettings={(u) => store.setUpdateSettings(u)}
     onClose={() => (dialog = null)}
   />
-{:else if dialog?.kind === 'firstRun'}
-  <ConfirmDialog
-    title={t.wizard.title}
-    body={t.wizard.firstRun}
-    confirmLabel={t.wizard.start}
-    cancelLabel={t.no}
-    onConfirm={() => {
-      dialog = null;
-      wizardOpen = true;
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'offerEnable'}
-  <ConfirmDialog
-    title={t.enable.enableTitle}
-    body={t.enable.offerEnable}
-    confirmLabel={t.enable.offerEnableButton}
-    cancelLabel={t.later}
-    onConfirm={async () => {
-      await setEnabled(true);
-      // A pending reboot comes first (spec 10 §2.3): setEnabled then shows only the reboot
-      // dialog, and seats start after the restart.
-      if (store.enabled && !store.status?.reboot_pending) requestStart(null);
-    }}
-    onCancel={() => (dialog = null)}
-  />
 {/if}
-
-<style>
-  .shell {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-  }
-  .top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    padding: 0.75rem 1.25rem 0.25rem;
-  }
-  .top p {
-    margin: 0;
-  }
-  .tabs {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0 1.25rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .tabs button {
-    border: none;
-    border-bottom: 3px solid transparent;
-    border-radius: 0;
-    background: none;
-    padding: 0.5rem 0.9rem;
-  }
-  .tabs button.active {
-    border-bottom-color: var(--accent);
-    font-weight: 600;
-  }
-  .content {
-    flex: 1;
-    padding: 1rem 1.25rem 5rem;
-  }
-  .bar {
-    position: sticky;
-    bottom: 0;
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-    padding: 0.6rem 1.25rem;
-    border-top: 1px solid var(--border);
-    background: var(--panel);
-  }
-  .spacer {
-    flex: 1;
-  }
-</style>

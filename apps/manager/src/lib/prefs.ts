@@ -6,7 +6,10 @@
 import { ALL_SEATS_BITS } from './mask.ts';
 
 export type Theme = 'system' | 'light' | 'dark';
-export type Tab = 'seats' | 'basic' | 'advanced' | 'network' | 'remote' | 'status';
+/** The manager's views (rail places plus the Advanced sub-page of Settings). Older builds
+ *  stored `basic` and `network`; `parsePrefs` maps them to `settings` and `advanced`. */
+export type Tab = 'seats' | 'remote' | 'settings' | 'advanced' | 'status';
+export const TABS: readonly Tab[] = ['seats', 'remote', 'settings', 'advanced', 'status'];
 
 export interface Prefs {
   scaleIcons: boolean;
@@ -69,7 +72,9 @@ export function parsePrefs(raw: string | null): Prefs {
   }
   out.flashSeconds = clampFlash(out.flashSeconds);
   if (!['system', 'light', 'dark'].includes(out.theme)) out.theme = 'system';
-  if (!['seats', 'basic', 'advanced', 'network', 'remote', 'status'].includes(out.tab)) out.tab = 'seats';
+  const legacy: Record<string, Tab> = { basic: 'settings', network: 'advanced' };
+  const tab = out.tab as string;
+  out.tab = legacy[tab] ?? (TABS.includes(tab as Tab) ? (tab as Tab) : 'seats');
   out.visibleSeats = out.visibleSeats >>> 0;
   return out;
 }

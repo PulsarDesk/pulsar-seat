@@ -7,57 +7,147 @@ import App from './App.svelte';
 import { createDemoApi } from '#lib/demo.ts';
 import { t } from '#lib/i18n.ts';
 import { ManagerStore } from '#lib/store.svelte.ts';
+import type { TrayAction } from '#lib/api.ts';
 import { EXPERIMENTAL_WARNING_VERSION } from '#lib/types.ts';
 
-async function setup() {
+async function setup(api = createDemoApi()) {
   localStorage.clear();
-  const api = createDemoApi();
   const store = new ManagerStore(api);
   await store.init();
   render(App, { store });
   const user = userEvent.setup();
-  // The "configured but disabled" offer opens on load; dismiss it.
-  await user.click(await screen.findByRole('button', { name: t.later }));
+  await screen.findByRole('region', { name: t.canvas.system });
   return { api, store, user };
 }
 
-describe('App', () => {
-  it('shows the product state, seats and the system pool', async () => {
+const nav = (name: string) => screen.getByRole('link', { name: new RegExp(`^${name}`) });
+const saveBar = () => screen.queryByRole('region', { name: t.saveBar.region });
+/** Tray items reach App through the store's handler (the shell sends them). */
+const tray = (store: ManagerStore, a: TrayAction) => (store as unknown as { trayHandler: (a: TrayAction) => void }).trayHandler(a);
+
+describe('App shell', () => {
+  it('renders the rail, the seats and the system pool, with no startup modal', async () => {
     await setup();
-    expect(screen.getByTestId('product-state')).toHaveTextContent('Off');
-    expect(screen.getByRole('region', { name: t.canvas.system })).toBeInTheDocument();
+    // BEHAVIOUR (P2): the "configured but off" offer no longer opens on launch.
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('complementary', { name: t.nav.app })).toBeInTheDocument();
+    expect(screen.getByRole('main')).toBeInTheDocument();
+    expect(nav(t.nav.seats)).toHaveAttribute('aria-current', 'page');
+    expect(nav(t.nav.remote)).not.toHaveAttribute('aria-current');
+    expect(screen.queryByRole('tab')).toBeNull();
     const two = screen.getByRole('region', { name: `2. ${t.seat}` });
     expect(within(two).getByText('Kablosuz klavye')).toBeInTheDocument();
     expect(within(two).getByText(t.health.ready)).toBeInTheDocument();
   });
 
-  it('adding a seat enables Save; saving writes the config', async () => {
-    const { api, user } = await setup();
-    const save = screen.getByRole('button', { name: t.bar.save });
-    expect(save).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
-    expect(save).toBeEnabled();
-    expect(screen.getByRole('region', { name: `3. ${t.seat}` })).toBeInTheDocument();
-    await user.click(save);
-    expect(api.state.config.seats).toHaveLength(3);
-    expect(save).toBeDisabled();
+  it('the Status link names the service state', async () => {
+    const { store } = await setup();
+    expect(nav(t.nav.status)).toHaveAccessibleName(`${t.nav.status}${t.nav.statusOk}`);
+    store.serviceDown = true;
+    await tick();
+    expect(nav(t.nav.status)).toHaveAccessibleName(`${t.nav.status}${t.nav.statusDown}`);
   });
 
-  it('enable asks first, then start seats works', async () => {
+  it('rail links switch views; Settings stays current on its Advanced sub-page', async () => {
+    const { store, user } = await setup();
+    await user.click(nav(t.nav.settings));
+    expect(store.prefs.tab).toBe('settings');
+    expect(nav(t.nav.settings)).toHaveAttribute('aria-current', 'page');
+    store.setPref('tab', 'advanced');
+    await tick();
+    expect(nav(t.nav.settings)).toHaveAttribute('aria-current', 'page');
+    await user.click(nav(t.nav.status));
+    expect(store.prefs.tab).toBe('status');
+    expect(nav(t.nav.status)).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('the save bar appears with a staged change; saving writes the config', async () => {
     const { api, user } = await setup();
-    await user.click(screen.getByRole('button', { name: t.bar.enable }));
+    expect(saveBar()).toBeNull();
+    await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
+    const bar = saveBar()!;
+    expect(bar).toBeInTheDocument();
+    expect(within(bar).getByText(t.saveBar.count(1))).toBeInTheDocument();
+    expect(t.saveBar.count(1).endsWith('.')).toBe(false);
+    expect(screen.getByRole('region', { name: `3. ${t.seat}` })).toBeInTheDocument();
+    // Docked: the bar is a sibling after the scroll area inside main, not inside it.
+    expect(bar.parentElement).toBe(screen.getByRole('main'));
+    expect(bar.previousElementSibling).toHaveClass('scroll');
+    await user.click(within(bar).getByRole('button', { name: t.saveBar.save }));
+    expect(api.state.config.seats).toHaveLength(3);
+    expect(saveBar()).toBeNull();
+    // The confirmation is a toast without buttons.
+    const toast = await screen.findByText(t.saved.ok);
+    expect(within(toast.closest('.toast') as HTMLElement).queryByRole('button')).toBeNull();
+  });
+
+  it('undo in the save bar drops the staged change', async () => {
+    const { store, user } = await setup();
+    await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
+    await user.click(within(saveBar()!).getByRole('button', { name: t.saveBar.undo }));
+    expect(store.dirty).toBe(false);
+    expect(saveBar()).toBeNull();
+  });
+
+  it('turn on asks first, then starts the seats', async () => {
+    const { api, store, user } = await setup();
+    tray(store, 'toggle_enabled');
+    await tick();
     const dlg = screen.getByRole('alertdialog');
-    await user.click(within(dlg).getByRole('button', { name: t.bar.enable }));
+    await user.click(within(dlg).getByRole('button', { name: t.power.openAndStart }));
     expect(api.state.product.state).toBe('enabled');
-    await user.click(screen.getByRole('button', { name: t.bar.start }));
-    const confirm = screen.getByRole('alertdialog');
+    // Turning on starts the seats (the former startup offer): the start question follows.
+    const confirm = await screen.findByRole('alertdialog', { name: t.start.confirmTitle });
     await user.click(within(confirm).getByRole('button', { name: t.bar.start }));
     expect(api.calls).toContain('start_seats');
   });
 
-  it('advanced tab: experimental backend needs the warning, input isolation note', async () => {
+  it('service down replaces the page with the recovery state', async () => {
+    const { store } = await setup();
+    store.serviceDown = true;
+    await tick();
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByRole('heading', { name: t.service.downTitle })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: t.service.start })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: t.service.diagnostics })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: t.canvas.system })).toBeNull();
+  });
+
+  it('page notices share one region; failures stay until OK', async () => {
     const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.advanced }));
+    store.toast('error', 'Broken', 'x_code');
+    await tick();
+    const one = screen.getByRole('alert');
+    expect(one).toHaveTextContent('Broken (x_code)');
+    store.configChangedElsewhere = true;
+    await tick();
+    expect(screen.getByText(t.notices.count(2))).toBeInTheDocument();
+    const okButtons = screen.getAllByRole('button', { name: t.notices.ok });
+    await user.click(okButtons[0]);
+    expect(store.toasts.some((x) => x.kind === 'error')).toBe(false);
+    expect(screen.queryByText(t.notices.count(2))).toBeNull();
+    expect(screen.getByText(t.changedElsewhere)).toBeInTheDocument();
+  });
+
+  it('a seat that must restart after saving is kept in the store, not toasted', async () => {
+    const api = createDemoApi();
+    const apply = api.apply.bind(api);
+    api.apply = async (...a: Parameters<typeof api.apply>) => ({ ...(await apply(...a)), restart_seats: [2] });
+    const { store, user } = await setup(api);
+    await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
+    await user.click(within(saveBar()!).getByRole('button', { name: t.saveBar.save }));
+    expect(store.restartRequired).toEqual([2]);
+    expect(store.toasts.some((x) => x.text.includes(t.saved.restartSeats('2')))).toBe(false);
+    api.state.product = { state: 'enabled', started: true };
+    await store.restartSeat(2);
+    expect(api.calls).toEqual(expect.arrayContaining(['stop_seat', 'start_seats']));
+    expect(store.restartRequired).toEqual([]);
+  });
+
+  it('advanced view: experimental backend needs the warning, input isolation note', async () => {
+    const { store, user } = await setup();
+    store.setPref('tab', 'advanced');
+    await tick();
     expect(screen.getByTestId('input-not-isolated')).toBeInTheDocument();
     await user.click(screen.getByLabelText(/Multiple sessions on client Windows/));
     const dlg = screen.getByRole('alertdialog');
@@ -70,9 +160,10 @@ describe('App', () => {
     expect(screen.queryByTestId('input-not-isolated')).toBeNull();
   });
 
-  it('advanced tab: passwordless-seat listener settings edit the draft', async () => {
+  it('advanced view: passwordless-seat listener settings edit the draft', async () => {
     const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.advanced }));
+    store.setPref('tab', 'advanced');
+    await tick();
     expect(screen.getByTestId('loopback-listener')).toBeInTheDocument();
     const port = screen.getByTestId('loopback-port') as HTMLInputElement;
     await user.clear(port);
@@ -90,9 +181,10 @@ describe('App', () => {
     expect(screen.getByTestId('loopback-port')).toBeDisabled();
   });
 
-  it('advanced tab: compatibility options are opt-in and edit the draft', async () => {
+  it('advanced view: compatibility options are opt-in and edit the draft', async () => {
     const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.advanced }));
+    store.setPref('tab', 'advanced');
+    await tick();
     const box = screen.getByTestId('compat-settings');
     expect(box).toBeInTheDocument();
     expect(store.draft?.settings.tweaks.fast_startup_off ?? false).toBe(false);
@@ -115,9 +207,9 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: t.compat.steamProxyQuarantine })).toBeInTheDocument();
   });
 
-  it('basic tab: start mode and seat autostart edit the draft', async () => {
+  it('settings view: start mode and seat autostart edit the draft', async () => {
     const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.basic }));
+    await user.click(nav(t.nav.settings));
     await user.click(screen.getByLabelText(t.startModes.at_boot));
     expect(store.draft?.settings.start_mode).toBe('at_boot');
     expect(screen.getByText(t.startModeHints.at_boot)).toBeInTheDocument();

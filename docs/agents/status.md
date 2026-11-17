@@ -2686,3 +2686,84 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     build OK. No Rust, Tauri, installer or driver code touched. No test deleted.
   - Behaviour: none of the three planned behaviour changes is in P5. Small behaviour note for
     the maintainer test: the restart-service question no longer uses a red button.
+
+- 2026-11-17 (redesign P2, manager app shell): `target/redesign/final/IMPLEMENTATION.md` P2.
+  - **Layout:** `App.svelte` is `.app` = `Rail` + `main.main` (`.scroll > .page` with the page,
+    then the docked `ui/SaveBar`). No header, tab strip or footer bar. Views (`prefs.tab`):
+    `seats | remote | settings | advanced | status`; stored `basic` / `network` map to
+    `settings` / `advanced`. Moving between Settings and its Advanced sub-page needs no
+    unsaved question (same draft); every other move keeps the guard. `NetworkTab` is no
+    longer routed (its content moves into Advanced in P4; its tests render it directly).
+  - **Rail** (`components/Rail.svelte`): brand, Seats / Remote seats / Settings (local and
+    remote seat counts from the saved config), Status at the foot with an 8px dot (ok /
+    amber while the event link reconnects / red when the service is down) and visually
+    hidden state text (`nav.statusOk|statusDown|statusLink`, the last one new in both
+    locales), version line plus "Running on seat N". 232 / 188 (900-1100px) / 64px icon rail
+    with count badges below 900px. Links are `<a href="#view">` with `aria-current="page"`.
+  - **Notices:** one region per page from `ui/Notices`: link lost, safe mode, restricted,
+    needs elevation (+ restart as administrator), reboot pending (+ restart now, replaces the
+    footer button), Windows updated (+ OK, acknowledged per run), changed elsewhere
+    (+ reload), and every failure (error toast) as a danger notice with OK. New
+    `ui/notice-host.svelte.ts`: App provides the items through context and a mounted
+    `PageHead` renders the region right under the page head (as in shot 07); a page without a
+    PageHead gets it at the top from App. Service down replaces the page (except Status) with
+    the 09 empty state: Start service (disabled with the reason when not elevated) +
+    Diagnostic report.
+  - **Save bar:** shown while the draft is dirty on every view except Remote seats;
+    count / detail from new `lib/changes.ts` (`summarizeChanges`: one change per device,
+    seat or settings group, plus pending passwords; a single device move names the device
+    and seat). Save keeps `save()` (conflict dialog), Undo = `store.discard()`, Ctrl+Shift+S
+    in the bar. Not elevated: Save disabled with `t.notAdmin` as the visible reason. Toasts
+    (`ui/Toasts`) sit above the bar; `components/Toasts.svelte` deleted.
+  - **Dialogs:** unsaved (Save / Continue without saving / Cancel, plus the move detail),
+    enable / disable, start, reboot, quit, reset x2, input move, same account and the
+    service stop / restart confirm are `ui/ConfirmDialog` / `ui/Modal`. App now also owns
+    the outputs and per-seat IP dialogs (for the Advanced page and the seat menus).
+    `ServiceControl` became `ServiceActions.svelte` (restart / stop, neutral secondary, start
+    when stopped; visible disabled reason; optional `onAction` hands the question to App).
+  - **Page prop contracts** (P3-P7 code against these; App passes them as spread objects
+    so pages that do not declare a prop yet still type-check): `SeatsTab { store, commands }`
+    with `commands.enable(on)` (opens the enable question; turning on then starts the seats
+    like the old offer), `startAll()`, `stopAll()` (`store.stopAllSeats`: every running seat
+    except seat 1 and the manager's own seat), `openSettings()`, `restartSeat(n)`;
+    `BasicTab { store, onAdvanced, onDialog(kind) }` (`diagnostics|updates|import|reset1|
+    clearPictures`, type `PageDialog` exported from App's module script);
+    `AdvancedTab { store, onBack, onHotkey, onCpu, onOutputs, onIp(seat) }`;
+    `StatusTab { store, onDiagnostics, onServiceAction(kind) }`;
+    `RemoteTab { store, initialSeat, onSeatsChanged }`. App renders `.scroll > .page` and the
+    notice region: pages render from their Breadcrumb / PageHead down, with no `.page`
+    wrapper and no `main`.
+  - **Store** (new fields, named in the plan): `restartRequired: SeatNumber[]` (filled from
+    `apply_config.restart_seats`, cleared when the seat starts, stops or is restarted),
+    `restartSeat(n)` (stop then start; HYPOTHESIS: the service queues the start behind the
+    stop) and `stopAllSeats()`. P3's seat card shows `t.seatCard.restartNeeded` + Restart
+    from these. `t.saved.restartSeats` is no longer shown (P8 may drop it).
+  - **BEHAVIOUR, needs maintainer test before push:** (1) no modal on launch: the
+    "configured but off" offer and the first-run wizard question are gone (P3's status line
+    "Turn on and start" and empty board replace them); (2) the restart-required info toast
+    is replaced by `store.restartRequired` on the seat card (P3) with Restart; (3) toasts are
+    confirmations only and failures became danger notices that stay until OK. (The remote
+    staged save is P6.)
+  - **Interim until the page packages merge** (all land the same day): with only P2, the
+    old SeatsTab has no status line, so turning on / starting the seats is reachable from the
+    tray only; the Advanced page has no link from the old BasicTab (P4 adds Maintenance >
+    Advanced settings); Updates is reachable after P4 (Settings > Maintenance); the old
+    StatusTab does not show `ServiceActions` until P5.
+  - Visual check: demo on port 5362, own copy of the CDP driver (port 9362), headless Edge,
+    light + dark at 1280x800, 1024x700 and 860x700 (`target/redesign/audit/p2/`), compared
+    with shots 01 (shell), 07 (one notice region, toast, docked bar), 09, 50: same structure,
+    hierarchy and copy. Detector (`bunx impeccable detect --json --no-config` on the changed
+    shell files): no findings.
+  - Gates: manager 285 tests (was 271; no test deleted: the old App / ServiceControl cases
+    were rewritten for the new DOM), check 0 errors / 0 warnings, build OK. No Rust, Tauri,
+    installer or driver code touched.
+
+- 2026-11-17 (integration redesign-p2): merged the P2 app shell (9c0aad7) into main after
+  redesign-p5-status. Conflicts only in `docs/agents/status.md` and `docs/journal.md`
+  (both appends, kept both). Follow-up: P5's `StatusTab` rendered its own `.page` wrapper
+  while P2's App already renders `.scroll > .page`, which doubled the page padding; the
+  wrapper is now a plain `div[data-testid=status-page]`. P2's `statusProps`
+  (`onDiagnostics`, `onServiceAction`) match the props P5 declared. Gates green: cargo
+  1912 / 6 ignored, clippy host aarch64 + x86_64 clean, manager 298 tests, check 0 / 0,
+  build OK, shim tests + check x86_64 / i686 / aarch64, installer scripts 89. No test
+  deleted. Drivers untouched.

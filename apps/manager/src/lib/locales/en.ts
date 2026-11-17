@@ -241,6 +241,7 @@ const t = {
     status: 'Status',
     statusOk: ': service running',
     statusDown: ': service unreachable',
+    statusLink: ': reconnecting to the service',
     count: (n: number) => (n === 1 ? '1 seat' : `${n} seats`),
     version: (v: string) => `Version ${v}`,
     location: 'Location',
