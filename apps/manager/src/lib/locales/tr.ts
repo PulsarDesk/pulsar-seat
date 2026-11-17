@@ -425,7 +425,26 @@ const t = {
     restrictionsHelp: 'Seçili yöntemlerin bu bilgisayardaki sınırları.',
     fallbackTo: (method: string) => `Yedek: ${method}`,
     ok: 'Uygun',
-    remoteSeat: (name: string) => `${name} (uzak)`
+    remoteSeat: (name: string) => `${name} (uzak)`,
+    serviceRow: 'Pulsar Seat hizmeti',
+    versions: (service: string, manager: string, arch: string) => `Sürüm ${service} · yönetici ${manager} · ${arch}`,
+    productRow: 'Pulsar Seat',
+    noStatus: 'Hizmet durumunu bildirmedi.',
+    windowsSession: (id: number) => `Windows oturumu ${id}`,
+    categories: {
+      session: 'Oturum',
+      display: 'Ekran',
+      input: 'Giriş',
+      audio: 'Ses',
+      gates: 'Aygıt erişimi'
+    } as Record<string, string>,
+    notUsed: (wanted: string, why: string) => `${wanted} kullanılamıyor: ${why}`,
+    noRestrictions: 'Seçili yöntemlerin bu bilgisayarda bilinen bir sınırı yok.',
+    allMethods: 'Bu bilgisayardaki bütün yöntemler',
+    allMethodsHelp: 'Bu bilgisayarın neleri kullanabildiği ve öteki yöntemlerin neden kullanılamadığı.',
+    inUse: 'Kullanılıyor',
+    selectedNotInUse: 'Seçili, kullanılmıyor',
+    driversHelp: 'Pulsar Seat sürücüleri henüz imzalı değil; kullanıcı kipi yöntemleri kullanılır.'
   },
 
   /** `DisplayInfo.output_technology` (seat_display::model::output_technology_name). */
