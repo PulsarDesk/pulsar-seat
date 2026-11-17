@@ -58,6 +58,12 @@ pub enum Change {
         name: String,
         previous: Option<RegData>,
         written: Option<RegData>,
+        /// Keys the write created (the key and the ancestors that were missing, deepest
+        /// first). The undo of a value that was absent before removes them again when they
+        /// are empty (VM round 2, 2026-11-17: uninstall left empty policy keys behind).
+        /// Additive: older records have none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        created_keys: Vec<String>,
     },
     /// A power setting (AC index) on a scheme.
     PowerAc {
@@ -637,8 +643,12 @@ fn open_no_follow(path: &Path, create: bool, write: bool) -> std::io::Result<Fil
 
 fn inherit_previous(new: &mut Change, old: &Change) {
     match (new, old) {
-        (Change::Registry { previous, .. }, Change::Registry { previous: p, .. }) => {
-            *previous = p.clone()
+        (Change::Registry { previous, created_keys, .. }, Change::Registry { previous: p, created_keys: c, .. }) => {
+            *previous = p.clone();
+            // The first write created the keys; a later one found them.
+            if created_keys.is_empty() {
+                *created_keys = c.clone();
+            }
         }
         (Change::PowerAc { previous, .. }, Change::PowerAc { previous: p, .. }) => *previous = *p,
         (
@@ -661,6 +671,7 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             name,
             previous,
             written,
+            created_keys,
         } => {
             // Defence in depth: only values a tweak writes are ever restored.
             if !crate::tweaks::is_tweak_target(*hive, key, name) {
@@ -668,6 +679,9 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             }
             let cur = ops.reg_read(*hive, key, name)?;
             if &cur == previous {
+                if previous.is_none() {
+                    remove_created_keys(ops, *hive, key, created_keys);
+                }
                 return Ok(RevertOutcome::AlreadyRestored);
             }
             if &cur != written && !force {
@@ -675,7 +689,10 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             }
             match previous {
                 Some(p) => ops.reg_write(*hive, key, name, p)?,
-                None => ops.reg_delete(*hive, key, name)?,
+                None => {
+                    ops.reg_delete(*hive, key, name)?;
+                    remove_created_keys(ops, *hive, key, created_keys);
+                }
             }
             Ok(RevertOutcome::Restored)
         }
@@ -810,6 +827,41 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
 
 }
 
+/// `key` and its ancestors that do not exist yet, deepest first (at most 8 levels; a key
+/// with fewer than three path parts, like `SOFTWARE\Policies`, is never listed).
+fn missing_keys(ops: &dyn SystemOps, hive: Hive, key: &str) -> Result<Vec<String>, OpsError> {
+    let mut out = Vec::new();
+    let mut k = key.trim_matches('\\').to_string();
+    while out.len() < 8 && k.split('\\').count() >= 3 && !ops.reg_key_exists(hive, &k)? {
+        out.push(k.clone());
+        match k.rfind('\\') {
+            Some(i) => k.truncate(i),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+/// After the undo of a value that was absent before: remove the keys its write created,
+/// deepest first, each only when it is empty. Only `key` itself and its ancestors are ever
+/// touched (a record cannot name another key), and errors are ignored (an empty key left
+/// behind is harmless).
+fn remove_created_keys(ops: &dyn SystemOps, hive: Hive, key: &str, created: &[String]) {
+    let own = key.trim_matches('\\').to_ascii_lowercase();
+    for c in created {
+        let c = c.trim_matches('\\');
+        let l = c.to_ascii_lowercase();
+        let ancestor_or_self = own == l || own.starts_with(&format!("{l}\\"));
+        if !ancestor_or_self || c.split('\\').count() < 3 {
+            continue;
+        }
+        if !matches!(ops.reg_delete_empty_key(hive, c), Ok(true)) {
+            // Not empty (other values or subkeys): its ancestors are not empty either.
+            break;
+        }
+    }
+}
+
 /// Write a registry value through the journal: records the previous value first, then
 /// writes. Returns `false` when the value already had the wanted data (nothing changed,
 /// nothing recorded).
@@ -826,6 +878,7 @@ pub fn set_registry(
     if previous.as_ref() == data {
         return Ok(false);
     }
+    let created_keys = if data.is_some() { missing_keys(ops, hive, key)? } else { Vec::new() };
     let e = j.record(
         owner,
         Change::Registry {
@@ -834,6 +887,7 @@ pub fn set_registry(
             name: name.to_string(),
             previous,
             written: data.cloned(),
+            created_keys,
         },
     )?;
     let res = match data {
@@ -857,6 +911,7 @@ pub fn set_registry(
                         name: name.to_string(),
                         previous: orig.clone(),
                         written: cur,
+                        created_keys: Vec::new(),
                     },
                 )?;
             }
@@ -930,6 +985,46 @@ mod tests {
         d
     }
 
+    /// VM round 2 (2026-11-17): the undo removes the policy keys the writes created (in
+    /// reverse order, each only when empty) and keeps keys that were there before.
+    #[test]
+    fn undo_removes_the_keys_it_created() {
+        const WU: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate";
+        const AU: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
+        let ops = MemoryOps::new();
+        ops.add_key(Hive::Hklm, r"SOFTWARE\Policies\Microsoft\Windows");
+        let j = Journal::memory();
+        set_registry(&j, &ops, "t", Hive::Hklm, WU, "DeferFeatureUpdates", Some(&RegData::Dword(1))).unwrap();
+        set_registry(&j, &ops, "t", Hive::Hklm, WU, "DeferFeatureUpdatesPeriodInDays", Some(&RegData::Dword(9))).unwrap();
+        set_registry(&j, &ops, "t", Hive::Hklm, AU, "NoAutoRebootWithLoggedOnUsers", Some(&RegData::Dword(1))).unwrap();
+        let recs: Vec<Vec<String>> = j
+            .active()
+            .unwrap()
+            .into_iter()
+            .map(|e| match e.change {
+                Change::Registry { created_keys, .. } => created_keys,
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(recs, vec![vec![WU.to_string()], vec![], vec![AU.to_string()]]);
+        // A pre-existing key outside ours with a value stays whatever happens.
+        ops.set(Hive::Hklm, r"SOFTWARE\Policies\Microsoft\Windows\System", "X", RegData::Dword(1));
+        let r = j.revert_all(&ops, false).unwrap();
+        assert!(r.is_clean());
+        assert!(!ops.reg_key_exists(Hive::Hklm, AU).unwrap());
+        assert!(!ops.reg_key_exists(Hive::Hklm, WU).unwrap());
+        assert!(ops.reg_key_exists(Hive::Hklm, r"SOFTWARE\Policies\Microsoft\Windows").unwrap());
+        // A key that existed (empty) before the write is kept.
+        let j2 = Journal::memory();
+        ops.add_key(Hive::Hklm, WU);
+        set_registry(&j2, &ops, "t", Hive::Hklm, WU, "DeferQualityUpdates", Some(&RegData::Dword(1))).unwrap();
+        j2.revert_all(&ops, false).unwrap();
+        assert!(ops.reg_key_exists(Hive::Hklm, WU).unwrap());
+        // Old records without the field still parse.
+        let old = r#"{"kind":"registry","hive":"hklm","key":"A\\B\\C","name":"n","previous":null,"written":null}"#;
+        assert!(matches!(serde_json::from_str::<Change>(old).unwrap(), Change::Registry { ref created_keys, .. } if created_keys.is_empty()));
+    }
+
     #[test]
     fn set_and_revert_registry() {
         let ops = MemoryOps::new();
@@ -996,6 +1091,7 @@ mod tests {
                     name: V.into(),
                     previous: Some(RegData::Dword(7)),
                     written: Some(RegData::Dword(2)),
+                    created_keys: Vec::new(),
                 },
             }))
             .unwrap();
@@ -1037,6 +1133,7 @@ mod tests {
                 name: "ImagePath".into(),
                 previous: Some(RegData::Sz(r"C:\evil.exe".into())),
                 written: None,
+                created_keys: Vec::new(),
             },
         )
         .unwrap();

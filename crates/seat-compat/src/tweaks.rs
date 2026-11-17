@@ -438,6 +438,7 @@ pub fn apply(
                         name: name.clone(),
                         previous: None,
                         written: None,
+                        created_keys: Vec::new(),
                     }
                     .target(),
                 ),
