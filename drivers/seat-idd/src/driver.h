@@ -163,6 +163,7 @@ EVT_IDD_CX_ADAPTER_COMMIT_MODES2 PsiddCommitModes2;
 EVT_IDD_CX_PARSE_MONITOR_DESCRIPTION2 PsiddParseMonitorDescription2;
 EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES2 PsiddQueryTargetModes2;
 EVT_IDD_CX_MONITOR_SET_DEFAULT_HDR_METADATA PsiddSetDefaultHdrMetaData;
+EVT_IDD_CX_MONITOR_SET_GAMMA_RAMP PsiddSetGammaRamp;
 
 /* swapchain.cpp */
 NTSTATUS PsiddCreateSection(PSIDD_MONITOR *m, const uint16_t *readerSid);

@@ -104,6 +104,12 @@ NTSTATUS PsiddDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     if (IDD_IS_FIELD_AVAILABLE(IDD_CX_CLIENT_CONFIG, EvtIddCxMonitorSetDefaultHdrMetaData)) {
         cfg.EvtIddCxMonitorSetDefaultHdrMetaData = PsiddSetDefaultHdrMetaData;
     }
+    /* An FP16 adapter (IDDCX_ADAPTER_FLAGS_CAN_PROCESS_FP16, D0Entry) needs the gamma ramp
+     * callback too: without it IddCxAdapterInitAsync failed on Windows 11 26300 ARM64 and the
+     * devnode stopped with CM_PROB_FAILED_START (VM round 2026-11-17). */
+    if (IDD_IS_FIELD_AVAILABLE(IDD_CX_CLIENT_CONFIG, EvtIddCxMonitorSetGammaRamp)) {
+        cfg.EvtIddCxMonitorSetGammaRamp = PsiddSetGammaRamp;
+    }
 
     status = IddCxDeviceInitConfig(DeviceInit, &cfg);
     if (!NT_SUCCESS(status)) {
@@ -625,6 +631,16 @@ NTSTATUS PsiddCommitModes2(IDDCX_ADAPTER Adapter, const IDARG_IN_COMMITMODES2 *p
             (p->WireFormatInfo.ColorSpace == IDDCX_COLOR_SPACE_G2084_P2020 || p->WireFormatInfo.ColorSpace == IDDCX_COLOR_SPACE_G22_P709_WCG);
         ReleaseSRWLockExclusive(&mc->Device->SwapLocks[mc->Slot]);
     }
+    return STATUS_SUCCESS;
+}
+
+/* Gamma ramp / colour transform of a monitor. The adapter reports GammaSupport NONE, so the
+ * OS applies colour transforms in the composed frame; accepted and not applied here (the
+ * seat host presents the frame on a physical monitor that has its own calibration). */
+NTSTATUS PsiddSetGammaRamp(IDDCX_MONITOR Monitor, const IDARG_IN_SET_GAMMARAMP *pInArgs)
+{
+    UNREFERENCED_PARAMETER(Monitor);
+    UNREFERENCED_PARAMETER(pInArgs);
     return STATUS_SUCCESS;
 }
 
