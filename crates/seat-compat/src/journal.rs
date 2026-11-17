@@ -615,8 +615,14 @@ impl Journal {
         force: bool,
     ) -> Result<RevertReport, JournalError> {
         let mut rep = RevertReport::default();
+        // Keys any record of this journal created (VM round 2 run 3, 2026-11-17): with
+        // every option off one by one, `exclude_driver_updates` created
+        // `Policies\...\WindowsUpdate` and was undone first while `windows_update` values
+        // still lived there; the later undo of those values found the key already there
+        // at their write, so the empty key stayed behind.
+        let created = self.created_keys_all()?;
         for e in entries {
-            match revert_one(ops, &e.change, force) {
+            match revert_one(ops, &e.change, force, &created) {
                 Ok(o) => {
                     self.close(e.seq, o)?;
                     rep.done.push((e.seq, o));
@@ -625,6 +631,21 @@ impl Journal {
             }
         }
         Ok(rep)
+    }
+
+    /// Every registry key a record of this journal created, with its hive (any state).
+    fn created_keys_all(&self) -> Result<Vec<(Hive, String)>, JournalError> {
+        let mut out: Vec<(Hive, String)> = Vec::new();
+        for r in self.records()? {
+            if let Record::Apply(Entry { change: Change::Registry { hive, created_keys, .. }, .. }) = r {
+                for k in created_keys {
+                    if !out.iter().any(|(h, x)| *h == hive && x.eq_ignore_ascii_case(&k)) {
+                        out.push((hive, k));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -663,7 +684,12 @@ fn inherit_previous(new: &mut Change, old: &Change) {
     }
 }
 
-fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutcome, OpsError> {
+fn revert_one(
+    ops: &dyn SystemOps,
+    c: &Change,
+    force: bool,
+    journal_created: &[(Hive, String)],
+) -> Result<RevertOutcome, OpsError> {
     match c {
         Change::Registry {
             hive,
@@ -677,10 +703,11 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             if !crate::tweaks::is_tweak_target(*hive, key, name) {
                 return Ok(RevertOutcome::Refused);
             }
+            let created = created_with_journal(*hive, created_keys, journal_created);
             let cur = ops.reg_read(*hive, key, name)?;
             if &cur == previous {
                 if previous.is_none() {
-                    remove_created_keys(ops, *hive, key, created_keys);
+                    remove_created_keys(ops, *hive, key, &created);
                 }
                 return Ok(RevertOutcome::AlreadyRestored);
             }
@@ -691,7 +718,7 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
                 Some(p) => ops.reg_write(*hive, key, name, p)?,
                 None => {
                     ops.reg_delete(*hive, key, name)?;
-                    remove_created_keys(ops, *hive, key, created_keys);
+                    remove_created_keys(ops, *hive, key, &created);
                 }
             }
             Ok(RevertOutcome::Restored)
@@ -855,11 +882,29 @@ fn remove_created_keys(ops: &dyn SystemOps, hive: Hive, key: &str, created: &[St
         if !ancestor_or_self || c.split('\\').count() < 3 {
             continue;
         }
+        // Already gone (an earlier undo removed it): its ancestors may still be empty.
+        if matches!(ops.reg_key_exists(hive, c), Ok(false)) {
+            continue;
+        }
         if !matches!(ops.reg_delete_empty_key(hive, c), Ok(true)) {
             // Not empty (other values or subkeys): its ancestors are not empty either.
             break;
         }
     }
+}
+
+/// The keys a record created plus those other records of the journal created in the same
+/// hive, deepest first, without duplicates. `remove_created_keys` still keeps only the
+/// record's own key and its ancestors, and deletes only empty keys.
+fn created_with_journal(hive: Hive, own: &[String], journal: &[(Hive, String)]) -> Vec<String> {
+    let mut all: Vec<String> = own.to_vec();
+    for (h, k) in journal {
+        if *h == hive && !all.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+            all.push(k.clone());
+        }
+    }
+    all.sort_by_key(|k| std::cmp::Reverse(k.trim_matches('\\').split('\\').count()));
+    all
 }
 
 /// Write a registry value through the journal: records the previous value first, then
@@ -1023,6 +1068,27 @@ mod tests {
         // Old records without the field still parse.
         let old = r#"{"kind":"registry","hive":"hklm","key":"A\\B\\C","name":"n","previous":null,"written":null}"#;
         assert!(matches!(serde_json::from_str::<Change>(old).unwrap(), Change::Registry { ref created_keys, .. } if created_keys.is_empty()));
+    }
+
+    /// VM round 2 run 3 (2026-11-17): owners undone one by one. The owner whose write
+    /// created the key is undone first, while another owner's values still live there;
+    /// the last undo in that key removes it (the journal remembers who created it).
+    #[test]
+    fn undo_per_owner_removes_a_key_another_owner_created() {
+        const WU: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate";
+        const AU: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
+        let ops = MemoryOps::new();
+        ops.add_key(Hive::Hklm, r"SOFTWARE\Policies\Microsoft\Windows");
+        let j = Journal::memory();
+        set_registry(&j, &ops, "drivers", Hive::Hklm, WU, "ExcludeWUDriversInQualityUpdate", Some(&RegData::Dword(1))).unwrap();
+        set_registry(&j, &ops, "wu", Hive::Hklm, WU, "DeferFeatureUpdates", Some(&RegData::Dword(1))).unwrap();
+        set_registry(&j, &ops, "wu", Hive::Hklm, AU, "NoAutoRebootWithLoggedOnUsers", Some(&RegData::Dword(1))).unwrap();
+        assert!(j.revert_owner(&ops, "drivers", false).unwrap().is_clean());
+        assert!(ops.reg_key_exists(Hive::Hklm, WU).unwrap(), "still holds the other owner's values");
+        assert!(j.revert_owner(&ops, "wu", false).unwrap().is_clean());
+        assert!(!ops.reg_key_exists(Hive::Hklm, AU).unwrap());
+        assert!(!ops.reg_key_exists(Hive::Hklm, WU).unwrap());
+        assert!(ops.reg_key_exists(Hive::Hklm, r"SOFTWARE\Policies\Microsoft\Windows").unwrap());
     }
 
     #[test]
