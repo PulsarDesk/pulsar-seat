@@ -5,13 +5,14 @@
  *
  * Two callouts, IPv4 only (the seat address is IPv4; IPv6 traffic is never touched):
  *
- * - FWPS_LAYER_ALE_BIND_REDIRECT_V4: a TCP / UDP socket of a seat process bound to the
- *   wildcard address (0.0.0.0, explicit or implicit at the first connect / send) is bound
- *   to the seat address instead, port unchanged. Explicit binds to a given address are left
- *   alone (the program chose it).
+ * - FWPS_LAYER_ALE_BIND_REDIRECT_V4: a TCP / UDP socket of a seat process explicitly bound
+ *   to the wildcard address (0.0.0.0: listeners, UDP servers) is bound to the seat address
+ *   instead, port unchanged. Explicit binds to a given address are left alone (the program
+ *   chose it), and so are implicit binds of a first connect / send
+ *   (FWP_CONDITION_FLAG_IS_IMPLICIT_BIND): their destination may be loopback.
  * - FWPS_LAYER_ALE_CONNECT_REDIRECT_V4: an outbound TCP connect / UDP flow of a seat process
- *   to a non-loopback destination gets the seat address as its local address (backstop for
- *   sockets bound before the map arrived). Connections redirected by another callout are
+ *   to a non-loopback destination gets the seat address as its local address (implicitly
+ *   bound sockets, and sockets bound before the map arrived). Connections redirected by another callout are
  *   left alone (FwpsQueryConnectionRedirectState0), and so are sockets the program bound
  *   explicitly to a given address: the bind classify records their transport endpoint
  *   handle and address in a small table (SeatWfpBound*), the connect classify skips an
@@ -253,6 +254,21 @@ SeatWfpClassifyBind(_In_ const FWPS_INCOMING_VALUES0* inFixedValues, _In_ const 
         return;
     }
     local = inFixedValues->incomingValue[FWPS_FIELD_ALE_BIND_REDIRECT_V4_IP_LOCAL_ADDRESS].value.uint32;
+    if (inFixedValues->incomingValue[FWPS_FIELD_ALE_BIND_REDIRECT_V4_IP_PROTOCOL].value.uint8 == SEATWFP_IPPROTO_TCP &&
+        ((inFixedValues->incomingValue[FWPS_FIELD_ALE_BIND_REDIRECT_V4_FLAGS].value.uint32 & FWP_CONDITION_FLAG_IS_IMPLICIT_BIND) != 0 ||
+         (local == 0 && inFixedValues->incomingValue[FWPS_FIELD_ALE_BIND_REDIRECT_V4_IP_LOCAL_PORT].value.uint16 == 0))) {
+        /* A TCP client socket: the implicit bind of a first connect, or a wildcard bind to
+         * an ephemeral port. Its destination is not known here, and a seat address on a
+         * socket that then connects to 127/8 fails the connect (WSAEADDRNOTAVAIL; VM round
+         * 2026-11-17, the implicit-bind flag alone did not cover .NET clients). The connect
+         * classify, which sees the destination, gives non-loopback connects the seat address
+         * (the SYN left with it in the VM). Listeners bind a port of their own and are
+         * redirected below. UDP keeps the bind redirect: the connect classify's local
+         * address was not honoured for unconnected UDP sends (the datagram left with the
+         * default address), so a UDP socket of a seat process that sends to 127/8 without a
+         * bind of its own fails; such programs go on the seat's program list as exceptions. */
+        return;
+    }
     if (local != 0) {
         /* Explicit bind to an address: left alone, and remembered so the connect backstop
          * leaves it alone too. Only while a map is set (nothing to protect otherwise). */
