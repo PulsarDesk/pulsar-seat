@@ -162,8 +162,12 @@ HYPOTHESIS: no hook ran in a seat on hardware.
   `CreateSemaphoreExW`, `OpenSemaphoreW`, `CreateFileMappingW`, `OpenFileMappingW` hooks
   (kernelbase first, kernel32 fallback; the `A` forms best effort) append
   `.PulsarSeat-<seat>` to matching names. Seat role (own session): only `Global\` names;
-  kiosk role (shared session): every matching name; console / seat 1: never. A name is
-  never rewritten twice. Rules are read once at init (programs started after a change pick
+  kiosk role (shared session): every matching name; local seat 1: never (on or off the
+  console). A fast user switching seat that holds the console keeps the console role but
+  has an identity-only seat map entry (`Flags` bit 16 `console`, no isolation, no pads;
+  `decide::seat_identity`), so its names and Steam override are the same with and without
+  the console (VM round 2, 2026-11-17: before, the seat on the console used the plain
+  names and met seat 1's instance). A name is never rewritten twice. Rules are read once at init (programs started after a change pick
   it up). HYPOTHESIS: the listed programs use these entry points, not the native API.
 - **Steam per local seat**: with `settings.apps.steam_per_seat` the service sets the
   `steam` flag in the local seats' map entries, so `steam.exe` in a local seat's own session

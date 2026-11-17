@@ -5,7 +5,7 @@
 //! per-seat `-master_ipc_name_override`, and the matching variable is set in-process.
 
 use super::hook::Hook;
-use seat_shim_core::decide::Role;
+use seat_shim_core::decide::{Role, seat_identity};
 use seat_shim_core::steam::{IPC_ENV, ipc_name, steam_cmdline_patch};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use windows_sys::Win32::Globalization::{CP_ACP, WideCharToMultiByte};
@@ -23,15 +23,20 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// The seat whose IPC name this process uses: a seat role, or the console role of a fast
+/// user switching seat that holds the console (identity entry, VM round 2). The plan
+/// already leaves local seat 1 out.
 fn seat_id() -> Option<String> {
-    match super::live()? {
-        (Role::Seat { seat_id, .. }, plan, _, _) if plan.steam_cmdline || plan.hkcu_redirect => Some(seat_id),
-        _ => None,
+    let (role, plan, map, _) = super::live()?;
+    if !(plan.steam_cmdline || plan.hkcu_redirect) {
+        return None;
     }
+    let session = super::state()?.facts.session_id;
+    seat_identity(&role, session, &map).map(|e| e.seat_id.clone())
 }
 
 fn active() -> bool {
-    super::live().is_some_and(|(r, p, _, _)| p.steam_cmdline && matches!(r, Role::Seat { .. }))
+    super::live().is_some_and(|(r, p, _, _)| p.steam_cmdline && matches!(r, Role::Seat { .. } | Role::Console))
 }
 
 unsafe extern "system" fn cmd_w() -> *const u16 {

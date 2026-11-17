@@ -787,6 +787,7 @@ impl Engine {
                 xinput_focus: global.process_patching,
                 steam: global.steam_isolation,
                 shared_account: false,
+                console: false,
             },
         };
         match d.seatmap.publish(&entry) {
@@ -1260,6 +1261,7 @@ impl Engine {
                     xinput_focus: run.global.process_patching,
                     steam: run.global.steam_isolation,
                     shared_account: false,
+                    console: false,
                 },
             }
         };

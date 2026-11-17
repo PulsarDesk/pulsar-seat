@@ -3327,6 +3327,31 @@ fn steam_per_local_seat_flag() {
     assert!(map.iter().all(|e| e.flags.steam), "{map:?}");
 }
 
+/// VM round 2 (2026-11-17), fast user switching: the seat that holds the console gets an
+/// identity-only entry (console flag, no isolation, no pads), so its single-instance names
+/// and Steam override stay the same; seat 1 on the console gets none.
+#[test]
+fn console_seat_gets_an_identity_entry() {
+    let mut c = two_seat_config();
+    c.settings.apps.steam_per_seat = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let off = h.s.local_seat_map(&|_| None);
+    assert!(off.iter().all(|e| !e.flags.console), "{off:?}");
+    *h.p.console.lock().unwrap() = Some(10);
+    let on = h.s.local_seat_map(&|_| None);
+    let me = on.iter().find(|e| e.session_id == 10).expect("identity entry");
+    assert_eq!(me.seat_id, seat_input::local_pads::local_seat_pad_id(2));
+    assert!(me.flags.console && me.flags.steam && !me.flags.hid_isolation && !me.flags.xinput_focus);
+    assert!(me.pad_instance_prefixes.is_empty());
+    assert_eq!(seat_shim_core::seatmap::LOCAL_SEAT_ONE_ID, seat_input::local_pads::local_seat_pad_id(1));
+    assert!(on.iter().all(|e| e.seat_id != seat_shim_core::seatmap::LOCAL_SEAT_ONE_ID || !e.flags.console));
+}
+
 // ---- Hyper-V VM seats (hyperv-seats 2026-11-17) ----
 
 const VM_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";

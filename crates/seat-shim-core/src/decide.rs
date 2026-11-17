@@ -68,10 +68,24 @@ pub fn role(p: &ProcessFacts, map: &[SeatMapEntry]) -> Role {
     }
     // Several entries for one session should never exist (the service replaces the key);
     // if they do, the newest generation wins.
-    match map.iter().filter(|e| e.session_id == p.session_id).max_by_key(|e| e.generation) {
+    // Console identity entries (`SeatFlags::console`) never make a seat role.
+    match map.iter().filter(|e| e.session_id == p.session_id && !e.flags.console).max_by_key(|e| e.generation) {
         Some(e) => Role::Seat { seat_id: e.seat_id.clone(), session_id: e.session_id },
         None => Role::None,
     }
+}
+
+/// The seat map entry that names the seat of a process for per-seat names (single-instance
+/// programs, Steam's IPC override): its seat entry in a seat role, or the console identity
+/// entry (`SeatFlags::console`) of its own session in the console role (VM round 2: a fast
+/// user switching seat that holds the console keeps its seat's names). `None` otherwise.
+pub fn seat_identity<'a>(role: &Role, session_id: u32, map: &'a [SeatMapEntry]) -> Option<&'a SeatMapEntry> {
+    let console = match role {
+        Role::Seat { session_id: s, .. } if *s == session_id => false,
+        Role::Console => true,
+        _ => return None,
+    };
+    map.iter().filter(|e| e.session_id == session_id && e.flags.console == console).max_by_key(|e| e.generation)
 }
 
 /// [`role`] with the kiosk map (round 4). A process whose [`ProcessFacts::kiosk_seat`]
@@ -518,14 +532,25 @@ pub fn hook_plan_full(
         Role::Console => {
             // Console-side rule (spec 50 §4.4 / contracts §4.1): the console must not see
             // seat-owned input while any running seat asks for HID isolation.
-            let hid = map.iter().any(|e| e.flags.hid_isolation)
+            let hid = map.iter().any(|e| e.flags.hid_isolation && !e.flags.console)
                 || kiosk.iter().any(|e| e.flags.hid_isolation && e.session_id == p.session_id);
             // Parity 2026-11-17: seat-1 console apps also drop raw-input records of kiosk
             // devices (games and apps that read keyboards / mice through raw input), while a
             // kiosk seat of their session asks for it.
             let raw = kiosk.iter().any(|e| e.flags.raw_input && e.session_id == p.session_id);
             let hid = hid || cfg.camera_rules;
-            HookPlan { hid_open: hid, hid_enumeration: hid, raw_input_data: raw, scard_filter: cfg.reader_rules, ..HookPlan::default() }
+            // A local seat holding the console (fast user switching) keeps its per-seat
+            // names and Steam override (identity entry, VM round 2).
+            let me = seat_identity(role, p.session_id, map).filter(|e| e.seat_id != crate::seatmap::LOCAL_SEAT_ONE_ID);
+            HookPlan {
+                hid_open: hid,
+                hid_enumeration: hid,
+                raw_input_data: raw,
+                scard_filter: cfg.reader_rules,
+                object_names: me.is_some() && cfg.has_object_rules(exe),
+                steam_cmdline: me.is_some_and(|e| e.flags.steam) && exe == "steam.exe",
+                ..HookPlan::default()
+            }
         }
         Role::Kiosk { seat, session_id } => {
             let Some(e) =
@@ -549,7 +574,9 @@ pub fn hook_plan_full(
             };
             let f = e.flags;
             let focus_ok = WNF_FOCUS_CANDIDATES.iter().all(|n| wnf_known_with(build, *n, &cfg.wnf_builds));
-            let steam = f.steam && STEAM_EXES.contains(&exe);
+            // Local seat 1 keeps Steam's default name also while another seat holds the
+            // console (it uses the default when it has the console; VM round 2).
+            let steam = f.steam && STEAM_EXES.contains(&exe) && e.seat_id != crate::seatmap::LOCAL_SEAT_ONE_ID;
             HookPlan {
                 hid_open: f.hid_isolation,
                 hid_enumeration: f.hid_isolation,
@@ -566,14 +593,17 @@ pub fn hook_plan_full(
     }
 }
 
-/// The rewrite scope of a role (`None` = names stay as they are: console, none).
-pub fn object_scope(role: &Role) -> Option<crate::objects::Scope> {
+/// The rewrite scope of a process (`None` = names stay as they are). Kiosk seats by their
+/// number; otherwise the seat of [`seat_identity`], so a fast user switching seat keeps
+/// its names whether or not it holds the console (VM round 2, 2026-11-17). Local seat 1
+/// never gets a suffix (it has the plain names while it holds the console).
+pub fn object_scope(role: &Role, session_id: u32, map: &[SeatMapEntry]) -> Option<crate::objects::Scope> {
     use crate::objects::{Scope, tag};
-    match role {
-        Role::Seat { seat_id, .. } => Some(Scope::OwnSession { tag: tag(seat_id) }),
-        Role::Kiosk { seat, .. } => Some(Scope::SharedSession { tag: format!("kiosk{seat}") }),
-        Role::None | Role::Console => None,
+    if let Role::Kiosk { seat, .. } = role {
+        return Some(Scope::SharedSession { tag: format!("kiosk{seat}") });
     }
+    let e = seat_identity(role, session_id, map)?;
+    (e.seat_id != crate::seatmap::LOCAL_SEAT_ONE_ID).then(|| Scope::OwnSession { tag: tag(&e.seat_id) })
 }
 
 #[cfg(test)]
@@ -592,7 +622,7 @@ mod tests {
             user_sid: "S-1-5-21-1-2-3-1001".into(),
             generation,
             pad_instance_prefixes: vec![],
-            flags: SeatFlags { hid_isolation: true, xinput_focus: true, steam: true, shared_account: false },
+            flags: SeatFlags { hid_isolation: true, xinput_focus: true, steam: true, shared_account: false, console: false },
         }
     }
 
@@ -617,8 +647,47 @@ mod tests {
         assert!(!other.object_names);
         let console = hook_plan(&Role::Console, &facts(1, 1, r"c:\l\launcher.exe"), &map, &cfg, 26100);
         assert!(!console.object_names);
-        assert!(object_scope(&Role::Console).is_none());
-        assert_eq!(object_scope(&Role::Kiosk { seat: 2, session_id: 1 }), Some(crate::objects::Scope::SharedSession { tag: "kiosk2".into() }));
+        assert!(object_scope(&Role::Console, 1, &map).is_none());
+        assert_eq!(object_scope(&Role::Kiosk { seat: 2, session_id: 1 }, 1, &map), Some(crate::objects::Scope::SharedSession { tag: "kiosk2".into() }));
+        assert_eq!(object_scope(&seat_a(), 3, &map), Some(crate::objects::Scope::OwnSession { tag: crate::objects::tag(SEAT_A) }));
+    }
+
+    /// VM round 2 (2026-11-17), fast user switching: the seat that holds the console has an
+    /// identity entry (`console` flag). Its processes keep the console role and rules but
+    /// the seat's names and Steam override; seat 1 never gets either, on or off the console.
+    #[test]
+    fn console_identity_keeps_a_seats_names() {
+        const SEAT_TWO: &str = "5053454c-4f43-4100-8000-000000000002";
+        let console_flags = SeatFlags { hid_isolation: false, xinput_focus: false, steam: true, shared_account: false, console: true };
+        // Seat 2 on the console (session 3), seat 1 off it (session 2).
+        let mut two = entry(SEAT_TWO, 3, 1);
+        two.flags = console_flags;
+        let one = entry(crate::seatmap::LOCAL_SEAT_ONE_ID, 2, 1);
+        let map = vec![two, one];
+        let cfg = ShimConfig {
+            object_rules: vec![crate::objects::ObjectRule { exe: "app.exe".into(), names: vec!["One".into()] }],
+            ..Default::default()
+        };
+        assert_eq!(role(&facts(3, 3, "app.exe"), &map), Role::Console);
+        assert_eq!(role(&facts(3, 9, "app.exe"), &map), Role::None, "an identity entry never makes a seat role");
+        let plan = hook_plan(&Role::Console, &facts(3, 3, r"c:\a\app.exe"), &map, &cfg, 26100);
+        assert!(plan.object_names);
+        assert!(plan.hid_open, "seat 1 off the console asks for HID isolation");
+        let only_identity = hook_plan(&Role::Console, &facts(3, 3, r"c:\a\app.exe"), &map[..1], &cfg, 26100);
+        assert!(!only_identity.hid_open, "the identity entry does not switch on the console HID rule");
+        assert!(hook_plan(&Role::Console, &facts(3, 3, r"c:\s\steam.exe"), &map, &cfg, 26100).steam_cmdline);
+        let tag2 = Some(crate::objects::Scope::OwnSession { tag: crate::objects::tag(SEAT_TWO) });
+        assert_eq!(object_scope(&Role::Console, 3, &map), tag2);
+        // The same seat off the console (a seat entry) gets the same scope.
+        let off = vec![entry(SEAT_TWO, 3, 1)];
+        assert_eq!(object_scope(&Role::Seat { seat_id: SEAT_TWO.into(), session_id: 3 }, 3, &off), tag2);
+        // Seat 1 off the console: no suffix, no Steam override.
+        let seat1 = Role::Seat { seat_id: crate::seatmap::LOCAL_SEAT_ONE_ID.into(), session_id: 2 };
+        assert_eq!(object_scope(&seat1, 2, &map), None);
+        assert!(!hook_plan(&seat1, &facts(2, 3, r"c:\s\steam.exe"), &map, &cfg, 26100).steam_cmdline);
+        // Console without an identity entry (seat 1 on the console): plain names.
+        assert_eq!(object_scope(&Role::Console, 2, &[]), None);
+        assert!(!hook_plan(&Role::Console, &facts(2, 2, r"c:\a\app.exe"), &[], &cfg, 26100).object_names);
     }
 
     #[test]

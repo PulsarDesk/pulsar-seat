@@ -139,11 +139,33 @@ pub(crate) fn local_seat_map(st: &State, console: Option<u32>, parent_of: &dyn F
     let mut out = Vec::new();
     for seat in st.config.seats.iter().filter(|s| s.kind == SeatKind::Local) {
         let Some(owner) = seat_owner(st, &KioskSids::new(), seat.number) else { continue };
-        if Some(owner.session_id) == console || owner.session_id == 0 {
+        if owner.session_id == 0 {
             continue;
         }
         let shared = st.seats.iter().any(|(n, s)| *n != seat.number && s.rt.session_id == Some(owner.session_id));
         if shared {
+            continue;
+        }
+        if Some(owner.session_id) == console {
+            // The seat on the console keeps the console role (no isolation entry), but a
+            // seat other than seat 1 gets an identity entry, so its single-instance names
+            // and Steam override do not change with the console (VM round 2, 2026-11-17).
+            if seat.number != SeatNumber::CONSOLE {
+                out.push(seat_shim_core::SeatMapEntry {
+                    session_id: owner.session_id,
+                    seat_id: local_seat_pad_id(seat.number.get()),
+                    user_sid: owner.user_sid,
+                    generation: 1,
+                    pad_instance_prefixes: Vec::new(),
+                    flags: seat_shim_core::SeatFlags {
+                        hid_isolation: false,
+                        xinput_focus: false,
+                        steam: st.config.settings.apps.steam_per_seat,
+                        shared_account: false,
+                        console: true,
+                    },
+                });
+            }
             continue;
         }
         let mut prefixes: Vec<String> = Vec::new();
@@ -173,6 +195,7 @@ pub(crate) fn local_seat_map(st: &State, console: Option<u32>, parent_of: &dyn F
                 xinput_focus: false,
                 steam: st.config.settings.apps.steam_per_seat,
                 shared_account: false,
+                console: false,
             },
         });
     }

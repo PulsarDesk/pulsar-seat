@@ -23,19 +23,32 @@ pub struct SeatFlags {
     /// the HKCU redirect fallback runs). Addition to the contract.
     #[serde(default)]
     pub shared_account: bool,
+    /// Identity-only entry of the local seat that holds the console session right now (fast
+    /// user switching, VM round 2, 2026-11-17). Its processes keep the console role (HID,
+    /// focus and every other rule ignore the entry); only the per-seat names of single-
+    /// instance programs and Steam's IPC override use it, so a seat's names stay the same
+    /// whether or not it has the console. Addition to the contract (bit 16).
+    #[serde(default)]
+    pub console: bool,
 }
+
+/// Seat id of local seat 1 in the seat map (`seat_input::local_pads::local_seat_pad_id(1)`).
+/// Seat 1 keeps the programs' own names (no per-seat suffix, no Steam override).
+pub const LOCAL_SEAT_ONE_ID: &str = "5053454c-4f43-4100-8000-000000000001";
 
 impl SeatFlags {
     pub const HID: u32 = 1;
     pub const XINPUT_FOCUS: u32 = 2;
     pub const STEAM: u32 = 4;
     pub const SHARED_ACCOUNT: u32 = 8;
+    pub const CONSOLE: u32 = 16;
 
     pub fn bits(self) -> u32 {
         (self.hid_isolation as u32 * Self::HID)
             | (self.xinput_focus as u32 * Self::XINPUT_FOCUS)
             | (self.steam as u32 * Self::STEAM)
             | (self.shared_account as u32 * Self::SHARED_ACCOUNT)
+            | (self.console as u32 * Self::CONSOLE)
     }
     pub fn from_bits(b: u32) -> Self {
         Self {
@@ -43,6 +56,7 @@ impl SeatFlags {
             xinput_focus: b & Self::XINPUT_FOCUS != 0,
             steam: b & Self::STEAM != 0,
             shared_account: b & Self::SHARED_ACCOUNT != 0,
+            console: b & Self::CONSOLE != 0,
         }
     }
 }
@@ -154,7 +168,7 @@ pub fn decode_entry(values: &[(String, RegValue)]) -> Result<SeatMapEntry, ShimE
         flags: find(values, V_FLAGS)
             .and_then(RegValue::as_dword)
             .map(SeatFlags::from_bits)
-            .unwrap_or(SeatFlags { hid_isolation: true, xinput_focus: true, steam: true, shared_account: false }),
+            .unwrap_or(SeatFlags { hid_isolation: true, xinput_focus: true, steam: true, shared_account: false, console: false }),
     })
 }
 
@@ -183,7 +197,7 @@ mod tests {
             user_sid: "S-1-5-21-1-2-3-1001".into(),
             generation: 7,
             pad_instance_prefixes: vec![r"usb\vid_045e&pid_028e\1&2d595ca7&0&01".into()],
-            flags: SeatFlags { hid_isolation: true, xinput_focus: false, steam: true, shared_account: false },
+            flags: SeatFlags { hid_isolation: true, xinput_focus: false, steam: true, shared_account: false, console: false },
         }
     }
 
@@ -203,7 +217,7 @@ mod tests {
 
     #[test]
     fn flags_bits() {
-        let f = SeatFlags { hid_isolation: true, xinput_focus: true, steam: false, shared_account: true };
+        let f = SeatFlags { hid_isolation: true, xinput_focus: true, steam: false, shared_account: true, console: false };
         assert_eq!(f.bits(), 1 | 2 | 8);
         assert_eq!(SeatFlags::from_bits(f.bits()), f);
     }

@@ -178,11 +178,16 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         // The console only needs the HID rule, and only while a seat asks for it; and the
         // raw-input data filter while a kiosk seat of its session runs (parity 2026-11-17:
         // kiosk keyboards / mice never reach seat-1 apps through raw input).
+        // A fast user switching seat that holds the console keeps its per-seat names and
+        // Steam override (identity entry, VM round 2); the hooks for listed programs are in
+        // place either way and the live plan decides.
         return HookPlan {
             hid_open: now.plan.hid_open,
             hid_enumeration: now.plan.hid_enumeration,
             raw_input_data: now.plan.raw_input_data,
             scard_filter: cfg.reader_rules,
+            object_names: cfg.has_object_rules(exe),
+            steam_cmdline: now.plan.steam_cmdline,
             ..Default::default()
         };
     }

@@ -20,13 +20,13 @@ const K: &[&str] = &["kernelbase.dll", "kernel32.dll"];
 const MAX_NAME: usize = 32_767;
 
 fn new_name(name: &str) -> Option<String> {
-    let (role, plan, _, _) = super::live()?;
+    let (role, plan, map, _) = super::live()?;
     if !plan.object_names {
         return None;
     }
     let st = super::state()?;
     let rules = rules_for(st.facts.exe_name(), &st.cfg.object_rules);
-    let scope = object_scope(&role)?;
+    let scope = object_scope(&role, st.facts.session_id, &map)?;
     let out = rewrite(name, &rules, &scope)?;
     super::log::redirect("object_name", &out);
     Some(out)
