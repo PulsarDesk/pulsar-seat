@@ -114,6 +114,14 @@ pub enum Change {
     /// proxy DLL, added 2026-11-17, `crate::steam`). Undone by moving it back while its
     /// place is free.
     QuarantinedFile { original: String, quarantined: String },
+    /// A certificate we added to a machine store on the installer's opt-in (it was not in
+    /// that store before; added 2026-11-17, `crate::certs`). Undone by deleting it from
+    /// that store again.
+    Certificate { store: crate::certs::CertStore, thumbprint: String },
+    /// An optional Windows feature we turned on at the installer's opt-in (it was off
+    /// before; added 2026-11-17, `crate::features`). Informational: uninstall keeps the
+    /// feature (other software may rely on it by then).
+    OptionalFeature { name: String },
 }
 
 impl Change {
@@ -157,6 +165,8 @@ impl Change {
                 format!("userenv:{}:{}", sid.to_ascii_uppercase(), name.to_ascii_lowercase())
             }
             Self::QuarantinedFile { original, .. } => format!("quarantine:{}", original.to_ascii_lowercase()),
+            Self::Certificate { store, thumbprint } => format!("cert:{store:?}:{}", thumbprint.to_ascii_uppercase()),
+            Self::OptionalFeature { name } => format!("feature:{}", name.to_ascii_lowercase()),
         }
     }
 }
@@ -784,6 +794,18 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             ops.file_move(quarantined, original)?;
             Ok(RevertOutcome::Restored)
         }
+        Change::Certificate { store, thumbprint } => {
+            if !crate::certs::is_thumbprint(thumbprint) {
+                return Ok(RevertOutcome::Refused);
+            }
+            if !ops.cert_thumbprints(*store)?.iter().any(|t| t.eq_ignore_ascii_case(thumbprint)) {
+                return Ok(RevertOutcome::AlreadyRestored);
+            }
+            ops.cert_remove(*store, thumbprint)?;
+            Ok(RevertOutcome::Restored)
+        }
+        // Kept on purpose (see `crate::features`).
+        Change::OptionalFeature { .. } => Ok(RevertOutcome::Closed),
     }
 
 }

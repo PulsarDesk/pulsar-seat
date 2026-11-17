@@ -1291,6 +1291,16 @@ impl Engine {
         self.d().pads.as_ref().map(|p| lock(p).pump()).unwrap_or(0)
     }
 
+    /// Runs `f` with the pad manager's channel generation and its live input-event handles,
+    /// under the pad lock (so the handles stay valid for the call; the pad pump duplicates
+    /// them there). `None` without pads. Added 2026-11-17 (Split OQ integrator-2).
+    pub fn with_pad_events<R>(&self, f: impl FnOnce(u64, &[isize]) -> R) -> Option<R> {
+        self.d().pads.as_ref().map(|p| {
+            let g = lock(p);
+            f(g.channels_generation(), &g.input_events())
+        })
+    }
+
     pub fn has_pads(&self) -> bool {
         self.d().pads.is_some()
     }

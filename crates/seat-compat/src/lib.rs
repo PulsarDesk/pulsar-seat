@@ -23,6 +23,8 @@
 //! | [`rights`] | opt-in "Deny log on locally" for RDP-signed-in seat accounts (`LsaAddAccountRights`), journaled |
 //! | [`user_env`] | per-seat environment variables in the seat user's `Environment` key, journaled |
 //! | [`steam`] | Steam folders, legacy proxy-DLL report, journaled quarantine / restore |
+//! | [`certs`] | opt-in import of the package's own publisher certificate at install (visible choice), journaled |
+//! | [`features`] | opt-in optional Windows features at install (VirtualMachinePlatform, Hyper-V, Sandbox) via DISM, journaled |
 //! | [`setup`] | install / uninstall steps for the service sub-commands, exit codes |
 //! | `winsec` (Windows) | trust checks for SYSTEM-only files: owner, DACL, links; owner + DACL hardening |
 //!
@@ -35,10 +37,12 @@
 //! journaled and undone on disable / uninstall (compat-tweaks 2026-11-17).
 
 pub mod apps;
+pub mod certs;
 pub mod coexist;
 pub mod cpu;
 pub mod defender;
 pub mod drivers;
+pub mod features;
 pub mod gpu_pref;
 pub mod hvsock;
 pub mod hyperv;
@@ -60,6 +64,8 @@ pub mod wfp;
 pub mod launcher;
 #[cfg(windows)]
 pub mod win;
+#[cfg(windows)]
+pub mod win_certs;
 #[cfg(windows)]
 pub mod win_extra;
 #[cfg(windows)]

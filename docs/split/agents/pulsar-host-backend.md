@@ -236,6 +236,16 @@ Why a second pipe: the service reads the control pipe about once a second (§3.4
 are polled), so audio on it would arrive in 1 s bursts and could fill the pipe buffer and
 block the host's event writes.
 
+**Pulsar Seat side complete (2026-11-17, package remote-smalls).** Nothing more is needed
+in this repo once a host implements the table above: the pipe, the `mic` capability check,
+the `config.apply` key, the hold's `AUDIO_INPUT` channel and the status values exist and are
+tested with a fake host. Since 2026-11-17 the hold also sends 20 ms of silence while the
+server has the capture open and no client PCM arrived for 100 ms (before the client opens its
+microphone, after it closes it, during gaps), as an idle RDP client would, so capture
+readers in the seat never stall (`seat_rdp::headless::mic::HoldMic::tick`). The host must
+not send silence itself. DualSense microphones (pad mic) go through the media section of §5,
+not this pipe.
+
 **HYPOTHESIS (untested, no host and no RDP target here):** Windows creates the seat
 session's capture endpoint when the hold sets `INFO_AUDIOCAPTURE`; the server picks one of
 the offered 48 kHz formats; apps in the seat see a microphone; latency stays low enough for

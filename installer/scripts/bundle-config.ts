@@ -81,8 +81,13 @@ function wixId(prefix: string, s: string, i: number): string {
 /**
  * WiX v3 fragment: `ComponentGroup PulsarSeatDriverPackages` with one directory per package
  * under `PulsarSeatDriversDir` (installer/wix/PulsarSeat.wxs). Empty group when none.
+ * `publisherCert` (build-installer.ps1 -PublisherCert, 2026-11-17): the package's own public
+ * publisher certificate, installed as `certs\publisher.cer` next to the service and offered
+ * for import only through the unchecked `PSIMPORTCERT` choice (property `PSHASCERT` = 1
+ * shows it). Never a key: only a `.cer` file is taken.
  */
-export function driversFragment(pkgs: DriverPackage[]): string {
+export function driversFragment(pkgs: DriverPackage[], publisherCert?: string): string {
+  if (publisherCert !== undefined && !/\.cer$/i.test(publisherCert)) throw new Error(`publisher certificate must be a .cer file: ${publisherCert}`);
   const dirs: string[] = [];
   const refs: string[] = [];
   pkgs.forEach((p, i) => {
@@ -107,12 +112,25 @@ export function driversFragment(pkgs: DriverPackage[]): string {
     '  <Fragment>',
     // PulsarSeat.wxs schedules a reboot (msiexec exit 3010) when this build stages drivers.
     ...(pkgs.length ? ['    <Property Id="PSHASDRIVERS" Value="1" />'] : []),
+    ...(publisherCert ? ['    <Property Id="PSHASCERT" Value="1" />'] : []),
     '    <DirectoryRef Id="PulsarSeatDriversDir">',
     ...dirs,
     '    </DirectoryRef>',
+    ...(publisherCert
+      ? [
+          '    <DirectoryRef Id="INSTALLDIR">',
+          '      <Directory Id="PulsarSeatCertsDir" Name="certs">',
+          '        <Component Id="PsPublisherCert" Guid="*" Win64="yes">',
+          `          <File Id="PsPublisherCert" Name="publisher.cer" Source="${xmlAttr(publisherCert)}" KeyPath="yes" />`,
+          '        </Component>',
+          '      </Directory>',
+          '    </DirectoryRef>'
+        ]
+      : []),
     '    <ComponentGroup Id="PulsarSeatDriverPackages">',
     // An empty group is valid WiX; the drivers folder itself comes from PulsarSeat.wxs.
     ...refs,
+    ...(publisherCert ? ['      <ComponentRef Id="PsPublisherCert" />'] : []),
     '    </ComponentGroup>',
     '  </Fragment>',
     '</Wix>',
@@ -260,7 +278,9 @@ if (import.meta.main) {
   const pkgs = listDriverPackages(arg('--drivers'));
   const frag = join(dirname(out), 'PulsarSeatDrivers.wxs');
   mkdirSync(dirname(out), { recursive: true });
-  await Bun.write(frag, driversFragment(pkgs));
+  const cert = arg('--publisher-cert');
+  if (cert && !existsSync(cert)) throw new Error(`--publisher-cert missing: ${cert}`);
+  await Bun.write(frag, driversFragment(pkgs, cert ? resolve(cert) : undefined));
   const remoteArg = arg('--remote');
   const remoteDir = remoteArg ? resolve(remoteArg) : null;
   if (remoteDir && !existsSync(remoteDir)) throw new Error(`--remote folder missing: ${remoteDir}`);

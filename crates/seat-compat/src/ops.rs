@@ -233,6 +233,31 @@ pub trait SystemOps: Send + Sync {
             .or_else(|_| std::fs::copy(from, to).and_then(|_| std::fs::remove_file(from)))
             .map_err(|e| OpsError::new("file_move", e.to_string()))
     }
+
+    /// SHA-1 thumbprints (upper-case hex) of the certificates in a local-machine store.
+    /// Added 2026-11-17 (`crate::certs`).
+    fn cert_thumbprints(&self, _store: crate::certs::CertStore) -> OpsResult<Vec<String>> {
+        Err(unsupported("cert_thumbprints"))
+    }
+    /// Add a DER certificate to a local-machine store.
+    fn cert_add(&self, _store: crate::certs::CertStore, _der: &[u8]) -> OpsResult<()> {
+        Err(unsupported("cert_add"))
+    }
+    /// Delete the certificate with this thumbprint from a local-machine store.
+    fn cert_remove(&self, _store: crate::certs::CertStore, _thumbprint: &str) -> OpsResult<()> {
+        Err(unsupported("cert_remove"))
+    }
+
+    /// State of an optional Windows feature (DISM name). Added 2026-11-17
+    /// (`crate::features`).
+    fn feature_state(&self, _name: &str) -> OpsResult<crate::features::FeatureState> {
+        Err(unsupported("feature_state"))
+    }
+    /// Turn an optional feature on (all parents, no restart, no Windows Update source).
+    /// `Ok(true)` = a restart is needed.
+    fn feature_enable(&self, _name: &str) -> OpsResult<bool> {
+        Err(unsupported("feature_enable"))
+    }
 }
 
 /// `S-1-5-21-…`-shaped string (digits and dashes only), so it can never name another key.
@@ -263,7 +288,14 @@ pub struct MemoryOps {
     pub rights: Mutex<BTreeMap<String, Vec<String>>>,
     /// Files that exist (lower-case paths).
     pub files: Mutex<std::collections::BTreeSet<String>>,
+    /// Certificate stores: store -> (thumbprint, DER).
+    pub certs: Mutex<BTreeMap<crate::certs::CertStore, Vec<MemoryCert>>>,
+    /// Optional features by DISM name (absent = unavailable).
+    pub features: Mutex<BTreeMap<String, crate::features::FeatureState>>,
 }
+
+/// (thumbprint, DER) of a certificate in a [`MemoryOps`] store.
+pub type MemoryCert = (String, Vec<u8>);
 
 fn norm(key: &str) -> String {
     key.trim_matches('\\').to_ascii_lowercase()
@@ -490,6 +522,36 @@ impl SystemOps for MemoryOps {
     }
     fn file_exists(&self, path: &str) -> OpsResult<bool> {
         Ok(self.files.lock().unwrap().contains(&path.to_ascii_lowercase()))
+    }
+    fn cert_thumbprints(&self, store: crate::certs::CertStore) -> OpsResult<Vec<String>> {
+        Ok(self.certs.lock().unwrap().get(&store).map(|v| v.iter().map(|(t, _)| t.clone()).collect()).unwrap_or_default())
+    }
+    fn cert_add(&self, store: crate::certs::CertStore, der: &[u8]) -> OpsResult<()> {
+        self.take_fail("cert_add")?;
+        let tp = crate::certs::thumbprint(der);
+        let mut g = self.certs.lock().unwrap();
+        let v = g.entry(store).or_default();
+        if !v.iter().any(|(t, _)| *t == tp) {
+            v.push((tp, der.to_vec()));
+        }
+        Ok(())
+    }
+    fn cert_remove(&self, store: crate::certs::CertStore, thumbprint: &str) -> OpsResult<()> {
+        self.take_fail("cert_remove")?;
+        if let Some(v) = self.certs.lock().unwrap().get_mut(&store) {
+            v.retain(|(t, _)| !t.eq_ignore_ascii_case(thumbprint));
+        }
+        Ok(())
+    }
+    fn feature_state(&self, name: &str) -> OpsResult<crate::features::FeatureState> {
+        Ok(self.features.lock().unwrap().get(name).copied().unwrap_or(crate::features::FeatureState::Unavailable))
+    }
+    fn feature_enable(&self, name: &str) -> OpsResult<bool> {
+        self.take_fail("feature_enable")?;
+        let mut g = self.features.lock().unwrap();
+        let st = g.get_mut(name).ok_or_else(|| OpsError::new("feature_enable", "unknown feature"))?;
+        *st = crate::features::FeatureState::EnablePending;
+        Ok(true)
     }
     fn file_move(&self, from: &str, to: &str) -> OpsResult<()> {
         self.take_fail("file_move")?;

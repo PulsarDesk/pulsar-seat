@@ -73,6 +73,8 @@ LangString PsAskRestorePoint 1033 "Create a restore point before system settings
 LangString PsAskRestorePoint 1055 "Sistem ayarları değiştirilmeden önce bir geri yükleme noktası oluşturulsun mu?"
 LangString PsBadTweaks 1033 "The /TWEAKS value is invalid (only lowercase letters, _ and commas are allowed); no system setting will change."
 LangString PsBadTweaks 1055 "/TWEAKS değeri geçersiz (yalnızca küçük harf, _ ve virgül kullanılabilir); sistem ayarı değiştirilmeyecek."
+LangString PsBadFeatures 1033 "The /FEATURES value is invalid (only lowercase letters, _ and commas are allowed); no Windows feature will change."
+LangString PsBadFeatures 1055 "/FEATURES değeri geçersiz (yalnızca küçük harf, _ ve virgül kullanılabilir); hiçbir Windows bileşeni değiştirilmeyecek."
 LangString PsAskFastStartup 1033 "Turn off fast startup?$\r$\n$\r$\nAll seats start clean after a shutdown. The old setting comes back when Pulsar Seat is removed."
 LangString PsAskFastStartup 1055 "Hızlı başlatma kapatılsın mı?$\r$\n$\r$\nKapatıp açınca tüm koltuklar temiz başlar. Pulsar Seat kaldırılınca eski ayar geri yüklenir."
 LangString PsAskSleep 1033 "Turn off sleep and display off on mains power?$\r$\n$\r$\nWhile nobody works on one seat, the other seats do not sleep. The active power plan changes; it is restored at uninstall."
@@ -117,6 +119,7 @@ LangString PsDetails 1055 "Ayrıntılar:"
 
 Var PsRestore
 Var PsTweaks
+Var PsFeatures
 
 !macro PS_RUN_SETUP ARGS
   nsExec::ExecToLog '"${PS_SERVICE_EXE}" ${ARGS}'
@@ -337,9 +340,26 @@ FunctionEnd
     ps_no_dump:
   ${EndIf}
 
+  ; Optional Windows features (spec/remote 90 §2.4): command line only (/FEATURES=ids),
+  ; validated like /TWEAKS; never asked for. The publisher certificate import is MSI only
+  ; (this setup.exe ships no certificate).
+  ClearErrors
+  ${GetOptions} $R0 "/FEATURES=" $PsFeatures
+  ${If} ${Errors}
+    StrCpy $PsFeatures ""
+  ${Else}
+    Push $PsFeatures
+    Call PsValidTweaks
+    Pop $1
+    ${If} $1 != "1"
+      MessageBox MB_ICONEXCLAMATION|MB_OK "$(PsBadFeatures)" /SD IDOK
+      StrCpy $PsFeatures ""
+    ${EndIf}
+  ${EndIf}
+
   ; --- service record + compat steps (gate again, restore point, tweaks, drivers) -------
-  ; Every variable part is quoted; $PsTweaks is validated above, $PsRestore is 0 / 1.
-  !insertmacro PS_RUN_SETUP 'install --register-service --restore-point=$PsRestore "--tweak=$PsTweaks" "--drivers=$INSTDIR\drivers"'
+  ; Every variable part is quoted; $PsTweaks / $PsFeatures are validated above, $PsRestore is 0 / 1.
+  !insertmacro PS_RUN_SETUP 'install --register-service --restore-point=$PsRestore "--tweak=$PsTweaks" "--features=$PsFeatures" "--drivers=$INSTDIR\drivers"'
   ${If} $0 == "4"
     ; Refused (the PC changed since PREINSTALL): undo what this run laid down, so no
     ; half-installed product stays behind (service record, binaries, uninstall entry).

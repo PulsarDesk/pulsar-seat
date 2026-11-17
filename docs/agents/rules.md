@@ -41,7 +41,13 @@ remote). Since merge step 10 this file holds the union of Seat's rules and Pulsa
 - Every third-party artefact we ship is pinned by URL and SHA-256
   (`installer/remote/drivers.json`, `installer/remote/stream-server.json`) and checked at
   build time (`installer/scripts/fetch-deps.ts`, `check-payload.ts`). Nothing unpinned is
-  downloaded or bundled. No certificate is ever installed on a user machine.
+  downloaded or bundled. No certificate is installed on a user machine without the
+  operator's explicit, visible opt-in: the only exception (maintainer's full-parity round,
+  2026-11-17) is the unchecked installer choice `PSIMPORTCERT=1`, which imports the
+  package's own public publisher certificate (`certs\publisher.cer`, a leaf code-signing
+  certificate, never a CA) into `TrustedPublisher` (+ `Root` when self-signed), journaled
+  and removed at uninstall (`seat_compat::certs`). Optional Windows features follow the same
+  rule (`PSWINFEATURES`, unchecked, `seat_compat::features`).
 
 ## Local services
 

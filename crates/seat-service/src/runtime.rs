@@ -5,7 +5,7 @@
 //!
 //! Remote seats (merge step 6): the remote seat worker (`crate::remote::win::build`) is
 //! part of the [`Service`]; this runtime also drives its engine: a 1 s engine tick, the
-//! 4 ms pad pump, the shim health pipe and session-change forwarding.
+//! pad pump (wakes on pad input events, at least every 4 ms), the shim health pipe and session-change forwarding.
 //!
 //! Local seats' virtual pads (round 4): a [seat_input::local_pads::LocalPadHub] on the
 //! engine's pad manager, synced with the routed pads (crate::local_pads::targets) on the
@@ -319,17 +319,22 @@ impl Running {
         self.start_health();
     }
 
-    /// Remote seats' pad input pump: every 4 ms (HYPOTHESIS from Pulsar Split: enough for
-    /// controller input).
+    /// Remote seats' pad input pump. Since 2026-11-17 (Split OQ integrator-2) it waits on the
+    /// pad channels' input events (duplicated, so a channel dropped meanwhile cannot leave a
+    /// dangling handle) and wakes at once when a seat process writes input; it still runs at
+    /// least every 4 ms for the feedback, media rings and outgoing messages. HYPOTHESIS:
+    /// lower input latency than the old fixed 4 ms sleep; never measured on hardware.
     fn start_pad_pump(&self) {
         let (Some(e), stop) = (self.engine.clone(), self.stop.clone()) else { return };
         if !e.has_pads() {
             return;
         }
         std::thread::spawn(move || {
+            let mut set = PadWaitSet::default();
             while !stop.load(Ordering::SeqCst) {
                 e.pump_pads();
-                std::thread::sleep(Duration::from_millis(4));
+                e.with_pad_events(|generation, handles| set.refresh(generation, handles));
+                set.wait(Duration::from_millis(4));
             }
         });
     }
@@ -406,5 +411,62 @@ fn sync_local_pads(s: &Service, hub: &Mutex<Option<seat_input::local_pads::Local
             N::Denied { unit_key, detail } => log::warn(&format!("local pad {unit_key}: no virtual pad: {detail}")),
             N::OpenFailed { unit_key, error } => log::warn(&format!("local pad {unit_key}: physical pad not opened: {error}")),
         }
+    }
+}
+/// Duplicated input-event handles of the pad channels (the pad pump's wait set).
+#[derive(Default)]
+struct PadWaitSet {
+    generation: Option<u64>,
+    handles: Vec<windows_sys::Win32::Foundation::HANDLE>,
+}
+
+// SAFETY: kernel handles owned by this set; usable from any thread.
+unsafe impl Send for PadWaitSet {}
+
+impl PadWaitSet {
+    /// Rebuild when the channel set changed (called under the pad lock).
+    fn refresh(&mut self, generation: u64, events: &[isize]) {
+        use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        if self.generation == Some(generation) {
+            return;
+        }
+        self.close();
+        // WaitForMultipleObjects takes at most 64 handles (MAXIMUM_WAIT_OBJECTS).
+        for &h in events.iter().take(64) {
+            let mut dup: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+            // SAFETY: `h` is a live event of the pad manager (its lock is held by the caller).
+            let ok = unsafe {
+                DuplicateHandle(GetCurrentProcess(), h as _, GetCurrentProcess(), &mut dup, 0, 0, DUPLICATE_SAME_ACCESS)
+            };
+            if ok != 0 && !dup.is_null() {
+                self.handles.push(dup);
+            }
+        }
+        self.generation = Some(generation);
+    }
+
+    /// Wait for any input event or `max`.
+    fn wait(&self, max: Duration) {
+        use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
+        if self.handles.is_empty() {
+            std::thread::sleep(max);
+            return;
+        }
+        // SAFETY: owned, valid handles; bounded timeout.
+        unsafe { WaitForMultipleObjects(self.handles.len() as u32, self.handles.as_ptr(), 0, max.as_millis() as u32) };
+    }
+
+    fn close(&mut self) {
+        for h in self.handles.drain(..) {
+            // SAFETY: duplicated by `refresh`, closed once.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(h) };
+        }
+    }
+}
+
+impl Drop for PadWaitSet {
+    fn drop(&mut self) {
+        self.close();
     }
 }

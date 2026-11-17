@@ -69,9 +69,27 @@ installer/scripts` covers the scripts.
   `/norestart` such a `/qn` run restarts the PC at the end: always pass `/norestart` in
   deployments. `/qn` and `/qb` upgrades stop running seats **without asking**; full UI
   asks first.
+- Optional Windows features and the publisher certificate (spec/remote 90 §2.4 / §2.5,
+  parity round 2026-11-17): `PSWINFEATURES=virtual_machine_platform,hyper_v,windows_sandbox`
+  turns those features on through `dism.exe /Online /Enable-Feature /All /NoRestart
+  /LimitAccess` (no Windows Update source); a feature that is already on is left alone, one
+  the edition lacks is logged as unavailable; each change is journaled and **kept at
+  uninstall** (other software may rely on it; `setup.log` and the dialog say so).
+  `PSIMPORTCERT=1` imports the package's own `certs\publisher.cer` (only in a build made
+  with `build-installer.ps1 -PublisherCert <file.cer>`; refused for a CA, without the
+  code-signing usage, or for a file carrying a private key) into
+  `LocalMachine\TrustedPublisher`, plus `Root` when it is self-signed; a store that already
+  has it is not touched; each add is journaled and removed at uninstall. While it is in
+  `TrustedPublisher`, driver catalogs signed by exactly that certificate (thumbprint) are
+  staged besides Microsoft-signed ones. Both are off by default and are visible check boxes
+  on the "Optional Windows components" page (the certificate box only when the build ships
+  one). NSIS (not shipped) takes `/FEATURES=` on the command line only. HYPOTHESIS: never
+  run on a PC; a self-signed **kernel** driver still does not load with Secure Boot on,
+  whatever the stores hold.
 - MSI full UI: an options page after the install folder (restore point, fast startup off
   — offered only while fast startup is on —, sleep off, small crash dumps; all off by
-  default) sets `PSRESTOREPOINT` / `PSTWEAKS`; removal from the MSI's own maintenance UI
+  default) sets `PSRESTOREPOINT` / `PSTWEAKS`, then the "Optional Windows components" page
+  sets `PSWINFEATURES` / `PSIMPORTCERT`; removal from the MSI's own maintenance UI
   shows a "delete settings and logs too" page (`REMOVEUSERDATA`). Removal from Settings
   runs with reduced UI and keeps `%ProgramData%\Pulsar Seat`; quiet removal with data:
   `msiexec /x PulsarSeat_<v>_<arch>.msi /qn REMOVEUSERDATA=1`. The update download cache
@@ -111,8 +129,9 @@ Full ordered list, including accounts and approvals: [docs/release/checklist.md]
    `SHA256SUMS.txt`). Unsigned artefacts are for testing only.
 2. The maintainer signs every exe / dll **before** bundling (or re-bundles with signed
    binaries) and the MSI itself, with a publicly trusted code-signing certificate and an
-   RFC 3161 timestamp (`installer\scripts\sign-authenticode.ps1`). No certificate is ever
-   installed on a user machine. Rehearsal with the test certificate:
+   RFC 3161 timestamp (`installer\scripts\sign-authenticode.ps1`). No certificate is
+   installed on a user machine unless the operator ticks the publisher-certificate choice
+   of a `-PublisherCert` build (see "Target"). Rehearsal with the test certificate:
    `installer\scripts\sign-dryrun.ps1` (docs/release/signing-dry-run.md).
 3. `installer\scripts\build-setup.ps1 -Arch <arch> -Msi <signed msi> -Release` per arch,
    then sign the two `PulsarSeat_<x.y.z>_<arch>_setup.exe`.
@@ -297,7 +316,8 @@ open the pipe client in `cli.rs` the way `seat_compat::seatapi::connect` does
 ## Never
 
 Firewall **allow** rules (the manager talks to the service over a local pipe; spec 90 §11
-item 8), Defender exclusions, test-signing, certificate imports, DeviceGuard / CI policy values,
+item 8), Defender exclusions, test-signing, certificate imports or optional features
+without the operator's tick (`PSIMPORTCERT` / `PSWINFEATURES` are unchecked), DeviceGuard / CI policy values,
 Windows Update blocking or deferral values, `DenyDeviceClasses`, class-wide filter edits,
 files in `System32`, legacy driver services.
 

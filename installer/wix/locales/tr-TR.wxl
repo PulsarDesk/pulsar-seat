@@ -14,6 +14,8 @@
   <String Id="PsBadDrivers">PULSARDRIVERS geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.</String>
   <String Id="PsBadConsent">PULSARCONSENT geçersiz: yalnızca sürücü adları ve virgül kullanılabilir.</String>
   <String Id="PsBadRemoveUserData">REMOVEUSERDATA yalnızca 0 ya da 1 olabilir.</String>
+  <String Id="PsBadFeatures">PSWINFEATURES geçersiz: yalnızca küçük harf, alt çizgi ve virgül kullanılabilir.</String>
+  <String Id="PsBadImportCert">PSIMPORTCERT yalnızca 0 ya da 1 olabilir.</String>
   <String Id="PsServiceDisplayName">Pulsar Seat Hizmeti</String>
   <String Id="PsServiceDescription">Bir bilgisayarda birden çok koltuğu (ekran, klavye, fare, ses) yönetir.</String>
   <String Id="PsStopSeatsText">Pulsar Seat hizmeti güncellenecek, onarılacak ya da kaldırılacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.&#13;&#10;&#13;&#10;Devam edilsin mi?</String>
@@ -26,6 +28,14 @@
   <String Id="PsOptSleep">Etkin güç planında uyku modunu kapat (koltuklar kullanılırken bilgisayar uyumaz)</String>
   <String Id="PsOptDumps">Çökme dökümünü küçük döküm olarak ayarla (disk alanından tasarruf)</String>
   <String Id="PsOptNote">İşaretlenmeyen ayarlara dokunulmaz.</String>
+  <String Id="PsComponentsTitle">{\WixUI_Font_Title}İsteğe bağlı Windows bileşenleri</String>
+  <String Id="PsComponentsDescription">Yalnızca sanal makine koltukları ve ağ yardımcıları için gerekir. Hepsi varsayılan olarak kapalıdır.</String>
+  <String Id="PsOptVmp">Sanal Makine Platformunu aç (korumalı alan ve sanal makine koltukları)</String>
+  <String Id="PsOptHyperV">Hyper-V'yi aç (koltuk başına sanal ağ bağdaştırıcıları, sanal makine koltukları; Pro ve üstü)</String>
+  <String Id="PsOptSandbox">Windows Korumalı Alanı aç (Pro ve üstü)</String>
+  <String Id="PsComponentsNote">Windows yeniden başlatma isteyebilir. Bu bileşenler Pulsar Seat kaldırıldıktan sonra da açık kalır; "Windows Özellikleri"nden kapatabilirsiniz.</String>
+  <String Id="PsOptCert">Pulsar Seat yayımcı sertifikasını içe aktar (kendi sürücü paketleri için gerekir)</String>
+  <String Id="PsOptCertWarn">Bu, paketteki sertifikayı bilgisayarın Güvenilen Yayımcılar deposuna (kendinden imzalıysa Güvenilen Kök deposuna da) ekler. Windows bundan sonra bu sertifikayla imzalanan yazılımlara güvenir. Yalnızca bu paketi hazırlayana güveniyorsanız işaretleyin. Kaldırırken yeniden silinir.</String>
   <String Id="PsRemoveTitle">{\WixUI_Font_Title}Ayarlar ve günlükler</String>
   <String Id="PsRemoveDescription">Pulsar Seat kaldırılırken kayıtlı verileriniz ne olsun?</String>
   <String Id="PsRemoveText">Koltuk yapılandırması, aygıt atamaları ve günlükler %ProgramData%\Pulsar Seat klasöründedir. Saklarsanız Pulsar Seat yeniden kurulduğunda kaldığı yerden devam eder. Koltuk parolaları her durumda silinir.</String>

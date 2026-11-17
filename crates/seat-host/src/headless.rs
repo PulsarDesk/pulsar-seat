@@ -64,6 +64,8 @@ fn run(rest: &[String]) -> i32 {
         let mic = HoldMic::new();
         let feed = mic.clone();
         let _ = std::thread::Builder::new().name("hold-mic".into()).spawn(move || feed.pump(std::io::stdin()));
+        // Silence while the client mic is closed, so capture readers never stall.
+        mic.spawn_filler();
         mic
     });
     match seat_rdp::headless::client::run(&args, password, mic, &mut emit) {

@@ -2463,3 +2463,89 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     x86_64 / i686 / aarch64, lint-ci --local ok, repo-scan 0 / 0. No driver source changed;
     build-drivers.ps1 not rerun. `-StreamServer` itself was not run here (MSYS2 build).
   - Open: the installer-dist HYPOTHESIS list above is unchanged.
+- 2026-11-17 (parity round, package remote-smalls, branch worktree-wf_41b135b3-32a-9).
+  Remaining small remote-kind gaps.
+  - Built:
+    - **Microphone path, Pulsar Seat side complete.** Everything the service needs for
+      contract §3.8 was already in place (mic pipe, `mic` capability, `config.apply` key,
+      hold `AUDIO_INPUT`, status); this round adds the hold's silence filler
+      (`seat_rdp::headless::mic::HoldMic::tick` / `spawn_filler`: 20 ms of zeros while the
+      capture is open and no client PCM came for 100 ms), the "no silence while no client
+      mic" open item of round 4. The pad microphone (`<base>_Media` in ring) was already
+      complete (pads-pen package). Contract §3.8 says so; no further Pulsar Seat change is
+      needed when pulsar-desktop implements it.
+    - **Optional Windows features at install** (spec/remote 90 §2.4): `PSWINFEATURES`
+      (VirtualMachinePlatform, Hyper-V, Windows Sandbox), unchecked boxes on the new MSI
+      page "Optional Windows components", DISM without Windows Update source, journaled,
+      kept at uninstall (`seat_compat::features`).
+    - **Publisher certificate import at install** (spec/remote 90 §2.5): `PSIMPORTCERT`,
+      unchecked box with a warning text, shown only in a `build-installer.ps1
+      -PublisherCert <file.cer>` build; leaf code-signing certificate only, `TrustedPublisher`
+      (+ `Root` when self-signed), journaled, removed at uninstall (`seat_compat::certs`);
+      driver catalogs signed by exactly that certificate are then staged
+      (`drivers::signer_accepted_with`); build-installer accepts catalogs of that publisher;
+      check-payload `--allow-publisher-cert` lets only `certs/publisher.cer` through.
+      rules.md amended (opt-in exception). No certificate exists yet (none created here).
+    - **Pad pump waits on input events** (Split OQ integrator-2), 4 ms cadence kept.
+    - NSIS hooks (not shipped): `/FEATURES=` on the command line.
+  - **Not built: refused by the model provider's safety system** (stopped as the round's
+    rules require, not rephrased): the system-wide DXVK DLL redirect opt-in (spec/remote 50
+    §10) and the legacy verifier per-executable registration (spec/remote 50 §11). The
+    per-game DXVK deployment stays as it was.
+  - Split open-questions / coverage "not built" lines: coverage.md lists none; the
+    open-questions items left after this round belong to other packages of this round
+    (final-8 stream-server patch set: sunshine; final-9 protocol provider / remote IDD:
+    remote-idd-hdr / rdp-listener; sandbox seats: hyperv-seats) or are maintainer / analyst
+    decisions (pulsar-host-1..12, stream-backends-1..5, OQ 2..8). integrator-2 is closed
+    above; final-12 (mic) is closed on our side.
+  - HYPOTHESIS (nothing ran on hardware): DISM output / exit codes, CryptoAPI store writes
+    as SYSTEM, `CertGetEnhancedKeyUsage` / basic-constraints decoding, PnP accepting a
+    catalog of an imported self-signed publisher (user-mode packages; kernel packages need
+    Secure Boot off), the silence filler's effect on capture readers, pad latency.
+  - Gates (worktree): cargo test --workspace 1820 passed / 6 ignored (main had 1805 after
+    compat-tweaks), clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager
+    229 tests / check 0 errors / build, shim tests (1 + 8 + 3) + check x86_64 / i686 /
+    aarch64, bun test installer/scripts 65 (was 63). No driver touched. No test deleted.
+
+### pulsar-desktop change needed
+
+Exact change for pulsar-desktop (not edited from here; Pulsar Seat needs no further change
+once it lands). In the `--split-seat` host (`pulsar-host`, contract
+`docs/split/agents/pulsar-host-backend.md` §3.8 and §6 item 20):
+
+1. Add `"mic"` to the `capabilities` array of the `hello` answer.
+2. On `config.apply` with `"mic": true`: open `\\.\pipe\PulsarSplit\seat\<seat-id>\pulsar-host-mic`
+   as a client (`CreateFileW`, `GENERIC_WRITE`, byte mode; verify the server like the
+   control pipe: `GetNamedPipeServerProcessId` is the Pulsar Seat service, session 0), once,
+   and keep it open for the session. Missing key = no mic; never open it otherwise.
+3. When a Pulsar client's microphone opens (one client per seat): decode it to 48 kHz
+   signed 16-bit little-endian interleaved PCM (1 or 2 channels) and write frames
+   `u32 LE length + payload` with payload `0x01 <channels>` (start), then `0x02 <pcm>`
+   every 10-20 ms (payload at most 32 KiB), and `0x03` (stop) when the mic closes or the
+   client leaves. Do not send silence (the service fills gaps).
+4. Never block the stream on this pipe: write without waiting (overlapped or a bounded
+   queue on its own thread) and drop frames when a write would block. A broken pipe ends the
+   mic only; do not reconnect within the same `config.apply`.
+5. Client side (pulsar-core): send the client's microphone inside the existing session
+   (no new port).
+6. DualSense pads with `pad.attach` `"media": true`: map `<base>_Media` / `<base>_MediaEvt`
+   (same DACL as `_In` / `_Out`, header in §5): read the **out** ring (4 ch s16le: speaker
+   L / R, haptics L / R) to the client's DualSense, write the client's controller mic
+   (2 ch s16le) into the **in** ring and set bit 1 of `flags` while it is open. With
+   `"media"` absent or false, open neither.
+- 2026-11-17 (parity round, integration remote-smalls, main). Merged branch
+  worktree-wf_41b135b3-32a-9 (8fa1495: mic silence filler, opt-in Windows features and
+  publisher certificate at install, pad pump waits on input) into main after
+  installer-dist.
+  - Conflicts: status.md and journal.md (both sides appended, both kept); installer/README.md
+    "Signing and release" (main's sign-authenticode / dry-run / build-setup steps kept, with
+    the branch's "unless the operator ticks the publisher-certificate choice of a
+    `-PublisherCert` build" wording). Code merged without conflicts. setup.exe
+    (seat-bootstrap) forwards MSI properties generically, so `PSWINFEATURES` /
+    `PSIMPORTCERT` need no change there.
+  - Gates green on main: cargo 1875 passed / 6 ignored (main 1866 + 9 new), clippy
+    -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 242 (check 0 errors,
+    build OK), installer scripts 87 (85 + 2), shim 1+8+3 and checks x86_64 / i686 / aarch64,
+    lint-ci --local ok, repo-scan 0 / 0. No driver touched; build-drivers.ps1 not run.
+  - Open: the remote-smalls HYPOTHESIS list and the two refused items above are unchanged;
+    pulsar-desktop still has to implement contract §3.8.
