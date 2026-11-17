@@ -1949,6 +1949,24 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
   service from the assignment; `SCardListReaders` / `SCardConnect` filtered in every
   patched process; gate status `seat_filter`. RDP seats redirect a reader assigned to them
   alone even with the smart-card switch off.
+- **Cameras.** `Shim\CameraRules` (same format as the reader rules, rule name = device
+  instance id) published from the assignment of webcams that are not shared; the module's
+  HID open / enumeration hooks also hide and refuse camera interface paths
+  (`KSCATEGORY_VIDEO_CAMERA` / `CAPTURE` / `VIDEO`) of cameras of other seats in every
+  patched process (console processes get the HID groups while camera rules exist). The
+  frame server opens cameras from session 0, so the per-user camera consent
+  (`camera_consent` gate) stays the second layer; WinRT enumeration through the broker is
+  not covered (HYPOTHESIS: never run).
+- **Hyper-V helper.** Request `hyper_v { action }` (admin; `seat_proto::hyperv`):
+  `status`, `enable_feature { confirm }` (`Enable-WindowsOptionalFeature … -NoRestart`),
+  `set_seat_nic { seat, address, prefix_len }` (internal switch "Pulsar Seat" + host
+  adapter "Pulsar Seat NN" + the address, `seat_compat::hyperv`), `remove_seat_nic`.
+  Adapters are journaled (`journal\hyperv.json`) before creation and removed at uninstall;
+  the feature stays. Manager: Network tab section. HYPOTHESIS: never run.
+- **Remote stream options.** `GamepadPref::{PulsarDs4, PulsarDs5, PulsarDs5e, PulsarXone}`
+  and `CapturePref::PulsarIdd` reach the Pulsar stream-server build's keys
+  (`gamepad = pulsar_*`, `capture = pulsar_idd`); a stock server falls back to `auto` /
+  its default. The fork patch set itself is still to be written (open issue).
 - **CPU.** See §4 "CPU limits": Explorer in the seat job, opt-in `cpu_seat_wide`.
 - **Display.** IddCx frame source for seats without a session display (see HDR section).
 - **Network.** `seat-wfp` remembers explicitly bound endpoints (bind classify, endpoint

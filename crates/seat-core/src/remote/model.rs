@@ -184,6 +184,26 @@ pub enum GamepadPref {
     Auto,
     X360,
     Ds4,
+    /// Our own pads through the Pulsar stream-server build (`pulsar_pad`; spec/remote 80
+    /// §0): isolated per seat, with feedback. Added 2026-11-17 (parity review); a stock
+    /// server falls back to `auto`.
+    PulsarDs4,
+    PulsarDs5,
+    PulsarDs5e,
+    PulsarXone,
+}
+
+impl GamepadPref {
+    /// The Pulsar build's gamepad id (`pulsar_ds5` …), `None` for the stock kinds.
+    pub fn pulsar_id(self) -> Option<&'static str> {
+        match self {
+            Self::PulsarDs4 => Some("pulsar_ds4"),
+            Self::PulsarDs5 => Some("pulsar_ds5"),
+            Self::PulsarDs5e => Some("pulsar_ds5e"),
+            Self::PulsarXone => Some("pulsar_xone"),
+            _ => None,
+        }
+    }
 }
 
 /// Capture method (`capture` key); `Default` = key not written (server chooses).
@@ -194,6 +214,10 @@ pub enum CapturePref {
     Default,
     Ddx,
     Wgc,
+    /// Frames straight from our IddCx monitor (`pulsar_idd`, HDR capable) through the
+    /// Pulsar stream-server build. Added 2026-11-17 (parity review); a stock server falls
+    /// back to its default.
+    PulsarIdd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

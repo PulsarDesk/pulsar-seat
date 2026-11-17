@@ -483,7 +483,12 @@
         <option value="auto">{t.seat.gamepadAuto}</option>
         <option value="x360">Xbox 360</option>
         <option value="ds4">DualShock 4</option>
+        <option value="pulsar_ds4">{t.seat.gamepadPulsar('DualShock 4')}</option>
+        <option value="pulsar_ds5">{t.seat.gamepadPulsar('DualSense')}</option>
+        <option value="pulsar_ds5e">{t.seat.gamepadPulsar('DualSense Edge')}</option>
+        <option value="pulsar_xone">{t.seat.gamepadPulsar('Xbox One')}</option>
       </select>
+      {#if draft.stream.gamepad.startsWith('pulsar_')}<small class="hint">{t.seat.pulsarBuildOnly}</small>{/if}
     </label>
     {/if}
     <!-- Both backends read the capture choice (Pulsar: auto / dxgi / wgc). -->
@@ -493,7 +498,9 @@
         <option value="default">{t.seat.captureDefault}</option>
         <option value="ddx">DDX</option>
         <option value="wgc">WGC</option>
+        <option value="pulsar_idd">{t.seat.capturePulsarIdd}</option>
       </select>
+      {#if draft.stream.capture === 'pulsar_idd'}<small class="hint">{t.seat.pulsarBuildOnly}</small>{/if}
     </label>
     {#if backend === 'sunshine'}
     <label class="field">

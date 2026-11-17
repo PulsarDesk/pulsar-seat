@@ -843,6 +843,7 @@ export type RequestBody =
   | { type: 'relogon_seat'; data: { seat: SeatNumber } }
   | { type: 'reset_graphics'; data: { seat: SeatNumber } }
   | { type: 'remove_kiosk_user'; data: { seat: SeatNumber } }
+  | { type: 'hyper_v'; data: { action: HyperVAction } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }
@@ -887,8 +888,23 @@ export type RequestBody =
   | { type: 'get_user_picture'; data: { user: string } }
   | { type: 'cleanup_audio_endpoints'; data: { confirm: boolean } };
 
+/** Hyper-V helper (`hyper_v`, added 2026-11-17). */
+export type HyperVAction =
+  | { type: 'status' }
+  | { type: 'enable_feature'; confirm: boolean }
+  | { type: 'set_seat_nic'; seat: number; address: string; prefix_len: number }
+  | { type: 'remove_seat_nic'; seat: number };
+
+export interface HyperVStatus {
+  feature: 'enabled' | 'disabled' | 'enable_pending' | 'unavailable' | string;
+  switch_present: boolean;
+  seat_nics: { seat: number; addresses: string[] }[];
+  reboot_required?: boolean;
+}
+
 export type ResponseBody =
   | { type: 'ack' }
+  | { type: 'hyper_v'; data: HyperVStatus }
   | { type: 'status'; data: ServiceStatus }
   | { type: 'backends'; data: BackendReport }
   | { type: 'checks'; data: Check[] }

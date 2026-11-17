@@ -282,6 +282,33 @@ impl WinPlatform {
     }
 }
 
+/// Uninstall: removes the seat adapters (and the switch) the Hyper-V helper recorded.
+/// The Hyper-V feature stays (the operator turned it on). Returns the errors.
+pub fn hyperv_uninstall(data_dir: &Path) -> Vec<String> {
+    use seat_compat::hyperv as hv;
+    let path = data_dir.join("journal").join(hv::JOURNAL_FILE);
+    let Some(j) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<hv::HyperVJournal>(&b).ok()) else { return Vec::new() };
+    let errors: Vec<String> = j.seats.iter().filter_map(|s| run_powershell(&hv::script_remove_nic(*s)).err().map(|e| format!("seat {s}: {e}"))).collect();
+    if errors.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    }
+    errors
+}
+
+/// Runs a PowerShell script non-interactively (Hyper-V helper); stdout on success.
+fn run_powershell(script: &str) -> BackendResult<String> {
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).stdin(std::process::Stdio::null());
+    let child = seat_core::spawn::spawn_locked(&mut cmd).map_err(|e| BackendError::new(ErrorKind::Os, "powershell", e.to_string()))?;
+    let out = child.wait_with_output().map_err(|e| BackendError::new(ErrorKind::Os, "powershell", e.to_string()))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(BackendError::new(ErrorKind::Os, "hyperv_failed", err.lines().next().unwrap_or("PowerShell failed").to_string()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 fn os_err(reason: &str, what: &str) -> BackendError {
     // SAFETY: trivially safe.
     let code = unsafe { GetLastError() };
@@ -459,6 +486,56 @@ impl Platform for WinPlatform {
             return Ok(());
         }
         seat_shim_core::win::write_reader_rules(rules).map_err(|e| e.to_string())?;
+        *last = Some(rules.to_vec());
+        Ok(())
+    }
+
+    fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
+        use seat_compat::hyperv as hv;
+        use seat_proto::hyperv::HyperVAction as A;
+        let journal_path = self.data_dir.join("journal").join(hv::JOURNAL_FILE);
+        let load = || -> hv::HyperVJournal { std::fs::read(&journal_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default() };
+        let save = |j: &hv::HyperVJournal| {
+            if let Some(d) = journal_path.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            std::fs::write(&journal_path, serde_json::to_vec_pretty(j).unwrap_or_default())
+                .map_err(|e| BackendError::new(ErrorKind::Os, "journal", e.to_string()))
+        };
+        let mut reboot = false;
+        match action {
+            A::Status => {}
+            A::EnableFeature { .. } => {
+                let out = run_powershell(&hv::script_enable_feature())?;
+                reboot = out.contains("\"restart\":true");
+            }
+            A::SetSeatNic { seat, address, prefix_len } => {
+                let script = hv::script_set_nic(*seat, address, *prefix_len).map_err(|e| BackendError::new(ErrorKind::Policy, "invalid", e))?;
+                // Journal first: uninstall removes what we may have created.
+                let mut j = load();
+                j.add(*seat);
+                save(&j)?;
+                run_powershell(&script)?;
+            }
+            A::RemoveSeatNic { seat } => {
+                run_powershell(&hv::script_remove_nic(*seat))?;
+                let mut j = load();
+                j.remove(*seat);
+                save(&j)?;
+            }
+        }
+        let mut st = hv::parse_status(&run_powershell(&hv::script_status())?).map_err(|e| BackendError::new(ErrorKind::Os, "hyperv_status", e))?;
+        st.reboot_required |= reboot;
+        Ok(st)
+    }
+
+    fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+        static LAST: Mutex<Option<Vec<seat_shim_core::readers::ReaderRule>>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(rules) {
+            return Ok(());
+        }
+        seat_shim_core::win::write_camera_rules(rules).map_err(|e| e.to_string())?;
         *last = Some(rules.to_vec());
         Ok(())
     }

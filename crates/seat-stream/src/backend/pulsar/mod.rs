@@ -86,6 +86,8 @@ pub fn host_config(seat: &RemoteSeatRecord) -> HostConfig {
             CapturePref::Default => "auto",
             CapturePref::Ddx => "dxgi",
             CapturePref::Wgc => "wgc",
+            // pulsar-host captures our IddCx monitor itself when it has one.
+            CapturePref::PulsarIdd => "auto",
         }
         .into(),
         codecs: Vec::new(),

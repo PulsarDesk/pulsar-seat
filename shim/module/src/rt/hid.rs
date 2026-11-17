@@ -127,12 +127,16 @@ unsafe fn nt_name<'a>(oa: *const ObjectAttributes) -> Option<&'a [u16]> {
 
 /// Cheap, allocation-free check first: this runs on every file open of the process.
 fn denied_units(name: &[u16]) -> bool {
-    may_be_device_path(name) && denied(&String::from_utf16_lossy(name), false)
+    (may_be_device_path(name) || crate::filter::may_be_camera_path(name)) && denied(&String::from_utf16_lossy(name), false)
 }
 
 /// Opens look at HID / XUSB paths only; enumerations also at keyboard / mouse class paths
 /// (kiosk seats, round 4; `decide` applies `rule_applies` for the role).
 fn denied(path: &str, enumeration: bool) -> bool {
+    // Cameras per seat (parity review 2026-11-17): rule from the service, any role.
+    if seat_shim_core::readers::is_camera_path(path) {
+        return !super::scard::camera_allowed(path);
+    }
     let check = if enumeration { Check::Enumeration } else { Check::Open };
     (is_filtered_device_path(path) || (enumeration && is_input_class_path(path)))
         && guarded(|| decide(path, check)).flatten() == Some(Access::Deny)

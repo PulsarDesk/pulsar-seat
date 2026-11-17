@@ -86,6 +86,17 @@ describe('ManagerStore', () => {
     store.dispose();
   });
 
+  it('Hyper-V helper: feature, then a seat adapter', async () => {
+    const { api } = await ready();
+    expect((await api.hyperV({ type: 'status' })).feature).toBe('disabled');
+    const on = await api.hyperV({ type: 'enable_feature', confirm: true });
+    expect(on.reboot_required).toBe(true);
+    const nic = await api.hyperV({ type: 'set_seat_nic', seat: 2, address: '10.0.0.2', prefix_len: 24 });
+    expect(nic.seat_nics).toEqual([{ seat: 2, addresses: ['10.0.0.2'] }]);
+    expect((await api.hyperV({ type: 'remove_seat_nic', seat: 2 })).seat_nics).toEqual([]);
+    expect(api.calls.filter((c) => c === 'hyper_v').length).toBe(4);
+  });
+
   it('enable, start and errors with codes', async () => {
     const { api, store } = await ready();
     expect(await store.startSeats(null)).toBe(false);

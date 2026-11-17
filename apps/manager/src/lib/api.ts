@@ -18,6 +18,8 @@ import type {
   DeviceView,
   EventFrame,
   HelloReply,
+  HyperVAction,
+  HyperVStatus,
   Issue,
   LocalUser,
   Panel,
@@ -117,6 +119,8 @@ export interface Api extends LocalApi {
   resetGraphics(seat: SeatNumber): Promise<void>;
   /** Delete Pulsar's own Windows user of a former kiosk seat with its profile (`remove_kiosk_user`). */
   removeKioskUser(seat: SeatNumber): Promise<void>;
+  /** Hyper-V helper of the source-IP tools (`hyper_v`). */
+  hyperV(action: HyperVAction): Promise<HyperVStatus>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -183,6 +187,7 @@ export function createRequestApi(
     relogonSeat: (seat) => ack({ type: 'relogon_seat', data: { seat } }),
     resetGraphics: (seat) => ack({ type: 'reset_graphics', data: { seat } }),
     removeKioskUser: (seat) => ack({ type: 'remove_kiosk_user', data: { seat } }),
+    hyperV: async (action) => expectBody(await call({ type: 'hyper_v', data: { action } }), 'hyper_v').data,
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

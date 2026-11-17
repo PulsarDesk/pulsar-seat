@@ -1836,7 +1836,7 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   §4.1.3 limits now state the ARM64 module from parity-arm64 plus the seat-1 raw-input
   filter from kiosk; status / journal keep both sides). Gates on main: cargo test 1664
   passed / 6 ignored (1646 + 18 kiosk tests; the kiosk report's 1650 was measured against
-  its own base), clippy -D warnings aarch64 + x86_64 clean, shim tests (1 + 7 + 3) host and
+  its own base), clippy -D warnings aarch64 + x86_64 clean, shim tests (1 + 8 + 3) host and
   x86_64, clippy x86_64 + aarch64, check i686, debug build aarch64 + x64, manager 203 / check
   / build, bun test installer/scripts 54. No driver touched; no test deleted. Kiosk runtime
   behaviour stays HYPOTHESIS (list in the kiosk entry above); new HYPOTHESIS: the seat
@@ -1933,7 +1933,7 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   touched before the gate runs (shared target dir hazard noted in the display-gpu entry).
   - Gates on main: cargo test --workspace 1725 passed / 6 ignored (1695 + 30 display-gpu
     tests; the package's 1662 was measured against its own base), clippy -D warnings aarch64
-    host + x86_64-pc-windows-msvc clean, shim tests (1 + 7 + 3) + check x86_64 / i686 /
+    host + x86_64-pc-windows-msvc clean, shim tests (1 + 8 + 3) + check x86_64 / i686 /
     aarch64, manager 206 tests / check 0 errors / build, bun test installer/scripts 54,
     build-drivers.ps1 -Projects seat-idd ARM64 + x64 Release + Debug clean (PE 0xAA64 /
     0x8664, output target\wf\drivers-display). No test deleted. Runtime behaviour stays
@@ -1988,3 +1988,51 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     tray relabel at runtime; Tauri merges its default WiX strings with our locale file and
     names the MSI per culture; NSIS LangStrings with numeric ids where the hooks are
     included.
+- 2026-11-17 (parity review fixes, on main; commits "fix: apply parity review (part 1/2)").
+  Built and unit-tested; nothing ran on hardware (runtime claims are HYPOTHESIS; the list
+  is in architecture.md "Parity review fixes"):
+  - **Confirmed findings fixed:** kiosk seat pads owned by the seat's own Windows user;
+    pad scoping opt-in (`input.pad_device_scope` default off), failed nodes retried with
+    back-off, one warning per error; `pad.attach.media` only with audio endpoints; hotkey
+    guard raw-first key behind a held-back hotkey; shim cursor hooks DPI-convert for
+    unaware threads and only override a successful real call; vendor async MFT flush
+    restarts the stream, `Drop` shuts the MFT and its activation down; seat-wfp leaves
+    explicitly bound sockets alone (endpoint table); every driver INF has English
+    `[Strings]` + Turkish `[Strings.041f]`; unused kiosk accounts are disabled (profiles
+    kept), deleted only at uninstall (profiles with `REMOVEUSERDATA`) or by the new
+    `remove_kiosk_user` request; probe notes `kiosk_users_share_desktop` /
+    `no_per_user_isolation` + manager warning for personal accounts on kiosk seats; x64
+    targets kept out of the AppHelp database on ARM64 and the manager copy corrected;
+    test fixes (kiosk masks vs windows-sys, devtree test name / doc, CAPTUREMOUSE case);
+    `.claude/` ignored, merged worktrees 1-4 removed (5 kept: its commit is not an
+    ancestor of main).
+  - **Gaps implemented:** kiosk seats' key state, `SetCursorPos` / `ClipCursor` and a
+    per-seat clipboard (sections `kiosk_cursor` v2, `kiosk_clip`); `reset_graphics`
+    request (agent: Win+Ctrl+Shift+B) + manager seat menu; IddCx frame source for seats
+    without a session display (kiosk shell `IddPresenter`, HDR frames to the presenter);
+    Explorer joins the seat job and opt-in `cpu_seat_wide`; WNF focus runtime check;
+    opt-in GameInputSvc focus filter; remote seats' SDL list from the PC's pads; Xbox USB
+    (XUSB) and HID PID rumble, Switch Pro SPI stick calibration; smart-card readers per
+    seat (RDP auto-redirect of the seat's own reader, WinSCard filter in patched
+    processes, gate status `seat_filter`); cameras per seat in patched processes
+    (`Shim\CameraRules`); Hyper-V helper (`hyper_v` request, Network tab); Pulsar
+    stream-server options (`pulsar_*` gamepads, `pulsar_idd` capture, stock fallback);
+    stale docs (manager README, plan.md).
+  - Gates: cargo test --workspace 1773 passed, clippy -D warnings aarch64 host +
+    x86_64-pc-windows-msvc clean, shim tests (1 + 8 + 3) + clippy x86_64 / i686 / aarch64,
+    manager 217 tests / check 0 errors / build, bun test installer/scripts 63,
+    build-drivers.ps1 all five drivers ARM64 + x64 Release + Debug clean (PE 0xAA64 /
+    0x8664, output target\wf\drivers-review). No test deleted; changed on purpose:
+    `failures_never_lose_the_original` (a repeated identical error is reported once),
+    `hub_generic_and_xbox_bluetooth_pads` (generic pads now rumble through the fallback),
+    `hub_switch_pro_init_input_and_rumble` (two SPI reads after init),
+    `masks_are_the_interactive_users` (compares windows-sys constants, Windows only),
+    `physical_node_reads_are_read_only` renamed `missing_node_reads_fail`, manager pad
+    scope default test (off).
+  - Open (not built in this round): the Pulsar stream-server patch set (spec/remote 80 §0:
+    pulsar_idd capture, seat control pipe with the web UI off, pairing timeout, pulsar_pad
+    pads) and its MSYS2 build: only the config side exists; sandbox / VM seats (spec/remote
+    10 §8); per-seat smart-card readers and cameras on the logon screen and in processes
+    without the module; WinRT camera enumeration; Ctrl+Alt+Del / Win+L from kiosk
+    keyboards (Windows handles them before user mode). Hardware tests for everything
+    above.

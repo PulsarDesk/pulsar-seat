@@ -324,6 +324,11 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
                 eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
             }
+            // Hyper-V adapters / switch the source-IP helper created (parity review).
+            for e in super::platform::hyperv_uninstall(data_dir) {
+                eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
+                code = code.max(setup::EXIT_PARTIAL);
+            }
         }
         Ok(false) => {
             eprintln!("{}", copy::NOT_STOPPED.fmt(&[&seat_session::host_account::ACCOUNT_NAME]));

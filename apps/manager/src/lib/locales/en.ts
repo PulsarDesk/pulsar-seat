@@ -91,6 +91,17 @@ const t = {
 
   network: {
     intro: 'Some network programs and LAN games want each seat to use its own IP address. You can give each seat one of this PC’s static IPv4 addresses.',
+    hyperv: 'Hyper-V virtual adapters',
+    hypervIntro:
+      'A seat can get its own virtual network adapter on an internal Hyper-V switch, with the seat’s address on it. The switch and adapters are named “Pulsar Seat…” and are removed when Pulsar Seat is uninstalled.',
+    hypervFeature: (s: string) => `Hyper-V: ${({ enabled: 'on', disabled: 'off', enable_pending: 'turning on (restart needed)', unavailable: 'not available on this Windows edition' } as Record<string, string>)[s] ?? s}`,
+    hypervEnable: 'Turn Hyper-V on…',
+    hypervEnableConfirm: 'Turn on the Windows Hyper-V feature? This is a system change and Windows must restart afterwards.',
+    hypervRefresh: 'Check',
+    hypervCreate: 'Create adapter',
+    hypervRemove: 'Remove adapter',
+    hypervNoAddress: 'Assign the seat an address first.',
+    hypervReboot: 'Restart Windows to finish turning Hyper-V on.',
     bestEffort: 'While the source IP driver is not loaded, Pulsar Seat keeps this setting and applies it only in programs that support it. If the program has its own “bind to this address” setting, set it to the same address too.',
     enforcedByDriver: (seats: string) => `Source IP driver loaded: programs of seat ${seats} use the seat’s address for their connections.`,
     driverReady: 'Source IP driver loaded; a seat’s address is enforced once it signs in.',
@@ -1656,6 +1667,9 @@ const rt = {
     streamSection: 'Stream',
     gamepad: 'Gamepad type',
     gamepadAuto: 'Automatic',
+    gamepadPulsar: (kind: string) => `${kind} (Pulsar pad, isolated)`,
+    capturePulsarIdd: 'Pulsar virtual display (HDR)',
+    pulsarBuildOnly: 'Needs the Pulsar build of the stream server; with the standard build the server’s default is used.',
     capture: 'Screen capture',
     captureDefault: 'Default',
     minFps: 'Lowest FPS target',

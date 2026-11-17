@@ -108,6 +108,33 @@ pub fn reader_visible(reader: &str, role: &Role, session: u32, rules: &[ReaderRu
     }
 }
 
+/// Camera device-interface classes (`KSCATEGORY_VIDEO_CAMERA`, `KSCATEGORY_CAPTURE`,
+/// `KSCATEGORY_VIDEO`), lower case with braces.
+pub const CAMERA_INTERFACE_CLASSES: [&str; 3] =
+    ["{e5323777-f976-4f5b-9b55-b94699c46e44}", "{65e8773d-8f56-11d0-a3b9-00a0c9223196}", "{6994ad05-93ef-11d0-a3cc-00a0c9223196}"];
+
+/// A camera device-interface path (any of [`CAMERA_INTERFACE_CLASSES`]).
+pub fn is_camera_path(path: &str) -> bool {
+    let l = path.to_ascii_lowercase();
+    (l.starts_with(r"\\?\") || l.starts_with(r"\??\") || l.starts_with(r"\\.\")) && CAMERA_INTERFACE_CLASSES.iter().any(|g| l.contains(&format!("#{g}")))
+}
+
+/// Cameras per seat (parity review 2026-11-17; spec/local 70 §3.6): the same grants as
+/// readers, keyed by the camera's device instance id (rule `name`). A camera interface
+/// path of a camera with a rule is visible / openable only for the granted seats in
+/// Pulsar-patched processes (DirectShow and in-process enumeration; the frame server opens
+/// cameras from session 0, so the per-user camera consent stays the second layer).
+pub fn camera_visible(path: &str, role: &Role, session: u32, rules: &[ReaderRule]) -> bool {
+    let Some(inst) = crate::decide::interface_path_to_instance_id(path) else { return true };
+    let Some(rule) = rules.iter().find(|r| r.name.eq_ignore_ascii_case(&inst)) else { return true };
+    match role {
+        Role::None => true,
+        Role::Console => rule.allowed.iter().any(|g| *g == ReaderGrant::Console || *g == ReaderGrant::Session(session)),
+        Role::Kiosk { seat, .. } => rule.allowed.contains(&ReaderGrant::Kiosk(*seat)),
+        Role::Seat { .. } => rule.allowed.contains(&ReaderGrant::Session(session)),
+    }
+}
+
 /// Filters a WinSCard multi-string (names separated by NUL, ending with an extra NUL) in
 /// place: returns the new length in characters (final NUL included).
 pub fn filter_multi<T: Copy + PartialEq + Default>(buf: &mut [T], keep: &dyn Fn(&[T]) -> bool) -> usize {
@@ -176,6 +203,21 @@ mod tests {
         assert!(reader_visible("Alcor Reader 0", &Role::None, 0, &r));
         assert!(!reader_visible("alcor reader", &kiosk3, 1, &r), "case-insensitive, name alone");
         assert!(reader_visible("Alcor Readers 0", &kiosk3, 1, &r), "another name that only starts alike");
+    }
+
+    #[test]
+    fn cameras_per_seat() {
+        let rules = vec![ReaderRule { name: r"USB\VID_046D&PID_085B&MI_00\7&1A2B&0&0000".into(), allowed: vec![ReaderGrant::Kiosk(2)] }];
+        let path = r"\\?\usb#vid_046d&pid_085b&mi_00#7&1a2b&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global";
+        assert!(is_camera_path(path));
+        assert!(!is_camera_path(r"\\?\hid#vid_1#1#{4d1e55b2-f16f-11cf-88cb-001111000030}"));
+        let k2 = Role::Kiosk { seat: 2, session_id: 1 };
+        let k3 = Role::Kiosk { seat: 3, session_id: 1 };
+        assert!(camera_visible(path, &k2, 1, &rules));
+        assert!(!camera_visible(path, &k3, 1, &rules));
+        assert!(!camera_visible(path, &Role::Console, 1, &rules));
+        let other = r"\\?\usb#vid_1111&pid_2222&mi_00#9&9&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}";
+        assert!(camera_visible(other, &k3, 1, &rules), "no rule: everyone");
     }
 
     #[test]

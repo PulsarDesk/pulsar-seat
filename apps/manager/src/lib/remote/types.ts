@@ -10,8 +10,8 @@ export type StopAction = 'log_off' | 'disconnect';
 export type SeatState = 'stopped' | 'booting' | 'running' | 'stopping' | 'failed';
 export type PadBackendId = 'vigem' | 'usbip_ds5' | 'pulsar_pad';
 export type DisplayBackendKind = 'rdp_session' | 'vdd' | 'pulsar_idd';
-export type GamepadPref = 'auto' | 'x360' | 'ds4';
-export type CapturePref = 'default' | 'ddx' | 'wgc';
+export type GamepadPref = 'auto' | 'x360' | 'ds4' | 'pulsar_ds4' | 'pulsar_ds5' | 'pulsar_ds5e' | 'pulsar_xone';
+export type CapturePref = 'default' | 'ddx' | 'wgc' | 'pulsar_idd';
 
 export interface GlobalSettings {
   start_with_windows: boolean;

@@ -7,7 +7,7 @@
   import { t } from '#lib/i18n.ts';
   import { setIpBinding, setIpPrograms } from '#lib/model.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { SeatNumber } from '#lib/types.ts';
+  import type { HyperVAction, HyperVStatus, SeatNumber } from '#lib/types.ts';
 
   interface Props {
     store: ManagerStore;
@@ -25,6 +25,17 @@
   onMount(() => {
     if (!store.backends) void store.refreshBackends();
   });
+  // Hyper-V helper (parity review 2026-11-17): only on the operator's action.
+  let hyperv = $state<HyperVStatus | null>(null);
+  let confirmHv = $state(false);
+  async function hv(action: HyperVAction) {
+    try {
+      hyperv = await store.api.hyperV(action);
+    } catch (e) {
+      store.fail(e);
+    }
+  }
+  const nicOf = (n: number) => hyperv?.seat_nics.find((x) => x.seat === n);
 </script>
 
 <p>{t.network.intro}</p>
@@ -61,6 +72,39 @@
       <p class="hint warn" title={ip.dropped_paths.join('\n')}>{t.network.droppedPaths(ip.dropped_paths.length)}</p>
     {/if}
   </div>
+  <section class="hyperv" data-testid="hyperv">
+    <h3>{t.network.hyperv}</h3>
+    <p class="hint">{t.network.hypervIntro}</p>
+    <button type="button" disabled={!store.isAdmin} onclick={() => hv({ type: 'status' })}>{t.network.hypervRefresh}</button>
+    {#if hyperv}
+      <p>{t.network.hypervFeature(hyperv.feature)}</p>
+      {#if hyperv.reboot_required}<p class="hint warn">{t.network.hypervReboot}</p>{/if}
+      {#if hyperv.feature === 'disabled'}
+        {#if confirmHv}
+          <p class="hint warn">{t.network.hypervEnableConfirm}</p>
+          <button type="button" class="danger" onclick={() => { confirmHv = false; void hv({ type: 'enable_feature', confirm: true }); }}>{t.network.hypervEnable}</button>
+          <button type="button" onclick={() => (confirmHv = false)}>{t.cancel}</button>
+        {:else}
+          <button type="button" disabled={!store.isAdmin} onclick={() => (confirmHv = true)}>{t.network.hypervEnable}</button>
+        {/if}
+      {:else if hyperv.feature === 'enabled'}
+        <ul>
+          {#each draft.seats.filter((s) => s.number !== 1) as s (s.number)}
+            <li>
+              {s.number}. {nicOf(s.number)?.addresses.join(', ') ?? s.ip_binding?.address ?? t.network.notAssigned}
+              {#if nicOf(s.number)}
+                <button type="button" disabled={!store.isAdmin} onclick={() => hv({ type: 'remove_seat_nic', seat: s.number })}>{t.network.hypervRemove}</button>
+              {:else if s.ip_binding?.address}
+                <button type="button" disabled={!store.isAdmin} onclick={() => hv({ type: 'set_seat_nic', seat: s.number, address: s.ip_binding!.address, prefix_len: 24 })}>{t.network.hypervCreate}</button>
+              {:else}
+                <small class="hint">{t.network.hypervNoAddress}</small>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+  </section>
 {:else if store.needsElevation}
   <p class="hint">{t.adminToView}</p>
 {:else}

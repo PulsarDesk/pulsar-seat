@@ -8,7 +8,7 @@ use crate::apps::{render_apps_json, AppEntry};
 use crate::conf::{generate, Capture, ConfInputs, Gamepad, PAIR_TIMEOUT_DEFAULT_S};
 use crate::control::upstream::Random;
 use crate::control::{PairedClient, SeatControl};
-use crate::dist::ServerDist;
+use crate::dist::{ServerDist, ServerFlavour};
 use crate::firewall::{apply_seat_rules, remove_seat_rules, Firewall};
 use crate::journal::RestoreLog;
 use crate::ports::ListenerProbe;
@@ -53,6 +53,31 @@ impl SunshineBackend {
     }
 }
 
+/// Capture key for the server build: `pulsar_idd` only on the Pulsar build, else the
+/// server's default (parity review 2026-11-17).
+fn capture_for(pref: CapturePref, flavour: ServerFlavour) -> Capture {
+    match pref {
+        CapturePref::Default => Capture::Default,
+        CapturePref::Ddx => Capture::Ddx,
+        CapturePref::Wgc => Capture::Wgc,
+        CapturePref::PulsarIdd if flavour == ServerFlavour::PulsarFork => Capture::PulsarIdd,
+        CapturePref::PulsarIdd => Capture::Default,
+    }
+}
+
+/// Gamepad key for the server build: our pads only on the Pulsar build, else `auto`.
+fn gamepad_for(pref: GamepadPref, flavour: ServerFlavour) -> Gamepad {
+    match pref {
+        GamepadPref::Auto => Gamepad::Auto,
+        GamepadPref::X360 => Gamepad::X360,
+        GamepadPref::Ds4 => Gamepad::Ds4,
+        p => match p.pulsar_id() {
+            Some(id) if flavour == ServerFlavour::PulsarFork => Gamepad::Pulsar(id.to_string()),
+            _ => Gamepad::Auto,
+        },
+    }
+}
+
 fn conf_text(spec: &SeatStreamSpec<'_>, dist: &ServerDist, dir: &SeatDir) -> Result<String, StreamError> {
     let seat = spec.seat;
     generate(&ConfInputs {
@@ -60,16 +85,8 @@ fn conf_text(spec: &SeatStreamSpec<'_>, dist: &ServerDist, dir: &SeatDir) -> Res
         global: spec.global,
         dir,
         flavour: dist.flavour,
-        capture: match seat.stream.capture {
-            CapturePref::Default => Capture::Default,
-            CapturePref::Ddx => Capture::Ddx,
-            CapturePref::Wgc => Capture::Wgc,
-        },
-        gamepad: match seat.stream.gamepad {
-            GamepadPref::Auto => Gamepad::Auto,
-            GamepadPref::X360 => Gamepad::X360,
-            GamepadPref::Ds4 => Gamepad::Ds4,
-        },
+        capture: capture_for(seat.stream.capture, dist.flavour),
+        gamepad: gamepad_for(seat.stream.gamepad, dist.flavour),
         audio_keys: spec.audio_keys.clone(),
         min_fps: seat.stream.min_fps,
         pair_timeout_s: PAIR_TIMEOUT_DEFAULT_S,
@@ -213,5 +230,25 @@ impl SeatStream for SunshineSeat {
     }
     fn pad_request(&mut self, ty: &str, body: &serde_json::Value) -> Result<(), StreamError> {
         self.control()?.pad_request(ty, body)
+    }
+}
+
+#[cfg(test)]
+mod pref_tests {
+    use super::*;
+
+    #[test]
+    fn pulsar_build_options_fall_back_on_a_stock_server() {
+        let fork = ServerFlavour::PulsarFork;
+        let stock = ServerFlavour::Upstream;
+        assert_eq!(capture_for(CapturePref::PulsarIdd, fork), Capture::PulsarIdd);
+        assert_eq!(capture_for(CapturePref::PulsarIdd, stock), Capture::Default);
+        assert_eq!(capture_for(CapturePref::Wgc, stock), Capture::Wgc);
+        assert_eq!(gamepad_for(GamepadPref::PulsarDs5, fork), Gamepad::Pulsar("pulsar_ds5".into()));
+        assert_eq!(gamepad_for(GamepadPref::PulsarXone, stock), Gamepad::Auto);
+        assert_eq!(gamepad_for(GamepadPref::Ds4, fork), Gamepad::Ds4);
+        for p in [GamepadPref::PulsarDs4, GamepadPref::PulsarDs5, GamepadPref::PulsarDs5e, GamepadPref::PulsarXone] {
+            assert!(crate::conf::PULSAR_GAMEPADS.contains(&p.pulsar_id().unwrap()));
+        }
     }
 }

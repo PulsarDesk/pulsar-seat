@@ -410,6 +410,9 @@ pub struct ShimConfig {
     pub gameinput_focus: bool,
     /// The service published smart-card reader rules (`crate::readers`).
     pub reader_rules: bool,
+    /// The service published camera rules (`crate::readers::camera_visible`); the HID open
+    /// / enumeration groups then also run in console processes.
+    pub camera_rules: bool,
 }
 
 /// The shared game-input service (spec/remote 50 §2.3, §5.1). It runs in session 0, so it
@@ -508,6 +511,7 @@ pub fn hook_plan_full(
             // devices (games and apps that read keyboards / mice through raw input), while a
             // kiosk seat of their session asks for it.
             let raw = kiosk.iter().any(|e| e.flags.raw_input && e.session_id == p.session_id);
+            let hid = hid || cfg.camera_rules;
             HookPlan { hid_open: hid, hid_enumeration: hid, raw_input_data: raw, scard_filter: cfg.reader_rules, ..HookPlan::default() }
         }
         Role::Kiosk { seat, session_id } => {

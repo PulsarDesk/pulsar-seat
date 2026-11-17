@@ -100,6 +100,21 @@ pub fn may_be_device_path(name: &[u16]) -> bool {
         && (0..=body.len() - needle_len).any(|i| body[i] == u16::from(b'#') && starts_ci(&body[i + 1..], guid))
 }
 
+/// Allocation-free first check: could the name be a camera device-interface path
+/// (`seat_shim_core::readers::CAMERA_INTERFACE_CLASSES`)?
+pub fn may_be_camera_path(name: &[u16]) -> bool {
+    fn starts_ci(s: &[u16], p: &str) -> bool {
+        s.len() >= p.len() && s.iter().zip(p.bytes()).all(|(a, b)| *a < 128 && (*a as u8).eq_ignore_ascii_case(&b))
+    }
+    if !(starts_ci(name, r"\??\") || starts_ci(name, r"\\?\") || starts_ci(name, r"\\.\")) {
+        return false;
+    }
+    seat_shim_core::readers::CAMERA_INTERFACE_CLASSES.iter().any(|g| {
+        let n = g.len() + 1;
+        name.len() >= n && (0..=name.len() - n).any(|i| name[i] == u16::from(b'#') && starts_ci(&name[i + 1..], g))
+    })
+}
+
 /// Layout of `RAWINPUT` records in a `GetRawInputBuffer` buffer for this process:
 /// `RAWINPUTHEADER` = `dwType` (u32), `dwSize` (u32), `hDevice` (pointer), `wParam`
 /// (pointer); records follow each other at `NEXTRAWINPUTBLOCK` alignment.
@@ -213,6 +228,19 @@ mod tests {
 
     fn u(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn camera_path_prefilter_matches_the_core_rule() {
+        for c in [
+            r"\\?\usb#vid_046d&pid_085b&mi_00#7&1a2b&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global",
+            r"\??\USB#VID_1#1#{65E8773D-8F56-11D0-A3B9-00A0C9223196}",
+            r"\\.\x#{6994ad05-93ef-11d0-a3cc-00a0c9223196}",
+            r"\\?\hid#vid_1#1#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+            r"C:\cam#{e5323777-f976-4f5b-9b55-b94699c46e44}",
+        ] {
+            assert_eq!(may_be_camera_path(&u(c)), seat_shim_core::readers::is_camera_path(c), "{c}");
+        }
     }
 
     #[test]

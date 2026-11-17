@@ -22,6 +22,7 @@
 //! 2 was Pulsar Split's own protocol and is never spoken on this pipe.
 
 pub mod framing;
+pub mod hyperv;
 pub mod messages;
 pub mod remote;
 

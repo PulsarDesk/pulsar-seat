@@ -112,6 +112,8 @@ pub mod values {
     pub const GAME_INPUT_FOCUS: &str = "GameInputFocus";
     /// `REG_MULTI_SZ`: smart-card reader rules (`crate::readers::encode`).
     pub const READER_RULES: &str = "ReaderRules";
+    /// `REG_MULTI_SZ`: camera rules (same format, rule name = device instance id).
+    pub const CAMERA_RULES: &str = "CameraRules";
     pub const TARGETS_SUBKEY: &str = "Targets";
 }
 

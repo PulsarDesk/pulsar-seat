@@ -163,6 +163,10 @@ pub enum RequestBody {
     /// kiosk users are otherwise only disabled at service start (their data stays). Added
     /// 2026-11-17 (parity review, additive, admin).
     RemoveKioskUser { seat: SeatNumber },
+    /// Hyper-V helper of the source-IP tools (status, turn the feature on, a seat's own
+    /// virtual adapter with a fixed address on an internal switch). Answers
+    /// [`ResponseBody::HyperV`]. Added 2026-11-17 (parity review, additive, admin).
+    HyperV { action: crate::hyperv::HyperVAction },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -406,6 +410,7 @@ impl RequestBody {
             | R::RequestReboot
             | R::ResetGraphics { .. }
             | R::RemoveKioskUser { .. }
+            | R::HyperV { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -576,6 +581,8 @@ pub enum Topic {
 pub enum ResponseBody {
     Hello(HelloReply),
     Ack,
+    /// Answer of `hyper_v` (added 2026-11-17, additive).
+    HyperV(crate::hyperv::HyperVStatus),
     Status(ServiceStatus),
     Backends(BackendReport),
     Checks(Vec<Check>),

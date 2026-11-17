@@ -9,6 +9,7 @@ import * as M from './mask.ts';
 import { createDemoRemoteApi } from './remote/demo.ts';
 import {
   type Config,
+  type HyperVStatus,
   type ServiceRunState,
   type Device,
   type DeviceView,
@@ -219,6 +220,7 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     for (const cb of eventCbs) cb(f);
   };
 
+  const hyperv: HyperVStatus = { feature: 'disabled', switch_present: false, seat_nics: [] };
   const step = async (name: string) => {
     calls.push(name);
     if (failure) {
@@ -515,6 +517,17 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       if (!state.seats.some((x) => x.seat === seat && x.state.state !== 'off')) {
         throw { code: 'invalid_value', message: 'demo: the seat has no session', reason: 'not_running' };
       }
+    },
+    hyperV: async (action) => {
+      await step('hyper_v');
+      needAdmin();
+      if (action.type === 'enable_feature') hyperv.feature = 'enable_pending';
+      if (action.type === 'set_seat_nic') {
+        hyperv.switch_present = true;
+        hyperv.seat_nics = [...hyperv.seat_nics.filter((n) => n.seat !== action.seat), { seat: action.seat, addresses: [action.address] }];
+      }
+      if (action.type === 'remove_seat_nic') hyperv.seat_nics = hyperv.seat_nics.filter((n) => n.seat !== action.seat);
+      return { ...hyperv, reboot_required: hyperv.feature === 'enable_pending' };
     },
     removeKioskUser: async (seat) => {
       await step('remove_kiosk_user');

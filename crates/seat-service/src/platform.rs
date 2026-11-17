@@ -150,6 +150,16 @@ pub trait Platform: Send + Sync {
         let _ = rules;
         Ok(())
     }
+    /// Hyper-V helper (`seat_compat::hyperv`): run one action, answer the status after it.
+    fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
+        let _ = action;
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no Hyper-V here"))
+    }
+    /// Publish the camera rules for the module (`seat_shim_core::readers::camera_visible`).
+    fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+        let _ = rules;
+        Ok(())
+    }
     /// Publish the kiosk seat map (seat-shim-core `kiosk`, round 4): exactly `entries`
     /// afterwards (stale seats removed). Default: nothing (no shim on this platform).
     fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
@@ -357,6 +367,10 @@ pub mod mock {
         pub rebooted: AtomicBool,
         /// Last published reader rules.
         pub reader_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
+        /// Hyper-V actions run.
+        pub hyperv_actions: Mutex<Vec<seat_proto::hyperv::HyperVAction>>,
+        /// Last published camera rules.
+        pub camera_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
         /// `cover_session` calls: (session, cpu sets, seat-wide).
         pub covered: Mutex<Vec<(u32, Vec<u32>, bool)>>,
         /// Seats whose kiosk user was removed (`remove_kiosk_user`).
@@ -480,6 +494,14 @@ pub mod mock {
         fn publish_reader_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
             *lock(&self.reader_rules) = rules.to_vec();
             Ok(())
+        }
+        fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+            *lock(&self.camera_rules) = rules.to_vec();
+            Ok(())
+        }
+        fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
+            lock(&self.hyperv_actions).push(action.clone());
+            Ok(seat_proto::hyperv::HyperVStatus { feature: "enabled".into(), ..Default::default() })
         }
         fn cover_session(&self, session_id: u32, job: &SeatJobSpec, seat_wide: bool) -> Vec<String> {
             lock(&self.covered).push((session_id, job.cpu_sets.clone(), seat_wide));

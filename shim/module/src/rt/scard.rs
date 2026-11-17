@@ -32,6 +32,26 @@ fn rules() -> Vec<ReaderRule> {
     g.1.clone()
 }
 
+static CAMERAS: Mutex<(u64, Vec<ReaderRule>)> = Mutex::new((0, Vec::new()));
+
+/// May this process see / open the camera behind `path` (`readers::camera_visible`)?
+pub fn camera_allowed(path: &str) -> bool {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+    let Some((role, _, _, _)) = super::live() else { return true };
+    // SAFETY: plain call.
+    let now = unsafe { GetTickCount64() };
+    let rules = {
+        let mut g = CAMERAS.lock().unwrap_or_else(|e| e.into_inner());
+        if g.0 == 0 || now.saturating_sub(g.0) >= 2000 {
+            g.1 = seat_shim_core::win::read_camera_rules();
+            g.0 = now.max(1);
+        }
+        g.1.clone()
+    };
+    let session = super::state().map_or(0, |s| s.facts.session_id);
+    seat_shim_core::readers::camera_visible(path, &role, session, &rules)
+}
+
 /// May this process see the reader?
 fn visible(name: &str) -> bool {
     let Some((role, plan, _, _)) = super::live() else { return true };

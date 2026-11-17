@@ -893,10 +893,17 @@ impl Service {
                     .map(|c| c.number)
                     .collect();
                 let sessions: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
-                reader_rules(&eff, &kiosk, &sessions, |k| st.inventory.get(k).map(|e| e.device.name.clone()))
+                let readers = reader_rules(&eff, DeviceKind::SmartCardReader, &kiosk, &sessions, |k| st.inventory.get(k).map(|e| e.device.name.clone()));
+                // Cameras per seat: keyed by the device instance id (parity review).
+                let cameras =
+                    reader_rules(&eff, DeviceKind::Webcam, &kiosk, &sessions, |k| st.inventory.get(k).and_then(|e| e.device.instance_id.clone()));
+                (readers, cameras)
             };
-            if let Err(e) = self.platform.publish_reader_rules(&rules) {
+            if let Err(e) = self.platform.publish_reader_rules(&rules.0) {
                 log::warn(&format!("reader rules: {e}"));
+            }
+            if let Err(e) = self.platform.publish_camera_rules(&rules.1) {
+                log::warn(&format!("camera rules: {e}"));
             }
         }
         // Source IP per seat (net-wfp): session -> address map for the WFP callout.
@@ -1614,6 +1621,27 @@ impl Service {
         Ok(ResponseBody::Ack)
     }
 
+    /// `hyper_v` (parity review 2026-11-17): the Hyper-V helper of the source-IP tools.
+    /// Turning the feature on needs `confirm`; a seat adapter needs a configured seat.
+    pub(crate) fn hyperv(&self, action: seat_proto::hyperv::HyperVAction) -> Result<ResponseBody, ProtoError> {
+        use seat_proto::hyperv::HyperVAction as A;
+        match &action {
+            A::EnableFeature { confirm: false } => return Err(err(ErrorCode::InvalidValue, "confirmation needed")),
+            A::SetSeatNic { seat, address, prefix_len } => {
+                let n = SeatNumber::new(*seat).ok_or_else(|| err(ErrorCode::InvalidValue, "bad seat"))?;
+                if self.lock().config.seat(n).is_none() {
+                    return Err(err(ErrorCode::NotFound, "no such seat"));
+                }
+                seat_compat::hyperv::check_nic(*seat, address, *prefix_len).map_err(|e| err(ErrorCode::InvalidValue, e))?;
+            }
+            _ => {}
+        }
+        if !matches!(action, A::Status) {
+            log::info(&format!("hyper-v helper: {action:?}"));
+        }
+        Ok(ResponseBody::HyperV(self.platform.hyperv(&action)?))
+    }
+
     /// `remove_kiosk_user` (parity review 2026-11-17): Pulsar's kiosk account of `seat`
     /// with its profile, only while the seat has no kiosk shell.
     pub(crate) fn remove_kiosk_user(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
@@ -1632,18 +1660,20 @@ impl Service {
     }
 }
 
-/// Smart-card reader rules (`seat_shim_core::readers`): one per reader that is not shared,
+/// Smart-card reader / camera rules (`seat_shim_core::readers`): one per device of `kind`
+/// that is not shared, named by `name_of` (reader: friendly name; camera: instance id),
 /// granting seat 1 (console), the kiosk seats it names (console session) and the sessions
 /// of the other seats it names.
 pub(crate) fn reader_rules(
     eff: &[seat_core::assign::Effective],
+    kind: DeviceKind,
     kiosk: &std::collections::BTreeSet<SeatNumber>,
     sessions: &[(SeatNumber, u32)],
     name_of: impl Fn(&DeviceKey) -> Option<String>,
 ) -> Vec<seat_shim_core::readers::ReaderRule> {
     use seat_shim_core::readers::{ReaderGrant, ReaderRule};
     eff.iter()
-        .filter(|e| e.kind == DeviceKind::SmartCardReader && !e.mask.is_shared())
+        .filter(|e| e.kind == kind && !e.mask.is_shared())
         .filter_map(|e| {
             let name = name_of(&e.key).filter(|n| !n.trim().is_empty())?;
             let mut allowed = Vec::new();

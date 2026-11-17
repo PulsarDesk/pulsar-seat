@@ -2557,6 +2557,25 @@ fn local_pad_targets_follow_routing_session_and_the_seat_switch() {
 }
 
 #[test]
+fn hyperv_helper_checks_before_it_acts() {
+    use seat_proto::hyperv::HyperVAction as A;
+    let h = harness();
+    let mut a = admin();
+    assert_eq!(call(&h, &mut a, RequestBody::HyperV { action: A::EnableFeature { confirm: false } }).unwrap_err().code, ErrorCode::InvalidValue);
+    let bad = A::SetSeatNic { seat: 2, address: "127.0.0.1".into(), prefix_len: 24 };
+    assert_eq!(call(&h, &mut a, RequestBody::HyperV { action: bad }).unwrap_err().code, ErrorCode::InvalidValue);
+    let unknown = A::SetSeatNic { seat: 9, address: "10.0.0.9".into(), prefix_len: 24 };
+    assert_eq!(call(&h, &mut a, RequestBody::HyperV { action: unknown }).unwrap_err().code, ErrorCode::NotFound);
+    assert!(h.p.hyperv_actions.lock().unwrap().is_empty(), "nothing ran");
+    let ok = A::SetSeatNic { seat: 2, address: "10.0.0.2".into(), prefix_len: 24 };
+    let ResponseBody::HyperV(st) = call(&h, &mut a, RequestBody::HyperV { action: ok.clone() }).unwrap() else { panic!() };
+    assert_eq!(st.feature, "enabled");
+    assert_eq!(*h.p.hyperv_actions.lock().unwrap(), vec![ok]);
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::HyperV { action: A::Status }).unwrap_err().code, ErrorCode::AccessDenied);
+}
+
+#[test]
 fn reader_rules_follow_the_assignment() {
     use seat_shim_core::readers::{ReaderGrant, ReaderRule};
     let mut c = two_seat_config();
@@ -2578,6 +2597,8 @@ fn reader_rules_follow_the_assignment() {
     let rules = h.p.reader_rules.lock().unwrap().clone();
     let sid = seat_session_id(&h, s(2));
     assert_eq!(rules, vec![ReaderRule { name: "Reader A".into(), allowed: vec![ReaderGrant::Session(sid)] }], "shared readers get no rule");
+    // Webcams are shared by default: no camera rule.
+    assert!(h.p.camera_rules.lock().unwrap().is_empty());
 }
 
 #[test]

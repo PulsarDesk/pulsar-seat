@@ -91,6 +91,17 @@ const t = {
 
   network: {
     intro: 'Bazı ağ programları ve yerel ağ oyunları her koltuğun kendi IP adresini kullanmasını ister. Her koltuğa bu bilgisayarın sabit IPv4 adreslerinden birini verebilirsiniz.',
+    hyperv: 'Hyper-V sanal bağdaştırıcıları',
+    hypervIntro:
+      'Bir koltuk, iç bir Hyper-V anahtarı üzerinde koltuğun adresini taşıyan kendi sanal ağ bağdaştırıcısını alabilir. Anahtar ve bağdaştırıcılar “Pulsar Seat…” adını taşır ve Pulsar Seat kaldırılınca silinir.',
+    hypervFeature: (s: string) => `Hyper-V: ${({ enabled: 'açık', disabled: 'kapalı', enable_pending: 'açılıyor (yeniden başlatma gerekli)', unavailable: 'bu Windows sürümünde yok' } as Record<string, string>)[s] ?? s}`,
+    hypervEnable: 'Hyper-V’yi aç…',
+    hypervEnableConfirm: 'Windows Hyper-V özelliği açılsın mı? Bu bir sistem değişikliğidir ve ardından Windows’un yeniden başlatılması gerekir.',
+    hypervRefresh: 'Denetle',
+    hypervCreate: 'Bağdaştırıcı oluştur',
+    hypervRemove: 'Bağdaştırıcıyı kaldır',
+    hypervNoAddress: 'Önce koltuğa bir adres atayın.',
+    hypervReboot: 'Hyper-V’nin açılmasını tamamlamak için Windows’u yeniden başlatın.',
     bestEffort: 'Kaynak IP sürücüsü yüklü değilken Pulsar Seat bu ayarı saklar ve yalnızca destekleyen programlarda uygular. Programın kendi “şu adrese bağlan” ayarı varsa onu da aynı adrese getirin.',
     enforcedByDriver: (seats: string) => `Kaynak IP sürücüsü yüklü: ${seats} koltuğunun programları bağlantılarında koltuğun adresini kullanır.`,
     driverReady: 'Kaynak IP sürücüsü yüklü; bir koltuk oturum açınca adresi zorlanır.',
@@ -1656,6 +1667,9 @@ const rt = {
     streamSection: 'Akış',
     gamepad: 'Kumanda türü',
     gamepadAuto: 'Otomatik',
+    gamepadPulsar: (kind: string) => `${kind} (Pulsar kolu, yalıtılmış)`,
+    capturePulsarIdd: 'Pulsar sanal ekranı (HDR)',
+    pulsarBuildOnly: 'Yayın sunucusunun Pulsar derlemesini gerektirir; standart derlemede sunucunun varsayılanı kullanılır.',
     capture: 'Görüntü yakalama',
     captureDefault: 'Varsayılan',
     minFps: 'En düşük FPS hedefi',
