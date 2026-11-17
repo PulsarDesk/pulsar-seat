@@ -4,7 +4,11 @@
 #   1. release binaries (static CRT) of the service, seat host and agent
 #   2. the app API helper DLL for every app architecture the PC can run
 #   3. optional: signed driver packages (-SignedDrivers <dir>), staged only when every
-#      catalog verifies and is signed by the Microsoft hardware publisher
+#      catalog verifies and is signed by the Microsoft hardware publisher, or (with
+#      -PublisherCert) by exactly that publisher certificate
+#   3a. optional: the public publisher certificate (-PublisherCert <file.cer>), shipped as
+#      certs\publisher.cer and imported on the target PC only when the operator ticks the
+#      unchecked "import publisher certificate" choice (PSIMPORTCERT=1; seat-compat certs.rs)
 #   3b. remote seat kind (merge step 10): the shim (both packages; arm64 adds shim\arm64) and the pinned
 #      third-party payload (fetch-deps.ts: drivers + Sunshine per arch) under remote\
 #   4. PE-machine / payload gate (check-payload.ts)
@@ -21,11 +25,15 @@
 #
 #   powershell -ExecutionPolicy Bypass -File installer\scripts\build-installer.ps1 -Arch arm64
 #   ... -Arch x64 -SignedDrivers target\drivers-signed\x64
+#   ... -Arch x64 -SignedDrivers target\drivers-signed\x64 -PublisherCert path\publisher.cer
 #   ... -Arch arm64 -NoArm64ec      (toolchain without the arm64ec target: test builds only)
 param(
     [ValidateSet("arm64", "x64", "")] [string] $Arch = "",
     # Folder with one sub-folder per signed driver package (inf + cat + sys/dll).
     [string] $SignedDrivers = "",
+    # Public publisher certificate (.cer, DER) to ship for the opt-in import. Never a key
+    # (.pfx / .pvk are refused). The driver catalogs may then be signed by it.
+    [string] $PublisherCert = "",
     # Use binaries already in the payload folder (CI: the rust job's artifact).
     [switch] $SkipCargo,
     # Leave out the ARM64EC helper (rustup target missing). Not for releases.
@@ -252,6 +260,19 @@ $staged = Join-Path $work "drivers"
 if (Test-Path $staged) { Remove-Item -Recurse -Force $staged }
 New-Item -ItemType Directory -Force $staged | Out-Null
 $checkArgs = @()
+$pubThumb = $null
+if ($PublisherCert) {
+    if ([System.IO.Path]::GetExtension($PublisherCert) -ne ".cer") { throw "-PublisherCert must be a .cer file (public certificate only)" }
+    $pc = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 (,[System.IO.File]::ReadAllBytes((Resolve-Path $PublisherCert).Path))
+    if ($pc.HasPrivateKey) { throw "-PublisherCert carries a private key - refused" }
+    $bc = $pc.Extensions | Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] }
+    if ($bc -and $bc.CertificateAuthority) { throw "-PublisherCert is a CA certificate - only a leaf publisher certificate is shipped" }
+    $eku = $pc.Extensions | Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] }
+    if (-not $eku -or -not ($eku.EnhancedKeyUsages | Where-Object { $_.Value -eq "1.3.6.1.5.5.7.3.3" })) { throw "-PublisherCert has no code-signing usage" }
+    $pubThumb = $pc.Thumbprint
+    $checkArgs += "--allow-publisher-cert"
+    Write-Host "publisher certificate $($pc.Subject) ($pubThumb) shipped for the opt-in import"
+}
 if ($SignedDrivers) {
     $publisher = "Microsoft Windows Hardware Compatibility Publisher"
     # signtool of the Windows SDK, native for this host (catalog membership check).
@@ -266,16 +287,20 @@ if ($SignedDrivers) {
         $infs = @(Get-ChildItem $p.FullName -Filter *.inf -File)
         if ($cats.Count -ne 1 -or $infs.Count -ne 1) { throw "$($p.Name): need exactly one .inf and one .cat" }
         $sig = Get-AuthenticodeSignature $cats[0].FullName
-        if ($sig.Status -ne "Valid") { throw "$($p.Name): catalog signature $($sig.Status) - not staged" }
+        $ownPublisher = $pubThumb -and $sig.SignerCertificate -and $sig.SignerCertificate.Thumbprint -eq $pubThumb
+        # A catalog of the shipped publisher certificate is not trusted on the build PC
+        # (UnknownError / NotTrusted until imported); its signer is matched by thumbprint.
+        if ($sig.Status -ne "Valid" -and -not $ownPublisher) { throw "$($p.Name): catalog signature $($sig.Status) - not staged" }
         $subject = $sig.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-        if ($subject -ne $publisher) { throw "$($p.Name): catalog signed by '$subject', not '$publisher' - not staged" }
+        if ($subject -ne $publisher -and -not $ownPublisher) { throw "$($p.Name): catalog signed by '$subject', not '$publisher' - not staged" }
         # Every binary must be a member of that catalog (signtool verify /c: hash listed in
         # the catalog and the catalog's signature valid) or embedded-signed by the same
         # Microsoft publisher. An embedded signature from anyone else refuses the package.
         foreach ($b in Get-ChildItem $p.FullName -File | Where-Object { $_.Extension -in ".sys", ".dll" }) {
             $bs = Get-AuthenticodeSignature $b.FullName
-            $embedded = $bs.Status -eq "Valid" -and $bs.SignerCertificate -and
-                $bs.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -eq $publisher
+            $embedded = ($bs.Status -eq "Valid" -and $bs.SignerCertificate -and
+                $bs.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -eq $publisher) -or
+                ($pubThumb -and $bs.SignerCertificate -and $bs.SignerCertificate.Thumbprint -eq $pubThumb)
             if ($bs.SignerCertificate -and -not $embedded -and $bs.Status -ne "NotSigned") {
                 $who = $bs.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
                 throw "$($p.Name)\$($b.Name): signed by '$who' ($($bs.Status)), not '$publisher' - not staged"
@@ -288,6 +313,7 @@ if ($SignedDrivers) {
                 try { & $signtool verify /q /pa /c $cats[0].FullName $b.FullName 2>$null | Out-Null; $inCatalog = $LASTEXITCODE -eq 0 }
                 finally { $ErrorActionPreference = $eap }
             }
+            if ($ownPublisher -and -not $embedded) { $inCatalog = $true }  # membership checked by PnP at install
             if (-not ($embedded -or $inCatalog)) {
                 throw "$($p.Name)\$($b.Name): neither in $($cats[0].Name) nor embedded-signed by '$publisher' - not staged"
             }
@@ -309,6 +335,7 @@ $config = Join-Path $work "tauri-bundle.json"
 Invoke-Checked "bundle config" {
     $extra = @("--bin", $payload); if ($NoArm64ec -and $Arch -eq "arm64") { $extra += "--no-arm64ec" }
     if (Test-Path $remoteDir) { $extra += @("--remote", $remoteDir) }
+    if ($PublisherCert) { $extra += @("--publisher-cert", (Resolve-Path $PublisherCert).Path) }
     bun (Join-Path $repo "installer\scripts\bundle-config.ts") $config --drivers $staged --version $Version --language $Language @extra
 }
 

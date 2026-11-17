@@ -9,8 +9,11 @@
 //!   "Microsoft Windows Hardware Compatibility Publisher" (attestation / WHQL). "Microsoft
 //!   Windows" (the signer of every OS catalog) is **not** accepted, so a copied OS `.cat`
 //!   does not pass. The binaries are listed in the same catalog and PnP checks them at
-//!   install time. An unsigned or self-signed package is skipped and reported, never
-//!   installed; no test-signing, no certificate import;
+//!   install time. An unsigned package is skipped and reported, never installed; no
+//!   test-signing. Since 2026-11-17 one more signer is accepted: the package's own
+//!   publisher certificate, and only while the operator imported it at install (visible
+//!   opt-in, `crate::certs`) so that it sits in `TrustedPublisher` (matched by thumbprint,
+//!   [`signer_accepted_with`]);
 //! - the INF must have a models section for the native architecture;
 //! - a package already in the store that is not in our journal is foreign: never touched,
 //!   unless its original INF name **and** content hash equal our payload (a crash between
@@ -173,6 +176,11 @@ pub fn signer_accepted(subject: &str) -> bool {
         .any(|s| s.eq_ignore_ascii_case(subject.trim()))
 }
 
+/// [`signer_accepted`], or a thumbprint in `extra_thumbprints` (the imported publisher).
+pub fn signer_accepted_with(subject: &str, thumbprint: &str, extra_thumbprints: &[String]) -> bool {
+    signer_accepted(subject) || extra_thumbprints.iter().any(|t| t.eq_ignore_ascii_case(thumbprint))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum StageOutcome {
@@ -283,20 +291,21 @@ pub fn is_ours(j: &Journal, published: &str) -> Result<bool, JournalError> {
 }
 
 /// Stage every signed package under `dir` (Windows, elevated). See module rules.
+/// `extra_publishers`: thumbprints accepted besides Microsoft's hardware publisher.
 #[cfg(windows)]
-pub fn stage_all(j: &Journal, dir: &Path) -> Vec<StageResult> {
+pub fn stage_all(j: &Journal, dir: &Path, extra_publishers: &[String]) -> Vec<StageResult> {
     let machine = crate::win::native_machine().unwrap_or(crate::preflight::build_machine());
     find_packages(dir)
         .into_iter()
         .map(|inf| StageResult {
-            outcome: stage_one(j, &inf, machine),
+            outcome: stage_one(j, &inf, machine, extra_publishers),
             inf,
         })
         .collect()
 }
 
 #[cfg(windows)]
-fn stage_one(j: &Journal, inf: &Path, machine: u16) -> StageOutcome {
+fn stage_one(j: &Journal, inf: &Path, machine: u16, extra_publishers: &[String]) -> StageOutcome {
     let cat = match precheck(inf, machine) {
         Ok(c) => c,
         Err(o) => return o,
@@ -309,10 +318,10 @@ fn stage_one(j: &Journal, inf: &Path, machine: u16) -> StageOutcome {
                 detail: e.to_string(),
             };
         }
-        Ok(subject) if !signer_accepted(&subject) => {
+        Ok(s) if !signer_accepted_with(&s.name, &s.thumbprint, extra_publishers) => {
             return StageOutcome::Skipped {
                 reason: SkipReason::UntrustedSigner,
-                detail: subject,
+                detail: s.name,
             };
         }
         Ok(_) => {}
@@ -487,6 +496,10 @@ mod tests {
         assert!(!signer_accepted("Pulsar Test Cert"));
         // Signer of every OS catalog: a copied OS .cat must not pass.
         assert!(!signer_accepted("Microsoft Windows"));
+        let tp = "AB".repeat(20);
+        assert!(signer_accepted_with("Pulsar Seat Publisher", &tp, std::slice::from_ref(&tp.to_ascii_lowercase())));
+        assert!(!signer_accepted_with("Pulsar Seat Publisher", &tp, &[]));
+        assert!(signer_accepted_with("Microsoft Windows Hardware Compatibility Publisher", &tp, &[]));
     }
 
     #[test]

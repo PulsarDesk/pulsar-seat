@@ -14,6 +14,8 @@
   <String Id="PsBadDrivers">PULSARDRIVERS is invalid: only driver names and commas are allowed.</String>
   <String Id="PsBadConsent">PULSARCONSENT is invalid: only driver names and commas are allowed.</String>
   <String Id="PsBadRemoveUserData">REMOVEUSERDATA can only be 0 or 1.</String>
+  <String Id="PsBadFeatures">PSWINFEATURES is invalid: only lowercase letters, underscores and commas are allowed.</String>
+  <String Id="PsBadImportCert">PSIMPORTCERT can only be 0 or 1.</String>
   <String Id="PsServiceDisplayName">Pulsar Seat Service</String>
   <String Id="PsServiceDescription">Manages several seats (monitor, keyboard, mouse, sound) on one PC.</String>
   <String Id="PsStopSeatsText">The Pulsar Seat service will be updated, repaired or removed. All running seats will stop and the sessions on the seats will close.&#13;&#10;&#13;&#10;Continue?</String>
@@ -26,6 +28,14 @@
   <String Id="PsOptSleep">Turn off sleep in the active power plan (the PC does not sleep while seats are in use)</String>
   <String Id="PsOptDumps">Set the crash dump to a small dump (saves disk space)</String>
   <String Id="PsOptNote">Settings that are not ticked are left untouched.</String>
+  <String Id="PsComponentsTitle">{\WixUI_Font_Title}Optional Windows components</String>
+  <String Id="PsComponentsDescription">Only needed for virtual-machine seats and the network helpers. All are off by default.</String>
+  <String Id="PsOptVmp">Turn on Virtual Machine Platform (sandbox and virtual-machine seats)</String>
+  <String Id="PsOptHyperV">Turn on Hyper-V (per-seat virtual network adapters, VM seats; Pro or higher)</String>
+  <String Id="PsOptSandbox">Turn on Windows Sandbox (Pro or higher)</String>
+  <String Id="PsComponentsNote">Windows may need a restart. These components stay on after Pulsar Seat is removed; turn them off in "Windows Features".</String>
+  <String Id="PsOptCert">Import the Pulsar Seat publisher certificate (needed for its own driver packages)</String>
+  <String Id="PsOptCertWarn">This adds the certificate shipped in this package to the computer's Trusted Publishers (and Trusted Root, if it is self-signed). Windows then trusts software signed with it. Only tick this if you trust who built this package. It is removed again at uninstall.</String>
   <String Id="PsRemoveTitle">{\WixUI_Font_Title}Settings and logs</String>
   <String Id="PsRemoveDescription">What should happen to your saved data when Pulsar Seat is removed?</String>
   <String Id="PsRemoveText">Seat configuration, device assignments and logs are in the %ProgramData%\Pulsar Seat folder. If you keep them, Pulsar Seat continues where it left off when installed again. Seat passwords are always deleted.</String>

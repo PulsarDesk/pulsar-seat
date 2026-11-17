@@ -472,6 +472,37 @@ impl SystemOps for WinOps {
     fn account_right(&self, sid: &str, right: &str, add: bool) -> OpsResult<()> {
         crate::win_extra::account_right(sid, right, add)
     }
+
+    fn cert_thumbprints(&self, store: crate::certs::CertStore) -> OpsResult<Vec<String>> {
+        crate::win_certs::cert_thumbprints(store)
+    }
+
+    fn cert_add(&self, store: crate::certs::CertStore, der: &[u8]) -> OpsResult<()> {
+        crate::win_certs::cert_add(store, der)
+    }
+
+    fn cert_remove(&self, store: crate::certs::CertStore, thumbprint: &str) -> OpsResult<()> {
+        crate::win_certs::cert_remove(store, thumbprint)
+    }
+
+    fn feature_state(&self, name: &str) -> OpsResult<crate::features::FeatureState> {
+        crate::win_certs::feature_state(name)
+    }
+
+    fn feature_enable(&self, name: &str) -> OpsResult<bool> {
+        crate::win_certs::feature_enable(name)
+    }
+}
+
+pub use crate::win_certs::inspect_cert;
+
+/// Leaf signer of a verified catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogSigner {
+    /// Simple display name of the subject.
+    pub name: String,
+    /// SHA-1 thumbprint (upper-case hex).
+    pub thumbprint: String,
 }
 
 /// `oemNN.inf` (file name only, digits only between `oem` and `.inf`).
@@ -706,7 +737,7 @@ pub fn cpu_sets() -> OpsResult<Vec<CpuSetInfo>> {
 ///
 /// # Safety
 /// `state` is the `hWVTStateData` of a successful verify, not yet closed.
-unsafe fn signer_name(state: HANDLE) -> OpsResult<String> {
+unsafe fn signer_name(state: HANDLE) -> OpsResult<CatalogSigner> {
     use windows_sys::Win32::Security::Cryptography::{
         CERT_NAME_SIMPLE_DISPLAY_TYPE, CertGetNameStringW,
     };
@@ -735,7 +766,7 @@ unsafe fn signer_name(state: HANDLE) -> OpsResult<String> {
             buf.as_mut_ptr(),
             buf.len() as u32,
         );
-        Ok(from_wide(&buf[..n as usize]))
+        Ok(CatalogSigner { name: from_wide(&buf[..n as usize]), thumbprint: crate::win_certs::context_thumbprint(cert) })
     }
 }
 
@@ -751,10 +782,10 @@ impl Drop for CatAdmin {
 
 /// Verify that `member` (the INF) is listed in catalog `cat` and that the catalog's
 /// Authenticode signature is trusted (`WinVerifyTrust`, `WTD_CHOICE_CATALOG`, generic
-/// verify v2, no UI, no revocation fetch). Returns the catalog's leaf signer display
-/// name. A catalog copied from the OS that does not list our INF fails here.
+/// verify v2, no UI, no revocation fetch). Returns the catalog's leaf signer (display
+/// name and thumbprint). A catalog copied from the OS that does not list our INF fails here.
 /// Tries a SHA-256 member hash first, then SHA-1 (older catalogs).
-pub fn catalog_member_signer(cat: &Path, member: &Path) -> OpsResult<String> {
+pub fn catalog_member_signer(cat: &Path, member: &Path) -> OpsResult<CatalogSigner> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Security::Cryptography::Catalog::{
         CryptCATAdminAcquireContext2, CryptCATAdminCalcHashFromFileHandle2,

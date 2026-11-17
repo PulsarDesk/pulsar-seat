@@ -64,12 +64,21 @@
                                        saved at the first install; a fresh install without it
                                        installs none, so local-only PCs get no virtual display)
     PULSARCONSENT=usbip-win2           remote kind: ids whose upstream installer may run
+    PSWINFEATURES=virtual_machine_platform,hyper_v,windows_sandbox
+                                       optional Windows features to turn on (DISM, no restart,
+                                       no Windows Update source; journaled, kept at uninstall);
+                                       ids from seat-compat features.rs, a-z, _ and , only
+    PSIMPORTCERT=1                     import the package's own publisher certificate
+                                       (certs\publisher.cer, only in a -PublisherCert build) into
+                                       LocalMachine\TrustedPublisher (+ Root when self-signed);
+                                       journaled, removed at uninstall; default off
     REMOVEUSERDATA=1                   uninstall also deletes %ProgramData%\Pulsar Seat
                                        (msiexec /x PulsarSeat.msi /qn REMOVEUSERDATA=1); the
                                        updates\ download cache is deleted on every uninstall
 
   Never: firewall allow rules (local pipe only, spec 90 §11 item 8), Defender exclusions,
-  certificates, test-signing, DeviceGuard / CI values, Windows Update blocking, files in
+  certificates or optional features without the operator's tick (PSIMPORTCERT /
+  PSWINFEATURES, unchecked by default), test-signing, DeviceGuard / CI values, Windows Update blocking, files in
   System32, class-wide filter edits. Built with the WiX 3.14 that Tauri's bundler downloads
   (installer/README.md "Build"); never installed on the dev box.
 
@@ -90,6 +99,8 @@
     <Property Id="REMOVEUSERDATA" Secure="yes" />
     <Property Id="PULSARDRIVERS" Secure="yes" />
     <Property Id="PULSARCONSENT" Secure="yes" />
+    <Property Id="PSWINFEATURES" Secure="yes" />
+    <Property Id="PSIMPORTCERT" Secure="yes" />
 
     <!-- Native machine (64-bit registry view; not virtualised for x64 code on ARM64). -->
     <Property Id="PSNATIVEARCH">
@@ -150,6 +161,10 @@
          (except "-", which driver ids use; seat-setup's parser refuses unknown ids). -->
     <Condition Message="!(loc.PsBadDrivers)">Installed OR NOT (PULSARDRIVERS &gt;&lt; " " OR PULSARDRIVERS &gt;&lt; "&#9;" OR PULSARDRIVERS &gt;&lt; "/" OR PULSARDRIVERS &gt;&lt; "\" OR PULSARDRIVERS &gt;&lt; "=" OR PULSARDRIVERS &gt;&lt; "[" OR PULSARDRIVERS &gt;&lt; "]")</Condition>
     <Condition Message="!(loc.PsBadConsent)">Installed OR NOT (PULSARCONSENT &gt;&lt; " " OR PULSARCONSENT &gt;&lt; "&#9;" OR PULSARCONSENT &gt;&lt; "/" OR PULSARCONSENT &gt;&lt; "\" OR PULSARCONSENT &gt;&lt; "=" OR PULSARCONSENT &gt;&lt; "[" OR PULSARCONSENT &gt;&lt; "]")</Condition>
+    <Condition Message="!(loc.PsBadFeatures)">Installed OR NOT (PSWINFEATURES &gt;&lt; " " OR PSWINFEATURES &gt;&lt; "&#9;" OR PSWINFEATURES &gt;&lt; "-" OR PSWINFEATURES &gt;&lt; "/" OR PSWINFEATURES &gt;&lt; "\" OR PSWINFEATURES &gt;&lt; "=" OR PSWINFEATURES &gt;&lt; "[" OR PSWINFEATURES &gt;&lt; "]")</Condition>
+    <Condition Message="!(loc.PsBadImportCert)">
+      <![CDATA[Installed OR NOT PSIMPORTCERT OR PSIMPORTCERT = "0" OR PSIMPORTCERT = "1"]]>
+    </Condition>
     <Condition Message="!(loc.PsBadRemoveUserData)">
       <![CDATA[NOT REMOVEUSERDATA OR REMOVEUSERDATA = "0" OR REMOVEUSERDATA = "1"]]>
     </Condition>
@@ -181,6 +196,16 @@
     </SetProperty>
     <SetProperty Id="PSUI_DUMPS" Value="1" After="AppSearch" Sequence="ui">
       <![CDATA[PSTWEAKS >< "small_crash_dumps"]]>
+    </SetProperty>
+    <!-- Components dialog check boxes, pre-set from a PSWINFEATURES given on the command line. -->
+    <SetProperty Id="PSUI_VMP" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSWINFEATURES >< "virtual_machine_platform"]]>
+    </SetProperty>
+    <SetProperty Id="PSUI_HYPERV" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSWINFEATURES >< "hyper_v"]]>
+    </SetProperty>
+    <SetProperty Id="PSUI_SANDBOX" Value="1" After="AppSearch" Sequence="ui">
+      <![CDATA[PSWINFEATURES >< "windows_sandbox"]]>
     </SetProperty>
 
     <!-- ================================================================ files + service -->
@@ -366,7 +391,7 @@
          quote and the folder would never be found). The trailing "." names the same folder.
          The service also drops one stray trailing quote (win/setup.rs normalize_install_args). -->
     <CustomAction Id="PsSetupInstall" FileKey="PulsarSeatServiceExe"
-                  ExeCommand="install --msi &quot;--restore-point=[PSRESTOREPOINT]&quot; &quot;--tweak=[PSTWEAKS]&quot; &quot;--drivers=[PulsarSeatDriversDir].&quot;"
+                  ExeCommand="install --msi &quot;--restore-point=[PSRESTOREPOINT]&quot; &quot;--tweak=[PSTWEAKS]&quot; &quot;--features=[PSWINFEATURES]&quot; &quot;--import-cert=[PSIMPORTCERT]&quot; &quot;--drivers=[PulsarSeatDriversDir].&quot;"
                   Execute="deferred" Impersonate="no" Return="check" />
     <!-- Rollback of PsSetupInstall: if a later action fails (StartServices on the Vital
          service, any later deferred action), Windows Installer rolls the files back;
@@ -492,14 +517,58 @@
           <Publish Property="PSTWEAKS" Value="[PSTWEAKS]fast_startup_off," Order="2"><![CDATA[PSUI_FASTSTARTUP AND PSHIBERBOOT <> "#0"]]></Publish>
           <Publish Property="PSTWEAKS" Value="[PSTWEAKS]sleep_off," Order="3">PSUI_SLEEP</Publish>
           <Publish Property="PSTWEAKS" Value="[PSTWEAKS]small_crash_dumps," Order="4">PSUI_DUMPS</Publish>
-          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="5">1</Publish>
+          <Publish Event="NewDialog" Value="PsComponentsDlg" Order="5">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.PsButtonCancelSetup)">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+      <!-- Spec/remote 90 §2.4 / §2.5 (parity 2026-11-17): optional Windows features and the
+           publisher certificate, each an unchecked, visible choice. The certificate box is
+           shown only when this build ships one (PSHASCERT, generated fragment). -->
+      <Dialog Id="PsComponentsDlg" Width="370" Height="270" Title="!(loc.PsSetupTitle)">
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="340" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="!(loc.PsComponentsTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="330" Height="15" Transparent="yes" NoPrefix="yes"
+                 Text="!(loc.PsComponentsDescription)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="Vmp" Type="CheckBox" X="20" Y="55" Width="330" Height="18" Property="PSUI_VMP"
+                 CheckBoxValue="1" Text="!(loc.PsOptVmp)" />
+        <Control Id="HyperV" Type="CheckBox" X="20" Y="77" Width="330" Height="18" Property="PSUI_HYPERV"
+                 CheckBoxValue="1" Text="!(loc.PsOptHyperV)" />
+        <Control Id="Sandbox" Type="CheckBox" X="20" Y="99" Width="330" Height="18" Property="PSUI_SANDBOX"
+                 CheckBoxValue="1" Text="!(loc.PsOptSandbox)" />
+        <Control Id="FeatureNote" Type="Text" X="20" Y="120" Width="330" Height="28" NoPrefix="yes"
+                 Text="!(loc.PsComponentsNote)" />
+        <Control Id="Cert" Type="CheckBox" X="20" Y="152" Width="330" Height="18" Property="PSIMPORTCERT"
+                 CheckBoxValue="1" Text="!(loc.PsOptCert)">
+          <Condition Action="hide"><![CDATA[NOT PSHASCERT]]></Condition>
+          <Condition Action="show"><![CDATA[PSHASCERT]]></Condition>
+        </Control>
+        <Control Id="CertWarn" Type="Text" X="20" Y="172" Width="330" Height="56" NoPrefix="yes"
+                 Text="!(loc.PsOptCertWarn)">
+          <Condition Action="hide"><![CDATA[NOT PSHASCERT]]></Condition>
+          <Condition Action="show"><![CDATA[PSHASCERT]]></Condition>
+        </Control>
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.PsButtonBack)">
+          <Publish Event="NewDialog" Value="PsOptionsDlg">1</Publish>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.PsButtonNext)">
+          <!-- Rebuild PSWINFEATURES from the boxes (the service ignores the trailing comma). -->
+          <Publish Property="PSWINFEATURES" Value="{}" Order="1">1</Publish>
+          <Publish Property="PSWINFEATURES" Value="[PSWINFEATURES]virtual_machine_platform," Order="2">PSUI_VMP</Publish>
+          <Publish Property="PSWINFEATURES" Value="[PSWINFEATURES]hyper_v," Order="3">PSUI_HYPERV</Publish>
+          <Publish Property="PSWINFEATURES" Value="[PSWINFEATURES]windows_sandbox," Order="4">PSUI_SANDBOX</Publish>
+          <Publish Property="PSIMPORTCERT" Value="{}" Order="5">NOT PSHASCERT</Publish>
+          <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="6">1</Publish>
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.PsButtonCancelSetup)">
           <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
         </Control>
       </Dialog>
       <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="PsOptionsDlg" Order="5"><![CDATA[WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID="1"]]></Publish>
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="PsOptionsDlg" Order="5">NOT Installed</Publish>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="PsComponentsDlg" Order="5">NOT Installed</Publish>
 
       <!-- Spec 90 §11 item 11: removal offers to keep or delete %ProgramData%\Pulsar Seat.
            Full UI only (MaintenanceTypeDlg -> Remove -> PsRemoveDataDlg -> VerifyReadyDlg).

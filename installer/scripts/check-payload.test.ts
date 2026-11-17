@@ -17,6 +17,7 @@ import {
   checkMachine,
   checkNotices,
   findNameViolations,
+  isPublisherCert,
   allowedMachines,
   remoteDriverFile,
   parseArgs,
@@ -68,6 +69,19 @@ describe("name rules", () => {
       "certificate_or_key:x.pfx",
     ]);
   });
+  test("only certs/publisher.cer passes, and only with --allow-publisher-cert", () => {
+    const v = (paths: string[], allow: boolean) =>
+      findNameViolations(paths, false, allow).map((x) => `${x.rule}:${x.path}`);
+    expect(v(["certs/publisher.cer"], false)).toEqual(["certificate_or_key:certs/publisher.cer"]);
+    expect(v(["PFiles/Pulsar Seat/certs/publisher.cer"], true)).toEqual([]);
+    expect(v(["certs/publisher.pfx", "publisher.cer", "other/publisher.cer"], true)).toEqual([
+      "certificate_or_key:certs/publisher.pfx",
+      "certificate_or_key:publisher.cer",
+      "certificate_or_key:other/publisher.cer",
+    ]);
+    expect(isPublisherCert(String.raw`certs\publisher.cer`)).toBe(true);
+    expect(parseArgs(["--arch", "x64", "--allow-publisher-cert", "o"])?.allowPublisherCert).toBe(true);
+  });
   test("drivers need --allow-drivers and a full package", () => {
     expect(rules(["drivers/kbdmou/pseat.sys"])).toEqual(["driver_not_allowed:drivers/kbdmou/pseat.sys"]);
     expect(rules(["drivers/kbdmou/pseat.sys", "drivers/kbdmou/pseat.inf"], true)).toEqual([
@@ -99,6 +113,7 @@ describe("checkDirs + args", () => {
     expect(parseArgs(["--arch", "arm64", "out"])).toEqual({
       arch: "arm64",
       allowDrivers: false,
+      allowPublisherCert: false,
       machineOnly: false,
       release: false,
       notices: false,
@@ -108,6 +123,7 @@ describe("checkDirs + args", () => {
     expect(parseArgs(["--arch", "x64", "--machine-only", "--blocklist", "b.xml", "o"])).toEqual({
       arch: "x64",
       allowDrivers: false,
+      allowPublisherCert: false,
       machineOnly: true,
       release: false,
       notices: false,

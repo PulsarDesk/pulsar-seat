@@ -6,7 +6,10 @@
 //     (rules.md: ARM64 0xAA64, x64 0x8664; checked from the PE header, never the name);
 //   - Microsoft runtime / system binaries are bundled (vcruntime, msvcp, ucrtbase,
 //     api-ms-win-*, WebView2Loader, termsrv, ...) — binaries are built with a static CRT;
-//   - certificates or keys are bundled (no certificate is ever installed, spec 90 §11 item 3);
+//   - certificates or keys are bundled (spec 90 §11 item 3). One exception since 2026-11-17:
+//     with `--allow-publisher-cert`, the public `certs/publisher.cer` of a build made with
+//     `build-installer.ps1 -PublisherCert` (imported only on the unchecked PSIMPORTCERT
+//     choice); any other certificate or key file still fails;
 //   - a kernel driver ships outside a driver package (INF + CAT next to it), or any
 //     driver ships while `--allow-drivers` is not given (none is signed yet,
 //     drivers/README.md);
@@ -145,7 +148,13 @@ export function readHead(path: string, size = 4096): Uint8Array {
 }
 
 /** Name rules over relative paths (forward or back slashes). */
-export function findNameViolations(paths: string[], allowDrivers: boolean): Violation[] {
+/** The one certificate file a `-PublisherCert` build may carry. */
+export function isPublisherCert(path: string): boolean {
+  const parts = path.replace(/\\/g, "/").toLowerCase().split("/").filter((p) => p.length > 0);
+  return parts.at(-1) === "publisher.cer" && parts.at(-2) === "certs";
+}
+
+export function findNameViolations(paths: string[], allowDrivers: boolean, allowPublisherCert = false): Violation[] {
   const out: Violation[] = [];
   const set = new Set(paths.map((p) => p.replace(/\\/g, "/").toLowerCase()));
   for (const raw of paths) {
@@ -154,7 +163,9 @@ export function findNameViolations(paths: string[], allowDrivers: boolean): Viol
     const name = parts[parts.length - 1] ?? "";
     const lower = name.toLowerCase();
     if (MS_DLL_PATTERNS.some((re) => re.test(name))) out.push({ path, rule: "microsoft_binary", severity: "error" });
-    if (CERT_EXT.has(ext(name))) out.push({ path, rule: "certificate_or_key", severity: "error" });
+    if (CERT_EXT.has(ext(name)) && !(allowPublisherCert && isPublisherCert(path))) {
+      out.push({ path, rule: "certificate_or_key", severity: "error" });
+    }
     if (WEB_EXT.has(ext(name)) || parts.slice(0, -1).some((d) => WEB_DIRS.has(d.toLowerCase()))) {
       out.push({ path, rule: "web_ui_asset", severity: "error" });
     }
@@ -449,6 +460,8 @@ export function listFiles(root: string): string[] {
 
 export interface CheckOptions {
   allowDrivers?: boolean;
+  /** `certs/publisher.cer` may ship (build-installer.ps1 -PublisherCert). */
+  allowPublisherCert?: boolean;
   machineOnly?: boolean;
   blocklist?: Blocklist;
   /** Release gate: MUST_BE_SIGNED files need a certificate table. */
@@ -504,7 +517,9 @@ export function checkDirs(dirs: string[], arch: Arch, opts: CheckOptions | boole
       }
     }
     if (!o.machineOnly) {
-      for (const v of findNameViolations(files, o.allowDrivers ?? false)) all.push({ ...v, path: `${d}/${v.path}` });
+      for (const v of findNameViolations(files, o.allowDrivers ?? false, o.allowPublisherCert ?? false)) {
+        all.push({ ...v, path: `${d}/${v.path}` });
+      }
     }
     for (const f of files) {
       if (TEST_SIGN_EXT.has(ext(f))) {
@@ -538,6 +553,7 @@ export function checkDirs(dirs: string[], arch: Arch, opts: CheckOptions | boole
 export interface Args {
   arch: Arch;
   allowDrivers: boolean;
+  allowPublisherCert: boolean;
   machineOnly: boolean;
   release: boolean;
   notices: boolean;
@@ -548,6 +564,7 @@ export interface Args {
 export function parseArgs(argv: string[]): Args | null {
   let arch: Arch | null = null;
   let allowDrivers = false;
+  let allowPublisherCert = false;
   let machineOnly = false;
   let release = false;
   let notices = false;
@@ -560,6 +577,7 @@ export function parseArgs(argv: string[]): Args | null {
       if (v !== "arm64" && v !== "x64") return null;
       arch = v;
     } else if (a === "--allow-drivers") allowDrivers = true;
+    else if (a === "--allow-publisher-cert") allowPublisherCert = true;
     else if (a === "--machine-only") machineOnly = true;
     else if (a === "--release") release = true;
     else if (a === "--notices") notices = true;
@@ -569,14 +587,14 @@ export function parseArgs(argv: string[]): Args | null {
       blocklist = v;
     } else dirs.push(a);
   }
-  return arch && dirs.length > 0 ? { arch, allowDrivers, machineOnly, release, notices, blocklist, dirs } : null;
+  return arch && dirs.length > 0 ? { arch, allowDrivers, allowPublisherCert, machineOnly, release, notices, blocklist, dirs } : null;
 }
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (!args) {
     console.error(
-      "usage: bun installer/scripts/check-payload.ts --arch arm64|x64 [--allow-drivers] [--machine-only] [--release] [--notices] [--blocklist <xml>] <dir>...",
+      "usage: bun installer/scripts/check-payload.ts --arch arm64|x64 [--allow-drivers] [--allow-publisher-cert] [--machine-only] [--release] [--notices] [--blocklist <xml>] <dir>...",
     );
     process.exit(2);
   }
@@ -587,6 +605,7 @@ if (import.meta.main) {
   }
   const found = checkDirs(args.dirs, args.arch, {
     allowDrivers: args.allowDrivers,
+    allowPublisherCert: args.allowPublisherCert,
     machineOnly: args.machineOnly,
     release: args.release,
     notices: args.notices,

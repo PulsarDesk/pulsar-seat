@@ -16,6 +16,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 # Driver package identity (INF hash in the journal).
 sha2 = "0.10.9"
+# Certificate thumbprints (certs.rs) and the service SID pin of the source-IP driver DACL (wfp.rs).
+sha1 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { workspace = true }
@@ -51,5 +53,3 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 seat-core = { workspace = true, features = ["mock"] }
-# Pins the service SID of the source-IP driver DACL (wfp.rs).
-sha1 = "0.10"

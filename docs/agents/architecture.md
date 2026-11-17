@@ -2016,6 +2016,30 @@ Preflight check titles are localized on the console (`seat_compat::preflight::ti
 setup log uses English titles (`title_en`, `BLOCKED` / `WARNING` prefixes).
 
 
+## Install-time optional features and publisher certificate (remote-smalls, 2026-11-17)
+
+Spec/remote 90 §2.4 / §2.5. Both are unchecked installer choices on the MSI page "Optional
+Windows components" and reach `pulsar-seat-service install` as `--features=<ids>` and
+`--import-cert=<0|1>` (`seat_compat::setup::InstallOptions`). Order in `setup::install`:
+gate, restore point, tweaks, **features**, **certificate**, driver packages.
+
+| Piece | Module | Journal change | Uninstall |
+| --- | --- | --- | --- |
+| VirtualMachinePlatform, Microsoft-Hyper-V-All, Containers-DisposableClientVM (allow list) via `dism.exe /Online /Enable-Feature /All /NoRestart /LimitAccess` | `seat_compat::features` (+ `win_certs::feature_*`) | `OptionalFeature { name }`, only when it was off | kept (`closed`), logged |
+| `certs\publisher.cer` (shipped only by `build-installer.ps1 -PublisherCert`) into `LocalMachine\TrustedPublisher` (+ `Root` when self-signed); leaf code-signing certificate only | `seat_compat::certs` (+ `win_certs::{cert_*, inspect_cert}`) | `Certificate { store, thumbprint }`, only for a store that lacked it | deleted from that store |
+| Driver catalogs signed by that certificate | `seat_compat::drivers::signer_accepted_with` (thumbprint, only while it is in `TrustedPublisher`) | `DriverPackage` as before | as before |
+
+`SystemOps` gained `cert_thumbprints / cert_add / cert_remove / feature_state /
+feature_enable` (defaults: unsupported; `MemoryOps` fakes them). HYPOTHESIS: never run.
+
+## Remote pad pump (remote-smalls, 2026-11-17)
+
+`runtime::start_pad_pump` waits on duplicated copies of the pad channels' auto-reset input
+events (`RemoteEngine::with_pad_events`, rebuilt when `channels_generation` changes, at
+most 64) with a 4 ms timeout, then pumps. Input from a stream server wakes it at once;
+feedback, media rings and outgoing messages keep the 4 ms cadence (Split OQ
+integrator-2). HYPOTHESIS: latency gain not measured.
+
 ## Compatibility options (compat-tweaks, 2026-11-17)
 
 Every option is a visible opt-in in the manager (Advanced > Compatibility, seat menu

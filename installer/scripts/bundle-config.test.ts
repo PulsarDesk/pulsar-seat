@@ -30,6 +30,15 @@ describe('bundle-config', () => {
     expect(() => resolveFragment('no marker', 'C:\\p')).toThrow();
   });
 
+  it('publisher certificate only when given, and only a .cer', () => {
+    expect(driversFragment([])).not.toContain('PSHASCERT');
+    const c = driversFragment([], 'C:\\b\\publisher.cer');
+    expect(c).toContain('<Property Id="PSHASCERT" Value="1" />');
+    expect(c).toContain('Name="publisher.cer"');
+    expect(c).toContain('<ComponentRef Id="PsPublisherCert" />');
+    expect(() => driversFragment([], 'C:\\b\\key.pfx')).toThrow();
+  });
+
   it('empty fragment without packages', () => {
     const f = driversFragment([]);
     expect(f).toContain('<ComponentGroup Id="PulsarSeatDriverPackages">');

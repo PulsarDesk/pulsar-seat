@@ -5,6 +5,7 @@
 //! ```text
 //! preflight : gate only (NSIS runs it from $PLUGINSDIR before any file is laid down)
 //! install   : gate (preflight + coexistence) -> [restore point] -> [optional tweaks]
+//!             -> [optional Windows features] -> [publisher certificate]
 //!             -> [signed driver packages]                         -> exit code
 //! uninstall : revert every journaled change (tweaks, per-user palm checks, addresses,
 //!             driver packages)
@@ -26,6 +27,7 @@
 
 use crate::journal::{Change, Journal, RevertReport};
 use crate::ops::SystemOps;
+use crate::features::{self, FeatureOutcome, OptionalFeature};
 use crate::tweaks::{self, TweakId, TweakParams};
 use seat_proto::messages::{Check, CheckOutcome};
 use serde::{Deserialize, Serialize};
@@ -61,13 +63,21 @@ pub fn valid_tweak_list(s: &str) -> bool {
 }
 
 /// Installer options: `--restore-point` (or `--restore-point=1`), `--tweak=<id>[,<id>…]`
-/// (repeatable), `--drivers=<dir>` (`none` / empty = no driver packages; at most once),
+/// (repeatable), `--features=<id>[,<id>…]` (optional Windows features, visible opt-in),
+/// `--import-cert=1` (the package's own publisher certificate, visible opt-in),
+/// `--drivers=<dir>` (`none` / empty = no driver packages; at most once),
 /// `--msi` (MSI exit-code mapping, service record made by the MSI), `--register-service`
 /// (NSIS: the service creates its own record).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallOptions {
     pub restore_point: bool,
     pub tweaks: Vec<TweakId>,
+    /// Optional Windows features to turn on (`crate::features`).
+    #[serde(default)]
+    pub features: Vec<OptionalFeature>,
+    /// Import the shipped publisher certificate (`crate::certs`).
+    #[serde(default)]
+    pub import_cert: bool,
     pub drivers_dir: Option<PathBuf>,
     pub msi: bool,
     pub register_service: bool,
@@ -130,6 +140,20 @@ impl InstallOptions {
                         None => errors.push(format!("unknown tweak {part}")),
                     }
                 }
+            } else if let Some(v) = a.strip_prefix("--features=") {
+                match features::parse_list(v) {
+                    Ok(list) => {
+                        for f in list {
+                            if !o.features.contains(&f) {
+                                o.features.push(f);
+                            }
+                        }
+                    }
+                    Err(e) => errors.push(e),
+                }
+            } else if let Some(v) = a.strip_prefix("--import-cert=") {
+                // MSI passes `--import-cert=[PSIMPORTCERT]`: "1" = yes, empty / other = no.
+                o.import_cert = v == "1";
             } else if let Some(d) = a.strip_prefix("--drivers=") {
                 // A second --drivers= can only come from an injected argument.
                 if drivers_seen {
@@ -155,6 +179,8 @@ pub struct InstallReport {
     pub refused: bool,
     pub restore_point: Option<Result<i64, String>>,
     pub tweaks: Vec<(TweakId, Result<bool, String>)>,
+    pub features: Vec<(OptionalFeature, Result<FeatureOutcome, String>)>,
+    pub certificate: Option<Result<crate::certs::ImportReport, String>>,
     pub drivers: Vec<String>,
     pub reboot_needed: bool,
     pub partial: bool,
@@ -198,6 +224,24 @@ impl InstallReport {
                 Ok(changed) => out.push_str(&format!("tweak {} changed={changed}\n", t.as_str())),
                 Err(e) => out.push_str(&format!("tweak {} failed {e}\n", t.as_str())),
             }
+        }
+        for (f, r) in &self.features {
+            match r {
+                Ok(FeatureOutcome::AlreadyOn) => out.push_str(&format!("feature {} already_on\n", f.id())),
+                Ok(FeatureOutcome::Enabled { restart }) => {
+                    out.push_str(&format!("feature {} enabled restart={restart} (kept on uninstall)\n", f.id()))
+                }
+                Ok(FeatureOutcome::Unavailable) => out.push_str(&format!("feature {} unavailable on this edition\n", f.id())),
+                Err(e) => out.push_str(&format!("feature {} failed {e}\n", f.id())),
+            }
+        }
+        match &self.certificate {
+            Some(Ok(c)) => out.push_str(&format!(
+                "certificate {} added={:?} present={:?} (removed on uninstall)\n",
+                c.thumbprint, c.added, c.present
+            )),
+            Some(Err(e)) => out.push_str(&format!("certificate failed {e}\n")),
+            None => {}
         }
         for d in &self.drivers {
             out.push_str(&format!("driver {d}\n"));
@@ -269,7 +313,43 @@ pub fn install_with(
             }
         }
     }
+    for f in &opts.features {
+        match features::enable(j, ops, *f) {
+            Ok(o) => {
+                if let FeatureOutcome::Enabled { restart } = o {
+                    rep.reboot_needed |= restart;
+                }
+                rep.features.push((*f, Ok(o)));
+            }
+            Err(e) => {
+                rep.partial = true;
+                rep.features.push((*f, Err(e.to_string())));
+            }
+        }
+    }
     rep
+}
+
+/// Facts about a certificate, as Windows reports them.
+pub type CertFactsFn<'a> = &'a dyn Fn(&[u8]) -> Result<crate::certs::CertFacts, String>;
+
+/// Import the shipped publisher certificate (`der` + Windows' facts about it) into the
+/// report. Separate from [`install_with`] so the file read stays on Windows.
+pub fn import_certificate(
+    j: &Journal,
+    ops: &dyn SystemOps,
+    rep: &mut InstallReport,
+    der: Result<Vec<u8>, String>,
+    facts: CertFactsFn<'_>,
+) {
+    let r = der.and_then(|d| {
+        let f = facts(&d)?;
+        crate::certs::import(j, ops, &d, &f).map_err(|e| e.to_string())
+    });
+    if r.is_err() {
+        rep.partial = true;
+    }
+    rep.certificate = Some(r);
 }
 
 /// Gate only (`pulsar-seat-service preflight`): [`EXIT_REFUSED`] on any blocking check.
@@ -313,6 +393,20 @@ pub fn install(j: &Journal, ops: &dyn SystemOps, opts: &InstallOptions) -> Insta
     if rep.refused {
         return rep;
     }
+    let shipped_der = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.join(crate::certs::SHIPPED_CERT)))
+        .and_then(|p| std::fs::read(p).ok());
+    if opts.import_cert {
+        let der = shipped_der.clone().ok_or_else(|| "this package carries no publisher certificate".to_string());
+        import_certificate(j, ops, &mut rep, der, &|d| crate::win::inspect_cert(d).map_err(|e| e.to_string()));
+    }
+    // Publishers whose catalogs are accepted besides Microsoft's: the shipped certificate,
+    // only while it is in TrustedPublisher (imported now or at an earlier install).
+    let extra_publishers = shipped_der
+        .as_deref()
+        .map(|d| crate::certs::trusted_publishers(ops, &[crate::certs::thumbprint(d)]))
+        .unwrap_or_default();
     if let Some(dir) = opts.drivers_dir.as_ref().filter(|d| {
         let ok = drivers_dir_allowed(d);
         if !ok {
@@ -324,7 +418,7 @@ pub fn install(j: &Journal, ops: &dyn SystemOps, opts: &InstallOptions) -> Insta
         }
         ok
     }) {
-        for r in crate::drivers::stage_all(j, dir) {
+        for r in crate::drivers::stage_all(j, dir, &extra_publishers) {
             let name = r.inf.display().to_string();
             match &r.outcome {
                 StageOutcome::Installed {
@@ -383,6 +477,9 @@ mod tests {
             "--tweak=bogus",
             "--tweak=",
             "--drivers=none",
+            "--features=virtual_machine_platform,hyper_v",
+            "--features=hyper_v",
+            "--import-cert=1",
             "--msi",
         ]
         .iter()
@@ -396,8 +493,46 @@ mod tests {
             vec![TweakId::FastStartupOff, TweakId::SmallCrashDumps]
         );
         assert_eq!(o.drivers_dir, None);
+        assert_eq!(o.features, vec![OptionalFeature::VirtualMachinePlatform, OptionalFeature::HyperV]);
+        assert!(o.import_cert);
         assert!(rest.is_empty());
         assert_eq!(errs.len(), 1);
+        let (o, _, errs) = InstallOptions::parse(&["--import-cert=".to_string(), "--features=x y".to_string()]);
+        assert!(!o.import_cert && o.features.is_empty());
+        assert_eq!(errs.len(), 1);
+    }
+
+    #[test]
+    fn features_and_certificate_reach_the_report_and_journal() {
+        use crate::certs::{CertFacts, CertStore, OID_CODE_SIGNING};
+        use crate::features::FeatureState;
+        let j = Journal::memory();
+        let ops = MemoryOps::new();
+        ops.features.lock().unwrap().insert("VirtualMachinePlatform".into(), FeatureState::Disabled);
+        let opts = InstallOptions {
+            features: vec![OptionalFeature::VirtualMachinePlatform, OptionalFeature::WindowsSandbox],
+            import_cert: true,
+            ..Default::default()
+        };
+        let mut r = install_with(&j, &ops, &opts, evaluate(&Environment::default()), &|_| Ok(1));
+        assert_eq!(r.exit_code(), EXIT_REBOOT);
+        let mut der = vec![0x30, 0x81, 120];
+        der.extend(vec![9u8; 120]);
+        let facts = CertFacts { subject: "P".into(), is_ca: false, ekus: vec![OID_CODE_SIGNING.into()], self_signed: true };
+        import_certificate(&j, &ops, &mut r, Ok(der), &|_| Ok(facts.clone()));
+        assert!(!r.partial, "{r:?}");
+        let log = r.log_text();
+        assert!(log.contains("feature virtual_machine_platform enabled restart=true"), "{log}");
+        assert!(log.contains("feature windows_sandbox unavailable"), "{log}");
+        assert!(log.contains("certificate "), "{log}");
+        assert_eq!(ops.cert_thumbprints(CertStore::Root).unwrap().len(), 1);
+        // A package without a certificate: partial, nothing written.
+        let mut r2 = InstallReport::default();
+        import_certificate(&j, &ops, &mut r2, Err("none".into()), &|_| Ok(facts.clone()));
+        assert!(r2.partial);
+        uninstall(&j, &ops).unwrap();
+        assert!(ops.cert_thumbprints(CertStore::Root).unwrap().is_empty());
+        assert!(ops.cert_thumbprints(CertStore::TrustedPublisher).unwrap().is_empty());
     }
 
     #[test]
