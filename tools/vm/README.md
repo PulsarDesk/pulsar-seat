@@ -55,3 +55,23 @@ must keep one (`seat_one_no_display`) and monitors are exclusive.
 - Extra seat addresses: the VM's NIC set static with the DHCP address plus two addresses
   (`SkipAsSource`); `pktmon` shows the source address on the wire. The checkpoint
   restore undoes it.
+
+## VM round 2 notes (2026-11-17)
+
+- Nested virtualization: this ARM64 host refuses to start the VM with
+  `Set-VMProcessor -ExposeVirtualizationExtensions $true` ("this platform does not support
+  nested virtualization"), so Hyper-V VM seats cannot be tried in it. Set it back to `$false`.
+- `seatctl.ps1 raw` takes the request envelope: `{"type":"test_seat_credentials","data":{"seat":2}}`
+  (a bare `{"type":...,"seat":2}` is a bad frame).
+- Elevated manager in the VM: Win+R, type the path, Ctrl+Shift+Enter (`key:0x11+0x10+0x0D`),
+  then Left + Enter on the UAC prompt (`key:0x25; key:0x0D`). Close an earlier instance
+  first: the single-instance plugin hands the new start to the running (unelevated) one.
+  Keyboard save of a staged change: Ctrl+Shift+S (`key:0x11+0x10+0x53`).
+- Logon type of the credential test: Security log 4624 / 4625 `LogonType` (2 interactive,
+  3 network; `0xC000015B` = right not granted, the deny-logon case).
+- Class `Properties` keys (class default descriptors) are readable by SYSTEM only: read
+  them through a one-shot `/ru SYSTEM` task.
+- A single-instance stand-in: any small native ARM64 program that calls
+  `CreateMutexW(NULL, FALSE, L"Global\\<name>")` and logs `GetLastError()` (183 = second
+  instance, 5 = another user's instance) and `GetModuleHandleW(L"PulsarSplitShim.dll")`.
+  On ARM64 only the launcher path loads the module (shim/README.md).

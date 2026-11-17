@@ -3139,3 +3139,87 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     344), check 0 / 0, build OK, installer scripts 92 (was 89). No driver touched. No test
     deleted (the VM seat service test's `get_apps` refusal assertion became assertions of the
     forwarded requests).
+- 2026-11-17 (VM round 2, package vm-tests-2, on main). Parity-2 features on
+  `PulsarSeatTest-arm64` (Win11 Pro 26300 ARM64, single monitor). Interrupted once by a host
+  PC crash (not caused by the run) and resumed from `docs/progress/vm-tests-2.md`. ARM64 MSI
+  and `setup.exe` built from main with `build-installer.ps1 -Arch arm64 -UpstreamStreamServer`
+  (the stream server is not exercised here; the Pulsar build needs the MSYS2 toolchain),
+  installed through `setup.exe /quiet`. Stand-in single-instance program: a small native
+  ARM64 tool (`CreateMutexW(Global\PSeatSingleTest)`, logs session / state / shim module /
+  `PSEAT_TEST_VAR`; recipe in tools/vm/README.md). At the end: uninstalled, VM restored to
+  `clean-logged-on` and Off. No driver loaded in this round (no driver feature in the list).
+  - **Bugs found and fixed on main (each with gates green):** 6dcdab7 (apihelper lockfile
+    broke the MSI build), dc027da (seat-bootstrap windows-sys features), 7db63fa (`setup.exe`
+    held the unpacked MSI writable: msiexec 1619), f4e02c6 (Defender exclusion add without
+    `ReturnValue` taken as failure, exclusions leaked), 4b641a1 (compat sync ran only on a
+    `settings.tweaks` change: deny-logon / object rules not applied), 00efdb8
+    (`settings.remote` saved with `apply_config` never reached the worker), 8de502b
+    (TermService restart offered without RDS), a6f0cc4 (FUS console seat lost its per-seat
+    object names / Steam override), dcaf37b (service token without SeBackup / SeRestore: user
+    environment undo failed, AdjustTokenPrivileges 1300), b913c52 (manager kept "link to the
+    service was lost" when the link came up before the page listened), 45e0a67 (tweak undo
+    left the keys its writes created), d73c29e (startup apps with object rules start through
+    the shim launcher; AppHelp did not load the module on ARM64), and in run 3:
+    - compat journal: with each option turned off on its own, an empty
+      `Policies\Microsoft\Windows\WindowsUpdate` stayed (created by `exclude_driver_updates`,
+      undone first while `windows_update` values still lived there). The undo now also
+      considers the keys any record of the journal created (still only the record's own key
+      and its ancestors, only when empty).
+    - remote seats: a remote seat added by `apply_config` was unknown to the engine until
+      its first start, so `display_backend = pulsar_idd` left the protocol provider
+      unregistered. A seat-list change now hands the remote seats' accounts to the engine
+      (`Controller::seats_changed`, `Engine::set_seat_users`, one task before the
+      `settings.remote` change of the same save).
+    - manager: under fast user switching (display backend `console_only`, no monitor listed)
+      every seat card, the running seat 1 too, said "No screen. This seat cannot start without
+      a screen". Missing-device lines now follow the running backends (`missingKinds`).
+  - **PASS / FAIL per item:**
+    - `setup.exe` (ARM64, 0xAA64) installs the MSI quietly: **PASS** (after 7db63fa); service
+      running, pipe up, binaries 0xAA64.
+    - Compat tweaks apply: **PASS** (lock-screen image, driver-update exclusion, fast startup
+      off, Windows Update deferrals / active hours / no auto restart, device install deny with
+      admin override, Defender exclusions, class default descriptors as SYSTEM-only
+      `Properties\Security`; each one journaled). Each one off on its own: **PASS** after the
+      journal fix (values and created keys gone, Defender list empty after a few seconds,
+      class descriptors removed). `hide_fast_user_switching` refused under FUS by validation
+      (by design). Uninstall with every option on: **PASS** (no tweak value or key, no
+      Defender exclusion, no class descriptor, no shim key, deny right back to `Guest`, no
+      WRDS keys, no service / dirs / accounts / tasks / firewall rules).
+    - Deny-logon option (`deny_local_logon` on a remote seat): **PASS** (account added to
+      SeDenyInteractiveLogonRight on save, removed on disable / uninstall; the credential test
+      then reports interactive `0xC000015B` and falls back to a network logon).
+    - Per-seat environment: **PASS** (seat 2 startup app saw `seat2-value`; undone on disable).
+    - DPI: effective DPI read back per seat and logged (`\\.\DISPLAY1 100 %`); the warning
+      itself is remote-seat only: **NOT TESTABLE** here (no remote seat runs on Pro).
+    - Single-instance isolation with object rules: **PASS** (console: first, then a second
+      copy got 183; seat 2 via FUS: its own `first`, shim module loaded through the launcher).
+      Steam per seat: the rule set is written, the Steam client itself was not installed:
+      **NOT TESTED** with Steam.
+    - Credential test logon type: **PASS** (Security 4624 type 2 for seat users; deny case
+      as above).
+    - TermService restart button flow: request refused `not_rds` on Pro (FUS fallback) and
+      the manager no longer offers it there (8de502b): **PASS** as designed; a real restart
+      needs RDS (Server or the operator's wrapper).
+    - RDP drive redirection of an NTFS volume with live add / remove, ListReaderGroups
+      filtering: **NOT TESTABLE** here (loopback RDP seats need concurrent sessions; Pro
+      falls back to FUS; no virtual smart card reader). Unit tests stand; HYPOTHESIS until
+      Server / hardware.
+    - DXVK system redirect opt-in + revert, legacy verifier registration + revert: **NOT
+      BUILT** (refused by the model provider's safety system in remote-smalls, not retried).
+    - WRDS provider: **PASS** for registration through the manager's save path (after the
+      fix): registered at once, TermService loaded `pulsar-seat-wrds.dll` and the provider
+      connected (TermService pid checked) without a TermService restart; display backend
+      back removed both keys, again re-registered, `RDP-Tcp` untouched; uninstall removed
+      it. Session hosting needs Windows Server with RD Session Host: **NOT TESTABLE**.
+    - Hyper-V seats: **NOT TESTABLE** (the ARM64 host refuses nested virtualization).
+    - Redesigned manager: **PASS** (elevated start, no stale link banner after b913c52,
+      Settings start mode changed with the keyboard and saved with Ctrl+Shift+S: config
+      `start_mode = at_boot`, revision up; missing-screen lines gone under FUS after the fix).
+      Screenshots in `target\vm\shots\r3-*.png` (local).
+  - Gates (main, sources touched first): cargo test --workspace 1946 passed / 6 ignored,
+    clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, shim tests (1 + 8 + 3) +
+    check x86_64 / i686 / aarch64, manager 361 tests / check 0 errors / build, bun test
+    installer/scripts 94. No driver touched, no test deleted.
+  - Open: Steam client per seat, RDP drive / reader redirection, DPI warning, WRDS session
+    hosting and TermService restart need Server / RDS or hardware; Hyper-V seats need a host
+    with nested virtualization; DXVK redirect and legacy verifier registration not built.
