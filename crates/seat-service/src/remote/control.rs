@@ -206,6 +206,11 @@ pub trait Platform: Send {
     fn cleanup_audio_endpoints(&mut self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
         Err(unsupported("audio endpoint cleanup"))
     }
+    /// Running seat (checked by the controller): apply a display mode now; answers the
+    /// `seat_display::remote::ModeResult` JSON (2026-11-17, remote-idd-hdr).
+    fn set_display_mode(&mut self, _seat: &RemoteSeatRecord, _width: u32, _height: u32, _hz: u32, _hdr: bool) -> Result<serde_json::Value, ProtoError> {
+        Err(unsupported("display mode"))
+    }
 }
 
 /// `unsupported` with reason `backend_<kind>`: the request does not exist for the seat's
@@ -510,6 +515,21 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
                         .with_reason("seat_booting"));
                 }
                 self.platform.cleanup_audio_endpoints().map(ResponseBody::AudioCleanup)
+            }
+            RequestBody::SetSeatDisplayMode { name, width, height, hz, hdr } => {
+                let seat = self.running_seat(&name)?;
+                if !(1..=16384).contains(&width) {
+                    return Err(ProtoError::new(ErrorCode::InvalidValue, "width: 1-16384").with_field("width"));
+                }
+                if !(1..=16384).contains(&height) {
+                    return Err(ProtoError::new(ErrorCode::InvalidValue, "height: 1-16384").with_field("height"));
+                }
+                if !(1..=1000).contains(&hz) {
+                    return Err(ProtoError::new(ErrorCode::InvalidValue, "hz: 1-1000").with_field("hz"));
+                }
+                let r = self.platform.set_display_mode(&seat, width, height, hz, hdr)?;
+                self.drain_reports();
+                Ok(ResponseBody::ModeResult(r))
             }
             RequestBody::RebootHost { confirm } => {
                 if !confirm {

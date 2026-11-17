@@ -5,6 +5,7 @@
     AppEntry,
     CredentialTest,
     LocalUser,
+    ModeResult,
     RenderAdapter,
     SeatConfig,
     SeatRuntime,
@@ -48,6 +49,8 @@
     picture?: UserPicture | null;
     /** Native file dialog for an .exe; null = cancelled. */
     onPickExe?: (title: string) => Promise<string | null>;
+    /** Running seat: apply a display mode now (`set_seat_display_mode`). */
+    onSetMode?: (width: number, height: number, hz: number, hdr: boolean) => Promise<ModeResult>;
   }
   let {
     seat,
@@ -71,7 +74,8 @@
     onEnableUnlock,
     backends = [],
     picture = null,
-    onPickExe
+    onPickExe,
+    onSetMode
   }: Props = $props();
   let credOpen = $state(false);
 
@@ -95,7 +99,10 @@
       force_sdr: false,
       render_adapter_id: null,
       refresh_hz: 60,
-      luminance: { min_nits_x10000: 10, max_nits: 1000, max_full_frame_nits: 600 }
+      luminance: { min_nits_x10000: 10, max_nits: 1000, max_full_frame_nits: 600 },
+      fixed_width: 0,
+      fixed_height: 0,
+      lock_refresh: false
     },
     autostart: [],
     rdp_client_name: '',
@@ -193,6 +200,60 @@
     });
   }
 
+  // Fixed stream resolution: presets or custom; 0 x 0 = follow the client.
+  const RES_PRESETS: [number, number][] = [
+    [1280, 720],
+    [1920, 1080],
+    [2560, 1440],
+    [3440, 1440],
+    [3840, 2160]
+  ];
+  const fixedKey = $derived.by(() => {
+    const w = draft.display.fixed_width ?? 0;
+    const h = draft.display.fixed_height ?? 0;
+    if (w === 0 && h === 0) return 'follow';
+    return RES_PRESETS.some(([pw, ph]) => pw === w && ph === h) ? `${w}x${h}` : 'custom';
+  });
+  function chooseFixed(v: string) {
+    if (v === 'follow') {
+      draft.display.fixed_width = 0;
+      draft.display.fixed_height = 0;
+    } else if (v === 'custom') {
+      draft.display.fixed_width = draft.display.fixed_width || 1920;
+      draft.display.fixed_height = draft.display.fixed_height || 1080;
+    } else {
+      const [w, h] = v.split('x').map(Number);
+      draft.display.fixed_width = w;
+      draft.display.fixed_height = h;
+    }
+    void save();
+  }
+
+  // Operator mode control of a running seat.
+  let modeW = $state(1920);
+  let modeH = $state(1080);
+  let modeHz = $state(60);
+  let modeHdr = $state(false);
+  let modeResult = $state<ModeResult | null>(null);
+  let modeBusy = $state(false);
+  async function applyMode() {
+    if (!onSetMode) return;
+    modeBusy = true;
+    error = null;
+    modeResult = null;
+    try {
+      modeResult = await onSetMode(Number(modeW), Number(modeH), Number(modeHz), modeHdr);
+    } catch (e) {
+      error = errorMessage(e);
+    } finally {
+      modeBusy = false;
+    }
+  }
+  const modeText = (r: ModeResult) =>
+    r.status === 'ok' || r.status === 'ok_sdr_fallback' || r.status === 'clamped'
+      ? `${t.seat.modeApplied(r.width, r.height, r.hz, r.render_width, r.render_height)} · ${t.modeStatus[r.status] ?? r.status}`
+      : (t.modeStatus[r.status] ?? r.status);
+
   function chooseAdapter(id: string) {
     const a = adapters.find((x) => x.pnp_instance_id === id);
     draft.display.render_adapter_id = a ? a.pnp_instance_id : null;
@@ -267,6 +328,16 @@
           {t.seat.displayBackend}: {t.displayBackend[runtime.display.backend] ?? runtime.display.backend} ·
           {t.seat.hdr}: {runtime.display.hdr === 'ok' ? t.seat.hdrOk : (t.hdrReason[runtime.display.hdr] ?? runtime.display.hdr)}
         </li>
+        {#if runtime.display.host}
+          <li data-testid="display-host">
+            {t.seat.displayHost}: {runtime.display.host === 'provider' ? t.seat.hostProvider : t.seat.hostLoopback}
+          </li>
+        {/if}
+        {#if runtime.display.fallback}
+          <li class="hint warn" data-testid="display-fallback">
+            {t.seat.fallback}: {t.wrdsReason[runtime.display.fallback] ?? runtime.display.fallback}
+          </li>
+        {/if}
       {/if}
       {#if runtime.audio}
         <li>
@@ -305,6 +376,20 @@
         <li class="hint">{t.seat.isolationHealth}: {h.exe} {h.hooks_on ? '✓' : '✕'} {#if h.error}({failureText(h.error)}){/if}</li>
       {/each}
     </ul>
+    {#if onSetMode && runtime.display}
+      <fieldset class="mode-control" data-testid="mode-control">
+        <legend>{t.seat.modeControl}</legend>
+        <div class="row">
+          <label class="field"><span>{t.seat.modeWidth}</span><input type="number" min="640" max="8192" bind:value={modeW} /></label>
+          <label class="field"><span>{t.seat.modeHeight}</span><input type="number" min="640" max="8192" bind:value={modeH} /></label>
+          <label class="field"><span>{t.seat.modeHz}</span><input type="number" min="15" max="500" bind:value={modeHz} /></label>
+          <label class="toggle"><input type="checkbox" bind:checked={modeHdr} /> {t.seat.modeHdr}</label>
+          <button type="button" disabled={modeBusy} onclick={applyMode}>{t.seat.modeApply}</button>
+        </div>
+        <p class="hint">{t.seat.modeHint}</p>
+        {#if modeResult}<p class="hint" data-testid="mode-result">{modeText(modeResult)}</p>{/if}
+      </fieldset>
+    {/if}
   {/if}
 
   <h2>{t.seat.actions}</h2>
@@ -408,6 +493,35 @@
       <span>{t.seat.refresh}</span>
       <input type="number" min="15" max="500" bind:value={draft.display.refresh_hz} onchange={save} />
     </label>
+    <label class="toggle">
+      <input type="checkbox" checked={draft.display.lock_refresh ?? false} onchange={(e) => {
+        draft.display.lock_refresh = e.currentTarget.checked;
+        void save();
+      }} />
+      {t.seat.lockRefresh}
+    </label>
+    <label class="field">
+      <span>{t.seat.fixedResolution}</span>
+      <select value={fixedKey} onchange={(e) => chooseFixed(e.currentTarget.value)} data-testid="fixed-resolution">
+        <option value="follow">{t.seat.fixedFollow}</option>
+        {#each RES_PRESETS as [w, h] (`${w}x${h}`)}
+          <option value={`${w}x${h}`}>{w} × {h}</option>
+        {/each}
+        <option value="custom">{t.seat.fixedCustom}</option>
+      </select>
+    </label>
+    {#if fixedKey === 'custom'}
+      <div class="row">
+        <label class="field">
+          <span>{t.seat.fixedWidth}</span>
+          <input type="number" min="640" max="8192" bind:value={draft.display.fixed_width} onchange={save} />
+        </label>
+        <label class="field">
+          <span>{t.seat.fixedHeight}</span>
+          <input type="number" min="640" max="8192" bind:value={draft.display.fixed_height} onchange={save} />
+        </label>
+      </div>
+    {/if}
     <label class="field">
       <span>{t.seat.scale}</span>
       <select

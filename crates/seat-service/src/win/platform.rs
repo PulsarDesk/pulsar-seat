@@ -85,7 +85,7 @@ fn created_of(h: HANDLE) -> Option<u64> {
 }
 
 /// Native machine of this PC (`IMAGE_FILE_MACHINE_*`), 0 when unknown.
-fn native_machine() -> u16 {
+pub(crate) fn native_machine() -> u16 {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
     let mut process = 0u16;
     let mut native = 0u16;

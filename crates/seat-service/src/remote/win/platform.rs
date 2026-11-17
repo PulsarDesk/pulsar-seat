@@ -101,6 +101,9 @@ impl Platform for WindowsPlatform {
             if old.bluetooth_console_only != new.bluetooth_console_only {
                 e.set_bluetooth_console_only(new.bluetooth_console_only);
             }
+            if old.display_backend != new.display_backend {
+                e.sync_wrds(new);
+            }
         }
         self.global = new.clone();
         Ok(())
@@ -252,6 +255,10 @@ impl Platform for WindowsPlatform {
 
     fn cleanup_audio_endpoints(&mut self) -> Result<seat_proto::remote::AudioCleanup, ProtoError> {
         self.engine()?.cleanup_audio_endpoints()
+    }
+
+    fn set_display_mode(&mut self, seat: &RemoteSeatRecord, width: u32, height: u32, hz: u32, hdr: bool) -> Result<serde_json::Value, ProtoError> {
+        self.engine()?.set_display_mode(seat, width, height, hz, hdr)
     }
 
     fn stream_backends(&mut self) -> Result<Vec<StreamBackendInfo>, ProtoError> {

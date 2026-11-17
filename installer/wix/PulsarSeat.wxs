@@ -12,6 +12,8 @@
       reset after 1 day)                                         spec 90 §11, installer/README.md
     * pulsar-seat-host.exe, pulsar-seat-agent.exe
     * pulsar-seat-credprov.dll (file only; registered by the service, never by the MSI)
+    * pulsar-seat-wrds.dll (Remote Desktop protocol provider; file only, registered by the
+      service while remote seats use the Pulsar display, removed by `uninstall`)
     * machine Run value PulsarSeatManager = "<dir>\pulsar-seat-manager.exe" - -tray
     * HKLM\SOFTWARE\Pulsar Seat: InstallPath, Version (nothing else)
     * deferred, no-impersonate custom actions on our own binary:
@@ -249,6 +251,14 @@
            file only: no COM or credential-provider registration here. The service registers
            it while the product is enabled under fast user switching and removes it on
            disable; `uninstall` removes our keys too (seat_session::credprov). -->
+      <!-- Remote Desktop protocol provider (crates/seat-wrds, native for this package's arch).
+           The file only: the service registers its COM class and WinStation listener while
+           remote seats use the Pulsar display and removes them otherwise; `uninstall` removes
+           our keys too (seat_session::wrds). -->
+      <Component Id="PulsarSeatWrdsComponent" Guid="{9C41E7A2-5B3D-4E8F-A1C6-2D7F0B9E4A53}" Win64="yes">
+        <File Id="PulsarSeatWrdsDll" Name="pulsar-seat-wrds.dll" KeyPath="yes"
+              Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-wrds.dll" />
+      </Component>
       <Component Id="PulsarSeatCredProvComponent" Guid="{2E8B5D17-9A3C-4F61-B7D4-0C5A8E1F3B26}" Win64="yes">
         <File Id="PulsarSeatCredProvDll" Name="pulsar-seat-credprov.dll" KeyPath="yes"
               Source="$(env.PULSAR_SEAT_BIN)\pulsar-seat-credprov.dll" />

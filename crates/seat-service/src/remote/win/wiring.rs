@@ -519,6 +519,7 @@ pub fn build(
             };
             seat_audio::remove_stale_endpoints(&seat_audio::system_probe(), &seat_audio::CfgMgrRemover, &live)
         }),
+        wrds: Some(super::wrds::WinWrds::start(install_dir.to_path_buf())),
         data_root: data_root.to_path_buf(),
         service_version: service_version.to_string(),
     })

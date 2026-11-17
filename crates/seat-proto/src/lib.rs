@@ -26,6 +26,7 @@ pub mod hyperv;
 pub mod messages;
 pub mod remote;
 pub mod steam;
+pub mod wrds;
 
 use serde::{Deserialize, Serialize};
 
@@ -228,13 +229,14 @@ mod tests {
             RequestBody::GetStreamBackends,
             RequestBody::GetUserPicture { user: "ali".into() },
             RequestBody::CleanupAudioEndpoints { confirm: true },
+            RequestBody::SetSeatDisplayMode { seat: two, width: 1920, height: 1080, hz: 60, hdr: false },
         ]
     }
 
     #[test]
     fn v3_requests_are_admin_and_need_protocol_3() {
         let all = v3_requests();
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 33);
         for r in &all {
             assert_eq!(r.access(), Access::Admin, "{r:?}");
             assert!(r.is_remote_kind_request(), "{r:?}");
@@ -267,7 +269,7 @@ mod tests {
                 "get_remote_runtime", "submit_pin", "get_pair_state", "cancel_pair", "list_paired_clients",
                 "unpair_client", "unpair_all", "regenerate_seat_identity", "get_apps", "set_apps",
                 "answer_peer_request", "set_seat_connect_password", "get_seat_otp", "rotate_seat_otp",
-                "answer_relay_auth",
+                "answer_relay_auth", "set_seat_display_mode",
             ]
         );
         // Kind-agnostic seat requests and host-wide ones name no kind.

@@ -36,6 +36,7 @@
           "PulsarSeatHostComponent",
           "PulsarSeatAgentComponent",
           "PulsarSeatCredProvComponent",
+          "PulsarSeatWrdsComponent",
           "PulsarSeatRunComponent",
           "PulsarSeatRegistryComponent",
           "PulsarSeatDriversDirComponent",

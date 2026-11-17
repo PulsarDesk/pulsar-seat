@@ -167,3 +167,74 @@ describe('SeatPage Pulsar options', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 });
+
+describe('SeatPage display mode and HDR', () => {
+  const running = (display: SeatRuntime['display']): SeatRuntime => ({
+    session_id: 7,
+    client_name: 'PSS0F8FAD5B',
+    state: 'running',
+    phase: null,
+    failure: null,
+    display,
+    audio: null,
+    pads: [],
+    stream: null,
+    isolation: []
+  });
+
+  it('saves a fixed resolution and the locked refresh rate', async () => {
+    const { onSave, user } = setup(seat, status('stopped'), both(true));
+    await user.selectOptions(screen.getByTestId('fixed-resolution'), '2560x1440');
+    const d = onSave.mock.calls.at(-1)![1].display;
+    expect([d.fixed_width, d.fixed_height]).toEqual([2560, 1440]);
+    await user.click(screen.getByRole('checkbox', { name: t.seat.lockRefresh }));
+    expect(onSave.mock.calls.at(-1)![1].display.lock_refresh).toBe(true);
+    await user.selectOptions(screen.getByTestId('fixed-resolution'), 'follow');
+    const f = onSave.mock.calls.at(-1)![1].display;
+    expect([f.fixed_width, f.fixed_height]).toEqual([0, 0]);
+  });
+
+  it('applies a mode to a running seat and shows the result', async () => {
+    const onSetMode = vi.fn(async (w: number, h: number, hz: number, hdr: boolean) => ({
+      request_id: 1,
+      status: 'ok' as const,
+      width: w,
+      height: h,
+      hz,
+      hdr,
+      render_width: w * 2,
+      render_height: h * 2,
+      format: 'rgba16_float'
+    }));
+    const user = userEvent.setup();
+    render(SeatPage, {
+      seat,
+      status: status('running'),
+      users: [],
+      otherPorts: [],
+      serviceReachable: true,
+      onSave: vi.fn(async (_n: string, x: SeatConfig) => x),
+      onSetPassword: vi.fn(async () => {}),
+      onStart: vi.fn(async () => {}),
+      onStop: vi.fn(async () => {}),
+      onDelete: vi.fn(),
+      onPair: vi.fn(),
+      backends: both(true),
+      runtime: running({ backend: 'pulsar_idd', state: null, hdr: 'ok', host: 'provider', fallback: null }),
+      onSetMode
+    });
+    expect(screen.getByTestId('display-host')).toHaveTextContent(t.seat.hostProvider);
+    await user.click(screen.getByRole('checkbox', { name: t.seat.modeHdr }));
+    await user.click(screen.getByRole('button', { name: t.seat.modeApply }));
+    expect(onSetMode).toHaveBeenCalledWith(1920, 1080, 60, true);
+    expect(await screen.findByTestId('mode-result')).toHaveTextContent(t.seat.modeApplied(1920, 1080, 60, 3840, 2160));
+  });
+
+  it('says why the own display was not used', () => {
+    setup(seat, status('running'), both(true), running({ backend: 'rdp_session', state: null, hdr: 'rdp_display', host: 'loopback', fallback: 'wrds_restart_needed' }));
+    expect(screen.getByTestId('display-fallback')).toHaveTextContent(t.wrdsReason.wrds_restart_needed);
+    expect(screen.getByTestId('display-host')).toHaveTextContent(t.seat.hostLoopback);
+    // No mode control without the callback.
+    expect(screen.queryByTestId('mode-control')).toBeNull();
+  });
+});

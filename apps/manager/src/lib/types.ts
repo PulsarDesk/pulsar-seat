@@ -952,7 +952,8 @@ export type RequestBody =
   | { type: 'get_log_tail'; data: { source: string; lines: number } }
   | { type: 'get_stream_backends' }
   | { type: 'get_user_picture'; data: { user: string } }
-  | { type: 'cleanup_audio_endpoints'; data: { confirm: boolean } };
+  | { type: 'cleanup_audio_endpoints'; data: { confirm: boolean } }
+  | { type: 'set_seat_display_mode'; data: { seat: SeatNumber; width: number; height: number; hz: number; hdr: boolean } };
 
 /** Hyper-V helper (`hyper_v`, added 2026-11-17). */
 export type HyperVAction =
@@ -1052,7 +1053,8 @@ export type ResponseBody =
   | { type: 'otp'; data: { otp: string } }
   | { type: 'dxvk_status'; data: R.DxvkStatus }
   | { type: 'user_picture'; data: R.UserPicture }
-  | { type: 'audio_cleanup'; data: R.AudioCleanup };
+  | { type: 'audio_cleanup'; data: R.AudioCleanup }
+  | { type: 'mode_result'; data: R.ModeResult };
 
 export type Panel =
   | 'device_manager'

@@ -47,6 +47,7 @@ pub mod rds;
 pub mod registry;
 pub mod remote;
 pub mod version;
+pub mod wrds;
 pub mod wts;
 
 /// The one termsrv-wrapper integration (Seat's port merged with Pulsar Split's

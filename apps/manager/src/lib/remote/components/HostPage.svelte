@@ -131,6 +131,18 @@
         </li>
       {/each}
     </ul>
+    {#if info.wrds}
+      <h3>{t.host.wrds}</h3>
+      <p data-testid="wrds-status" class={info.wrds.reason && info.wrds.wanted ? 'hint warn' : 'hint'}>
+        {#if !info.wrds.wanted && info.wrds.registration === 'absent'}
+          {t.host.wrdsNotWanted}
+        {:else if !info.wrds.reason}
+          {t.host.wrdsReady}
+        {:else}
+          {t.wrdsReason[info.wrds.reason] ?? info.wrds.reason}
+        {/if}
+      </p>
+    {/if}
     <h3>{t.host.padDrivers}</h3>
     <ul class="drivers">
       {#each info.pad_backends as b (b.id)}

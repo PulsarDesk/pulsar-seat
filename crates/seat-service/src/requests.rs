@@ -369,7 +369,8 @@ impl Service {
             | B::GetLogTail { .. }
             | B::GetStreamBackends
             | B::GetUserPicture { .. }
-            | B::CleanupAudioEndpoints { .. } => unreachable!("answered by remote_kind_request above"),
+            | B::CleanupAudioEndpoints { .. }
+            | B::SetSeatDisplayMode { .. } => unreachable!("answered by remote_kind_request above"),
             B::AgentReport { report } => {
                 if caller.agent_session != Some(report.session_id) {
                     return Err(err(ErrorCode::AccessDenied, "agent may report only its own session"));

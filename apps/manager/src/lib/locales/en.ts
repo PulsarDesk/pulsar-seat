@@ -1881,6 +1881,26 @@ const rt = {
     luminance: 'HDR brightness (advanced)',
     maxNits: 'Peak (nits)',
     maxFullFrame: 'Full-frame peak (nits)',
+    fixedResolution: 'Stream resolution',
+    fixedFollow: 'Follow the client',
+    fixedCustom: 'Fixed (custom)',
+    fixedWidth: 'Width (px)',
+    fixedHeight: 'Height (px)',
+    lockRefresh: 'Keep this refresh rate whatever the client asks for',
+    modeControl: 'Display mode now',
+    modeWidth: 'Width',
+    modeHeight: 'Height',
+    modeHz: 'Hz',
+    modeHdr: 'HDR',
+    modeApply: 'Apply',
+    modeHint:
+      'Changes the running seat’s display at once, without a restart. The seat’s fixed resolution and locked refresh rate still apply; the client may ask for another mode later.',
+    modeApplied: (w: number, h: number, hz: number, rw: number, rh: number) =>
+      `Applied: ${w} × ${h} @ ${hz} Hz (rendered ${rw} × ${rh})`,
+    displayHost: 'Session path',
+    hostProvider: 'Pulsar protocol provider: own display with mode and HDR control',
+    hostLoopback: 'Remote Desktop client: stock display, mode follows the client',
+    fallback: 'Own display not used',
     audioSection: 'Sound',
     streamAudio: 'Add the seat’s sound to the stream',
     microphone: 'Microphone (Pulsar client only)',
@@ -2005,6 +2025,9 @@ const rt = {
     drivers: 'Drivers',
     displayDrivers: 'Virtual display',
     padDrivers: 'Virtual gamepad',
+    wrds: 'Remote display protocol provider',
+    wrdsReady: 'Ready: remote seats get the Pulsar display',
+    wrdsNotWanted: 'Not used (display setting is not “Pulsar virtual display driver”)',
     installedYes: 'Installed',
     installedNo: 'Not installed',
     signed: 'Signed',
@@ -2047,7 +2070,8 @@ const rt = {
     control_unavailable: 'The stream server’s control channel could not open; pairing is not available on this seat.',
     capture_error: 'The stream server could not capture the screen.',
     dpi_mismatch: 'The seat’s display scale differs from its static scale setting (Windows chose another scale).',
-    stream_fallback: 'This stream-server build lacks some Pulsar features; the seat uses the standard behaviour for them.'
+    stream_fallback: 'This stream-server build lacks some Pulsar features; the seat uses the standard behaviour for them.',
+    display_fallback: 'The Pulsar display could not be used; the seat runs on the Remote Desktop display.'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Another multiseat product is installed.',
@@ -2068,6 +2092,27 @@ const rt = {
     rds_residue: 'There are leftovers in the Remote Desktop settings.',
     upstream_sunshine: 'A separately installed Sunshine is present (ports may clash).',
     vigem_present: 'The ViGEmBus driver is installed.'
+  } as Record<string, string>,
+  modeStatus: {
+    ok: 'applied',
+    ok_sdr_fallback: 'applied in SDR',
+    clamped: 'applied with clamped values',
+    no_display: 'the seat display is not ready',
+    rejected: 'Windows refused the mode',
+    timeout: 'the display driver did not answer in time',
+    unsupported: 'this display cannot change mode (it follows the client)'
+  } as Record<string, string>,
+  wrdsReason: {
+    wrds_unavailable: 'the protocol provider is not part of this installation',
+    wrds_disabled_by_recovery: 'switched off by the recovery value WrdsDisabled',
+    wrds_dll_missing: 'the provider file is missing or for another processor',
+    wrds_not_registered: 'not registered yet',
+    wrds_restart_needed: 'registered; restart the Remote Desktop service or the PC to load it',
+    wrds_not_listening: 'loaded, but the Remote Desktop service has not started its listener',
+    wrds_connect_failed: 'the session could not be created through the provider',
+    wrds_timeout: 'the session through the provider did not log on in time',
+    display_timeout: 'the Pulsar display did not become ready in time',
+    driver_not_installed: 'the Pulsar display driver is not installed'
   } as Record<string, string>,
   hdrReason: {
     force_sdr: 'SDR is forced on the seat',

@@ -2549,3 +2549,60 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     lint-ci --local ok, repo-scan 0 / 0. No driver touched; build-drivers.ps1 not run.
   - Open: the remote-smalls HYPOTHESIS list and the two refused items above are unchanged;
     pulsar-desktop still has to implement contract §3.8.
+- 2026-11-17 (parity round 2, package remote-idd-hdr, worktree branch). Remote seats on the
+  own IddCx display with mode and HDR control, end to end in code. Details:
+  architecture.md "Remote seats on the own display: protocol provider, modes, HDR",
+  `crates/seat-wrds/README.md`.
+  - **Protocol provider** `crates/seat-wrds` (`pulsar-seat-wrds.dll`, COM in-proc server,
+    documented WRDS Protocol Provider API through the `windows` bindings):
+    `IWRdsProtocolManager` / `Listener` / `Connection` + `LicenseConnection` +
+    `LogonErrorRedirector` + `IWRdsWddmIddProps` / `IWRdsWddmIddProps1` (names
+    `PulsarSplit_IndirectDisplay`, reports the device instance), class factory, pipe client
+    to the service (server process must be the `PulsarSeat` service). Pure state in
+    `state.rs` (credentials handed out once, only the named seat account may log on).
+  - **Contract** `seat_proto::wrds` (pipe `\\.\pipe\PulsarSeat.Wrds`, DACL SYSTEM + TermService
+    service SID, frames <= 64 KiB, hello / welcome, connect, events); registration
+    `seat_session::wrds` (COM class + WinStation `PulsarSeat-Idd`, `LoadableProtocol_Object`,
+    seat-account-only `Security`, enable written last, recovery `WrdsDisabled`; `RDP-Tcp`
+    untouched), removed by `uninstall` (en/tr warning text).
+  - **Service**: `remote::wrds` (plan, hub, `WrdsPort`), `remote::win::wrds` (pipe server with
+    the TermService process check, registration sync, WTS logoff). Engine: provider path when
+    the display setting is `pulsar_idd` (or automatic with a signed driver) and the provider
+    is usable; any failure undoes it and the seat runs on loopback RDP + `rdp_session`
+    (`display_fallback` notice, `seat_runtime.display.{host, fallback, device_instance}`);
+    lost provider connections take the seat down; HDR facts probed after the device exists.
+  - **Modes**: per-seat fixed resolution (`fixed_width` / `fixed_height`, 640-8192) and
+    `lock_refresh`, applied to client mode requests and to the new protocol 3 request
+    `set_seat_display_mode` (answers `mode_result`); session starts at the fixed size.
+  - **Manager**: seat page stream resolution (follow / presets / custom), lock refresh,
+    "display mode now" (width, height, Hz, HDR, result), session path and fallback reason;
+    host page provider status; en / tr keys; demo API.
+  - **Installer**: `pulsar-seat-wrds.dll` built with the service and shipped next to it
+    (`PulsarSeatWrdsComponent`), `MUST_BE_SIGNED` in a release, ci-local payload gate.
+  - Docs: architecture, seat-wrds README, seat-idd README (device now from our provider),
+    troubleshooting §12 (en / tr).
+  - Gates: cargo test --workspace 1814 passed / 6 ignored (was 1777; +37: seat-proto 8, seat-session 8, seat-wrds 9, seat-core display_ranges extended, seat-service hub 5 + engine 7), clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 220 tests (was 217) / check 0 errors / build, bun test installer/scripts 63 (check-payload release test extended), shim tests + check x86_64 / i686 / aarch64 green (shim untouched). No driver touched (build-drivers not needed). No test deleted; changed on purpose: seat-proto `v3_requests_are_admin_and_need_protocol_3` (33 requests) and `seat_kind_of_requests` (new remote request).
+  - **HYPOTHESIS (nothing ran; needs Windows Server + RD Session Host, and a WHQL-signed
+    seat-idd for Server):** TermService loads the provider only at its start (restart
+    needed after registration); callback order; null input / video handles accepted with a
+    WDDM IDD; `ColorDepth` 32 / `ProtocolType` RDP / logon-screen-size query shape;
+    `E_NOTIMPL` for arbitration, client-session authentication and client licenses;
+    auto-logon with the provider's credentials; `BrokenConnection(0, 0)` ends the
+    connection; TermService can open our pipe; the remote role starts on the device
+    TermService creates; `WTSLogoffSession` ends provider sessions.
+  - **Open**: provider sessions have no RDP virtual channels, so no RDP audio endpoint, no
+    microphone hold, no clipboard / drive redirection on that path (sound must come from a
+    stream-server capture that does not need the Remote Audio endpoint, or a protocol audio
+    enumerator, `WTS_QUERY_AUDIOENUM_DLL`, not built); hardware / VM run on Windows Server.
+- 2026-11-17 (integration remote-idd-hdr): merged the WRDS protocol provider / remote
+  mode and HDR branch (worktree-wf_41b135b3-32a-4 at e0f6173) into main after
+  remote-smalls. Conflicts were additive: workspace members (seat-bootstrap next to
+  seat-wrds), `seat_proto` modules (steam next to wrds), `Response` variants (ModeResult
+  after TermServiceRestart / DriveBroker), the notice keys in both locales
+  (display_fallback after dpi_mismatch / stream_fallback), SeatPage tests (Pulsar options
+  and display mode suites both kept), docs. Gates green on main: cargo 1912 passed / 6
+  ignored (1875 + 37), clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean,
+  manager 245 (check 0 errors, build OK), installer scripts 87, shim 1+8+3 and checks
+  x86_64 / i686 / aarch64, lint-ci --local ok, repo-scan 0 / 0. No driver touched.
+  - Open: the remote-idd-hdr HYPOTHESIS list above (Windows Server + RDSH run) and the
+    missing virtual channels on provider sessions are unchanged.

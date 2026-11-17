@@ -18,6 +18,7 @@ pub mod picture;
 pub mod platform;
 pub mod setup_cmd;
 pub mod wiring;
+pub mod wrds;
 
 use super::control::Controller;
 use super::engine::Engine;

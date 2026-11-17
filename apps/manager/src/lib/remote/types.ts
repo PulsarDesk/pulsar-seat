@@ -98,6 +98,11 @@ export interface DisplaySettings {
   render_adapter_id: string | null;
   refresh_hz: number;
   luminance: HdrLuminance;
+  /** Fixed stream resolution; 0 x 0 (or missing) = follow the client. */
+  fixed_width?: number;
+  fixed_height?: number;
+  /** Keep `refresh_hz` whatever the client asks for. */
+  lock_refresh?: boolean;
 }
 
 export interface AutostartApp {
@@ -304,6 +309,34 @@ export interface HostInfo {
   pad_backends: PadBackendInfo[];
   multi_session: boolean;
   error: string | null;
+  /** Our Remote Desktop protocol provider (remote seats on the own display); older services omit it. */
+  wrds?: WrdsStatus | null;
+}
+
+export interface WrdsStatus {
+  registration: 'absent' | 'ours' | 'partial';
+  provider_connected: boolean;
+  listening: boolean;
+  restart_needed: boolean;
+  recovery_disabled: boolean;
+  dll_ok: boolean;
+  /** Why seats cannot use it now; null = usable. */
+  reason: string | null;
+  /** The display setting asks for it. */
+  wanted?: boolean;
+}
+
+/** Answer of `set_seat_display_mode` (`seat_display::remote::ModeResult`). */
+export interface ModeResult {
+  request_id: number;
+  status: 'ok' | 'ok_sdr_fallback' | 'clamped' | 'no_display' | 'rejected' | 'timeout' | 'unsupported';
+  width: number;
+  height: number;
+  hz: number;
+  hdr: boolean;
+  render_width: number;
+  render_height: number;
+  format: string;
 }
 
 export interface RenderAdapter {
@@ -330,7 +363,16 @@ export interface SeatRuntime {
   state: SeatState;
   phase: string | null;
   failure: string | null;
-  display: { backend: DisplayBackendKind; state: unknown; hdr: string } | null;
+  display: {
+    backend: DisplayBackendKind;
+    state: unknown;
+    hdr: string;
+    /** How the session was created: our protocol provider or the RDP client. */
+    host?: 'provider' | 'loopback';
+    /** Why the own display was wanted but not used. */
+    fallback?: string | null;
+    device_instance?: string | null;
+  } | null;
   audio: { state: string; limitations: string[] } | null;
   pads: PadStatus[];
   stream: {

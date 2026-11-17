@@ -52,6 +52,10 @@ mod copy {
         "Uyarı: kiosk kullanıcısının varsayılan terminal ayarı geri alınamadı ({0}); kullanıcı oturum açtığında Ayarlar > Sistem > Geliştiriciler için > Terminal'den değiştirilebilir.",
     );
     pub const CREDPROV: Text = Text::new("Warning: the credential provider registration could not be deleted: {0}", "Uyarı: kimlik sağlayıcı kaydı silinemedi: {0}");
+    pub const WRDS: Text = Text::new(
+        "Warning: the remote display protocol provider registration could not be deleted: {0}",
+        "Uyarı: uzak ekran protokol sağlayıcısı kaydı silinemedi: {0}",
+    );
     pub const SEAT_PASSWORD: Text = Text::new("Warning: the password of seat {0} could not be deleted: {1}", "Uyarı: {0}. koltuğun parolası silinemedi: {1}");
     pub const REMOTE_SECRET: Text = Text::new("Warning: the secret of remote seat {0} could not be deleted ({1}).", "Uyarı: {0} uzak koltuğunun gizli bilgisi silinemedi ({1}).");
     pub const DESKTOP_ACE: Text = Text::new(
@@ -74,7 +78,7 @@ mod copy {
     pub const ALL: &[(&str, &Text)] = seat_core::text_table![
         BLOCKED, WARNING, ERROR, WARNING_LINE, JOURNAL_OPEN_FAILED, JOURNAL_FAILED, SETUP_LOG_FAILED, INSTALLED, UNINSTALLED,
         GATE_DEVICE_SECURITY, GATE_PRINTER_ACL, GATE_CAMERA_CONSENT, GATE_DRIVE_LETTERS, GATE_MINIFILTER, RDS_SETTINGS,
-        REMOTE_PARTIAL, REVERT_FAILED_IN, REVERT_FAILED_SEQ, FIREWALL_RULE_KEPT, KIOSK_TERMINAL, CREDPROV, SEAT_PASSWORD,
+        REMOTE_PARTIAL, REVERT_FAILED_IN, REVERT_FAILED_SEQ, FIREWALL_RULE_KEPT, KIOSK_TERMINAL, CREDPROV, WRDS, SEAT_PASSWORD,
         REMOTE_SECRET, DESKTOP_ACE, NOT_STOPPED, STATE_UNKNOWN, UPDATES_DIR, DATA_DIR, LEGACY_DIR
     ];
 }
@@ -295,6 +299,11 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     // switching): our four keys go, nothing else.
     if let Err(e) = seat_session::credprov::unregister(&seat_session::win::registry::WinRegistry) {
         eprintln!("{}", copy::CREDPROV.fmt(&[&e]));
+        code = code.max(setup::EXIT_PARTIAL);
+    }
+    // Remote Desktop protocol provider (our WinStation listener + COM class only).
+    if let Err(e) = seat_session::wrds::unregister(&seat_session::win::registry::WinRegistry) {
+        eprintln!("{}", copy::WRDS.fmt(&[&e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // Seat passwords: a null value deletes the LSA secret (a missing one is fine).

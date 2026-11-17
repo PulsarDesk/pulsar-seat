@@ -21,6 +21,7 @@
 pub mod control;
 pub mod engine;
 pub mod glue;
+pub mod wrds;
 #[cfg(windows)]
 pub mod win;
 
@@ -330,6 +331,9 @@ pub fn to_legacy(body: &B, name_of: impl Fn(SeatNumber) -> Option<String>) -> Op
         B::GetStreamBackends => L::GetStreamBackends,
         B::GetUserPicture { user } => L::GetUserPicture { user },
         B::CleanupAudioEndpoints { confirm } => L::CleanupAudioEndpoints { confirm },
+        B::SetSeatDisplayMode { seat, width, height, hz, hdr } => {
+            L::SetSeatDisplayMode { name: n(&seat)?, width, height, hz, hdr }
+        }
         _ => return None,
     })
 }
@@ -354,6 +358,7 @@ pub fn from_legacy(r: LR) -> Result<V, ProtoError> {
         LR::DxvkStatus(d) => V::DxvkStatus(d),
         LR::UserPicture(p) => V::UserPicture(p),
         LR::AudioCleanup(a) => V::AudioCleanup(a),
+        LR::ModeResult(m) => V::ModeResult(m),
         _ => return Err(unmapped()),
     })
 }
@@ -631,6 +636,7 @@ mod tests {
             B::GetStreamBackends,
             B::GetUserPicture { user: "u".into() },
             B::CleanupAudioEndpoints { confirm: true },
+            B::SetSeatDisplayMode { seat: n(3), width: 1920, height: 1080, hz: 60, hdr: true },
         ];
         for b in all {
             assert!(b.is_remote_kind_request(), "{b:?}");
@@ -639,6 +645,7 @@ mod tests {
         assert_eq!(from_legacy(LR::Ack).unwrap(), V::Ack);
         assert!(matches!(from_legacy(LR::IsolationStatus(Default::default())).unwrap(), V::ShimStatus(_)));
         assert!(matches!(from_legacy(LR::SeatRuntime(Default::default())).unwrap(), V::RemoteRuntime(_)));
+        assert!(matches!(from_legacy(LR::ModeResult(serde_json::json!({"status": "ok"}))).unwrap(), V::ModeResult(_)));
         assert!(from_legacy(LR::Seats(vec![])).is_err());
     }
 

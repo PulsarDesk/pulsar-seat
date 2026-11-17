@@ -15,6 +15,8 @@ pub const SUPER_SAMPLING_RANGE: (u16, u16) = (100, 500);
 pub const SDR_WHITE_RANGE: (u16, u16) = (80, 480);
 /// `display.refresh_hz` (spec 40 §4.3).
 pub const REFRESH_RANGE: (u32, u32) = (15, 500);
+/// `display.fixed_width` / `fixed_height` when set (0 x 0 = follow the client).
+pub const FIXED_SIZE_RANGE: (u32, u32) = (640, 8192);
 /// `stream.min_fps` (`minimum_fps_target`).
 pub const MIN_FPS_RANGE: (u32, u32) = (1, 240);
 
@@ -88,6 +90,10 @@ pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
     in_range(d.sdr_white_level_nits, SDR_WHITE_RANGE, "display.sdr_white_level_nits")?;
     if !(REFRESH_RANGE.0..=REFRESH_RANGE.1).contains(&d.refresh_hz) {
         return Err(err(ErrorCode::InvalidValue, "display.refresh_hz", "refresh rate must be 15-500 Hz"));
+    }
+    let fixed_ok = |v: u32| (FIXED_SIZE_RANGE.0..=FIXED_SIZE_RANGE.1).contains(&v);
+    if (d.fixed_width, d.fixed_height) != (0, 0) && !(fixed_ok(d.fixed_width) && fixed_ok(d.fixed_height)) {
+        return Err(err(ErrorCode::InvalidValue, "display.fixed_size", "fixed resolution: both 640-8192, or 0 x 0 to follow the client"));
     }
     let l = &d.luminance;
     if l.max_nits == 0 || l.max_nits > 10_000 || l.max_full_frame_nits > l.max_nits {
@@ -351,6 +357,16 @@ mod tests {
         s.display.scale_percent = 501;
         assert_eq!(seat_alone(&s).unwrap_err().code, ErrorCode::InvalidValue);
         s.display.scale_percent = 100;
+        s.display.fixed_width = 1920;
+        assert_eq!(seat_alone(&s).unwrap_err().field.as_deref(), Some("display.fixed_size"));
+        s.display.fixed_height = 1080;
+        assert!(seat_alone(&s).is_ok());
+        assert_eq!(s.display.fixed_size(), Some((1920, 1080)));
+        s.display.fixed_width = 9000;
+        assert_eq!(seat_alone(&s).unwrap_err().field.as_deref(), Some("display.fixed_size"));
+        s.display.fixed_width = 0;
+        s.display.fixed_height = 0;
+        assert_eq!(s.display.fixed_size(), None);
         s.autostart.push(AutostartApp { path: "  ".into(), ..Default::default() });
         assert_eq!(seat_alone(&s).unwrap_err().field.as_deref(), Some("autostart.path"));
     }
