@@ -2190,3 +2190,53 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       changing TermService / LSM, kernel patching / BYOVD / DSE workarounds, signing with
       real certificates.
     - Refused by the model provider's safety system: none recorded in this round.
+- 2026-11-17 (installer-dist, branch of main fcb3692). Distribution gaps that need neither
+  money nor the maintainer's identity.
+  - **(d) Native setup.exe** (`crates/seat-bootstrap`, bin `pulsar-seat-setup`; replaces
+    Tauri's x86 NSIS stub, which stays unshipped): one build per arch (ARM64 0xAA64, x64
+    0x8664) with the MSI of that arch embedded at build time (`PULSAR_SEAT_SETUP_MSI`,
+    `build.rs` refuses another version / arch); native machine via `IsWow64Process2`;
+    sibling-MSI fallback (Turkish MSI first on a Turkish UI); SHA-256 check (embedded hash /
+    `SHA256SUMS.txt`), release builds also `WinVerifyTrust`; validated msiexec command line
+    (public `NAME=value` only, quoted), asInvoker manifest, en / tr messages, Windows
+    Installer exit codes. `installer/scripts/build-setup.ps1`; `build-installer.ps1` step 9
+    (test setup; `-NoSetup`); `write-sums.ps1` lists setups; `sign-release.ps1` checks setup
+    records (embeds the listed MSI hash, `-Release`, same commit) and has `-CheckOnly`.
+    Checked here: both builds, `/payload-info` = MSI hashes, `/extract` byte-identical, x64
+    setup on ARM64 exits 1633, bad switch 1639. HYPOTHESIS: the install path itself (never
+    run; needs a VM), Turkish MSI choice, release WinVerifyTrust with a real certificate.
+  - **(a) Driver submission:** `installer/scripts/driver-cab.ts` (INF / PDB / PE / SourceDisksFiles
+    / altitude checks, makecab DDF, CAB file table read back, `manifest.json`), all five
+    drivers incl. `seat-wfp` and `split-pad`; built against the 2026-11-17 driver outputs:
+    5 CABs, 6 files each (ARM64 + x64). CI drivers job uploads `driver-submission-<Platform>`.
+    Procedure (attestation now, WHQL / HLK later): docs/release/driver-submission.md.
+  - **(b) Altitude request:** docs/release/minifilter-altitude-request.md checked against
+    the INF, send checklist added; conditions open: maintainer OK, public repo, address.
+    driver-cab refuses the `UNALLOCATED` placeholder (`--allow-unallocated-altitude` only
+    for inspection CABs).
+  - **(c) Authenticode:** `installer/scripts/sign-authenticode.ps1` (thumbprint or cloud
+    `/dlib`, RFC 3161, skips `remote\` and signed files; TEST certificates only below
+    `target\sign-dryrun\`), `sign-dryrun.ps1`: 21 / 21 PASS with the store's TEST
+    certificate on copies of both MSIs (payload + MSI + setup signed; check-payload
+    `test_signed`, `sign-release -CheckOnly` refused; real dist unchanged).
+    docs/release/signing-dry-run.md.
+  - **(e) CI:** `lint-ci.ts --local ci-local.ps1` (every workflow job has a `# ---- <job> job`
+    section, every installer script a step runs is run locally or listed in `# ci-local
+    skips:`); new steps: public-repo scan (bun job), submission CABs (drivers job); ci-local
+    runs both. act is not installed: the workflow is linted and its steps run through
+    ci-local.ps1.
+  - **(f) Public repo:** `installer/scripts/repo-scan.ts` (local paths, keys, tokens, key
+    files, binaries, required files, SPDX, docs/local) + `installer/repo-scan-allow.txt`;
+    0 errors / 0 warnings; new CONTRIBUTING.md, SECURITY.md, README (install / build /
+    links), SOURCE-OFFER (English UI wording). History: no home-folder path in 152 commits;
+    every commit carries the maintainer's personal e-mail (decision in
+    docs/release/public-repo.md).
+  - Gates (branch, all .rs touched first): cargo test --workspace 1787 passed / 6 ignored
+    (was 1777; +10 seat-bootstrap), clippy -D warnings host aarch64 + x86_64-pc-windows-msvc
+    clean, manager 217 tests / check 0 errors / build, bun test installer/scripts 83 (was
+    63), repo-scan 0 / 0, lint-ci --local ok, shim tests (1 + 8 + 3) + check x86_64 /
+    i686 / aarch64. Drivers not touched (build-drivers.ps1 not rerun; CABs built from the
+    2026-11-17 outputs). No test deleted.
+  - Open (maintainer / hardware): dashboard account + EV certificate + upload; altitude
+    e-mail (conditions above); real code-signing certificate; first setup.exe / MSI install
+    on a VM; author-address decision before the first push; CI's first GitHub run.

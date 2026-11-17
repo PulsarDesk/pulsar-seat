@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { describe, expect, test } from "bun:test";
-import { lintWorkflow } from "./lint-ci";
+import { lintLocalCoverage, lintWorkflow } from "./lint-ci";
 
 const ok = `name: ci
 on:
@@ -75,5 +75,28 @@ describe("lint-ci", () => {
     expect(msgs("jobs: [").join("\n")).toContain("YAML does not parse");
     expect(msgs(ok.replace("permissions:\n  contents: read\n", "")).join("\n")).toContain('missing "permissions"');
     expect(msgs(ok.replace("${{ matrix.arch }}", "${{ matrix.arch }")).join("\n")).toContain("unbalanced");
+  });
+});
+
+describe("local coverage (ci-local.ps1)", () => {
+  const wf = ok.replace("cargo build --target", "bun installer/scripts/x.ts && ./installer/scripts/y.ps1 --target");
+  const local = "# ---- a job\nbun installer/scripts/x.ts\n# ---- b job\n# ci-local skips: y.ps1 (needs hardware)\n";
+  const cov = (w: string, l: string) => lintLocalCoverage(w, l).map((f) => `${f.where}: ${f.msg}`);
+
+  test("every job has a section, every script runs or is skipped", () => {
+    expect(cov(wf, local)).toEqual([]);
+    expect(cov(wf, local.replace("# ---- b job\n", "")).join("\n")).toContain('no "# ---- b job" section');
+    expect(cov(wf, local + "# ---- zz job\n").join("\n")).toContain('"zz job" names no workflow job');
+    expect(cov(wf, local.replace("# ci-local skips: y.ps1 (needs hardware)\n", "")).join("\n")).toContain("installer/scripts/y.ps1");
+    expect(cov(wf, local.replace("bun installer/scripts/x.ts", "")).join("\n")).toContain("installer/scripts/x.ts");
+    // Backslash paths in the PowerShell file count; workflow comments do not.
+    expect(cov(wf, local.replace("installer/scripts/x.ts", "installer\\scripts\\x.ts"))).toEqual([]);
+    expect(cov(wf.replace("      - name: two", "      # see installer/scripts/z.ts\n      - name: two"), local)).toEqual([]);
+  });
+
+  test("the repository's ci-local.ps1 covers ci.yml", async () => {
+    const text = await Bun.file(new URL("../../.github/workflows/ci.yml", import.meta.url)).text();
+    const l = await Bun.file(new URL("./ci-local.ps1", import.meta.url)).text();
+    expect(cov(text, l)).toEqual([]);
   });
 });

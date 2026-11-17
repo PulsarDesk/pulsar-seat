@@ -23,6 +23,25 @@ So, in order:
 4. A long-term contact address that is not a personal mailbox (Microsoft mails the
    altitude back to it). Not written into the repository.
 
+State on 2026-11-17: the e-mail below is complete except the two maintainer fields
+(contact address, name); conditions 1, 2 and 4 are open (no maintainer OK yet, the
+repository is not public yet, no project address chosen); condition 3 holds (filter
+unchanged since 2026-11-12, `DriverVer` 0.1.0.0). Every technical field was checked against
+the INF (`seat-storage-filter.inf`: service `PulsarSeatStorageGate`, binary
+`pulsarseatstoragegate.sys`, `LoadOrderGroup` "FSFilter Security Enhancer", start type 1
+= System) and against `README.md` of the driver.
+
+Send checklist (in order):
+
+- [ ] Maintainer OK for the exception, written into `docs/agents/plan.md`.
+- [ ] Public repository with the filter source (`docs/release/public-repo.md`).
+- [ ] Fill in `<long-term project address>` and `<maintainer name>`; send as plain text.
+- [ ] Note the send date in `docs/journal.md`; the answer is due after 30 business days.
+
+Until the altitude is in the INF, `installer/scripts/driver-cab.ts` refuses to package the
+filter for submission (the `UNALLOCATED` placeholder; `--allow-unallocated-altitude` only
+for inspection CABs), so an attestation submission cannot go out without it.
+
 Allow **30 business days**. Until an altitude arrives the INF keeps the placeholder
 `UNALLOCATED` (Filter Manager cannot attach with it, so an accidental install attaches
 nowhere). Never reuse another product's altitude.

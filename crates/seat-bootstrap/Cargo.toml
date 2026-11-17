@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-bootstrap"
+description = "Pulsar Seat setup.exe: a small native bootstrapper (ARM64 / x64) that runs the MSI of this PC's architecture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# One binary per architecture: <target>\<triple>\release\pulsar-seat-setup.exe. The MSI is
+# embedded at build time when PULSAR_SEAT_SETUP_MSI names it (build.rs); without it the
+# program looks for the MSI next to itself. installer/scripts/build-setup.ps1 builds it.
+[[bin]]
+name = "pulsar-seat-setup"
+path = "src/main.rs"
+
+[dependencies]
+seat-core.workspace = true
+sha2 = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_WinTrust",
+    "Win32_Security_Cryptography",
+    "Win32_System_Console",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+sha2 = "0.11"

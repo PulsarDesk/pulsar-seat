@@ -9,7 +9,7 @@
 #   ... -Targets aarch64-pc-windows-msvc            (one target only)
 #   ... -Payload        also the release binaries, helper DLLs, the credprov DLL and the PE / payload gate (implies -CredProv)
 #   ... -CredProv       also the credprov job (msbuild ARM64 + x64, self-test; VS 18 Build Tools + SDK)
-#   ... -Drivers        also the drivers job (msbuild ARM64 + x64, infverif, analysis)
+#   ... -Drivers        also the drivers job (msbuild ARM64 + x64, infverif, analysis, submission CABs)
 #   ... -Installers     also the MSI for the native arch (build-installer.ps1 -SkipCargo; implies -Payload)
 #   ... -Release        also the tag-only gates (release key list); never sets up a tag
 #
@@ -63,7 +63,9 @@ function Run([string] $Exe) {
 
 Push-Location $repo
 try {
-    Gate "workflow lint" { Run bun installer/scripts/lint-ci.ts .github/workflows/ci.yml }
+    # Structure of ci.yml, plus: every job / installer script there has its counterpart in
+    # this file (sections "# ---- <job> job", or a "# ci-local skips:" line).
+    Gate "workflow lint" { Run bun installer/scripts/lint-ci.ts .github/workflows/ci.yml --local installer/scripts/ci-local.ps1 }
     Gate "bun install" { Run bun install --frozen-lockfile }
 
     # ---- rust job
@@ -91,6 +93,7 @@ try {
     # ---- bun job
     Gate "manager check / test" { Push-Location apps/manager; try { Run bun run check; Run bun run test } finally { Pop-Location } }
     Gate "installer scripts (bun test)" { Run bun test installer/scripts }
+    Gate "public-repository scan" { Run bun installer/scripts/repo-scan.ts }
 
     # ---- shim job (remote kind's per-process shim, own x64 / x86 workspace). CI runs it on
     # the x64 runner; on an ARM64 host the x64 test binaries run under x64 emulation.
@@ -99,7 +102,8 @@ try {
         Run cargo clippy --locked --manifest-path shim/Cargo.toml --target x86_64-pc-windows-msvc --all-targets '--' -D warnings
         Run cargo check --locked --manifest-path shim/Cargo.toml --target i686-pc-windows-msvc --all-targets
     }
-    # ARM64 module (Detours backend, parity-arm64): only an ARM64 host runs its tests.
+    # ---- shim-arm64 job: the ARM64 module (Detours backend, parity-arm64); only an ARM64
+    # host runs its tests (its release builds are build-installer.ps1's, -Installers).
     if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
         Gate "shim test + clippy (arm64)" {
             Run cargo test --locked --manifest-path shim/Cargo.toml --target aarch64-pc-windows-msvc
@@ -180,7 +184,17 @@ try {
                 Run bun installer/scripts/check-payload.ts --arch $arch --machine-only "target/drivers/$p/Release"
             }
         }
+        # CI makes one CAB per platform job; here both platforms exist, so one CAB per driver
+        # with both (the layout the maintainer submits; docs/release/driver-submission.md).
+        Gate "drivers submission CABs (unsigned)" {
+            Run bun installer/scripts/driver-cab.ts --out target/driver-submission --allow-unallocated-altitude
+        }
     }
+
+    # ---- sdv job: not run here (the 17 GB 22H2 EWDK, x64 tools; docs/release/sdv.md has
+    # the local run-sdv.ps1 command)
+    # ci-local skips: run-sdv.ps1 (sdv job: needs the mounted EWDK ISO)
+    # ci-local skips: js-notices.ts (installers job, tag builds: generated together with cargo-about, which CI installs; build-installer.ps1 -Release refuses without the notices)
 
     # ---- installers job (native arch only; Tauri needs its frontend + WiX download)
     if ($Installers) {

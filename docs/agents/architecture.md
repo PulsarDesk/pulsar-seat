@@ -45,6 +45,7 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
 | `apps/manager` | Tauri 2 + SvelteKit 3 + Svelte 5, `adapter-static` | manager | all screens of spec 10 (English default, Turkish locale: `src/lib/locales/`), tray, wizard UI; `src-tauri` = pipe client |
 | `credprov/` | C++20 COM DLL (v145, SDK 10.0.28000), unsigned | credprov | credential provider + filter for `fast_user_switch` (auto-logon, switch link); registered only by the service — see [credprov/README.md](../../credprov/README.md) |
 | `drivers/` | C (KMDF / FltMgr) + C++17 (IddCx), built unsigned with WDK 10.0.28000; loaded only test-signed in the test VM (2026-11-16) | drivers | `seat-input-filter` (keyboard / mouse + HID roles), `seat-idd`, `seat-storage-filter` — see [drivers/README.md](../../drivers/README.md) |
+| `crates/seat-bootstrap` | bin `pulsar-seat-setup` | installer | native per-arch `setup.exe` (ARM64 / x64): embedded or sibling MSI of the PC's native arch, SHA-256 (+ Authenticode in release builds), validated msiexec command line — see [crates/seat-bootstrap/README.md](../../crates/seat-bootstrap/README.md) |
 | `installer/` | packaging | installer | see [installer/README.md](../../installer/README.md) |
 | `.cargo/config.toml` | cargo config | contracts | `+crt-static` for x64 / x86 / ARM64 (from Pulsar Split, merge step 2-3) |
 

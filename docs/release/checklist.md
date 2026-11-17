@@ -23,7 +23,10 @@ can make.
 | Licence texts in the MSI | `check-payload.ts --notices` (`build-installer.ps1 -Release`, `sign-release.ps1`) | `licenses/` inside the MSI lacks `LICENSE.txt`, `NOTICES.md`, `SOURCE-OFFER.txt` or the generated `THIRD-PARTY-NOTICES-RUST.md` / `-JS.md` (< 1 KiB) |
 | Release key file ACL | `pulsar-seat-release keygen`, `release-keygen.ps1` | the key folder is on a volume without ACLs (FAT / exFAT), or the protected DACL (you + SYSTEM) cannot be applied / read back |
 | SDV clean | `run-sdv.ps1` (CI `sdv` job) | a defect, no rule passed, a timeout / spaceout, or a count missing from the log |
-| Workflow lint | `installer/scripts/lint-ci.ts` (CI `bun` job, `ci-local.ps1`) | malformed `ci.yml`, unchecked exit codes in pwsh steps |
+| Workflow lint | `installer/scripts/lint-ci.ts` (CI `bun` job, `ci-local.ps1`) | malformed `ci.yml`, unchecked exit codes in pwsh steps, a job or installer script without its `ci-local.ps1` counterpart |
+| Public-repo scan | `installer/scripts/repo-scan.ts` (CI `bun` job, `ci-local.ps1`) | local user paths, keys, tokens, binaries, missing README / LICENSE / CONTRIBUTING / SECURITY / source offer, missing SPDX headers ([public-repo.md](public-repo.md)) |
+| Submission CABs | `installer/scripts/driver-cab.ts` (CI `drivers` job, `ci-local.ps1 -Drivers`) | INF / PDB / PE machine problems, the storage filter's placeholder altitude ([driver-submission.md](driver-submission.md)) |
+| Setup program | `installer/scripts/build-setup.ps1` (`build-installer.ps1` step 9) | wrong PE machine, no asInvoker manifest, embedded MSI hash not the MSI's; `-Release` with an unsigned MSI |
 
 Run everything locally first:
 `powershell -ExecutionPolicy Bypass -File installer\scripts\ci-local.ps1 -Payload -Release`
@@ -31,23 +34,25 @@ Run everything locally first:
 
 ## 0b. First commit and release tag — [blocker]
 
-The repository has **no commit yet** (every file untracked; agents never commit).
-`build-installer.ps1` writes a `<msi>.build.txt` record (commit, dirty, release) and
+Since 2026-11-13 the repository has a history on `main` (local only, no remote; agents
+commit on short branches merged the same day). `build-installer.ps1` writes a `<msi>.build.txt` record (commit, dirty, release) and
 `sign-release.ps1` refuses an MSI built from no commit, a dirty tree, or a commit that is
 not tag `v<version>`. So nothing can be signed before:
 
-- [ ] Review the tree (`git status`; no `docs/local/`, no `target/`, no key: see §1), then
-      the first commit on `main`.
+- [ ] Review the tree (`git status`; no `docs/local/`, no `target/`, no key: see §1;
+      `bun installer/scripts/repo-scan.ts` exits 0).
 - [ ] Tag `v0.1.0` on that commit (or the release commit later).
 - [ ] From the clean tag: `build-installer.ps1 -Release` for **both** arches (ARM64 with the
       ARM64EC helper, x64), then `sign-release.ps1`. The MSIs in `target/installer/dist`
-      today are unsigned test builds from an untracked tree: never publish them.
+      today are unsigned test builds: never publish them.
 
 ## 1. Public repository and tag (GPL-3 §6 source offer) — [blocker]
 
 `installer/licenses/SOURCE-OFFER.txt` promises the Corresponding Source at
 `https://github.com/PulsarDesk/pulsar-seat`, tag `v<x.y.z>`.
 
+- [ ] Work through [public-repo.md](public-repo.md) (scan, history, author address,
+      README / CONTRIBUTING / SECURITY, repository settings).
 - [ ] Create `PulsarDesk/pulsar-seat` (public), push `main` (maintainer's go; nothing is
       pushed by agents).
 - [ ] Check what is published: no `docs/local/`, no `spec/` raw analyst notes outside
@@ -122,7 +127,11 @@ Routes (check prices / eligibility on the day; HYPOTHESIS where marked):
 - [ ] Decide the route. If drivers will ever ship: EV (one certificate for both).
 - [ ] Sign every `.exe` / `.dll` of the payload **before** bundling (re-run
       `build-installer.ps1` on the signed payload with `-SkipCargo`), then the MSI, with an
-      RFC 3161 timestamp (`signtool sign /fd sha256 /tr <tsa> /td sha256 …`).
+      RFC 3161 timestamp: `installer\scripts\sign-authenticode.ps1 -Path <payload or msi>
+      -Thumbprint <sha1> -TimestampUrl <tsa>` (or `-Dlib` / `-DlibMetadata` for a cloud
+      signing service; it skips `remote\` and files that already carry a signature and
+      requires `Valid` afterwards). The whole order was rehearsed with the test
+      certificate on 2026-11-17 ([signing-dry-run.md](signing-dry-run.md)).
       **`pulsar-seat-credprov.dll` is mandatory** (LogonUI loads it as SYSTEM):
       `build-installer.ps1 -SignedCredProv <signed dll>` bundles it; `sign-release.ps1`
       extracts every MSI and refuses one whose DLL is not validly signed
@@ -139,15 +148,22 @@ Routes (check prices / eligibility on the day; HYPOTHESIS where marked):
 2. [ ] Push tag `v<x.y.z>`. CI's `installers` job builds both MSIs with `-Release` and
        uploads `installers-unsigned-<arch>` (unsigned: testing only).
 3. [ ] Sign payload + MSIs (§3) on the signing machine.
+3b. [ ] Setup programs from the **signed** MSIs: `installer\scripts\build-setup.ps1 -Arch
+       arm64 -Msi <dir>\PulsarSeat_<x.y.z>_arm64.msi -OutDir <dir> -Release` and the same
+       for x64 (both cross-compile on either host), then sign both `_setup.exe` with
+       `sign-authenticode.ps1`. Remove the test-build setups CI made from the unsigned
+       MSIs.
 4. [ ] `installer\scripts\write-sums.ps1 <dir>` → `SHA256SUMS.txt` of the **signed** MSIs
-       (removes a stale `.minisig`).
-5. [ ] `installer\scripts\sign-release.ps1 -Dist <dir>` → checks every listed MSI's hash
-       and Authenticode signature, writes `SHA256SUMS.txt.minisig`, verifies it against
-       `installer/release-signers.txt`.
+       and setups (removes a stale `.minisig`).
+5. [ ] `installer\scripts\sign-release.ps1 -Dist <dir>` → checks every listed file's hash
+       and Authenticode signature (and that each setup embeds the listed MSI), writes
+       `SHA256SUMS.txt.minisig`, verifies it against `installer/release-signers.txt`.
+       `-CheckOnly` runs the checks without the key first.
 6. [ ] GitHub release `v<x.y.z>`, not draft, not pre-release, assets exactly:
-       `PulsarSeat_<x.y.z>_arm64.msi`, `PulsarSeat_<x.y.z>_x64.msi`, `SHA256SUMS.txt`,
-       `SHA256SUMS.txt.minisig`.
-7. [ ] On a test machine with the previous version: manager → Güncellemeler → check →
+       `PulsarSeat_<x.y.z>_arm64.msi`, `PulsarSeat_<x.y.z>_x64.msi`,
+       `PulsarSeat_<x.y.z>_arm64_setup.exe`, `PulsarSeat_<x.y.z>_x64_setup.exe`,
+       `SHA256SUMS.txt`, `SHA256SUMS.txt.minisig`.
+7. [ ] On a test machine with the previous version: manager → Updates → check →
        download → install. Expect `ready` with the publisher name, then a clean upgrade.
        (Never exercised yet: no release exists.)
 8. [ ] Install / upgrade / uninstall of the MSI on a test VM (custom actions, rollback,
@@ -156,8 +172,9 @@ Routes (check prices / eligibility on the day; HYPOTHESIS where marked):
 
 ## 5. Driver packages — [drivers] [decision]
 
-None ships today; the installer stages only Microsoft-signed packages. Per driver
-(`seat-input-filter`, `seat-idd`, `seat-storage-filter`, `seat-wfp`):
+None ships today; the installer stages only Microsoft-signed packages. Full procedure:
+[driver-submission.md](driver-submission.md). Per driver (`seat-input-filter`,
+`seat-idd`, `seat-storage-filter`, `seat-wfp`, `split-pad`):
 
 1. [ ] Maintainer OK for the driver (the storage minifilter is an exception to
        `docs/agents/rules.md`, §6 below).
@@ -169,8 +186,10 @@ None ships today; the installer stages only Microsoft-signed packages. Per drive
        the **EV certificate**, accept the agreements.
 5. [ ] Build the package for **x64 and ARM64** (`target\drivers\<Platform>\Release\<project>\<project>\`),
        make one CAB per driver containing the INF, binaries and PDBs for both
-       architectures (`MakeCab` with a `.ddf`; layout in Microsoft Learn "Attestation
-       signing a kernel driver for public release"), sign the CAB with the EV certificate.
+       architectures: `bun installer/scripts/driver-cab.ts` (makecab + `.ddf`, layout of
+       Microsoft Learn "Attestation signing a kernel driver for public release"; CI's
+       drivers job uploads per-platform CABs as `driver-submission-<Platform>`), sign the
+       CAB with the EV certificate (`sign-authenticode.ps1 -Path <cab>`).
 6. [ ] Submit for attestation (Windows 10 / 11 client, both architectures). Microsoft
        returns the package signed by "Microsoft Windows Hardware Compatibility Publisher".
        Attestation-signed drivers load on client Windows only (not Server; not Windows
@@ -245,7 +264,7 @@ disposable VM is a maintainer decision).
 
 ## 8. Docs and housekeeping before the first release
 
-- [ ] `docs/troubleshooting.md` (Turkish) mentions the exact service / INF names of any
+- [ ] `docs/troubleshooting.md` (English; Turkish copy `troubleshooting.tr.md`) mentions the exact service / INF names of any
       shipped driver (offline recovery).
 - [ ] `installer/licenses/THIRD-PARTY-NOTICES-*.md` generated by CI (cargo-about,
       `js-notices.ts`); a build without them is not releasable. Enforced:
@@ -253,5 +272,8 @@ disposable VM is a maintainer decision).
       the MSI; `sign-release.ps1` refuses an MSI without them (`check-payload.ts
       --notices`). For a local release build generate them first with the two commands of
       the `ci.yml` step "Third-party notices".
-- [ ] NSIS stays unshipped unless the maintainer approves the x86-stub exception.
-- [ ] Release notes in Turkish on the GitHub release page.
+- [ ] NSIS stays unshipped (x86 stub); the exe installer is the native per-arch
+      `setup.exe` (§4 step 3b, `crates/seat-bootstrap/README.md`). Run it once on a test
+      VM per arch before the first release (its install path is HYPOTHESIS so far).
+- [ ] Release notes in English (with a Turkish section if wanted) on the GitHub release
+      page.

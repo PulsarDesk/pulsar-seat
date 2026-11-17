@@ -26,6 +26,8 @@ default-members = [
     "crates/seat-pads",
     "crates/seat-shim-core",
     "crates/seat-setup",
+    # Native per-arch setup.exe bootstrapper (installer/scripts/build-setup.ps1).
+    "crates/seat-bootstrap",
 ]
 
 # drivers/split-pad (own workspace) builds into the shared target dir (target\wf). wdk-build
