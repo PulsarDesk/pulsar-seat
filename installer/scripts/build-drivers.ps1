@@ -40,6 +40,11 @@ $Projects = @($Projects | ForEach-Object { $_ -split "," } | Where-Object { $_ }
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not $OutRoot) { $OutRoot = Join-Path $repo "target\drivers" }
+# Absolute, against the repository root: msbuild resolves a relative OutDir / IntDir against
+# each project's own folder (drivers\<name>\target\...), so the package check below would
+# look in the wrong place, or find a stale package from an earlier run.
+elseif (-not [System.IO.Path]::IsPathRooted($OutRoot)) { $OutRoot = [System.IO.Path]::GetFullPath((Join-Path $repo $OutRoot)) }
+else { $OutRoot = [System.IO.Path]::GetFullPath($OutRoot) }
 $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10"
 $hostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq "ARM64") { "arm64" } else { "x64" }
 
