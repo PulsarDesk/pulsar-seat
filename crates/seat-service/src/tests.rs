@@ -2376,6 +2376,41 @@ fn remote_harness_removed(config: Config) -> (Harness, Arc<HostRec>, Arc<Mutex<V
     (harness_full(config, None, Some(remote)), rec, removed)
 }
 
+/// VM round 2 (2026-11-17): a `settings.remote` change saved with `apply_config` (the
+/// manager's path) reaches the worker's `apply_global` (provider registration, isolation),
+/// not only Split's `set_global_settings`. An apply that leaves it alone does not.
+#[test]
+fn remote_settings_saved_with_apply_config_reach_the_worker() {
+    let globals: Arc<Mutex<Vec<seat_core::remote::RemoteSettings>>> = Arc::default();
+    let shared = globals.clone();
+    let remote = crate::service::RemoteDeps {
+        worker: Box::new(move |doc| {
+            Box::new(crate::remote::control::Controller::new(
+                doc,
+                crate::remote::control::tests::FakePlatform { globals: shared, ..Default::default() },
+                "t",
+                true,
+            ))
+        }),
+        host: None,
+    };
+    let h = harness_full(remote_ready_config(), None, Some(remote));
+    h.s.boot();
+    let mut a = admin();
+    let apply = |a: &mut Caller, f: &dyn Fn(&mut Config)| {
+        let ResponseBody::Config(view) = call(&h, a, RequestBody::GetConfig).unwrap() else { panic!() };
+        let mut cfg = view.config.clone();
+        f(&mut cfg);
+        call(&h, a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: view.config.revision, force: false }).unwrap();
+    };
+    apply(&mut a, &|c| c.seats[0].name = "renamed".into());
+    assert!(globals.lock().unwrap().is_empty(), "no settings.remote change");
+    apply(&mut a, &|c| c.settings.remote.display_backend = Some(seat_core::remote::DisplayBackendPref::PulsarIdd));
+    let g = globals.lock().unwrap();
+    assert_eq!(g.len(), 1);
+    assert_eq!(g[0].display_backend, Some(seat_core::remote::DisplayBackendPref::PulsarIdd));
+}
+
 #[test]
 fn deleting_a_remote_seat_with_apply_config_stops_first_then_removes_files() {
     let mut c = remote_ready_config();

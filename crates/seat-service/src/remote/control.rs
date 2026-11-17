@@ -841,6 +841,18 @@ impl<S: ConfigStore, P: Platform> Controller<S, P> {
         Ok(g)
     }
 
+    /// `apply_config` changed `settings.remote` (already stored in the shared document):
+    /// apply what lives outside the store (isolation, pad preference, Bluetooth rule, the
+    /// protocol provider registration). VM round 2 (2026-11-17): only Split's
+    /// `set_global_settings` did this, so the manager's save (`apply_config`) left e.g. the
+    /// provider unregistered until the service restarted.
+    pub fn global_changed(&mut self, old: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
+        if old == new {
+            return Ok(());
+        }
+        self.platform.apply_global(old, new)
+    }
+
     fn set_multi_session(&mut self, enabled: bool) -> Result<HostInfo, ProtoError> {
         if self.platform.passive() {
             return Err(passive_err());
@@ -1076,6 +1088,8 @@ pub(crate) mod tests {
         pub(crate) rebooted: bool,
         /// Ids of removed seats, shared with a test that boxed the controller.
         pub(crate) removed_ids: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        /// `apply_global` calls (the new settings), shared like `removed_ids`.
+        pub(crate) globals: std::sync::Arc<std::sync::Mutex<Vec<RemoteSettings>>>,
     }
 
     impl Platform for FakePlatform {
@@ -1100,7 +1114,8 @@ pub(crate) mod tests {
             self.pins.push(r);
             Ok(())
         }
-        fn apply_global(&mut self, _: &RemoteSettings, _: &RemoteSettings) -> Result<(), ProtoError> {
+        fn apply_global(&mut self, _: &RemoteSettings, new: &RemoteSettings) -> Result<(), ProtoError> {
+            self.globals.lock().unwrap().push(new.clone());
             Ok(())
         }
         fn list_local_users(&self) -> Result<Vec<LocalUser>, ProtoError> {

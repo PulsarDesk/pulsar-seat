@@ -70,6 +70,9 @@ pub trait RemoteWorker: Send {
     /// A remote seat removed by `apply_config`: delete its secrets, files and runtime
     /// (`seat_running` while it is active).
     fn forget_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError>;
+    /// `apply_config` changed `settings.remote`: apply what lives outside the document
+    /// (isolation, pad preference, Bluetooth rule, protocol provider registration).
+    fn global_changed(&mut self, old: &seat_core::remote::RemoteSettings, new: &seat_core::remote::RemoteSettings) -> Result<(), ProtoError>;
 }
 
 impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<S, P> {
@@ -111,6 +114,9 @@ impl<S: RecordStore, P: control::Platform> RemoteWorker for control::Controller<
     }
     fn forget_seat(&mut self, seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         control::Controller::forget_seat(self, seat)
+    }
+    fn global_changed(&mut self, old: &seat_core::remote::RemoteSettings, new: &seat_core::remote::RemoteSettings) -> Result<(), ProtoError> {
+        control::Controller::global_changed(self, old, new)
     }
 }
 

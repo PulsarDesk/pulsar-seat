@@ -353,6 +353,18 @@ impl Service {
         }
     }
 
+    /// After `apply_config` changed `settings.remote`: the worker applies what lives
+    /// outside the document (VM round 2, 2026-11-17).
+    pub(crate) fn remote_global_changed(&self, old: &seat_core::remote::RemoteSettings, new: &seat_core::remote::RemoteSettings) {
+        if old == new {
+            return;
+        }
+        match self.with_remote(|w| w.global_changed(old, new)) {
+            Some(Ok(())) | None => {}
+            Some(Err(e)) => log::warn(&format!("remote settings not applied outside the config: {e}")),
+        }
+    }
+
     /// `stop_seat` on a remote seat.
     pub(crate) fn stop_remote_seat(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
         if self.is_vm_seat(seat) {

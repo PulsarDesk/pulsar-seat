@@ -627,6 +627,10 @@ impl Service {
         };
         log::info(&format!("config revision {rev} applied"));
         self.forget_remote_seats(&removed_remote);
+        if old.settings.remote != cfg.settings.remote {
+            let (o, n) = ((*old.settings.remote).clone(), (*cfg.settings.remote).clone());
+            self.spawn(move |s| s.remote_global_changed(&o, &n));
+        }
         // A session-backend change prepares the new backend itself (restore + prepare).
         let prepared = old.settings.backends != cfg.settings.backends && self.reselect_backends();
         if crate::compat::compat_changed(&old, &cfg) {
