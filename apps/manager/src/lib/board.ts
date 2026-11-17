@@ -7,7 +7,7 @@ import { productLabel, seatLabel, t } from './i18n.ts';
 import { effectiveMasks, type CanvasItem, type SeatHealth } from './model.ts';
 import type { IconName } from './ui/icons.ts';
 import type { StatusKind } from './ui/types.ts';
-import type { Config, Device, DeviceKey, DeviceKind, DeviceView, ProductState, SeatConfig, SeatNumber, SeatRuntime, SeatState } from './types.ts';
+import type { ActiveBackends, Config, Device, DeviceKey, DeviceKind, DeviceView, ProductState, SeatConfig, SeatNumber, SeatRuntime, SeatState } from './types.ts';
 
 /** The card title: the seat's own name, or "Seat 2" while it has none. */
 export function seatTitle(s: Pick<SeatConfig, 'number' | 'name'>): string {
@@ -156,13 +156,18 @@ function isPointer(d: Device): boolean {
   return d.kind === 'hid' && d.details.type === 'input' && d.details.usage_page === 0x0d;
 }
 
-/** One line per kind a seat lacks, from the plugged-in devices shown in its card. */
-export function missingKinds(items: CanvasItem[]): Missing[] {
+/** One line per kind a seat lacks, from the plugged-in devices shown in its card. Only kinds
+ *  the running backends assign: VM round 2 (2026-11-17), under fast user switching the display
+ *  backend is `console_only`, the service lists no monitor, and every seat (seat 1 running
+ *  too) read "cannot start without a screen". */
+export function missingKinds(items: CanvasItem[], active?: Pick<ActiveBackends, 'display' | 'input'>): Missing[] {
   const present = items.map((i) => i.view.device).filter((d) => d.present);
   const out: Missing[] = [];
-  if (!present.some((d) => d.kind === 'monitor')) out.push({ kind: 'display', block: true });
-  if (!present.some((d) => d.kind === 'keyboard')) out.push({ kind: 'keyboard', block: true });
-  if (!present.some(isPointer)) out.push({ kind: 'mouse', block: false });
+  const monitors = active?.display !== 'console_only';
+  const inputs = active?.input !== 'none';
+  if (monitors && !present.some((d) => d.kind === 'monitor')) out.push({ kind: 'display', block: true });
+  if (inputs && !present.some((d) => d.kind === 'keyboard')) out.push({ kind: 'keyboard', block: true });
+  if (inputs && !present.some(isPointer)) out.push({ kind: 'mouse', block: false });
   if (!present.some((d) => d.kind === 'audio_render')) out.push({ kind: 'audio', block: false });
   return out;
 }

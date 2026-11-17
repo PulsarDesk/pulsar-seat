@@ -537,7 +537,7 @@
               {/each}
             </ul>
           {/if}
-          {#each missingKinds(list.concat(sharedPool)) as miss (miss.kind)}
+          {#each missingKinds(list.concat(sharedPool), store.status?.active) as miss (miss.kind)}
             <MissingSlot kind={miss.kind} block={miss.block} />
           {/each}
           {#if store.view?.password_failing.includes(s.number)}

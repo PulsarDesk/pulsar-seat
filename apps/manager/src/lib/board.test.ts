@@ -114,6 +114,13 @@ describe('missing devices and unsaved moves', () => {
     expect(missingKinds([item(kbd), item(unplugged)]).map((m) => m.kind)).toEqual(['display', 'mouse', 'audio']);
   });
 
+  it('leaves out the kinds the running backends do not assign', () => {
+    // Fast user switching: console-only display, so no screen line (VM round 2).
+    expect(missingKinds([], { display: 'console_only', input: 'raw_input_host' }).map((m) => m.kind)).toEqual(['keyboard', 'mouse', 'audio']);
+    expect(missingKinds([], { display: 'console_only', input: 'none' }).map((m) => m.kind)).toEqual(['audio']);
+    expect(missingKinds([], { display: 'display_core', input: 'kmdf_filter' }).map((m) => m.kind)).toEqual(['display', 'keyboard', 'mouse', 'audio']);
+  });
+
   it('marks a device whose seats differ from the saved config', () => {
     const saved = normalize(demoConfig());
     const v = views();
