@@ -128,6 +128,20 @@ pub struct DisplaySettings {
     pub refresh_hz: u32,
     /// v2: advanced HDR luminance of the seat monitor.
     pub luminance: HdrLuminanceSettings,
+    /// Fixed stream resolution (2026-11-17, remote-idd-hdr, additive): 0 x 0 = follow the
+    /// client's request. When set, client mode requests and the operator's mode control get
+    /// this size, and the seat session starts with it.
+    pub fixed_width: u32,
+    pub fixed_height: u32,
+    /// Keep `refresh_hz` whatever the client asks for (2026-11-17, additive).
+    pub lock_refresh: bool,
+}
+
+impl DisplaySettings {
+    /// The fixed resolution, when one is set.
+    pub fn fixed_size(&self) -> Option<(u32, u32)> {
+        (self.fixed_width > 0 && self.fixed_height > 0).then_some((self.fixed_width, self.fixed_height))
+    }
 }
 
 impl Default for DisplaySettings {
@@ -142,6 +156,9 @@ impl Default for DisplaySettings {
             render_adapter_id: None,
             refresh_hz: 60,
             luminance: HdrLuminanceSettings::default(),
+            fixed_width: 0,
+            fixed_height: 0,
+            lock_refresh: false,
         }
     }
 }

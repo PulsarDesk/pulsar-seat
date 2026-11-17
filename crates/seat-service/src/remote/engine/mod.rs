@@ -16,6 +16,8 @@
 
 use seat_audio::{AudioProbe, AudioState, SeatAudio, rdp_client_flags, seat_audio_status, server_keys, session_endpoint};
 use crate::remote::control::SeatEvent;
+use crate::remote::wrds::{HostPlan, WrdsConnect, WrdsPort, WrdsSession, plan, wants_provider};
+use seat_display::remote::backend::pulsar_idd::OWN_DRIVER_SIGNED;
 use seat_display::remote::{
     AdapterChoice, AdapterEnumerator, BackendInfo, BackendKind, DisplayBackend, DisplayError, HdrLuminance, HdrUnavailable,
     ModeRequest, ModeResult, ModeStatus, SeatDisplay, SeatDisplayHandle, choose_backend, resolve_adapter,
@@ -120,6 +122,9 @@ pub struct Deps {
     /// Spec 70 §2.6 operator-triggered stale RDP audio endpoint cleanup
     /// (`seat_audio::remove_stale_endpoints` over the real probe, remover and WTS list).
     pub audio_cleanup: Arc<dyn Fn() -> Result<seat_audio::StaleReport, seat_audio::AudioError> + Send + Sync>,
+    /// Our Remote Desktop protocol provider (remote seats on the own IddCx display,
+    /// `crate::remote::wrds`). `None` = not available on this build / host.
+    pub wrds: Option<Arc<dyn WrdsPort>>,
     /// `%ProgramData%\PulsarSplit`.
     pub data_root: PathBuf,
     pub service_version: String,
@@ -148,6 +153,10 @@ struct DisplayRun {
 #[derive(Default)]
 struct Resources {
     session: Option<SeatSession>,
+    /// The session came through our protocol provider (ended through it, not the hold).
+    wrds: Option<WrdsSession>,
+    /// The provider path was wanted but not taken: why (manager runtime display info).
+    fallback: Option<String>,
     display: Option<DisplayRun>,
     server: Option<Server>,
     pads: bool,
@@ -197,6 +206,9 @@ struct Inner {
     bt_next_ms: AtomicU64,
     /// USB ids of the PC's physical pads (the service's inventory), for the SDL ignore list.
     physical_pads: Mutex<Option<PadIdSource>>,
+    /// Seat accounts known at service start (+ seats started since), for the provider
+    /// listener's logon list.
+    seat_users: Mutex<Vec<String>>,
 }
 
 /// Source of the physical pads' USB ids (`Engine::set_physical_pads`).
@@ -255,12 +267,30 @@ fn json<T: serde::Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).unwrap_or(serde_json::Value::Null)
 }
 
-/// Session size at start: the seat's last applied mode, else [`DEFAULT_SIZE`].
+/// Session size at start: the seat's fixed resolution, else its last applied mode, else
+/// [`DEFAULT_SIZE`].
 pub fn session_size(seat: &RemoteSeatRecord) -> (u32, u32) {
+    if let Some(s) = seat.display.fixed_size() {
+        return s;
+    }
     match seat.last_mode {
         Some(m) if m.is_plausible() => (m.width, m.height),
         _ => DEFAULT_SIZE,
     }
+}
+
+/// A mode request after the seat's own display settings (2026-11-17): a fixed resolution
+/// replaces the asked size, a locked refresh the asked rate. Everything else (clamps,
+/// super-sampling, scale, HDR gate) is the backend's `resolve_mode`.
+pub fn seat_mode_request(d: &seat_proto::remote::DisplaySettings, mut req: ModeRequest) -> ModeRequest {
+    if let Some((w, h)) = d.fixed_size() {
+        req.width = w;
+        req.height = h;
+    }
+    if d.lock_refresh {
+        req.hz = d.refresh_hz;
+    }
+    req
 }
 
 fn mode_status_for(e: &DisplayError) -> ModeStatus {
@@ -342,6 +372,7 @@ impl Engine {
             workers: Mutex::new(Vec::new()),
             bt_next_ms: AtomicU64::new(0),
             physical_pads: Mutex::new(None),
+            seat_users: Mutex::new(Vec::new()),
         }))
     }
 
@@ -417,6 +448,7 @@ impl Engine {
     /// multi-seat is on and not passive) → RDS ready → sweep → pad orphans → seat map clear.
     /// Blocking (up to the RDS ready timeout); run it off the pipe thread.
     pub fn service_start(&self, global: &RemoteSettings, seat_users: &[String]) {
+        *lock(&self.0.seat_users) = seat_users.to_vec();
         let co = (self.d().coexist)();
         self.0.passive.store(co.passive, Ordering::SeqCst);
         *lock(&self.0.coexist) = co.report;
@@ -462,6 +494,40 @@ impl Engine {
             log::warn!("seat map clear: {e}");
         }
         self.set_bluetooth_console_only(global.bluetooth_console_only);
+        self.sync_wrds(global);
+    }
+
+    // ---- our protocol provider (crate::remote::wrds) ----
+
+    /// Register the provider while remote seats want our display, remove it otherwise.
+    /// Passive (coexistence) mode never changes it.
+    pub fn sync_wrds(&self, global: &RemoteSettings) {
+        let Some(w) = &self.d().wrds else { return };
+        if self.passive() {
+            return;
+        }
+        let want = wants_provider(global.display_backend.map(to_kind), OWN_DRIVER_SIGNED);
+        let users = lock(&self.0.seat_users).clone();
+        match w.sync_registration(want, &users) {
+            Ok(st) => log::info!("protocol provider registration: {:?} (reason {:?})", st.registration, st.reason),
+            Err(e) => log::warn!("protocol provider registration: {e}"),
+        }
+    }
+
+    /// A seat account the provider listener must admit (seat added after service start).
+    fn note_seat_user(&self, user: &str, global: &RemoteSettings) {
+        let added = {
+            let mut u = lock(&self.0.seat_users);
+            if u.iter().any(|x| x.eq_ignore_ascii_case(user)) {
+                false
+            } else {
+                u.push(user.to_string());
+                true
+            }
+        };
+        if added {
+            self.sync_wrds(global);
+        }
     }
 
     // ---- Bluetooth per-user services (spec 60 §10.4) ----
@@ -635,30 +701,64 @@ impl Engine {
             self.notice(&seat.id, "host_warning", serde_json::json!({"kind": "seat_user_is_admin"}));
         }
 
-        // 2. session (helper with the password on its stdin pipe).
+        // 2. session. Our display (`pulsar_idd`) needs the seat session to come through our
+        // protocol provider (crate::remote::wrds); anything else, and every failure of that
+        // path, uses the loopback RDP client (helper with the password on its stdin pipe)
+        // and the stock RDP display (`display_fallback` notice with the reason).
         self.phase(seat, cancel, "session")?;
         let audio = seat_audio(seat);
         let policy = d.audio.policy().ok();
-        // Microphone (spec/remote 70 §5.1): Pulsar seats only (pulsar-host mic pipe -> this
-        // hold's stdin -> MS-RDPEAI); Moonlight sends no mic.
-        let capture = policy.as_ref().map(|p| rdp_client_flags(&audio, p, mic_path(seat)).capture).unwrap_or(false);
-        let req = SessionRequest {
-            seat_id: &seat.id,
-            client_name: &seat.rdp_client_name,
-            user: &seat.user_name,
-            width: session_size(seat).0,
-            height: session_size(seat).1,
-            keyboard_layout: None,
-            audio_capture: capture,
-        };
-        let session = d.session.start_session(&req, password, cancel).map_err(|e| Failure::new(e.code(), &e))?;
-        let session_id = session.session_id;
-        let user_sid = session.user_sid.clone();
-        res.session = Some(session);
+        let pref = global.display_backend.map(to_kind);
+        let want_provider = wants_provider(pref, OWN_DRIVER_SIGNED);
+        if want_provider {
+            self.note_seat_user(&seat.user_name, global);
+            let status = d.wrds.as_ref().map(|w| w.status());
+            let fallback = match plan(pref, &[], false, OWN_DRIVER_SIGNED, status.as_ref()) {
+                HostPlan::Provider => match self.start_provider(seat, global, password, &user.sid, cancel, res) {
+                    Ok(()) => None,
+                    Err(f) if f.reason == "cancelled" => return Err(f),
+                    Err(f) => {
+                        log::warn!("seat '{}': own display path failed, falling back to RDP: {}", seat.name, f.message);
+                        Some(f.reason)
+                    }
+                },
+                HostPlan::Loopback { fallback, .. } => fallback,
+            };
+            if let Some(reason) = fallback {
+                self.notice(
+                    &seat.id,
+                    "host_warning",
+                    serde_json::json!({"kind": "display_fallback", "from": "pulsar_idd", "to": "rdp_session", "reason": reason}),
+                );
+                res.fallback = Some(reason);
+            }
+        }
+        // Microphone (spec/remote 70 §5.1): Pulsar seats only (pulsar-host mic pipe -> the
+        // loopback hold's stdin -> MS-RDPEAI); Moonlight sends no mic. Provider sessions have
+        // no RDP audio channel, so no mic either.
+        let capture = res.wrds.is_none()
+            && policy.as_ref().map(|p| rdp_client_flags(&audio, p, mic_path(seat)).capture).unwrap_or(false);
+        if res.session.is_none() {
+            let req = SessionRequest {
+                seat_id: &seat.id,
+                client_name: &seat.rdp_client_name,
+                user: &seat.user_name,
+                width: session_size(seat).0,
+                height: session_size(seat).1,
+                keyboard_layout: None,
+                audio_capture: capture,
+            };
+            let session = d.session.start_session(&req, password, cancel).map_err(|e| Failure::new(e.code(), &e))?;
+            res.session = Some(session);
+        }
+        let (session_id, user_sid) = res.session.as_ref().map(|s| (s.session_id, s.user_sid.clone())).unwrap_or_default();
 
-        // 3. display.
+        // 3. display (already attached on the provider path).
         self.phase(seat, cancel, "display")?;
-        res.display = Some(self.attach_display(seat, global, session_id)?);
+        if res.display.is_none() {
+            let force = want_provider.then_some(BackendKind::RdpSession);
+            res.display = Some(self.attach_display(seat, global, session_id, force, false, cancel)?);
+        }
 
         // 4. audio keys for the stream server (default device = the session's Remote Audio).
         self.phase(seat, cancel, "audio")?;
@@ -740,10 +840,70 @@ impl Engine {
             .collect()
     }
 
-    fn attach_display(&self, seat: &RemoteSeatRecord, global: &RemoteSettings, session_id: u32) -> Result<DisplayRun, Failure> {
+    /// The provider path: a session through our protocol provider, then our display in it.
+    /// On a failure everything it did is undone here, so the caller can fall back.
+    fn start_provider(
+        &self,
+        seat: &RemoteSeatRecord,
+        global: &RemoteSettings,
+        password: &Secret,
+        user_sid: &str,
+        cancel: &CancelToken,
+        res: &mut Resources,
+    ) -> Result<(), Failure> {
+        let Some(w) = self.d().wrds.clone() else {
+            return Err(Failure::new("wrds_unavailable", "no protocol provider on this host"));
+        };
+        let (width, height) = session_size(seat);
+        let req = WrdsConnect {
+            seat_id: seat.id.clone(),
+            client_name: seat.rdp_client_name.clone(),
+            user: seat.user_name.clone(),
+            width,
+            height,
+        };
+        let ws = w.connect(&req, password, cancel).map_err(|f| Failure { reason: f.reason, message: f.message })?;
+        log::info!("seat '{}': session {} through the protocol provider", seat.name, ws.session_id);
+        self.phase(seat, cancel, "display").inspect_err(|_| {
+            let _ = w.end(&ws, StopAction::LogOff);
+        })?;
+        match self.attach_display(seat, global, ws.session_id, Some(BackendKind::PulsarIdd), true, cancel) {
+            Ok(disp) => {
+                res.session = Some(SeatSession {
+                    seat_id: seat.id.clone(),
+                    session_id: ws.session_id,
+                    user_sid: user_sid.to_string(),
+                    helper_pid: 0,
+                    client_name: seat.rdp_client_name.clone(),
+                });
+                res.wrds = Some(ws);
+                res.display = Some(disp);
+                Ok(())
+            }
+            Err(f) => {
+                if let Err(e) = w.end(&ws, StopAction::LogOff) {
+                    log::warn!("seat '{}': provider session not ended: {e}", seat.name);
+                }
+                Err(f)
+            }
+        }
+    }
+
+    /// `force` = this backend whatever the setting says. `wait_device`: the session's display
+    /// device may still be arriving (provider path), so `driver_not_installed` is retried
+    /// until the ready timeout.
+    fn attach_display(
+        &self,
+        seat: &RemoteSeatRecord,
+        global: &RemoteSettings,
+        session_id: u32,
+        force: Option<BackendKind>,
+        wait_device: bool,
+        cancel: &CancelToken,
+    ) -> Result<DisplayRun, Failure> {
         let infos = self.probe_displays();
         let console = (self.d().console_session)() == Some(session_id);
-        let kind = choose_backend(global.display_backend.map(to_kind), &infos, console);
+        let kind = force.unwrap_or_else(|| choose_backend(global.display_backend.map(to_kind), &infos, console));
         let backend = self
             .d()
             .displays
@@ -768,12 +928,26 @@ impl Engine {
                 max_nits: l.max_nits,
                 max_full_frame_nits: l.max_full_frame_nits,
             });
-        let handle = backend.attach(&cfg).map_err(|e| Failure::new(e.code(), &e))?;
+        let deadline = Instant::now() + seat_display::remote::backend::READY_TIMEOUT;
+        let handle = loop {
+            match backend.attach(&cfg) {
+                Ok(h) => break h,
+                Err(e) if wait_device && e.code() == "driver_not_installed" && Instant::now() < deadline => {
+                    if cancel.is_cancelled() {
+                        return Err(Failure::cancelled());
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(e) => return Err(Failure::new(e.code(), &e)),
+            }
+        };
         if let Err(e) = backend.wait_ready(&handle, seat_display::remote::backend::READY_TIMEOUT) {
             let _ = backend.detach(&handle);
             let reason = if matches!(e, DisplayError::Timeout(_)) { "display_timeout" } else { e.code() };
             return Err(Failure::new(reason, &e));
         }
+        // The provider path's device exists only now: probe again for its HDR facts.
+        let infos = if wait_device { self.probe_displays() } else { infos };
         let hdr = if seat.display.force_sdr {
             Err(HdrUnavailable::ForceSdr)
         } else {
@@ -850,7 +1024,14 @@ impl Engine {
         {
             log::warn!("seat '{}': display detach: {e}", seat.name);
         }
-        if res.session.is_some()
+        if let Some(ws) = &res.wrds {
+            // Provider sessions: log off / disconnect through WTS, then drop the connection.
+            if let Some(w) = &d.wrds
+                && let Err(e) = w.end(ws, seat.stop_action)
+            {
+                log::warn!("seat '{}': provider session end: {e}", seat.name);
+            }
+        } else if res.session.is_some()
             && let Err(e) = d.session.stop_session(&seat.id, seat.stop_action)
         {
             log::warn!("seat '{}': session stop: {e}", seat.name);
@@ -915,6 +1096,17 @@ impl Engine {
                     let _ = self.take_down(&seat_id, Some(Failure::new("client_exited", "seat session ended")));
                 }
                 SessionNotice::Reconnected { seat_id, session_id } => self.reconnected(&seat_id, session_id),
+            }
+        }
+        if let Some(w) = &d.wrds {
+            for (conn_id, reason) in w.take_lost() {
+                let seat_id = lock(&self.0.seats)
+                    .iter()
+                    .find(|(_, r)| r.res.wrds.as_ref().is_some_and(|ws| ws.conn_id == conn_id))
+                    .map(|(id, _)| id.clone());
+                if let Some(seat_id) = seat_id {
+                    let _ = self.take_down(&seat_id, Some(Failure::new("client_exited", format!("provider connection ended: {reason}"))));
+                }
             }
         }
         let servers: Vec<(String, Server)> = lock(&self.0.seats)
@@ -1167,18 +1359,7 @@ impl Engine {
                 self.notice(seat_id, "host_warning", serde_json::json!({"kind": "capture_error", "code": code}));
             }
             ServerEvent::DisplayModeRequest { request_id, w, h, hz, hdr } => {
-                let disp = lock(&self.0.seats)
-                    .get(seat_id)
-                    .and_then(|r| r.res.display.as_ref().map(|d| (d.backend.clone(), d.handle.clone())));
-                let req = ModeRequest { request_id, width: w, height: h, hz, hdr };
-                let result = match disp {
-                    Some((b, handle)) => b.request_mode(&handle, &req).unwrap_or_else(|e| ModeResult::empty(request_id, mode_status_for(&e))),
-                    None => ModeResult::empty(request_id, ModeStatus::NoDisplay),
-                };
-                if matches!(result.status, ModeStatus::Ok | ModeStatus::OkSdrFallback | ModeStatus::Clamped) {
-                    let m = seat_proto::remote::LastMode { width: result.width, height: result.height, hz: result.hz };
-                    self.report(seat_id, SeatEvent::ModeApplied(m));
-                }
+                let result = self.apply_mode(seat_id, ModeRequest { request_id, width: w, height: h, hz, hdr });
                 if let Err(e) = lock(server).reply_mode(&json(&result)) {
                     log::debug!("display.mode.result not delivered: {e}");
                 }
@@ -1196,6 +1377,40 @@ impl Engine {
                 }
             }
         }
+    }
+
+    /// Apply a mode to a seat's display after its own settings ([`seat_mode_request`]); a
+    /// success is persisted as the seat's `last_mode`.
+    fn apply_mode(&self, seat_id: &str, req: ModeRequest) -> ModeResult {
+        let found = lock(&self.0.seats)
+            .get(seat_id)
+            .and_then(|r| r.res.display.as_ref().map(|d| (d.backend.clone(), d.handle.clone(), r.seat.display.clone())));
+        let request_id = req.request_id;
+        let result = match found {
+            Some((b, handle, settings)) => {
+                let req = seat_mode_request(&settings, req);
+                b.request_mode(&handle, &req).unwrap_or_else(|e| ModeResult::empty(request_id, mode_status_for(&e)))
+            }
+            None => ModeResult::empty(request_id, ModeStatus::NoDisplay),
+        };
+        if matches!(result.status, ModeStatus::Ok | ModeStatus::OkSdrFallback | ModeStatus::Clamped) {
+            let m = seat_proto::remote::LastMode { width: result.width, height: result.height, hz: result.hz };
+            self.report(seat_id, SeatEvent::ModeApplied(m));
+        }
+        result
+    }
+
+    /// Operator mode control (`set_seat_display_mode`): the same path as a client's request.
+    /// The stream server follows the new display mode by itself. Request ids of the operator
+    /// have the top bit set so they never collide with the stream server's.
+    pub fn set_display_mode(&self, seat: &RemoteSeatRecord, width: u32, height: u32, hz: u32, hdr: bool) -> Result<serde_json::Value, ProtoError> {
+        if !lock(&self.0.seats).get(&seat.id).is_some_and(|r| r.stage == Stage::Running) {
+            return Err(ProtoError::new(ErrorCode::ServiceUnavailable, "seat is not running"));
+        }
+        let request_id = 0x8000_0000 | (self.0.next_gen.fetch_add(1, Ordering::SeqCst) as u32 & 0x7fff_ffff);
+        let r = self.apply_mode(&seat.id, ModeRequest { request_id, width, height, hz, hdr });
+        self.notice(&seat.id, "display_mode", json(&r));
+        Ok(json(&r))
     }
 
     fn pad_wanted(&self, seat_id: &str, server: &Server, v: serde_json::Value) {
@@ -1268,6 +1483,11 @@ impl Engine {
             display_backends: self.probe_displays().iter().map(json).collect(),
             pad_backends: self.d().pads.as_ref().map(|p| lock(p).backends().iter().map(json).collect()).unwrap_or_default(),
             multi_session: global.multi_session,
+            wrds: self.d().wrds.as_ref().map(|w| {
+                let mut v = json(&w.status());
+                v["wanted"] = serde_json::Value::Bool(wants_provider(global.display_backend.map(to_kind), OWN_DRIVER_SIGNED));
+                v
+            }),
             ..Default::default()
         };
         match self.d().session.host_info(wrapper_active) {
@@ -1334,7 +1554,7 @@ impl Engine {
 
     pub fn seat_runtime(&self, seat: &RemoteSeatRecord) -> SeatRuntime {
         let mut out = SeatRuntime { client_name: seat.rdp_client_name.clone(), ..Default::default() };
-        let (disp, server, session, audio_report) = {
+        let (disp, server, session, audio_report, host) = {
             let seats = lock(&self.0.seats);
             let Some(run) = seats.get(&seat.id) else { return out };
             (
@@ -1342,6 +1562,11 @@ impl Engine {
                 run.res.server.clone(),
                 run.res.session.as_ref().map(|s| s.session_id),
                 run.audio_report,
+                (
+                    if run.res.wrds.is_some() { "provider" } else { "loopback" },
+                    run.res.fallback.clone(),
+                    run.res.wrds.as_ref().and_then(|w| w.device_instance.clone()),
+                ),
             )
         };
         out.session_id = session;
@@ -1351,7 +1576,13 @@ impl Engine {
                 Ok(()) => serde_json::Value::String("ok".into()),
                 Err(u) => serde_json::Value::String(u.code().into()),
             };
-            out.display = Some(serde_json::json!({"backend": h.kind, "state": state, "hdr": hdr}));
+            // `host`: how the session was created (`provider` = our protocol provider and
+            // display, `loopback` = RDP client); `fallback`: why the provider path was not
+            // taken (2026-11-17, additive).
+            out.display = Some(serde_json::json!({
+                "backend": h.kind, "state": state, "hdr": hdr,
+                "host": host.0, "fallback": host.1, "device_instance": host.2,
+            }));
         }
         if let Some(sid) = session {
             let audio = seat_audio(seat);

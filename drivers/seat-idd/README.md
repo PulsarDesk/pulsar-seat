@@ -194,7 +194,7 @@ The INF lists the hardware id only in the Windows 11 (22000+) model sections.
 
 | Area | Implementation |
 | --- | --- |
-| Device | Created by a Remote Desktop protocol stack that names `PulsarSplit_IndirectDisplay` in the seat session; installing the INF alone makes no device appear. That provider does not exist yet (spec 40 §2.3). |
+| Device | Created by a Remote Desktop protocol stack that names `PulsarSplit_IndirectDisplay` in the seat session; installing the INF alone makes no device appear. Since 2026-11-17 that is Pulsar Seat's own protocol provider (`crates/seat-wrds`, WinStation `PulsarSeat-Idd`, `IWRdsWddmIddProps(1)::GetHardwareId`); the service attaches to the device of the provider's session (HYPOTHESIS until a Windows Server + RDSH run). |
 | Adapter | `REMOTE_SESSION_DRIVER` + `USE_SMALLEST_MODE`; with 1.10 also `CAN_PROCESS_FP16` + `ALL_TARGET_MODES_MONITOR_COMPATIBLE`. One monitor, no EDID. No device group. 1.10 callbacks / functions are checked at run time (`IDD_IS_FIELD_AVAILABLE` / `IDD_IS_FUNCTION_AVAILABLE`); without them SDR and the legacy calls. |
 | Control | Interface `{B5FCB55F-1E09-4C81-A58F-0362792CFE99}`, buffered IOCTLs `0x0022E000`..`0x0022E014`, device security `D:P(A;;GA;;;SY)(A;;GR;;;BA)`. |
 | Seat binding | `SET_SEAT_CONFIG` v1 (64 bytes) or **v2** (256 bytes, 2026-11-14, additive by size): v1 plus the frame reader SID (`ReaderSid[96]`, UTF-16, only `S`, digits and `-`; checked by `ReaderSidOk`). |

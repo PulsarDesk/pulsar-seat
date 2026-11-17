@@ -499,3 +499,33 @@ language). To force one language for these, set the system environment variable
 `PULSAR_SEAT_LANG` to `en` or `tr` and restart the PC (services read system environment
 variables only at Windows start). The MSI is English; a Turkish
 MSI can be built with `installer\scripts\build-installer.ps1 -Language tr-TR`.
+
+## 12. Remote seat: "Pulsar display not used", or the mode / HDR does not change
+
+Remote seats use the Pulsar virtual display (with mode and HDR control) only when
+**Settings > Virtual display method** is "Pulsar virtual display driver". Pulsar Seat then
+registers its own Remote Desktop protocol provider (a listener named `PulsarSeat-Idd`; the
+standard `RDP-Tcp` listener is not changed). If that path cannot be used, the seat still
+starts, on the Remote Desktop display, and the seat page shows why under "Own display not
+used":
+
+- *registered; restart the Remote Desktop service or the PC*: Windows loads a new listener
+  only when the Remote Desktop service starts. Stop the seats, then restart the PC.
+- *the provider file is missing or for another processor*: repair the installation.
+- *the Pulsar display driver is not installed*: the driver is not signed yet (Windows
+  Server needs a WHQL-signed driver); the seat keeps running on the Remote Desktop display.
+
+On the Remote Desktop display the mode follows the client; "Display mode now" answers
+"this display cannot change mode".
+
+To keep the provider off whatever the settings say (for example if the Remote Desktop
+service misbehaves after it was registered):
+
+```bat
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters" /v WrdsDisabled /t REG_DWORD /d 1 /f
+sc stop PulsarSeat
+sc start PulsarSeat
+```
+
+The service then removes its listener and COM registration at start. To undo, delete the
+value and restart the service. Uninstalling Pulsar Seat removes both as well.

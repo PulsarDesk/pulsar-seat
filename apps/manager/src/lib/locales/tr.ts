@@ -1644,6 +1644,26 @@ const rt = {
     luminance: 'HDR parlaklığı (gelişmiş)',
     maxNits: 'En yüksek (nit)',
     maxFullFrame: 'Tam ekran en yüksek (nit)',
+    fixedResolution: 'Akış çözünürlüğü',
+    fixedFollow: 'İstemciye uy',
+    fixedCustom: 'Sabit (özel)',
+    fixedWidth: 'Genişlik (piksel)',
+    fixedHeight: 'Yükseklik (piksel)',
+    lockRefresh: 'İstemci ne isterse istesin bu yenileme hızını koru',
+    modeControl: 'Şimdiki ekran modu',
+    modeWidth: 'Genişlik',
+    modeHeight: 'Yükseklik',
+    modeHz: 'Hz',
+    modeHdr: 'HDR',
+    modeApply: 'Uygula',
+    modeHint:
+      'Çalışan koltuğun ekranını yeniden başlatmadan hemen değiştirir. Koltuğun sabit çözünürlüğü ve kilitli yenileme hızı yine geçerlidir; istemci daha sonra başka bir mod isteyebilir.',
+    modeApplied: (w: number, h: number, hz: number, rw: number, rh: number) =>
+      `Uygulandı: ${w} × ${h} @ ${hz} Hz (çizim ${rw} × ${rh})`,
+    displayHost: 'Oturum yolu',
+    hostProvider: 'Pulsar protokol sağlayıcısı: mod ve HDR denetimli kendi ekranı',
+    hostLoopback: 'Uzak Masaüstü istemcisi: standart ekran, mod istemciye uyar',
+    fallback: 'Kendi ekranı kullanılmadı',
     audioSection: 'Ses',
     streamAudio: 'Koltuğun sesini akışa ekle',
     microphone: 'Mikrofon (yalnızca Pulsar istemcisi)',
@@ -1748,6 +1768,9 @@ const rt = {
     drivers: 'Sürücüler',
     displayDrivers: 'Sanal ekran',
     padDrivers: 'Sanal kumanda',
+    wrds: 'Uzak ekran protokol sağlayıcısı',
+    wrdsReady: 'Hazır: uzak koltuklar Pulsar ekranını alır',
+    wrdsNotWanted: 'Kullanılmıyor (ekran ayarı “Pulsar sanal ekran sürücüsü” değil)',
     installedYes: 'Kurulu',
     installedNo: 'Kurulu değil',
     signed: 'İmzalı',
@@ -1788,7 +1811,8 @@ const rt = {
     adapter_fallback: 'Seçilen ekran kartı bulunamadı; varsayılan kullanılıyor.',
     firewall: 'Güvenlik duvarı kuralları eklenemedi; yerel ağdaki cihazlar koltuğa bağlanamayabilir.',
     control_unavailable: 'Akış sunucusunun denetim kanalı açılamadı; eşleştirme bu koltukta kullanılamıyor.',
-    capture_error: 'Akış sunucusu görüntü yakalayamadı.'
+    capture_error: 'Akış sunucusu görüntü yakalayamadı.',
+    display_fallback: 'Pulsar ekranı kullanılamadı; koltuk Uzak Masaüstü ekranında çalışıyor.'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Başka bir çoklu koltuk ürünü kurulu.',
@@ -1809,6 +1833,27 @@ const rt = {
     rds_residue: 'Uzak Masaüstü ayarlarında kalıntı var.',
     upstream_sunshine: 'Ayrıca kurulmuş bir Sunshine var (port çakışabilir).',
     vigem_present: 'ViGEmBus sürücüsü kurulu.'
+  } as Record<string, string>,
+  modeStatus: {
+    ok: 'uygulandı',
+    ok_sdr_fallback: 'SDR olarak uygulandı',
+    clamped: 'sınırlanmış değerlerle uygulandı',
+    no_display: 'koltuk ekranı hazır değil',
+    rejected: 'Windows modu reddetti',
+    timeout: 'ekran sürücüsü zamanında yanıt vermedi',
+    unsupported: 'bu ekran mod değiştiremez (istemciye uyar)'
+  } as Record<string, string>,
+  wrdsReason: {
+    wrds_unavailable: 'protokol sağlayıcısı bu kurulumda yok',
+    wrds_disabled_by_recovery: 'WrdsDisabled kurtarma değeriyle kapatıldı',
+    wrds_dll_missing: 'sağlayıcı dosyası eksik ya da başka bir işlemci için',
+    wrds_not_registered: 'henüz kayıtlı değil',
+    wrds_restart_needed: 'kayıtlı; yüklenmesi için Uzak Masaüstü hizmetini ya da bilgisayarı yeniden başlatın',
+    wrds_not_listening: 'yüklendi, ancak Uzak Masaüstü hizmeti dinleyiciyi başlatmadı',
+    wrds_connect_failed: 'oturum sağlayıcı üzerinden oluşturulamadı',
+    wrds_timeout: 'sağlayıcı üzerinden açılan oturumda zamanında oturum açılmadı',
+    display_timeout: 'Pulsar ekranı zamanında hazır olmadı',
+    driver_not_installed: 'Pulsar ekran sürücüsü yüklü değil'
   } as Record<string, string>,
   hdrReason: {
     force_sdr: 'koltukta SDR zorlanmış',

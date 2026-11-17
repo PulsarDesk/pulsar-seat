@@ -152,6 +152,9 @@ pub enum RequestBody {
     /// sessions. Refused while a seat is starting; `confirm` must be true. Answered with
     /// [`ResponseBody::AudioCleanup`].
     CleanupAudioEndpoints { confirm: bool },
+    /// Apply a mode to a running seat now; answered with [`ResponseBody::ModeResult`]
+    /// (2026-11-17, remote-idd-hdr).
+    SetSeatDisplayMode { name: String, width: u32, height: u32, hz: u32, #[serde(default)] hdr: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -202,6 +205,8 @@ pub enum ResponseBody {
     DxvkStatus(DxvkStatus),
     UserPicture(UserPicture),
     AudioCleanup(AudioCleanup),
+    /// `seat_display::remote::ModeResult`.
+    ModeResult(serde_json::Value),
 }
 
 #[cfg(test)]

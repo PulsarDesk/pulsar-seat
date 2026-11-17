@@ -51,6 +51,8 @@ export interface RemoteApi {
   userPicture(user: string): Promise<R.UserPicture>;
   /** Remove stale RDP audio endpoints of ended sessions (operator-confirmed). */
   cleanupAudioEndpoints(): Promise<R.AudioCleanup>;
+  /** Apply a display mode to a running seat now (the seat's fixed resolution / locked refresh still apply). */
+  setDisplayMode(seat: SeatNumber, width: number, height: number, hz: number, hdr: boolean): Promise<R.ModeResult>;
 }
 
 export function createRemoteApi(call: (body: RequestBody) => Promise<ResponseBody>): RemoteApi {
@@ -94,6 +96,8 @@ export function createRemoteApi(call: (body: RequestBody) => Promise<ResponseBod
     logTail: async (source, lines = 200) => expectBody(await call({ type: 'get_log_tail', data: { source, lines } }), 'log_lines').data,
     userPicture: async (user) => expectBody(await call({ type: 'get_user_picture', data: { user } }), 'user_picture').data,
     cleanupAudioEndpoints: async () =>
-      expectBody(await call({ type: 'cleanup_audio_endpoints', data: { confirm: true } }), 'audio_cleanup').data
+      expectBody(await call({ type: 'cleanup_audio_endpoints', data: { confirm: true } }), 'audio_cleanup').data,
+    setDisplayMode: async (seat, width, height, hz, hdr) =>
+      expectBody(await call({ type: 'set_seat_display_mode', data: { seat, width, height, hz, hdr } }), 'mode_result').data
   };
 }

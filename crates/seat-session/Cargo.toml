@@ -18,6 +18,7 @@ fake = []
 
 [dependencies]
 seat-core.workspace = true
+seat-proto.workspace = true
 # Headless hold protocol only (`seat_rdp::headless::proto`); no IronRDP without `client`.
 seat-rdp = { path = "../seat-rdp", default-features = false }
 serde.workspace = true

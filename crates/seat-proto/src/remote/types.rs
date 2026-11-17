@@ -114,6 +114,10 @@ pub struct HostInfo {
     pub multi_session: bool,
     /// Reason code when the session host information could not be read.
     pub error: Option<String>,
+    /// Our Remote Desktop protocol provider (`seat_session::wrds::WrdsStatus` plus
+    /// `provider_version`): remote seats on the own display. Added 2026-11-17 (additive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrds: Option<serde_json::Value>,
 }
 
 /// `seat_runtime` (contracts §9.2).

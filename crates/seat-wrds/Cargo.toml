@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: GPL-3.0-only
+[package]
+name = "seat-wrds"
+description = "Pulsar Seat Remote Desktop protocol provider (WRDS COM in-process server loaded by TermService): hosts remote seat sessions on the seat-idd remote role"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# The DLL TermService loads (shipped as pulsar-seat-wrds.dll) plus an rlib for the tests.
+name = "pulsar_seat_wrds"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+seat-proto.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# `#[implement]` expands to paths in `windows_core`, so it is a direct dependency too.
+windows-core = "=0.62.2"
+windows = { version = "=0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }

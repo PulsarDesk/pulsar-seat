@@ -136,7 +136,7 @@ try {
             if ($Release) { $env:PULSAR_SEAT_RELEASE = "1" }
             try {
                 Gate "release binaries ($t)" {
-                    Run cargo build --locked --release --target $t -p seat-service
+                    Run cargo build --locked --release --target $t -p seat-service -p seat-wrds
                     Run cargo build --locked --release --target $t -p seat-host
                 }
                 $sets = [ordered]@{ x86 = "i686-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" }
@@ -161,6 +161,7 @@ try {
                 }
                 $pl = if ($arch -eq "arm64") { "ARM64" } else { "x64" }
                 Copy-Item (Join-Path $repo "credprov\build\$pl\Release\pulsar-seat-credprov.dll") $out -Force
+                Copy-Item (Join-Path $targetDir "$t\release\pulsar_seat_wrds.dll") (Join-Path $out "pulsar-seat-wrds.dll") -Force
                 Run bun installer/scripts/check-payload.ts --arch $arch $out
             }
         }

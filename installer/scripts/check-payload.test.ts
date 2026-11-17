@@ -342,6 +342,12 @@ describe("vulnerable driver block rules", () => {
       expect(v[0].path.endsWith("pulsar-seat-credprov.dll")).toBe(true);
       writeFileSync(join(d, "pulsar-seat-credprov.dll"), signed);
       expect(checkDirs([d], "x64", { release: true })).toEqual([]);
+      // The protocol provider TermService loads is held to the same rule.
+      writeFileSync(join(d, "pulsar-seat-wrds.dll"), unsigned);
+      const w = checkDirs([d], "x64", { release: true });
+      expect(w.map((x) => [x.rule, x.path.endsWith("pulsar-seat-wrds.dll")])).toEqual([["unsigned_system_dll", true]]);
+      writeFileSync(join(d, "pulsar-seat-wrds.dll"), signed);
+      expect(checkDirs([d], "x64", { release: true })).toEqual([]);
       expect(parseArgs(["--arch", "x64", "--release", d])?.release).toBe(true);
     } finally {
       rmSync(d, { recursive: true, force: true });

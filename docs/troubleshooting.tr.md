@@ -500,3 +500,34 @@ isterseniz `PULSAR_SEAT_LANG` sistem ortam değişkenini `en` ya da `tr` yapıp 
 yeniden başlatın (hizmetler sistem ortam değişkenlerini yalnızca Windows açılırken okur).
 MSI İngilizcedir; Türkçe MSI `installer\scripts\build-installer.ps1 -Language tr-TR` ile
 derlenir.
+
+## 12. Uzak koltuk: "Kendi ekranı kullanılmadı" ya da mod / HDR değişmiyor
+
+Uzak koltuklar Pulsar sanal ekranını (mod ve HDR denetimiyle) yalnızca **Ayarlar > Sanal
+ekran yöntemi** "Pulsar sanal ekran sürücüsü" olduğunda kullanır. Pulsar Seat o zaman kendi
+Uzak Masaüstü protokol sağlayıcısını kaydeder (`PulsarSeat-Idd` adlı bir dinleyici;
+standart `RDP-Tcp` dinleyicisi değiştirilmez). Bu yol kullanılamazsa koltuk yine Uzak
+Masaüstü ekranında açılır ve koltuk sayfası nedenini "Kendi ekranı kullanılmadı" altında
+gösterir:
+
+- *kayıtlı; Uzak Masaüstü hizmetini ya da bilgisayarı yeniden başlatın*: Windows yeni bir
+  dinleyiciyi yalnızca Uzak Masaüstü hizmeti başlarken yükler. Koltukları durdurup
+  bilgisayarı yeniden başlatın.
+- *sağlayıcı dosyası eksik ya da başka bir işlemci için*: kurulumu onarın.
+- *Pulsar ekran sürücüsü yüklü değil*: sürücü henüz imzalı değil (Windows Server WHQL imzalı
+  sürücü ister); koltuk Uzak Masaüstü ekranında çalışmaya devam eder.
+
+Uzak Masaüstü ekranında mod istemciye uyar; "Şimdiki ekran modu" "bu ekran mod
+değiştiremez" yanıtını verir.
+
+Ayarlar ne derse desin sağlayıcıyı kapalı tutmak için (örneğin kayıttan sonra Uzak
+Masaüstü hizmeti sorun çıkarırsa):
+
+```bat
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeat\Parameters" /v WrdsDisabled /t REG_DWORD /d 1 /f
+sc stop PulsarSeat
+sc start PulsarSeat
+```
+
+Hizmet başlarken dinleyicisini ve COM kaydını kaldırır. Geri almak için değeri silip
+hizmeti yeniden başlatın. Pulsar Seat kaldırıldığında ikisi de silinir.

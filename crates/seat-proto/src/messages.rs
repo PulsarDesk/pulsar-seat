@@ -366,6 +366,17 @@ pub enum RequestBody {
     GetUserPicture { user: String },
     /// Remove non-present RDP audio endpoint nodes of ended sessions; `confirm` must be true.
     CleanupAudioEndpoints { confirm: bool },
+    /// Apply a display mode to a running remote seat now (operator control, spec/remote 40
+    /// §4.4 rules and the seat's display settings apply). Answers `mode_result`. Added
+    /// 2026-11-17 (remote-idd-hdr, additive).
+    SetSeatDisplayMode {
+        seat: SeatNumber,
+        width: u32,
+        height: u32,
+        hz: u32,
+        #[serde(default)]
+        hdr: bool,
+    },
 }
 
 impl RequestBody {
@@ -451,7 +462,8 @@ impl RequestBody {
             | R::GetLogTail { .. }
             | R::GetStreamBackends
             | R::GetUserPicture { .. }
-            | R::CleanupAudioEndpoints { .. } => Access::Admin,
+            | R::CleanupAudioEndpoints { .. }
+            | R::SetSeatDisplayMode { .. } => Access::Admin,
         }
     }
 
@@ -482,7 +494,8 @@ impl RequestBody {
             | R::SetSeatConnectPassword { seat, .. }
             | R::GetSeatOtp { seat }
             | R::RotateSeatOtp { seat }
-            | R::AnswerRelayAuth { seat, .. } => Some((*seat, SeatKind::Remote)),
+            | R::AnswerRelayAuth { seat, .. }
+            | R::SetSeatDisplayMode { seat, .. } => Some((*seat, SeatKind::Remote)),
             _ => None,
         }
     }
@@ -537,6 +550,7 @@ impl RequestBody {
                 | R::GetStreamBackends
                 | R::GetUserPicture { .. }
                 | R::CleanupAudioEndpoints { .. }
+                | R::SetSeatDisplayMode { .. }
         )
     }
 }
@@ -631,6 +645,9 @@ pub enum ResponseBody {
     DxvkStatus(remote::DxvkStatus),
     UserPicture(remote::UserPicture),
     AudioCleanup(remote::AudioCleanup),
+    /// Answer of `set_seat_display_mode`: `seat_display::remote::ModeResult` (`status`,
+    /// applied and render size, format). Added 2026-11-17 (additive).
+    ModeResult(serde_json::Value),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

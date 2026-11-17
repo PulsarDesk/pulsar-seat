@@ -401,8 +401,11 @@ export function checkBlocklist(path: string, bytes: Uint8Array, bl: Blocklist): 
 
 // ---- signatures of DLLs loaded into Windows' own processes -----------------------------
 
-/** Loaded into a SYSTEM Windows process (LogonUI): a release ships them signed only. */
-export const MUST_BE_SIGNED = new Set(["pulsar-seat-credprov.dll"]);
+/**
+ * Loaded into Windows' own processes (LogonUI; TermService for the protocol provider): a
+ * release ships them signed only.
+ */
+export const MUST_BE_SIGNED = new Set(["pulsar-seat-credprov.dll", "pulsar-seat-wrds.dll"]);
 
 /**
  * The PE carries an Authenticode certificate table (data directory 4, a file offset):

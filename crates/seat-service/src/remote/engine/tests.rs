@@ -14,6 +14,10 @@ use seat_stream::dist::{HostDist, ServerDist, ServerFlavour};
 use seat_stream::fake as sf;
 use seat_stream::supervise::ControlConnector;
 use std::sync::atomic::AtomicU32;
+use provider::FakeWrds;
+
+#[path = "tests_wrds.rs"]
+mod provider;
 
 const SEAT_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
 const USER_SID: &str = "S-1-5-21-7-7-7-1001";
@@ -89,6 +93,8 @@ struct World {
     bt: Arc<seat_pads::fake::FakeUserServices>,
     pipes: sf::FakeHostPipes,
     secrets: Arc<sf::MemSecrets>,
+    /// Own display driver (remote role) devices; only used by [`world_idd`].
+    idd: seat_display::remote::fake::FakeDeviceIo,
 }
 
 fn pulsar_dist() -> Result<(HostDist, PathBuf, PathBuf), StreamError> {
@@ -115,13 +121,27 @@ fn world_without_pulsar() -> World {
 }
 
 fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
+    world_full(pulsar_dist, None)
+}
+
+/// With our protocol provider (fake) and the own display driver (simulated devices).
+fn world_idd(wrds: Arc<FakeWrds>) -> World {
+    world_full(Arc::new(pulsar_dist), Some(wrds))
+}
+
+fn world_full(pulsar_dist: Arc<HostDistSource>, wrds: Option<Arc<FakeWrds>>) -> World {
     let (d, session) = fake_deps();
     session.accounts.add_user("seat1", USER_SID, "pw");
     let manager = Manager::new(d, SessionTimeouts::default());
 
     let dclock = Arc::new(seat_display::remote::fake::FakeClock::default());
     let probe = seat_display::remote::fake::FakeSessionProbe::default();
-    let rdp = seat_display::remote::RdpSessionDisplay::new(probe.clone(), dclock.clone(), dclock);
+    let rdp = seat_display::remote::RdpSessionDisplay::new(probe.clone(), dclock.clone(), dclock.clone());
+    let idd = seat_display::remote::fake::FakeDeviceIo::default();
+    let mut displays: Vec<Arc<dyn DisplayBackend>> = vec![Arc::new(rdp)];
+    if wrds.is_some() {
+        displays.push(Arc::new(seat_display::remote::PulsarIdd::new(idd.clone(), dclock.clone(), dclock, 26100, false)));
+    }
 
     let fs = Arc::new(sf::MemFs::default());
     let launcher = sf::FakeLauncher::default();
@@ -194,7 +214,7 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
     let termwrap = seat_session::termwrap::fake::FakeWorld::default();
     let engine = Engine::new(Deps {
         session: Arc::new(manager),
-        displays: vec![Arc::new(rdp)],
+        displays,
         adapters: Arc::new(seat_display::remote::fake::FakeAdapters(Vec::new())),
         audio: Arc::new(seat_audio::fake::FakeAudioProbe::default()),
         stream,
@@ -214,10 +234,11 @@ fn world_with(pulsar_dist: Arc<HostDistSource>) -> World {
         }),
         console_session: Arc::new(|| Some(1)),
         audio_cleanup: Arc::new(|| Ok(seat_audio::StaleReport { removed: vec![r"SWD\MMDEVAPI\X".into()], failed: vec![] })),
+        wrds: wrds.map(|w| w as Arc<dyn WrdsPort>),
         data_root: PathBuf::from(r"C:\ProgramData\PulsarSplitTest"),
         service_version: "0.1.0".into(),
     });
-    World { engine, session, probe, fs, launcher, connector, clock, firewall, seatmap, isolation, passive, termwrap, ports, bt, pipes, secrets }
+    World { engine, session, probe, fs, launcher, connector, clock, firewall, seatmap, isolation, passive, termwrap, ports, bt, pipes, secrets, idd }
 }
 
 fn seat() -> RemoteSeatRecord {

@@ -2015,3 +2015,59 @@ in either language, so a language change never turns our account into a "foreign
 Preflight check titles are localized on the console (`seat_compat::preflight::title`), the
 setup log uses English titles (`title_en`, `BLOCKED` / `WARNING` prefixes).
 
+
+## Remote seats on the own display: protocol provider, modes, HDR (2026-11-17)
+
+Package remote-idd-hdr. A remote seat's session gets our IddCx remote-role display
+(`drivers/seat-idd`, hardware id `PulsarSplit_IndirectDisplay`) only when the session's
+protocol stack names that driver (spec/remote 40 §2.3). Pulsar Seat therefore ships its own
+Remote Desktop protocol provider; mode changes and HDR metadata of such a seat go through
+our IDD (`REQUEST_MODE`, `SET_SEAT_CONFIG`) instead of RdpIdd. Built and unit-tested;
+nothing ran (needs Windows Server with RD Session Host). HYPOTHESIS list:
+`crates/seat-wrds/README.md`.
+
+| Part | Where |
+| --- | --- |
+| Provider DLL (`pulsar-seat-wrds.dll`, COM in-proc, `ThreadingModel = Both`) | `crates/seat-wrds` (`state.rs` pure, `com.rs`, `pipe.rs`) |
+| Pipe contract service <-> provider (`\\.\pipe\PulsarSeat.Wrds`, length-prefixed JSON, `hello` / `welcome`, `connect` with the password as `Secret`, events `accepted` / `session_id` / `logged_on` / `driver_loaded` / `logon_error` / `refused` / `disconnected` / `closed`) | `seat_proto::wrds` |
+| Registration: COM class `{6D3B1E54-7C2A-4F19-9E8B-2A51C4D07F36}` + WinStation `PulsarSeat-Idd` (`LoadableProtocol_Object`, seat-account-only `Security`, enable last); recovery `WrdsDisabled` | `seat_session::wrds` |
+| Plan per seat start, hub (pure), `WrdsPort` | `seat-service` `remote::wrds` |
+| Pipe server (one instance, TermService process check), registration sync, logoff | `seat-service` `remote::win::wrds` |
+| Engine | `remote::engine`: `boot_steps` (provider path first, fallback), `start_provider`, `attach_display(force, wait_device)`, `apply_mode`, `set_display_mode`, `sync_wrds`, lost connections in `tick` |
+
+Rules:
+
+- **When.** `RemoteSettings::display_backend = pulsar_idd`, or automatic with a signed own
+  driver (`OWN_DRIVER_SIGNED`, false today). Then the registration is kept in place
+  (`Engine::sync_wrds` at service start, on a display setting change and when a new seat
+  account starts), else removed. Coexistence passive mode never touches it.
+- **Path.** `remote::wrds::plan`: provider status usable (registered, provider connected,
+  listening, DLL native, no recovery switch) -> provider session (`WrdsPort::connect`,
+  blocks until `LoggedOn`, 90 s) -> `PulsarIdd` attach on that session (retries
+  `driver_not_installed` while the device arrives) -> first frame. Any failure undoes the
+  provider session (`WTSLogoffSession`) and the seat starts on the loopback RDP client with
+  `rdp_session`; notice `host_warning {kind: display_fallback, from, to, reason}` and
+  `seat_runtime.display.{host, fallback, device_instance}`.
+- **Stop / loss.** Provider sessions end through `WrdsPort::end` (log off or disconnect by
+  the seat's stop action, then `disconnect` to the provider); a connection that ends
+  without the engine asking (`take_lost`) takes the seat down as `client_exited`.
+- **Modes.** Per-seat `DisplaySettings` gained `fixed_width` / `fixed_height` (0 x 0 =
+  follow the client; validation 640-8192) and `lock_refresh`. `seat_mode_request` applies
+  them to every client `display.mode.request` and to the operator's
+  `set_seat_display_mode` (new protocol 3 request, admin, remote seats; answers
+  `mode_result`); super-sampling, scale, refresh clamps and the HDR gate stay in the
+  backend's `resolve_mode`. The seat session starts at the fixed size when set. Operator
+  request ids have the top bit set.
+- **HDR.** Unchanged rules (spec/remote 40 §8.4): our IDD's IddCx 1.10 path with the seat's
+  SDR white level and luminance (`SET_SEAT_CONFIG`); the HDR facts of a provider seat are
+  probed after its device exists.
+- **Manager.** Seat page: stream resolution (follow / presets / custom), lock refresh,
+  runtime "session path" and fallback reason, "display mode now" (width, height, Hz, HDR,
+  apply, result). Host page: protocol provider status. en / tr keys
+  (`seat.fixed*`, `seat.mode*`, `seat.host*`, `modeStatus`, `wrdsReason`, `host.wrds*`,
+  `hostWarning.display_fallback`).
+- **Installer.** `pulsar-seat-wrds.dll` next to the service (WiX component
+  `PulsarSeatWrdsComponent`, file only); `check-payload` holds it to `MUST_BE_SIGNED` in a
+  release; `uninstall` removes our two keys.
+- **Not on this path.** RDP virtual channels (audio redirection, microphone hold, clipboard,
+  drives): a provider session has none. Open item in status.md.

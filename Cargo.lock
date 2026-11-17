@@ -4680,6 +4680,7 @@ dependencies = [
  "seat-core",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
  "zeroize",
 ]
@@ -4769,6 +4770,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "seat-core",
+ "seat-proto",
  "seat-rdp",
  "serde",
  "serde_json",
@@ -4831,6 +4833,17 @@ dependencies = [
  "ureq",
  "windows",
  "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "seat-wrds"
+version = "0.1.0"
+dependencies = [
+ "seat-proto",
+ "serde_json",
+ "windows",
+ "windows-core",
  "zeroize",
 ]
 

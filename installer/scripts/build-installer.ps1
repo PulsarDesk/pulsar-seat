@@ -141,7 +141,7 @@ if (-not $SkipCargo) {
         # joint build would compile the service against seat-rdp/client (IronRDP, sspi,
         # native-tls) that only the seat host enables.
         Invoke-Checked "cargo build (service)" {
-            cargo build --locked --release --target $triple -p seat-service
+            cargo build --locked --release --target $triple -p seat-service -p seat-wrds
         }
         Invoke-Checked "cargo build (host, agent)" {
             cargo build --locked --release --target $triple -p seat-host
@@ -149,6 +149,8 @@ if (-not $SkipCargo) {
         foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe") {
             Copy-Item (Join-Path $CargoTargetDir "$triple\release\$n") $payload -Force
         }
+        # Remote Desktop protocol provider (crates/seat-wrds): loaded by TermService.
+        Copy-Item (Join-Path $CargoTargetDir "$triple\release\pulsar_seat_wrds.dll") (Join-Path $payload "pulsar-seat-wrds.dll") -Force
         $sets = [ordered]@{ x86 = "i686-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" }
         if ($Arch -eq "arm64") {
             $sets.arm64 = "aarch64-pc-windows-msvc"
@@ -183,7 +185,7 @@ if ($SignedCredProv) {
     Copy-Item $SignedCredProv (Join-Path $payload "pulsar-seat-credprov.dll") -Force
     Write-Host "credential provider: signed DLL from $SignedCredProv"
 }
-foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe", "pulsar-seat-credprov.dll") {
+foreach ($n in "pulsar-seat-service.exe", "pulsar-seat-host.exe", "pulsar-seat-agent.exe", "pulsar-seat-credprov.dll", "pulsar-seat-wrds.dll") {
     if (-not (Test-Path (Join-Path $payload $n))) { throw "payload is missing $n ($payload)" }
 }
 

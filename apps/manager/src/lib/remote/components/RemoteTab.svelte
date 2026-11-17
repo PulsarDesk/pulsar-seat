@@ -289,6 +289,7 @@
             onSaveApps={(apps) => remote.setApps(current.number, apps)}
             onRegenerate={() => remote.regenerateIdentity(current.number)}
             onTestCredentials={() => remote.testCredentials(current.number)}
+            onSetMode={(w, h, hz, hdr) => remote.setDisplayMode(current.number, w, h, hz, hdr)}
             onEnableUnlock={async (enable, unlock) => {
               await remote.enableUnlockAccount(current.number, enable, unlock);
               await store.refreshStatus();

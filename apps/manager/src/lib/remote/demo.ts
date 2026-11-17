@@ -58,6 +58,16 @@ export function createDemoRemoteApi(
     display_backends: [],
     pad_backends: [],
     multi_session: multi,
+    wrds: {
+      registration: 'absent',
+      provider_connected: false,
+      listening: false,
+      restart_needed: false,
+      recovery_disabled: false,
+      dll_ok: true,
+      reason: 'wrds_not_registered',
+      wanted: false
+    },
     error: null
   });
   return {
@@ -185,6 +195,27 @@ export function createDemoRemoteApi(
     cleanupAudioEndpoints: async () => {
       await admin('cleanup_audio_endpoints');
       return { removed: [], failed: [] };
+    },
+    setDisplayMode: async (seat, width, height, hz, hdr) => {
+      await admin('set_seat_display_mode');
+      const d = remoteSeat(seat).remote?.display;
+      // Same seat overrides as the service (fixed resolution, locked refresh); demo has no driver.
+      const fixed = d && (d.fixed_width ?? 0) > 0 && (d.fixed_height ?? 0) > 0;
+      const w = fixed ? (d.fixed_width as number) : width;
+      const h = fixed ? (d.fixed_height as number) : height;
+      const r = d?.lock_refresh ? d.refresh_hz : hz;
+      const ss = (d?.super_sampling_percent ?? 100) / 100;
+      return {
+        request_id: 0x80000001,
+        status: 'unsupported',
+        width: w,
+        height: h,
+        hz: r,
+        hdr: hdr && !d?.force_sdr,
+        render_width: Math.round(w * ss),
+        render_height: Math.round(h * ss),
+        format: 'bgra8_unorm'
+      };
     }
   };
 }
