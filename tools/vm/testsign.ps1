@@ -16,13 +16,15 @@
 #                  catalog (inf2cat) and signs it.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\vm\testsign.ps1 -Action Cert
-#   powershell -ExecutionPolicy Bypass -File tools\vm\testsign.ps1 -Action Sign [-Platform ARM64]
+#   powershell -ExecutionPolicy Bypass -File tools\vm\testsign.ps1 -Action Sign [-Platform ARM64] [-Source target\wf\drivers-review]
 param(
     [ValidateSet("Cert", "Sign")] [string] $Action = "Sign",
     [ValidateSet("ARM64", "x64")] [string] $Platform = "ARM64",
     [string] $Configuration = "Release",
     [string[]] $Projects = @("seat-input-filter", "seat-idd", "seat-storage-filter", "seat-wfp", "split-pad"),
-    [string] $Sdk = "10.0.28000.0"
+    [string] $Sdk = "10.0.28000.0",
+    # Folder build-drivers.ps1 wrote to (its -OutRoot); default target\drivers.
+    [string] $Source = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,7 +74,8 @@ $signtool = @("bin\$Sdk\$hostArch\signtool.exe", "bin\$Sdk\x64\signtool.exe", "b
 $inf2cat = Join-Path $kits "bin\$Sdk\x86\inf2cat.exe"
 if (-not $signtool) { throw "signtool not found under $kits" }
 $os = if ($Platform -eq "ARM64") { "10_VB_ARM64" } else { "10_VB_X64" }
-$src = Join-Path $repo "target\drivers\$Platform\$Configuration"
+$srcRoot = if ($Source) { $Source } else { Join-Path $repo "target\drivers" }
+$src = Join-Path $srcRoot "$Platform\$Configuration"
 $out = Join-Path $repo "target\vm\testsigned\$Platform"
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Force $out | Out-Null
