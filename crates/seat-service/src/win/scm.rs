@@ -40,7 +40,7 @@ pub const SERVICE_SDDL: &str =
 /// Privileges the service keeps (everything else LocalSystem has is removed from its
 /// token). HYPOTHESIS: complete for the default backends; re-check when a backend needs
 /// more (e.g. driver load, which we never do).
-pub const REQUIRED_PRIVILEGES: [&str; 8] = [
+pub const REQUIRED_PRIVILEGES: [&str; 10] = [
     "SeAssignPrimaryTokenPrivilege", // CreateProcessAsUser
     "SeIncreaseQuotaPrivilege",      // CreateProcessAsUser
     "SeTcbPrivilege",                // WTSQueryUserToken, token session ids
@@ -49,6 +49,11 @@ pub const REQUIRED_PRIVILEGES: [&str; 8] = [
     "SeChangeNotifyPrivilege",
     "SeCreateGlobalPrivilege",       // global named objects
     "SeSecurityPrivilege",           // device security descriptors (gates)
+    // RegLoadKey of a signed-out seat user's hive (seat_compat: undo of per-seat
+    // environment variables, GPU preference, palm check). VM round 2 (2026-11-17): without
+    // them a product switch-off failed with AdjustTokenPrivileges 1300 and left the values.
+    "SeBackupPrivilege",
+    "SeRestorePrivilege",
 ];
 
 /// SCM recovery: one restart per allowed crashed start, then nothing. With the default
@@ -393,5 +398,17 @@ mod tests {
         assert!(matches!(power_notice(&PowerEventParam::ResumeAutomatic), Some(Notice::Resume)));
         assert!(power_notice(&PowerEventParam::ResumeSuspend).is_none(), "no double start");
         assert!(power_notice(&PowerEventParam::PowerStatusChange).is_none());
+    }
+
+    /// VM round 2 (2026-11-17): hive loading for the undo of per-user values needs both.
+    #[test]
+    fn required_privileges_allow_hive_loading() {
+        for p in ["SeBackupPrivilege", "SeRestorePrivilege", "SeTcbPrivilege", "SeSecurityPrivilege"] {
+            assert!(REQUIRED_PRIVILEGES.contains(&p), "{p}");
+        }
+        let mut v = REQUIRED_PRIVILEGES.to_vec();
+        v.sort_unstable();
+        v.dedup();
+        assert_eq!(v.len(), REQUIRED_PRIVILEGES.len());
     }
 }
