@@ -3,10 +3,13 @@
 //! back-end ([`build_rdpdr`]) and the WinSCard reader source ([`WinReaders`]).
 //! **Untested on hardware.**
 
-use super::rdpdr::{CHANNEL_DRIVES, CHANNEL_PRINTERS, CHANNEL_SMARTCARD, DriveCheck, ReaderSource, SMARTCARD_DEVICE_ID, SeatRdpdr};
+use super::rdpdr::{
+    CHANNEL_DRIVES, CHANNEL_PRINTERS, CHANNEL_SMARTCARD, DriveCheck, DriveMaker, PrinterMaker, ReaderSource, SMARTCARD_DEVICE_ID, SeatRdpdr,
+    rdpdr_name,
+};
 use super::{Channels, LiveRedirection, RefusalLog};
 use crate::config::SessionParams;
-use crate::policy::{MAX_DRIVE_NAME, ReaderMatch, drive_root_allowed, reader_match};
+use crate::policy::{ReaderMatch, drive_root_allowed, reader_match};
 use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpdr::pdu::esc::ReturnCode;
 use ironrdp_rdpdr::backend::RdpdrBackendFactory;
@@ -28,10 +31,24 @@ pub fn system_drive() -> Option<char> {
     char::from_u32(u32::from(buf[0])).filter(|c| c.is_ascii_alphabetic()).map(|c| c.to_ascii_uppercase())
 }
 
-/// RDPDR names: ASCII letters / digits, at most [`MAX_DRIVE_NAME`] characters.
-fn rdpdr_name(name: &str, root: &str) -> String {
-    let n: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).take(MAX_DRIVE_NAME).collect();
-    if n.is_empty() { root.chars().take(1).collect() } else { n }
+/// Back-end of one drive added while the channel is open (FAT family; the host serves it).
+pub fn drive_maker() -> DriveMaker {
+    Arc::new(|id: u32, d: &seat_core::backend::session::RedirectDrive| {
+        let drive = RedirectedDrive::new(id, rdpdr_name(&d.name, &d.root), &d.root, d.read_only).map_err(|_| "drive_root_unavailable")?;
+        let f = WindowsRdpdrBackendFactory::from_drives(vec![drive]).map_err(|_| "drive_configuration_invalid")?;
+        Ok(Box::new(f.build()) as Box<dyn ironrdp_rdpdr::backend::RdpdrBackend>)
+    })
+}
+
+/// Back-end of the printers a live update selected (their own device ids).
+pub fn printer_maker() -> PrinterMaker {
+    Arc::new(|r: &seat_core::backend::session::HostRedirection| {
+        let Some(sel) = printer_selection(r) else { return Err("no printer selected".into()) };
+        let f = WindowsRdpdrBackendFactory::from_drives(Vec::new()).map_err(|e| e.to_string())?;
+        let product = f.with_printer_redirection(WindowsPrinterRedirection::new(sel)).build_rdpdr_backend().map_err(|e| e.to_string())?;
+        let list = product.printers().to_vec();
+        Ok((product.into_parts().0, list))
+    })
 }
 
 /// The seat's `rdpdr` channel: its volumes and (when on) its smart-card readers. `None` =
@@ -44,7 +61,9 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
     let mut drives = Vec::new();
     let mut offered = Vec::new();
     let mut id = FIRST_NAMED_DRIVE_DEVICE_ID;
-    for d in &red.drives {
+    // ACL'd volumes are served as the seat user by the drive broker; they join the session
+    // once the broker link is up (`SeatRdpdr::live_changes`).
+    for d in red.drives.iter().filter(|d| !d.acl) {
         if let Err(reason) = drive_root_allowed(&d.root, sys) {
             log.refuse(CHANNEL_DRIVES, reason, d.root.clone());
             continue;
@@ -77,7 +96,8 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
         None
     };
     let printers = printer_selection(&red);
-    if drives.is_empty() && readers.is_none() && printers.is_none() {
+    let acl_drives = red.drives.iter().any(|d| d.acl);
+    if drives.is_empty() && readers.is_none() && printers.is_none() && !red.drives_on && !red.printers_on && !acl_drives {
         return None;
     }
     let factory = match WindowsRdpdrBackendFactory::from_drives(drives) {
@@ -110,7 +130,7 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
         },
         None => (Box::new(factory.build()), Vec::new()),
     };
-    if initial.is_empty() && !smart && announced.is_empty() {
+    if initial.is_empty() && !smart && announced.is_empty() && !red.drives_on && !red.printers_on && !acl_drives {
         return None;
     }
     for pr in &announced {
@@ -118,10 +138,16 @@ pub fn build_rdpdr(p: &SessionParams, ch: &Channels) -> Option<Rdpdr> {
     }
     let backend = SeatRdpdr::new(inner, readers, log.clone())
         .with_drives(offered, Some(check), live)
-        .with_printers(announced.iter().map(ironrdp_rdpdr::RdpdrPrinter::device_id));
+        .with_printer_names(&announced)
+        .with_live_makers(Some(drive_maker()), Some(printer_maker()), ch.broker.clone());
     let mut r = Rdpdr::new(Box::new(backend), p.client_name.chars().take(15).collect());
-    if !initial.is_empty() {
+    // The drive capability is advertised whenever the drive policy is on, so drives
+    // assigned later (and ACL'd ones once the broker is up) can join this connection.
+    if !initial.is_empty() || red.drives_on || acl_drives {
         r = r.with_drives(Some(initial));
+    }
+    if red.printers_on {
+        r = r.with_printer_capability();
     }
     if smart {
         r = r.with_smartcard(SMARTCARD_DEVICE_ID);
@@ -205,6 +231,31 @@ impl Ctx {
         Err(ReturnCode::InternalError)
     }
 
+    /// `SCardListReaderGroupsW` (probe, then read; retried when a group appears between).
+    fn groups(&self) -> Result<Vec<String>, ReturnCode> {
+        use windows_sys::Win32::Security::Credentials::SCardListReaderGroupsW;
+        for _ in 0..4 {
+            let mut len = 0u32;
+            // SAFETY: length probe with a null buffer.
+            let rc = unsafe { SCardListReaderGroupsW(self.0, std::ptr::null_mut(), &mut len) };
+            if rc != 0 {
+                return Err(ReturnCode::InternalError);
+            }
+            let mut buf = vec![0u16; len as usize];
+            // SAFETY: the buffer holds `len` UTF-16 units.
+            let rc = unsafe { SCardListReaderGroupsW(self.0, buf.as_mut_ptr(), &mut len) };
+            match rc {
+                0 => {
+                    buf.truncate(len as usize);
+                    return Ok(buf.split(|c| *c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect());
+                }
+                SCARD_E_INSUFFICIENT_BUFFER => continue,
+                _ => return Err(ReturnCode::InternalError),
+            }
+        }
+        Err(ReturnCode::InternalError)
+    }
+
     /// The reader's device instance id (`SCardGetReaderDeviceInstanceIdW`, Windows 8+);
     /// `None` when the driver does not report one.
     fn instance_id(&self, reader: &str) -> Option<String> {
@@ -252,6 +303,14 @@ impl ReaderSource for WinReaders {
         let result = Ctx::open().and_then(|c| c.list(groups));
         if let Err(c) = &result {
             self.log.refuse(CHANNEL_SMARTCARD, "list_readers_failed", format!("{c:?}"));
+        }
+        result
+    }
+
+    fn groups(&self) -> Result<Vec<String>, ReturnCode> {
+        let result = Ctx::open().and_then(|c| c.groups());
+        if let Err(c) = &result {
+            self.log.refuse(CHANNEL_SMARTCARD, "list_reader_groups_failed", format!("{c:?}"));
         }
         result
     }

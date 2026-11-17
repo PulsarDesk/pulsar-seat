@@ -194,6 +194,7 @@ mod win {
             AgentTaskKind::RefreshEnvironment => refresh_environment(),
             // The read-back itself is sent by the task loop (`AgentEvent::Dpi`).
             AgentTaskKind::ReportDpi => Ok(()),
+            AgentTaskKind::DriveBroker { read, write, drives } => start_drive_broker(*read, *write, drives),
         }
     }
 
@@ -250,6 +251,27 @@ mod win {
         })
         .join()
         .unwrap_or_default()
+    }
+
+    /// Drive broker (rdp-listener 2026-11-17, `seat_rdp::channels::broker`): serve the
+    /// seat's ACL'd volumes to the seat host **as this session's user** over the two pipe
+    /// ends the service duplicated into this process, on a thread of its own until the
+    /// host closes its end. Only `drives` (the service's allowlist) are served, each
+    /// checked against its volume right before it is opened. Untested on hardware.
+    fn start_drive_broker(read: u64, write: u64, drives: &[seat_proto::DriveBrokerDrive]) -> Result<(), (String, Option<u32>)> {
+        use seat_rdp::channels::broker::{self, BrokerDrive};
+        let r = broker::handle_file(read).map_err(|e| (format!("broker read end: {e}"), None))?;
+        let w = broker::handle_file(write).map_err(|e| (format!("broker write end: {e}"), None))?;
+        let allow: Vec<BrokerDrive> =
+            drives.iter().map(|d| BrokerDrive { root: d.root.clone(), volume: d.volume.clone(), read_only: d.read_only }).collect();
+        std::thread::Builder::new()
+            .name("drive-broker".into())
+            .spawn(move || match broker::serve_as_user(Box::new(r), Box::new(w), allow) {
+                Ok(()) => eprintln!("agent: drive broker link closed"),
+                Err(e) => eprintln!("agent: drive broker ended: {e}"),
+            })
+            .map_err(|e| (format!("broker thread: {e}"), None))?;
+        Ok(())
     }
 
     /// Win+Ctrl+Shift+B (graphics driver restart) into the session's input desktop

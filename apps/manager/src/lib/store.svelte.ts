@@ -36,6 +36,7 @@ import type {
   SeatAccount,
   SeatNumber,
   ServiceStatus,
+  TermServiceRestart,
   UpdateSettings,
   UserPicture,
   WizardProgress
@@ -516,6 +517,20 @@ export class ManagerStore {
   /** Restart the graphics driver in a running seat's session. */
   resetGraphics(seat: SeatNumber): Promise<boolean> {
     return this.run(() => this.api.resetGraphics(seat), t.seatMenu.resetGraphicsSent);
+  }
+
+  /** Stop the seats and restart Remote Desktop Services (the operator confirmed). */
+  async restartTermService(): Promise<boolean> {
+    let out: TermServiceRestart | null = null;
+    const ok = await this.run(async () => {
+      out = await this.api.restartTermService();
+    });
+    if (!ok || !out) return false;
+    const r = out as TermServiceRestart;
+    if (r.restarted) this.toast('ok', t.advanced.restartTsDone(r.stopped_seats?.length ?? 0));
+    else this.toast('error', t.advanced.restartTsFailed(r.reason ?? ''), r.reason);
+    await this.refreshStatus();
+    return r.restarted;
   }
 
   /** Delete the Windows user Pulsar made for a former kiosk seat, with its profile. */

@@ -1198,13 +1198,61 @@ monitor's same-container hub keeps a seat the monitor is not on.
   `Rdpdr::with_redirected_printer`, and `SeatRdpdr` refuses printer IRPs for any other
   device id (`printer_not_redirected`). The `printer_acl` gate gives the seat's own host
   account the use right on the seat's queues (`GatePlan.printer_hosts`). ActiveX:
-  `printers_need_ironrdp`. Changes apply at the next connection. Untested on hardware;
+  `printers_need_ironrdp`. Changes apply live on the open channel (rdp-listener
+  2026-11-17, see *Drive broker and live device changes* below). Untested on hardware;
   HYPOTHESES: printing from a Low-integrity batch token works. **Spec deviation, not yet
   confirmed:** spec/local/70 §3.8 says the product does nothing with printers; this
   opt-in (default `off`) waits for the analyst to record the maintainer's opt-in there,
   or for the maintainer to confirm it (status.md, review 2026-11-14). Ports: never. Refusals: `channels::RefusalLog` (stderr,
   once per 10 s per reason). The clipboard bridge is the host session's clipboard (shared
   with seat 1 and every seat that has it on: note `clipboard_shared_with_host_session`).
+- **Drive broker and live device changes (2026-11-17, rdp-listener).**
+  - *Why a broker.* The seat host's token is contained (batch logon of its host account or
+    SYSTEM, Low integrity, no privileges): it cannot impersonate the seat user, and its own
+    rights on an ACL'd volume are not the user's. The seat session's agent
+    (`pulsar-seat-agent`) already runs with the seat user's token, so it serves those
+    volumes and Windows checks the user's own rights on every open.
+  - *Link.* The host asks `host_drive_broker {seat}` (Access::Host) when an ACL'd drive is
+    assigned. The service needs the seat's host, session and agent; it computes the seat's
+    redirection again, keeps the ACL'd drives as the **allowlist**, makes two anonymous
+    pipes (`Platform::broker_pipes`: `CreatePipe` twice, one per direction, because
+    synchronous handles serialise I/O per file object; each end moved into the host or the
+    agent with `DuplicateHandle(DUPLICATE_CLOSE_SOURCE)`), queues the agent task
+    `drive_broker {read, write, drives}` and answers `drive_broker {read, write}`. No pipe
+    name exists, so nothing can be squatted or opened by another process. `not_ready` while
+    the seat has no agent (no user signed in); the host retries every 5 s.
+  - *Protocol* (`seat_rdp::channels::broker::Frame`, u32 LE length + kind byte): host to
+    broker `activate {device_id, read_only, root, volume}`, `deactivate`, `irp` (the
+    `DR_DEVICE_IOREQUEST` re-encoded from IronRDP's decoded request), `reset`; broker to
+    host `pdu` (an encoded `DR_DEVICE_IOCOMPLETION`), `refused {device_id, reason}`,
+    `deactivated`. The broker refuses a root not on the allowlist (`drive_not_allowed`), a
+    letter that names another volume (`drive_letter_moved`) and keeps the allowlist's
+    read-only. The host passes on only I/O completions of the device ids it gave the
+    broker (`drive_broker_answer_dropped` otherwise). The broker runs IronRDP's Windows
+    drive back-end per drive in the agent (`serve_as_user`). The host waits up to 50 ms
+    for an IRP's completion, later ones go out with the channel ticker (20 ms).
+  - *Live changes* (`SeatRdpdr::live_changes`, applied by `channels::apply_live_changes`):
+    removed drives / printers leave (`Rdpdr::remove_drive`, `Rdpdr::remove_printer`), new
+    FAT drives get a back-end of their own (`channels::win::drive_maker`), new ACL'd drives
+    join once the broker is linked, new printers are discovered once per live revision
+    (`printer_maker`) and served by a back-end per batch whose own device ids are mapped to
+    the session's (IRP and completion device id rewritten). New devices are announced with
+    a `ClientDeviceListAnnounce` of only the new device (MS-RDPEFS 3.2.5.1.9:
+    `Rdpdr::add_dynamic_drive`, and Pulsar's `Rdpdr::add_dynamic_printer`). Live device ids:
+    drives from `0x3000_0000`, printers from `0x4000_0000`. A drive that fails its check is
+    not offered again for 10 s. The rdpdr channel and its drive / printer capabilities are
+    joined whenever the drive / printer policy is on (`HostRedirection.drives_on` /
+    `printers_on`), so a connection that started with nothing still takes devices later; a
+    policy switched on later and smart cards still need the next connection (static
+    channels and the pre-logon smart-card device are set up at connect).
+  - *Vendored IronRDP rdpdr.* `third_party/ironrdp-rdpdr` (0.9.0, MIT OR Apache-2.0) adds
+    `with_printer_capability`, `add_dynamic_printer` and `remove_printer`
+    (`third_party/ironrdp-rdpdr/PATCHES.md`); the root `Cargo.toml` patches crates.io with
+    it and excludes it from the workspace.
+  - **Untested on hardware** (HYPOTHESES: a Low-integrity host can use pipe ends the
+    service duplicated into it; Windows servers accept device announcements after logon
+    on an open channel and printers announced late; the agent's token opens the user's
+    files with the user's rights).
 - **Redirection hardening (2026-11-13, fix-rdp-channels).** Single source of truth:
   `seat_rdp::policy` (the old `seat_media::redirect::seat_redirection` rules are gone;
   `seat_media::redirect` keeps only `seat_cameras`).
@@ -1214,16 +1262,13 @@ monitor's same-container hub keeps a seat the monitor is not on.
     at resolve time (`volume`, serde default), re-checked with
     `GetVolumeNameForVolumeMountPointW` right before the root is opened on every connection
     and channel reset (`drive_letter_moved`; empty = `drive_volume_unknown`); open root
-    handles stay bound to their volume. Only **FAT / FAT32 / exFAT**: drive IRPs run under
-    the seat host's contained token (SYSTEM Low or the host account), not the seat user's,
-    so on an ACL'd volume reads would follow the host's rights (confused deputy) and Low
-    integrity would block writes; impersonating the seat user from a Low-integrity process
-    is not possible (identification level only). NTFS / ReFS volumes get
-    `drive_acl_volume_refused`; the seat session still reaches them directly through the
-    gates. Live updates: `Reconfigure` re-reads the assignment into
-    `channels::LiveRedirection`; the channel ticker removes drives no longer assigned (or no
-    longer writable) from the session (`Rdpdr::remove_drive`, `drive_unassigned`); new
-    drives appear at the next connection.
+    handles stay bound to their volume. FAT / FAT32 / exFAT volumes are served by the seat
+    host itself (no ACLs: the host and the seat user have the same access). Volumes with
+    ACLs (NTFS, ReFS, unknown) are marked `RedirectDrive.acl` and served **as the seat
+    user** by the drive broker (below); before 2026-11-17 they were refused
+    (`drive_acl_volume_refused`, now only when a FAT volume turned ACL'd after resolve).
+    Live updates: `Reconfigure` re-reads the assignment into `channels::LiveRedirection`;
+    the channel ticker applies it (`SeatRdpdr::live_changes`, below).
   - *Smart cards.* Readers are matched by device instance id
     (`SCardGetReaderDeviceInstanceIdW`); a known id never falls back to the name. The name
     is used only without an id, when the service marked it unique on the PC
@@ -1233,6 +1278,8 @@ monitor's same-container hub keeps a seat the monitor is not on.
     reader's count (high word) is translated to the PC count before the wait and rewritten
     to the filtered count in the reply (encoded `DR_CONTROL_RSP` patched in place), so a
     seat never learns other seats' reader count. Reader refs follow `LiveRedirection`.
+    `ListReaderGroups` (rdp-listener 2026-11-17) is answered by the host too: only groups
+    that hold at least one of the seat's readers (`channels::rdpdr::seat_groups`).
   - *Clipboard.* An empty Format List goes to the seat only as the initial list of a
     connection or to withdraw host data the seat still holds; a refused console copy never
     empties the seat's own clipboard. A fully refused seat copy releases console ownership
@@ -1955,7 +2002,19 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
   held-back hotkey.
 - **Requests (protocol 3, additive, admin):** `reset_graphics { seat }` (agent task
   `reset_graphics`: Win+Ctrl+Shift+B into the session's input desktop; HYPOTHESIS that
-  injected input triggers it), `remove_kiosk_user { seat }`.
+  injected input triggers it), `remove_kiosk_user { seat }`, `restart_term_service
+  { confirm }` (rdp-listener 2026-11-17: every running seat but seat 1 stopped and signed
+  out first, local seats on the request thread and remote seats through their worker; then
+  `SessionBackend::restart_termservice` (rds_loopback / termsrv_wrapper:
+  `LoopbackListener::operator_restart`, journaled, no "no user session" rule) and the
+  second listener re-checked; answer `term_service_restart {stopped_seats, restarted,
+  reason}`). Host requests (Access::Host, additive): `host_audio_report {seat,
+  render_open, capture_open, notes}` (the bridge notes go to `SeatRuntime.audio_notes`;
+  seat runtime `degraded` now says `audio_no_endpoint` / `audio_not_bound` /
+  `audio_service_not_running` for an RDP-bridge seat without a playback endpoint instead of
+  `audio_console_shared`), `host_drive_broker {seat}` (above). The credential test
+  (`test_seat_credentials`) uses an interactive logon first (spec/remote 10 §4.4), a
+  network logon only when the interactive logon right is denied (1385).
 - **Shim.** On ARM64 PCs x64 executables with a known path stay out of the AppHelp
   database (`install::apphelp_targets`, PE machine check); launcher path only. Focus WNF
   filter: runtime check of the candidate states (`decide::wnf_runtime_plausible`,

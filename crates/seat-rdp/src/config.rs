@@ -394,7 +394,7 @@ pub(crate) mod tests {
         assert!(RedirectPolicy::default().unsupported_notes().is_empty());
         let mut on = RedirectPolicy { clipboard: true, drives: true, smartcards: true, ..Default::default() };
         on.channels.clipboard.direction = seat_core::config::ClipboardDirection::Both;
-        on.channels.drives.push(seat_core::backend::session::RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new() });
+        on.channels.drives.push(seat_core::backend::session::RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new(), acl: false });
         on.channels.smartcards = true;
         on.channels.readers.push(seat_core::backend::session::SmartCardReaderRef { instance_id: "X".into(), name: "R".into(), name_unique: false });
         assert!(on.clipboard_on() && on.rdpdr_on() && on.smartcards_on());

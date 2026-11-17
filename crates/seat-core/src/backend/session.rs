@@ -203,6 +203,14 @@ pub struct HostRedirection {
     /// `printers`). Added 2026-11-14 (additive).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub all_printers: bool,
+    /// The seat's drive policy is on (even with no drive now): the host joins the device
+    /// channel so drives assigned later reach the open session. Added 2026-11-17 (additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drives_on: bool,
+    /// The seat's printer policy is on (even with no queue now): same for printers. Added
+    /// 2026-11-17 (additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub printers_on: bool,
     /// Snake_case notes for logs / the manager (`clipboard_shared_with_host_session`, ...).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
@@ -223,6 +231,11 @@ pub struct RedirectDrive {
     /// (`drive_volume_unknown`). Added 2026-11-13 (additive).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub volume: String,
+    /// The volume keeps ACLs (NTFS, ReFS): served as the seat user by the seat's drive
+    /// broker (the session agent), never by the seat host. `false` = a FAT-family volume the
+    /// host serves itself. Added 2026-11-17 (rdp-listener, additive).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub acl: bool,
 }
 
 /// A smart-card reader assigned to the seat: its device instance id and friendly name;
@@ -324,6 +337,13 @@ pub trait SessionBackend: Send + Sync {
     /// off / ends (off the request thread). Returns snake_case notes. Others ignore it.
     fn retry_deferred(&self) -> Vec<String> {
         Vec::new()
+    }
+    /// Restart Remote Desktop Services now (operator request `restart_term_service`, added
+    /// 2026-11-17): the service stopped the seats first. `Ok(notes)` after the restart
+    /// (the second listener re-checked); `Err` with reason `restart_needs_reboot` /
+    /// `termservice_restart_failed`. Backends without TermService: unsupported.
+    fn restart_termservice(&self) -> BackendResult<Vec<String>> {
+        Err(crate::backend::BackendError::unsupported("Remote Desktop Services restart"))
     }
     /// Kiosk shell processes this backend started and that still run (`desktops` backend,
     /// spec 35 §5.1 U3): the service verifies a `kiosk_shell` client in `hello` against

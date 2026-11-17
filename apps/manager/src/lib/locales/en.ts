@@ -599,7 +599,20 @@ const t = {
     loopbackAccountsHint: 'Accounts given to seats are always allowed. Administrators cannot sign in through this port.',
     loopbackAllowed: (list: string) => `These accounts can sign in through this port: ${list}.`,
     loopbackNoAccounts: (seats: string) =>
-      `No account is allowed for the seats on the sign-in screen (${seats}); these seats cannot start. Enter above the accounts that will sign in on these seats.`
+      `No account is allowed for the seats on the sign-in screen (${seats}); these seats cannot start. Enter above the accounts that will sign in on these seats.`,
+    loopbackBinding:
+      'Windows can bind a Remote Desktop port only to a network adapter, not to the loopback address, so the firewall rule is what keeps this port inside the PC.',
+    restartTs: 'Restart Remote Desktop Services…',
+    restartTsHint: 'Loads a new or changed port at once. Running seats are stopped first.',
+    restartTsTitle: 'Restart Remote Desktop Services?',
+    restartTsBody:
+      'Every running seat (except seat 1) is stopped and signed out first, then Remote Desktop Services restart. Other Remote Desktop connections to this PC are disconnected too. Seats do not start again by themselves.',
+    restartTsConfirm: 'Stop seats and restart',
+    restartTsDone: (n: number): string => (n ? `Remote Desktop Services restarted (${n} seat(s) stopped)` : 'Remote Desktop Services restarted'),
+    restartTsFailed: (reason: string): string =>
+      reason === 'restart_needs_reboot'
+        ? 'Remote Desktop Services cannot be stopped on this Windows build; restart the PC instead.'
+        : 'Remote Desktop Services could not restart (see the service log).'
   },
 
   backendNames: {
@@ -711,6 +724,17 @@ const t = {
     seat_one_sees_other_endpoints: 'Seat 1 also sees the other seats’ sound devices',
     display_fallback: 'The picture is shown in a full-screen window (not hidden from seat 1)',
     audio_console_shared: 'Sound comes from seat 1’s devices',
+    audio_no_endpoint: 'No sound device is given to this seat; the seat is silent',
+    audio_not_bound: 'The seat’s sound could not be set up (see the service log)',
+    audio_service_not_running: 'The Windows audio service is not running; the seat is silent',
+    render_absent: 'The seat’s speaker or headphones are missing; the seat is silent',
+    render_open_failed: 'The seat’s speaker or headphones could not be opened',
+    render_lost: 'The seat’s speaker or headphones were unplugged',
+    capture_absent: 'The seat has no microphone',
+    capture_open_failed: 'The seat’s microphone could not be opened',
+    capture_lost: 'The seat’s microphone was unplugged',
+    drive_served_as_seat_user:
+      'NTFS / ReFS drives are served as the seat’s user (by the seat’s own helper), so the drive’s permissions apply',
     same_account_warning: 'This account is also signed in on another seat',
     one_seat_at_a_time: 'Only one seat is active at a time',
     fus_inactive_frozen:
@@ -733,7 +757,7 @@ const t = {
     no_seat_drives: 'This seat has no drive that can be redirected',
     drive_without_global_letter: 'The letter of a seat drive is visible only in the seat’s session; this drive is not redirected',
     drive_acl_volume_refused:
-      'File systems with permissions such as NTFS are not redirected (FAT32 / exFAT only); the seat session sees this drive directly',
+      'A drive’s file system changed after it was checked (FAT / NTFS); it is not redirected until the seat connects again',
     drive_letter_moved: 'A drive letter now points to another volume; this drive is not redirected',
     drive_volume_unknown: 'The volume of a drive could not be determined; this drive is not redirected',
     no_seat_readers: 'No smart card reader is given to this seat',
@@ -792,7 +816,7 @@ const t = {
     drives: 'Drives',
     driveModes: { off: 'Off', read_only: 'Read-only', read_write: 'Read-write' } as Record<string, string>,
     drivesHint:
-      'Only FAT32 / exFAT drives that belong to this seat (for example a USB stick) are redirected. NTFS drives are not, because their permissions cannot be checked against the seat user.',
+      'Only drives that belong to this seat alone (for example a USB stick or a second disk) are redirected. FAT32 / exFAT drives are served by the seat’s background account; NTFS / ReFS drives as the seat’s user, so their permissions apply (they appear once the user has signed in). Changes reach a connected seat at once.',
     smartcards: 'Smart card',
     smartcardsLabel: 'Open the smart card readers given to this seat to the seat session',
     smartcardsHint: 'The seat session sees only its own readers. With two readers of the same model, both stay closed if the reader ID cannot be read.',
@@ -840,8 +864,18 @@ const t = {
     list_readers_failed: 'the readers could not be listed',
     drive_letter_moved: 'the drive letter now points to another volume',
     drive_volume_unknown: 'the drive’s volume could not be determined',
-    drive_acl_volume_refused: 'file systems with permissions (NTFS) are not redirected',
+    drive_acl_volume_refused: 'the drive’s file system changed after it was checked; not redirected until the next connection',
     drive_unassigned: 'the drive no longer belongs to this seat; removed from the session',
+    drive_broker_unavailable: 'the seat’s drive helper is not running yet (the user has not signed in)',
+    drive_broker_lost: 'the connection to the seat’s drive helper was lost',
+    drive_broker_refused: 'the seat’s drive helper refused the drive',
+    drive_add_failed: 'the new drive could not be added to the session',
+    printer_unassigned: 'the printer no longer belongs to this seat; removed from the session',
+    printer_add_failed: 'the new printer could not be added to the session',
+    printer_remove_failed: 'the printer could not be removed from the session',
+    drive_remove_failed: 'the drive could not be removed from the session',
+    drive_broker_answer_dropped: 'an invalid answer of the seat’s drive helper was dropped',
+    list_reader_groups_failed: 'the reader groups could not be listed',
     drive_is_system_drive: 'the Windows drive is not redirected',
     drive_root_invalid: 'invalid drive root',
     drive_root_unavailable: 'the drive could not be opened',

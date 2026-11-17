@@ -247,15 +247,21 @@ impl Profiles for WindowsProfiles {
     }
 }
 
-/// Credential test (spec 10 §4.4): a network logon against the local machine validates the
-/// password without needing a logon right or loading a profile. `Err(win32 code)` on
-/// failure (1326 wrong password, 1331 disabled, 1909 locked out, 1330 / 1907 expired).
-/// Nothing is changed on the account.
+/// Credential test (spec 10 §4.4): an **interactive** logon against the local machine
+/// (`LOGON32_LOGON_INTERACTIVE`, no profile loaded), with a network logon only when the
+/// interactive logon right is denied ([`crate::remote::users::credential_test_order`]).
+/// `Err(win32 code)` on failure (1326 wrong password, 1331 disabled, 1909 locked out,
+/// 1330 / 1907 expired). Nothing is changed on the account. HYPOTHESIS (not run on
+/// hardware): the interactive logon of an account denied local logon returns 1385 after
+/// the password check, as documented for `LogonUserW`.
 pub fn test_logon(user: &str, password: &Secret) -> Result<(), u32> {
-    let tok = logon(user, password, LOGON32_LOGON_NETWORK)?;
-    // SAFETY: token from LogonUserW, owned here.
-    unsafe { CloseHandle(tok) };
-    Ok(())
+    let try_kind = |kind: u32| -> Result<(), u32> {
+        let tok = logon(user, password, kind)?;
+        // SAFETY: token from LogonUserW, owned here.
+        unsafe { CloseHandle(tok) };
+        Ok(())
+    };
+    crate::remote::users::credential_test_order(|| try_kind(LOGON32_LOGON_INTERACTIVE), || try_kind(LOGON32_LOGON_NETWORK))
 }
 
 /// Clears `UF_ACCOUNTDISABLE` (`enable`) and / or `UF_LOCKOUT` (`unlock`). Called only after

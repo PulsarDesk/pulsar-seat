@@ -8,7 +8,18 @@ use seat_core::Secret;
 use seat_proto::{Check, CpuSetInfo, LocalUser};
 use std::path::PathBuf;
 
-/// The signed-in user of a session.
+/// Handle values of a drive broker link (see [`Platform::broker_pipes`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrokerPipes {
+    /// Host side: read from the broker / write to it.
+    pub host_read: u64,
+    pub host_write: u64,
+    /// Agent side: read from the host / write to it.
+    pub agent_read: u64,
+    pub agent_write: u64,
+}
+
+/// A signed-in session user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUser {
     pub domain: String,
@@ -188,6 +199,13 @@ pub trait Platform: Send + Sync {
     fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
         let _ = vm_id;
         None
+    }
+    /// Drive broker link (rdp-listener 2026-11-17): two fresh anonymous pipes, one per
+    /// direction; each end duplicated into the seat host (`host_pid`) or the seat's agent
+    /// (`agent_pid`) and closed here. Handle values valid in those processes.
+    fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<BrokerPipes> {
+        let _ = (host_pid, agent_pid);
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no drive broker here"))
     }
     /// Publish the camera rules for the module (`seat_shim_core::readers::camera_visible`).
     fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
@@ -439,6 +457,8 @@ pub mod mock {
         pub guest_offers: Mutex<BTreeMap<String, seat_core::remote::vm::GuestConfig>>,
         pub guest_sent: Mutex<Vec<(String, seat_core::remote::vm::GuestMsg)>>,
         pub guest_phases: Mutex<BTreeMap<String, (seat_core::remote::vm::GuestPhase, Option<String>)>>,
+        /// `(host pid, agent pid)` of every drive broker link made.
+        pub broker_links: Mutex<Vec<(u32, u32)>>,
         /// Last published camera rules.
         pub camera_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
         /// `cover_session` calls: (session, cpu sets, seat-wide).
@@ -660,6 +680,10 @@ pub mod mock {
         }
         fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
             lock(&self.guest_phases).get(vm_id).cloned()
+        }
+        fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<BrokerPipes> {
+            lock(&self.broker_links).push((host_pid, agent_pid));
+            Ok(BrokerPipes { host_read: 0x10, host_write: 0x14, agent_read: 0x20, agent_write: 0x24 })
         }
         fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
             lock(&self.hyperv_actions).push(action.clone());

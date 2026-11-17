@@ -274,6 +274,13 @@ impl SessionBackend for MockSessionBackend {
     fn console_seat_away(&self) -> Option<u32> {
         *lock(&self.console_seat_away)
     }
+    fn restart_termservice(&self) -> BackendResult<Vec<String>> {
+        if !self.kind.uses_rdp() {
+            return Err(crate::backend::BackendError::unsupported("Remote Desktop Services restart"));
+        }
+        self.rec.hit("restart_termservice")?;
+        Ok(vec!["termservice_restarted".into()])
+    }
 }
 
 /// Holder of a hot-plug sink so tests can emit events.

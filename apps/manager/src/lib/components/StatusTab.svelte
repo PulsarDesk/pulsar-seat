@@ -67,7 +67,9 @@
             <td>{r.seat}</td>
             <td class:error={r.state.state === 'error'}>{seatLabel(r.state)}</td>
             <td>{r.session_id ?? t.none}</td>
-            <td>{[...(r.degraded ?? []), ...(r.redirect_notes ?? [])].map(noteLabel).join(' · ') || t.none}</td>
+            <td class:warn-text={(r.audio_notes ?? []).length > 0}>
+              {[...(r.degraded ?? []), ...(r.audio_notes ?? []), ...(r.redirect_notes ?? [])].map(noteLabel).join(' · ') || t.none}
+            </td>
           </tr>
         {/each}
       </tbody>

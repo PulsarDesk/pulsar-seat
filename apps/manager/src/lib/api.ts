@@ -24,6 +24,7 @@ import type {
   SteamProxyStatus,
   VmAction,
   VmHostStatus,
+  TermServiceRestart,
   Issue,
   LocalUser,
   Panel,
@@ -129,6 +130,8 @@ export interface Api extends LocalApi {
   steamProxy(action: SteamProxyAction): Promise<SteamProxyStatus>;
   /** Hyper-V VM seats (`vm_seats`): status, VM network, base disk, reset a seat's disk. */
   vmSeats(action: VmAction): Promise<VmHostStatus>;
+  /** Stop the seats, then restart Remote Desktop Services (`restart_term_service`). */
+  restartTermService(): Promise<TermServiceRestart>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -198,6 +201,8 @@ export function createRequestApi(
     hyperV: async (action) => expectBody(await call({ type: 'hyper_v', data: { action } }), 'hyper_v').data,
     steamProxy: async (action) => expectBody(await call({ type: 'steam_proxy_dll', data: { action } }), 'steam_proxy').data,
     vmSeats: async (action) => expectBody(await call({ type: 'vm_seats', data: { action } }), 'vm_seats').data,
+    restartTermService: async () =>
+      expectBody(await call({ type: 'restart_term_service', data: { confirm: true } }), 'term_service_restart').data,
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

@@ -414,6 +414,24 @@ impl SessionBackend for RdsLoopbackBackend {
         self.retry_listener()
     }
 
+    fn restart_termservice(&self) -> BackendResult<Vec<String>> {
+        {
+            let _g = lock(&self.second.busy);
+            if let Err(reason) = self.listener().operator_restart() {
+                let kind = if reason == crate::loopback_listener::why::RESTART_NEEDS_REBOOT { ErrorKind::NotReady } else { ErrorKind::Os };
+                return Err(seat_core::backend::BackendError::new(kind, reason, "Remote Desktop Services did not restart"));
+            }
+        }
+        // The new listener state (pending restart -> ready, unload finished).
+        let mut notes = vec!["termservice_restarted".to_string()];
+        notes.extend(self.retry_listener());
+        if self.second.offered && self.second.prepared.load(Ordering::SeqCst) {
+            notes.extend(self.ensure_listener());
+        }
+        notes.dedup();
+        Ok(notes)
+    }
+
     fn wait_session(&self, seat: SeatNumber, client_name: &str, timeout: Duration) -> BackendResult<SessionInfo> {
         self.core.wait_session(&self.d, seat, client_name, timeout)
     }

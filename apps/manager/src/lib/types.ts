@@ -86,6 +86,8 @@ export interface SeatRuntime {
   redirect_notes?: string[];
   /** Latest refused redirection requests of the seat session (newest last). Added 2026-11-13. */
   redirect_refusals?: RedirectRefusal[];
+  /** The seat host's audio notes (`render_absent`: no playback device, ...). Added 2026-11-17. */
+  audio_notes?: string[];
 }
 
 /** One refused clipboard / drive / smart-card request of a seat session. */
@@ -906,6 +908,7 @@ export type RequestBody =
   | { type: 'hyper_v'; data: { action: HyperVAction } }
   | { type: 'steam_proxy_dll'; data: { action: SteamProxyAction } }
   | { type: 'vm_seats'; data: { action: VmAction } }
+  | { type: 'restart_term_service'; data: { confirm: boolean } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }
@@ -1004,11 +1007,20 @@ export interface VmHostStatus {
   seats: VmSeatInfo[];
 }
 
+/** Result of `restart_term_service` (added 2026-11-17). */
+export interface TermServiceRestart {
+  stopped_seats?: SeatNumber[];
+  restarted: boolean;
+  /** `restart_needs_reboot`, `termservice_restart_failed`. */
+  reason?: string;
+}
+
 export type ResponseBody =
   | { type: 'ack' }
   | { type: 'hyper_v'; data: HyperVStatus }
   | { type: 'steam_proxy'; data: SteamProxyStatus }
   | { type: 'vm_seats'; data: VmHostStatus }
+  | { type: 'term_service_restart'; data: TermServiceRestart }
   | { type: 'status'; data: ServiceStatus }
   | { type: 'backends'; data: BackendReport }
   | { type: 'checks'; data: Check[] }

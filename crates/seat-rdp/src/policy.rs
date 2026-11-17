@@ -11,24 +11,26 @@
 //!   1's user and with every other seat that has clipboard redirection on (note
 //!   `clipboard_shared_with_host_session`).
 //! - **Drives**: only volumes whose effective mask is exactly this seat, present, with a
-//!   drive letter the host can open, and **only file systems without ACLs** (FAT, FAT32,
-//!   exFAT); read-only when the policy says so. Shared volumes and other seats' volumes are
+//!   drive letter the host can open; read-only when the policy says so. File systems
+//!   without ACLs (FAT, FAT32, exFAT) are served by the seat host; volumes with ACLs (NTFS,
+//!   ReFS, any other) are marked `acl` and served **as the seat user** by the seat's drive
+//!   broker (`crate::channels::broker`, the session agent), note `drive_served_as_seat_user`. Shared volumes and other seats' volumes are
 //!   never offered. Each drive carries the volume GUID path its letter named at resolve
 //!   time; the host refuses the drive when the letter now names another volume
 //!   (`drive_letter_moved`). A seat-owned volume without a global letter (the
 //!   `session_drive_letters` gate moved it into the seat's own logon session) cannot be
 //!   opened by the host by letter: it is skipped with a note (`drive_without_global_letter`).
 //!
-//!   Why no NTFS / ReFS: drive IRPs run in the seat host, under the host's contained token
-//!   (SYSTEM at Low integrity, or the dedicated host account), **not as the seat user**.
-//!   On an ACL'd volume reads would follow the host's rights (a confused deputy: the seat
-//!   user could read files their own account cannot) and writes would be blocked by the
-//!   Low mandatory label anyway. FAT-family volumes carry no security descriptors, so the
-//!   host and the seat user have the same (full) access there. Impersonating the seat user
-//!   is not possible from a Low-integrity process (the token would drop to
-//!   identification level). Such volumes are skipped with `drive_acl_volume_refused`; the
-//!   seat session still reaches them directly through the device gates. **Untested on
-//!   hardware.**
+//!   Why the broker for NTFS / ReFS (rdp-listener 2026-11-17; before, such volumes were
+//!   refused): drive IRPs in the seat host run under the host's contained token (SYSTEM at
+//!   Low integrity, or the dedicated host account), **not as the seat user**. On an ACL'd
+//!   volume reads would follow the host's rights (a confused deputy: the seat user could
+//!   read files their own account cannot) and writes would be blocked by the Low mandatory
+//!   label. Impersonating the seat user is not possible from a Low-integrity process (the
+//!   token would drop to identification level). The seat's agent already runs with the
+//!   seat user's token, so it opens the files and Windows checks the user's own rights.
+//!   FAT-family volumes carry no security descriptors, so the host serves them itself.
+//!   **Untested on hardware.**
 //! - **Smart cards**: on when the policy asks and at least one reader whose effective mask
 //!   contains the seat is present; the session sees **only those readers** (the host filters
 //!   the reader list and refuses every call that names another reader). Readers are matched
@@ -68,14 +70,20 @@ pub fn same_volume(a: &str, b: &str) -> bool {
 }
 
 /// The host's check right before it opens a drive root: `expected` from the service,
-/// `actual` = `GetVolumeNameForVolumeMountPointW(root)` now, `fs` = its file system now.
-pub fn drive_identity_check(expected: &str, actual: Option<&str>, fs: Option<&str>) -> Result<(), &'static str> {
+/// `actual` = `GetVolumeNameForVolumeMountPointW(root)` now, `fs` = its file system now,
+/// `acl` = the service resolved it as an ACL'd volume (served by the drive broker as the
+/// seat user). A drive the host serves itself must still have no ACLs; a broker drive may
+/// have any file system (the broker opens it as the user).
+pub fn drive_identity_check(expected: &str, actual: Option<&str>, fs: Option<&str>, acl: bool) -> Result<(), &'static str> {
     if expected.trim().is_empty() {
         return Err("drive_volume_unknown");
     }
     match actual {
         Some(a) if same_volume(expected, a) => {}
         _ => return Err("drive_letter_moved"),
+    }
+    if acl {
+        return Ok(());
     }
     match fs {
         Some(f) if fs_without_acls(f) => Ok(()),
@@ -119,6 +127,7 @@ pub fn host_redirection_with(
     }
 
     if policy.drives != DriveRedirect::Off {
+        r.drives_on = true;
         let read_only = policy.drives == DriveRedirect::ReadOnly;
         for e in effective.iter().filter(|e| e.kind == DeviceKind::Storage && e.mask.single() == Some(seat)) {
             let Some(d) = device(e) else { continue };
@@ -127,9 +136,11 @@ pub fn host_redirection_with(
                 push_note(&mut r.notes, "drive_without_global_letter");
                 continue;
             }
-            if !s.file_system.trim().is_empty() && !fs_without_acls(&s.file_system) {
-                push_note(&mut r.notes, "drive_acl_volume_refused");
-                continue;
+            // An unknown file system is treated as ACL'd (the broker serves it as the user):
+            // the safe side of a FAT / NTFS mix-up.
+            let acl = !fs_without_acls(&s.file_system);
+            if acl {
+                push_note(&mut r.notes, "drive_served_as_seat_user");
             }
             for l in &s.letters {
                 let l = l.to_ascii_uppercase();
@@ -148,7 +159,7 @@ pub fn host_redirection_with(
                         continue;
                     }
                 };
-                r.drives.push(RedirectDrive { root: format!("{l}:\\"), name: drive_name(l), read_only, volume });
+                r.drives.push(RedirectDrive { root: format!("{l}:\\"), name: drive_name(l), read_only, volume, acl });
             }
         }
         if r.drives.is_empty() {
@@ -185,6 +196,7 @@ pub fn host_redirection_with(
         }
     }
 
+    r.printers_on = policy.printers != PrinterRedirect::Off;
     match policy.printers {
         PrinterRedirect::Off => {}
         PrinterRedirect::All => {
@@ -362,7 +374,7 @@ pub mod volume {
 
     /// [`super::drive_identity_check`] against the volume behind `d.root` now.
     pub fn check_drive(d: &seat_core::backend::session::RedirectDrive) -> Result<(), &'static str> {
-        super::drive_identity_check(&d.volume, name_of_root(&d.root).as_deref(), file_system(&d.root).as_deref())
+        super::drive_identity_check(&d.volume, name_of_root(&d.root).as_deref(), file_system(&d.root).as_deref(), d.acl)
     }
 }
 
@@ -412,7 +424,7 @@ mod tests {
         Some(format!("\\\\?\\Volume{{{}}}\\", l.to_ascii_lowercase()))
     }
     fn rd(l: char, read_only: bool) -> RedirectDrive {
-        RedirectDrive { root: format!("{l}:\\"), name: l.to_string(), read_only, volume: vol(l).unwrap() }
+        RedirectDrive { root: format!("{l}:\\"), name: l.to_string(), read_only, volume: vol(l).unwrap(), acl: false }
     }
     fn reader(name: &str, id: &str, unique: bool) -> SmartCardReaderRef {
         SmartCardReaderRef { instance_id: id.into(), name: name.into(), name_unique: unique }
@@ -502,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn drives_carry_their_volume_and_skip_acl_volumes() {
+    fn drives_carry_their_volume_and_acl_volumes_go_to_the_broker() {
         let devices = vec![
             dev("stor;ntfs", DeviceKind::Storage, "NTFS disk", stor_fs(&['E'], &["\\\\?\\Volume{e}\\"], "NTFS")),
             // The inventory says volume {z}; letter F now names {f}: another volume.
@@ -517,8 +529,11 @@ mod tests {
             .collect();
         let p = SeatRedirect { drives: DriveRedirect::ReadWrite, ..Default::default() };
         let r = host_redirection(s(2), &p, &effective, &devices, &vol);
-        assert_eq!(r.drives, vec![rd('G', false), rd('H', false)]);
-        assert_eq!(r.notes, vec!["drive_acl_volume_refused", "drive_letter_moved"]);
+        let acl = |l: char| RedirectDrive { acl: true, ..rd(l, false) };
+        // NTFS and the unknown file system go to the seat user's broker (`acl`).
+        assert_eq!(r.drives, vec![acl('E'), rd('G', false), acl('H')]);
+        assert_eq!(r.notes, vec!["drive_served_as_seat_user", "drive_letter_moved"]);
+        assert!(r.drives_on && !r.printers_on);
         // No resolver: a single volume with a single letter is still known; several are not.
         let two = vec![dev(
             "stor;two",
@@ -539,12 +554,15 @@ mod tests {
     #[test]
     fn drive_identity() {
         let v = "\\\\?\\Volume{abc}\\";
-        assert_eq!(drive_identity_check(v, Some("\\\\?\\VOLUME{ABC}"), Some("exFAT")), Ok(()));
-        assert_eq!(drive_identity_check(v, Some("\\\\?\\Volume{def}\\"), Some("exFAT")), Err("drive_letter_moved"));
-        assert_eq!(drive_identity_check(v, None, Some("exFAT")), Err("drive_letter_moved"));
-        assert_eq!(drive_identity_check("", Some(v), Some("exFAT")), Err("drive_volume_unknown"));
-        assert_eq!(drive_identity_check(v, Some(v), Some("NTFS")), Err("drive_acl_volume_refused"));
-        assert_eq!(drive_identity_check(v, Some(v), None), Err("drive_acl_volume_refused"));
+        assert_eq!(drive_identity_check(v, Some("\\\\?\\VOLUME{ABC}"), Some("exFAT"), false), Ok(()));
+        assert_eq!(drive_identity_check(v, Some("\\\\?\\Volume{def}\\"), Some("exFAT"), false), Err("drive_letter_moved"));
+        assert_eq!(drive_identity_check(v, None, Some("exFAT"), false), Err("drive_letter_moved"));
+        assert_eq!(drive_identity_check("", Some(v), Some("exFAT"), false), Err("drive_volume_unknown"));
+        assert_eq!(drive_identity_check(v, Some(v), Some("NTFS"), false), Err("drive_acl_volume_refused"));
+        assert_eq!(drive_identity_check(v, Some(v), None, false), Err("drive_acl_volume_refused"));
+        // A broker drive may be NTFS / ReFS; its volume must still match.
+        assert_eq!(drive_identity_check(v, Some(v), Some("NTFS"), true), Ok(()));
+        assert_eq!(drive_identity_check(v, Some("\\\\?\\Volume{def}\\"), Some("NTFS"), true), Err("drive_letter_moved"));
         assert!(fs_without_acls("FAT32") && fs_without_acls("exfat") && !fs_without_acls("ReFS"));
     }
 

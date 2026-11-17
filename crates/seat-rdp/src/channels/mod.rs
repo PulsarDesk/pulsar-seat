@@ -15,10 +15,17 @@
 //!
 //! Device ownership can change while a seat is connected (unplug, reassignment). The seat
 //! host keeps the service's latest resolution in [`LiveRedirection`] (refreshed on every
-//! `Reconfigure`): the reader filter reads it on every call, and the [`Ticker`] removes a
-//! drive from the session (`ClientDeviceListRemove`, open files closed) as soon as it is no
-//! longer in it, or no longer as writable. New drives appear at the next connection.
+//! `Reconfigure`): the reader filter reads it on every call, and the [`Ticker`] applies it
+//! to the open `rdpdr` channel (rdp-listener 2026-11-17): a drive or printer no longer in it
+//! (or a drive no longer as writable) leaves the session (`ClientDeviceListRemove`, open
+//! files closed), a drive or printer newly in it is announced (`ClientDeviceListAnnounce`
+//! with only the new device, MS-RDPEFS 3.2.5.1.9). ACL'd volumes join once the seat's
+//! drive broker ([`broker`]) is linked. The channel is joined whenever the seat's drive or
+//! printer policy is on, so this works also when the connection started with nothing; a
+//! policy switched on later and smart cards still need the next connection (static
+//! channels and the smart-card device are set up at connect).
 
+pub mod broker;
 pub mod clipboard;
 pub mod rdpdr;
 #[cfg(windows)]
@@ -167,6 +174,8 @@ pub struct Channels {
     pub log: RefusalLog,
     /// Latest resolution from the service; empty = `SessionParams.redirect.channels`.
     pub live: LiveRedirection,
+    /// Link to the seat's drive broker (ACL'd volumes served as the seat user).
+    pub broker: Option<rdpdr::BrokerConnector>,
 }
 
 /// Playback that drops the audio: `rdpsnd` advertised only because `rdpdr` needs it, on a
@@ -203,7 +212,8 @@ pub fn attach(connector: &mut ClientConnector, p: &SessionParams, ch: &Channels,
         }
     }
     let live = ch.live.get_or(&p.redirect.channels);
-    let rdpdr_wanted = !live.drives.is_empty() || (p.redirect.smartcards_on() && live.smartcards) || printers_wanted(&live);
+    let rdpdr_wanted =
+        !live.drives.is_empty() || live.drives_on || live.printers_on || (p.redirect.smartcards_on() && live.smartcards) || printers_wanted(&live);
     if rdpdr_wanted
         && let Some(r) = build_rdpdr(p, ch)
     {
@@ -288,17 +298,12 @@ impl Ticker {
         self.last = Instant::now();
         let mut out = Vec::new();
         if let Some(r) = stage.get_svc_processor_mut::<Rdpdr>() {
-            // Drives no longer assigned (or no longer writable): out of the session now.
-            let gone = r.downcast_backend_mut::<rdpdr::SeatRdpdr>().map(|b| b.drives_to_remove()).unwrap_or_default();
-            let mut removed = Vec::new();
-            for id in gone {
-                match r.remove_drive(id) {
-                    Ok(m) => removed.extend(m),
-                    Err(e) => log.refuse(rdpdr::CHANNEL_DRIVES, "drive_remove_failed", e.to_string()),
-                }
-            }
-            if !removed.is_empty() {
-                out.extend(stage.process_svc_processor_messages(SvcProcessorMessages::<Rdpdr>::new(removed))?);
+            // Live updates: drives / printers no longer assigned (or a drive no longer
+            // writable) leave the session, newly assigned ones are announced.
+            let c = r.downcast_backend_mut::<rdpdr::SeatRdpdr>().map(|b| b.live_changes()).unwrap_or_default();
+            let msgs = apply_live_changes(r, c, log);
+            if !msgs.is_empty() {
+                out.extend(stage.process_svc_processor_messages(SvcProcessorMessages::<Rdpdr>::new(msgs))?);
             }
         }
         if let Some(r) = stage.get_svc_processor_mut::<Rdpdr>() {
@@ -316,6 +321,36 @@ impl Ticker {
         }
         Ok(out)
     }
+}
+
+/// Apply live changes to the open channel; returns the PDUs to send.
+pub fn apply_live_changes(r: &mut Rdpdr, c: rdpdr::LiveChanges, log: &RefusalLog) -> Vec<ironrdp_svc::SvcMessage> {
+    let mut msgs = Vec::new();
+    for id in c.remove_drives {
+        match r.remove_drive(id) {
+            Ok(m) => msgs.extend(m),
+            Err(e) => log.refuse(rdpdr::CHANNEL_DRIVES, "drive_remove_failed", e.to_string()),
+        }
+    }
+    for id in c.remove_printers {
+        match r.remove_printer(id) {
+            Ok(m) => msgs.extend(m),
+            Err(e) => log.refuse(rdpdr::CHANNEL_PRINTERS, "printer_remove_failed", e.to_string()),
+        }
+    }
+    for (id, name) in c.add_drives {
+        match r.add_dynamic_drive(id, name) {
+            Ok(m) => msgs.extend(m),
+            Err(e) => log.refuse(rdpdr::CHANNEL_DRIVES, "drive_add_failed", e.to_string()),
+        }
+    }
+    for p in c.add_printers {
+        match r.add_dynamic_printer(p) {
+            Ok(m) => msgs.extend(m),
+            Err(e) => log.refuse(rdpdr::CHANNEL_PRINTERS, "printer_add_failed", e.to_string()),
+        }
+    }
+    msgs
 }
 
 #[cfg(test)]
@@ -381,6 +416,9 @@ mod tests {
         }
         fn allowed(&self, _r: &str) -> bool {
             false
+        }
+        fn groups(&self) -> Result<Vec<String>, ironrdp_rdpdr::pdu::esc::ReturnCode> {
+            Ok(Vec::new())
         }
     }
 

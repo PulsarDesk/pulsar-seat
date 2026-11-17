@@ -2271,3 +2271,68 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     installer/scripts 63, shim tests (1 + 8 + 3) + check x86_64 / i686 / aarch64. No driver
     touched, no test deleted.
   - Open: the HYPOTHESIS lists of both packages (architecture.md) are unchanged.
+
+- 2026-11-17 (rdp-listener, worktree branch). RDP seat gaps closed in code; unit-tested,
+  untested on hardware.
+  - **NTFS / ReFS drive redirection** (`seat_rdp::channels::broker`): ACL'd volumes the
+    seat owns alone are served **as the seat user** by the seat session's agent (drive
+    broker), not by the Low-integrity host. The host asks `host_drive_broker`; the service
+    makes two anonymous pipes (`Platform::broker_pipes`, one per direction, ends moved with
+    `DuplicateHandle(DUPLICATE_CLOSE_SOURCE)`), gives the agent the allowlist (agent task
+    `drive_broker {read, write, drives}`) and the host its ends. The broker refuses roots
+    off the allowlist and moved letters; the host forwards only re-encoded drive IRPs and
+    passes on only completions of its own broker device ids. `RedirectDrive.acl`, note
+    `drive_served_as_seat_user`; `drive_acl_volume_refused` now only when a FAT volume
+    turned ACL'd after resolve.
+  - **Live drive and printer changes** (`SeatRdpdr::live_changes`,
+    `channels::apply_live_changes`): unassigned drives / printers leave the open channel,
+    newly assigned ones are announced (MS-RDPEFS 3.2.5.1.9). FAT drives get a back-end of
+    their own, printers a back-end per discovery batch with device-id remapping, ACL'd
+    drives join once the broker is linked. The channel and its drive / printer
+    capabilities are joined whenever the policy is on (`HostRedirection.drives_on`,
+    `printers_on`). Dynamic printers need a patched `ironrdp-rdpdr` 0.9.0, vendored in
+    `third_party/ironrdp-rdpdr` (`PATCHES.md`, `[patch.crates-io]`, workspace `exclude`).
+  - **ListReaderGroups** answered by the host: only groups holding one of the seat's
+    readers (`seat_groups`, `SCardListReaderGroupsW`).
+  - **Second listener:** no documented per-address bind exists (only `LanAdapter` /
+    `SetNetworkAdapterLanaID`, a LANA per adapter), so the firewall design stays and is
+    documented. New admin request `restart_term_service {confirm}`: stops every running
+    seat but seat 1 (signed out), then `SessionBackend::restart_termservice`
+    (`LoopbackListener::operator_restart`, journaled) and re-checks the listener; manager
+    Advanced tab button with a confirmation dialog.
+  - **Audio notice:** host request `host_audio_report` -> `SeatRuntime.audio_notes`
+    (`render_absent`, ...); `degraded` says `audio_no_endpoint` / `audio_not_bound` /
+    `audio_service_not_running` for an RDP-bridge seat instead of `audio_console_shared`;
+    manager Status tab shows both with English / Turkish labels.
+  - **Credential test:** interactive logon first, network logon only after 1385 (logon
+    right denied) (`credential_test_order`).
+  - Gates (worktree): cargo test --workspace 1797 passed / 6 ignored (was 1777; +20),
+    clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 218 tests /
+    check / build, bun test installer/scripts 63, shim tests (1 + 8 + 3) + check x86_64 /
+    i686 / aarch64. No driver touched. No test deleted.
+  - HYPOTHESIS pending hardware: a Low-integrity seat host can use pipe ends the service
+    duplicated into it; the agent's token opens the seat user's files with the user's
+    rights; Windows servers accept device announcements (drives and printers) on an open
+    rdpdr channel after logon; the interactive logon of an account denied local logon
+    returns 1385 after the password check; TermService restarts cleanly with the seats
+    stopped; the loopback interface has no LANA.
+  - Open: a policy switched on while connected and smart-card changes still need the next
+    connection (static channels and the pre-logon smart-card device are fixed at connect).
+
+- 2026-11-17 (integration, rdp-listener into main after compat-tweaks and hyperv-seats).
+  Merged worktree-wf_41b135b3-32a-1 (8236d48). Conflicts were additive on both sides and
+  kept both: protocol requests / responses (`steam_proxy_dll`, `vm_seats` and
+  `restart_term_service`), agent tasks (`RefreshEnvironment` / `ReportDpi` and
+  `DriveBroker`, with both helper functions in seat-host `agent.rs`), the service
+  `Platform` trait and its mock (Hyper-V / guest link and `broker_pipes`), request
+  dispatch and service tests, manager api / types / demo. Manager Advanced tab: imports of
+  both `CompatSettings` and `ConfirmDialog`; the device-class target list stays the
+  compat-tweaks one (disks and volumes never offered) next to the TermService restart
+  dialog state.
+  - Gates (main checkout, sources touched first): cargo test --workspace 1849 passed /
+    6 ignored (1834 + 15 from rdp-listener; the worktree entry above says 1797 / +20, a
+    stale seat-stream test binary from the shared target dir; its clean run was 1792 / +15),
+    clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 237 tests /
+    check 0 errors / build, bun test installer/scripts 63, shim tests (1 + 8 + 3) + check
+    x86_64 / i686 / aarch64. No driver touched, no test deleted.
+  - Open: the rdp-listener HYPOTHESIS list above is unchanged (nothing run on hardware).

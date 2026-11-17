@@ -139,6 +139,12 @@ pub struct SeatRuntime {
     /// [`MAX_REDIRECT_REFUSALS`]). Added 2026-11-13 (additive).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redirect_refusals: Vec<RedirectRefusal>,
+    /// The seat host's audio bridge notes (`render_absent`: the seat has no playback
+    /// endpoint, `capture_absent`, `render_open_failed`, `render_lost`, ...), from
+    /// `host_audio_report`; empty while the seat's sound works. Added 2026-11-17
+    /// (rdp-listener, additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_notes: Vec<String>,
 }
 
 /// How many redirection refusals a seat keeps.
@@ -173,6 +179,7 @@ impl SeatRuntime {
             degraded: Vec::new(),
             redirect_notes: Vec::new(),
             redirect_refusals: Vec::new(),
+            audio_notes: Vec::new(),
         }
     }
 }

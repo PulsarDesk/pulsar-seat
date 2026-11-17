@@ -574,6 +574,16 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
         .map((s) => ({ seat: s.number, state: 'missing', guest_address: s.remote?.vm?.guest_address ?? '' }));
       return structuredClone(vmHost);
     },
+    restartTermService: async () => {
+      await step('restart_term_service');
+      needAdmin();
+      const stopped = state.seats.filter((x) => x.seat !== 1 && x.state.state !== 'off').map((x) => x.seat);
+      for (const seat of stopped) {
+        state.seats = state.seats.filter((x) => x.seat !== seat);
+        emit({ type: 'seat_state', data: { runtime: { seat, state: { state: 'off' }, since_ms: Date.now() } } });
+      }
+      return { stopped_seats: stopped, restarted: true };
+    },
     removeKioskUser: async (seat) => {
       await step('remove_kiosk_user');
       needAdmin();
