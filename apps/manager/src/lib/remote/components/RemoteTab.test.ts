@@ -16,14 +16,14 @@ async function setup(admin = true) {
   await store.init();
   render(App, { store });
   const user = userEvent.setup();
-  if (admin) await user.click(await screen.findByRole('button', { name: t.later }));
+  await screen.findByRole('link', { name: new RegExp(`^${t.nav.remote}`) });
   return { api, store, user };
 }
 
 describe('remote seats tab', () => {
   it('creates a remote seat through apply_config and lists it with its kind', async () => {
     const { api, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.remote }));
+    await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
     expect(await screen.findByText(rt.nav.noSeats)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: `+ ${rt.nav.newSeat}` }));
     await user.type(screen.getByRole('textbox'), 'Salon');
@@ -34,7 +34,7 @@ describe('remote seats tab', () => {
     // The seat page opens for the new seat.
     expect(await screen.findByRole('combobox', { name: rt.seat.streamBackend })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('tab', { name: t.tabs.seats }));
+    await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.seats}`) }));
     const list = screen.getByRole('region', { name: t.seatKind.remoteList });
     expect(within(list).getByText(t.seatKind.remote)).toBeInTheDocument();
     expect(within(list).getByText(`${seat!.number}. Salon`)).toBeInTheDocument();
@@ -59,7 +59,7 @@ describe('remote seats tab', () => {
 
   it('standard users see the admin hint and send no remote request', async () => {
     const { api, user } = await setup(false);
-    await user.click(screen.getByRole('tab', { name: t.tabs.remote }));
+    await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
     expect(screen.getAllByText(t.adminNeeded).length).toBeGreaterThan(0);
     expect(api.calls.filter((c) => c.startsWith('get_host_info') || c === 'list_local_users')).toEqual([]);
   });

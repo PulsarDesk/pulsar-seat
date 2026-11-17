@@ -31,6 +31,8 @@
       }
       s = new ManagerStore(api);
       store = s;
+      // Dev preview only: the visual captures drive states (service down, notices) through it.
+      if (import.meta.env.DEV && !isTauri()) (globalThis as { __store?: ManagerStore }).__store = s;
       await s.init();
     })();
     return () => s?.dispose();

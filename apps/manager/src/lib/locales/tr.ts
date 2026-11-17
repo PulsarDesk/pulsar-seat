@@ -241,6 +241,7 @@ const t = {
     status: 'Durum',
     statusOk: ': hizmet çalışıyor',
     statusDown: ': hizmete ulaşılamıyor',
+    statusLink: ': hizmete yeniden bağlanılıyor',
     count: (n: number) => `${n} koltuk`,
     version: (v: string) => `Sürüm ${v}`,
     location: 'Konum',

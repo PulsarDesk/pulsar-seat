@@ -37,4 +37,5 @@ export { default as Switch } from './Switch.svelte';
 export { default as Toasts } from './Toasts.svelte';
 export { default as Toc } from './Toc.svelte';
 export { ICONS, ICON_NAMES, type IconName } from './icons.ts';
+export { NoticeHost, noticeHost, provideNoticeHost } from './notice-host.svelte.ts';
 export type * from './types.ts';

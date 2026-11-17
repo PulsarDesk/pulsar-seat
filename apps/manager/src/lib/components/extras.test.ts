@@ -4,6 +4,7 @@ import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
+import NetworkTab from './NetworkTab.svelte';
 import LogLevelDialog from './LogLevelDialog.svelte';
 import OutputsDialog from './OutputsDialog.svelte';
 import PictureDialog from './PictureDialog.svelte';
@@ -21,26 +22,39 @@ async function setup() {
   await store.init();
   render(App, { store });
   const user = userEvent.setup();
-  await user.click(await screen.findByRole('button', { name: t.later }));
+  await screen.findByRole('region', { name: t.canvas.system });
   return { api, store, user };
 }
+
+/** The network addresses page (its content moves into Advanced in P4; NetworkTab until then). */
+async function setupNetwork() {
+  localStorage.clear();
+  const api = createDemoApi();
+  const store = new ManagerStore(api);
+  await store.init();
+  const user = userEvent.setup();
+  const view = render(NetworkTab, { store });
+  return { api, store, user, view };
+}
+
+const navLink = (name: string) => screen.getByRole('link', { name: new RegExp(`^${name}`) });
 
 describe('tab leave with unsaved changes', () => {
   it('asks save / discard / cancel and follows the answer', async () => {
     const { store, user } = await setup();
     await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
     expect(store.dirty).toBe(true);
-    await user.click(screen.getByRole('tab', { name: t.tabs.basic }));
+    await user.click(navLink(t.nav.settings));
     let dlg = screen.getByRole('alertdialog');
     await user.click(within(dlg).getByRole('button', { name: t.unsaved.cancel }));
     expect(store.prefs.tab).toBe('seats');
-    await user.click(screen.getByRole('tab', { name: t.tabs.basic }));
+    await user.click(navLink(t.nav.settings));
     dlg = screen.getByRole('alertdialog');
     await user.click(within(dlg).getByRole('button', { name: t.unsaved.discard }));
-    expect(store.prefs.tab).toBe('basic');
+    expect(store.prefs.tab).toBe('settings');
     expect(store.dirty).toBe(false);
     // No changes: no question.
-    await user.click(screen.getByRole('tab', { name: t.tabs.seats }));
+    await user.click(navLink(t.nav.seats));
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(store.prefs.tab).toBe('seats');
   });
@@ -48,8 +62,7 @@ describe('tab leave with unsaved changes', () => {
 
 describe('network tab', () => {
   it('assigns a static address with a rule and a program', async () => {
-    const { api, store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.network }));
+    const { api, store, user } = await setupNetwork();
     const rows = screen.getAllByTestId('ip-row');
     await user.click(within(rows[1]).getByRole('button', { name: t.network.edit }));
     const dlg = await screen.findByRole('dialog', { name: t.ipDialog.title(2) });
@@ -65,13 +78,12 @@ describe('network tab', () => {
     expect(store.draft?.seats[1].ip_binding).toEqual({ address: '192.168.1.21', rule: 'only_listed' });
     expect(store.draft?.settings.ip_programs?.[0]).toEqual({ title: 'lan.exe', path: 'C:\\Oyunlar\\lan.exe', enabled: true });
     expect(screen.getAllByTestId('ip-row')[1]).toHaveTextContent('192.168.1.21');
-    await user.click(screen.getByRole('button', { name: t.bar.save }));
+    await store.save();
     expect(api.state.config.seats[1].ip_binding?.address).toBe('192.168.1.21');
   });
 
   it('says how the addresses are applied: driver or the environment fallback', async () => {
-    const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.network }));
+    const { store, user } = await setupNetwork();
     const box = await screen.findByTestId('ip-enforcement');
     await vi.waitFor(() => expect(box).toHaveTextContent(t.network.driverMissing(t.network.driverReasons.driver_not_loaded)));
     store.backends = {
@@ -90,8 +102,7 @@ describe('network tab', () => {
   });
 
   it('adds programs from the browse and folder pickers without duplicates', async () => {
-    const { store, user } = await setup();
-    await user.click(screen.getByRole('tab', { name: t.tabs.network }));
+    const { store, user } = await setupNetwork();
     await user.click(within(screen.getAllByTestId('ip-row')[1]).getByRole('button', { name: t.network.edit }));
     const dlg = await screen.findByRole('dialog', { name: t.ipDialog.title(2) });
     await user.click(within(dlg).getByTestId('ip-browse'));

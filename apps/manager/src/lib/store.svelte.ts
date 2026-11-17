@@ -4,7 +4,7 @@
 // turns pushed events into state. All privileged work is a request to the service.
 
 import type { Api, TrayAction, Unlisten } from './api.ts';
-import { errorCodeTag, errorLabel, initLocale, noticeLabel, seatList, storeLangPref, t, type LangPref } from './i18n.ts';
+import { errorCodeTag, errorLabel, initLocale, noticeLabel, storeLangPref, t, type LangPref } from './i18n.ts';
 import {
   buildCanvas,
   clone,
@@ -105,6 +105,12 @@ export class ManagerStore {
   sameAccountSeat = $state<SeatNumber | null>(null);
   /** Seat that pending hotkey input moves go to (`input_move_pending`), until confirmed. */
   pendingInputMove = $state<SeatNumber | null>(null);
+  /**
+   * Seats that must restart before a saved change takes effect (`apply_config`
+   * `restart_seats`). The seat card shows "Restart required" + Restart (redesign P2/P3,
+   * replaces the info toast). A seat leaves the list when it restarts, stops or starts.
+   */
+  restartRequired = $state<SeatNumber[]>([]);
 
   readonly configDirty = $derived(!sameConfig(this.draft, this.saved));
   readonly hasPendingPasswords = $derived(Object.keys(this.pendingPasswords).length > 0);
@@ -285,6 +291,9 @@ export class ManagerStore {
           seats.push(r);
           seats.sort((a, b) => a.seat - b.seat);
           this.status = { ...this.status, seats };
+        }
+        if (r.state.state === 'off' || r.state.state === 'starting') {
+          if (this.restartRequired.includes(r.seat)) this.restartRequired = this.restartRequired.filter((n) => n !== r.seat);
         }
         if (r.state.state === 'error') {
           this.toast('error', `${t.seatN(r.seat)}: ${errorLabel({ code: 'internal', message: '', reason: r.state.reason })}`, r.state.reason);
@@ -468,7 +477,9 @@ export class ManagerStore {
       // The account change is saved: only now may its password reach the service.
       const passwordsOk = await this.flushPasswords();
       if (passwordsOk && !this.prefs.noShowGoodApply) this.toast('ok', t.saved.ok);
-      if (result.restart_seats.length) this.toast('info', t.saved.restartSeats(seatList(result.restart_seats)));
+      if (result.restart_seats.length) {
+        this.restartRequired = [...new Set([...this.restartRequired, ...result.restart_seats])].sort((a, b) => a - b);
+      }
       if (result.reboot_needed) this.toast('info', t.saved.reboot);
       void this.refreshDevices();
       void this.refreshStatus();
@@ -508,6 +519,33 @@ export class ManagerStore {
 
   stopSeat(seat: SeatNumber): Promise<boolean> {
     return this.run(() => this.api.stopSeat(seat));
+  }
+
+  /**
+   * "Restart" on a seat that must restart after a save: stop it, then start it again; the
+   * seat then runs with the saved settings. HYPOTHESIS (not run on hardware): the service
+   * queues the start behind the stop, as it does for a manual stop followed by a start.
+   */
+  async restartSeat(seat: SeatNumber): Promise<boolean> {
+    const ok = await this.run(async () => {
+      await this.api.stopSeat(seat);
+      await this.api.startSeats([seat]);
+    });
+    if (ok) this.restartRequired = this.restartRequired.filter((n) => n !== seat);
+    return ok;
+  }
+
+  /**
+   * "Stop all seats" (seats board overflow menu): every running seat except seat 1 (the
+   * console) and the seat this manager runs on, so the operator's own session stays.
+   */
+  async stopAllSeats(): Promise<boolean> {
+    const own = this.hello?.caller.seat ?? null;
+    const seats = (this.status?.seats ?? []).filter((r) => r.seat !== 1 && r.seat !== own && r.state.state !== 'off').map((r) => r.seat);
+    if (!seats.length) return true;
+    return this.run(async () => {
+      for (const n of seats) await this.api.stopSeat(n);
+    });
   }
 
   relogon(seat: SeatNumber): Promise<boolean> {

@@ -21,9 +21,16 @@ describe('prefs', () => {
   });
 
   it('round-trips through localStorage', () => {
-    savePrefs({ ...DEFAULT_PREFS, sharedInSeats: true, tab: 'basic' });
+    savePrefs({ ...DEFAULT_PREFS, sharedInSeats: true, tab: 'settings' });
     const p = loadPrefs();
     expect(p.sharedInSeats).toBe(true);
-    expect(p.tab).toBe('basic');
+    expect(p.tab).toBe('settings');
+  });
+
+  it('maps the tabs of older builds to the new views', () => {
+    expect(parsePrefs(JSON.stringify({ tab: 'basic' })).tab).toBe('settings');
+    expect(parsePrefs(JSON.stringify({ tab: 'network' })).tab).toBe('advanced');
+    expect(parsePrefs(JSON.stringify({ tab: 'status' })).tab).toBe('status');
+    expect(parsePrefs(JSON.stringify({ tab: 'nope' })).tab).toBe('seats');
   });
 });

@@ -7,6 +7,7 @@ import { applyLocale, t } from '#lib/i18n.ts';
 import KitHost from '../test/ui/KitHost.svelte';
 import MenuHost from '../test/ui/MenuHost.svelte';
 import ModalHost from '../test/ui/ModalHost.svelte';
+import NoticeHostFixture from '../test/ui/NoticeHostFixture.svelte';
 import Button from './Button.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
 import Icon from './Icon.svelte';
@@ -324,6 +325,22 @@ describe('SaveBar and ConfirmDialog', () => {
     expect(reset).not.toHaveAttribute('aria-disabled');
     await user.click(reset);
     expect(onConfirm).toHaveBeenCalledWith(false);
+  });
+});
+
+describe('PageHead notice region', () => {
+  it('renders the shell notices right under the page head and counts itself', async () => {
+    render(NoticeHostFixture, { items: [{ kind: 'warn', text: 'Windows was updated.' }] });
+    const head = screen.getByRole('heading', { level: 1, name: 'Seats' }).closest('header') as HTMLElement;
+    const notice = screen.getByText('Windows was updated.');
+    expect(head.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByTestId('heads')).toHaveTextContent('1');
+  });
+
+  it('a page without a PageHead leaves the region to the shell', () => {
+    render(NoticeHostFixture, { items: [{ kind: 'warn', text: 'x' }], withHead: false });
+    expect(screen.getByTestId('heads')).toHaveTextContent('0');
+    expect(screen.queryByText('x')).toBeNull();
   });
 });
 
