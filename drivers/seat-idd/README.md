@@ -102,7 +102,7 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
 - HDR (minor 3, IddCx 1.10 at run time, detected with `IDD_IS_FUNCTION_AVAILABLE` /
   `IDD_IS_FIELD_AVAILABLE`): the adapter sets `CAN_PROCESS_FP16`; the 1.10 callbacks
   (`QueryTargetInfo`, `ParseMonitorDescription2`, `QueryTargetModes2`, `CommitModes2`,
-  `SetDefaultHdrMetaData`) report `HIGH_COLOR_SPACE | WIDE_COLOR_SPACE` and 8 + 10 bit
+  `SetDefaultHdrMetaData`, plus `SetGammaRamp` accepted and not applied since GammaSupport is NONE) report `HIGH_COLOR_SPACE | WIDE_COLOR_SPACE` and 8 + 10 bit
   modes for HDR-flagged monitors (Windows takes the panel's HDR capability from the
   physical monitor's EDID we pass), nothing for the others. Frames come from
   `ReleaseAndAcquireBuffer2`: an HDR monitor's section holds 8 bytes per pixel and gets
@@ -130,10 +130,17 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
 
 - Whether a local non-console session can own an IddCx monitor at all (spec 40 q1); the
   monitor is plugged for the whole PC today, so every session's DWM may see it.
-- **One adapter per render GPU: built (minor 3, 2026-11-17), untested on hardware.**
-  HYPOTHESIS: a software devnode with the local hardware id gets the INF's device
-  security and starts its own IddCx adapter next to the root one; the OS honours one
-  render adapter per IddCx adapter. HDR frames, the 1.10 callbacks of the local role and
+- **FP16 caps need the gamma ramp callback (test VM 2026-11-17): fixed.** With `CAN_PROCESS_FP16` and no
+  `EvtIddCxMonitorSetGammaRamp` the local role failed to start on Windows 11 26300 ARM64
+  (`CM_PROB_FAILED_START`, 0xC000009E); with it (955be0c) the device starts under HVCI and
+  the WDF verifier.
+- **One adapter per render GPU: VM PASS (2026-11-17, ARM64, one GPU, two LUIDs).** `idd_monitor
+  multi`: a monitor on LUID A went to the root adapter (bound to A), a monitor on LUID B made
+  the service-side client create `SWD\PulsarSeatIdd\gpu1` (bound to B, ready, FP16 flag);
+  removes went to the right adapters; closing the client removed the devnode (a
+  non-present record stays until `pnputil /remove-device`). Not tested: two real GPUs
+  (HYPOTHESIS: the OS composes each adapter's monitors on its bound GPU; the VM's LUIDs
+  are all Microsoft Basic Render). HDR frames, the 1.10 callbacks of the local role and
   the FP16 to BGRA conversion are untested too.
 - Who owns the swap chain after a *failed* assign is not stated in the docs: the driver
   does not delete it on those paths (a leak beats a double delete). Untested on hardware.

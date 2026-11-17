@@ -10,7 +10,8 @@ Scripts for testing an installed Pulsar Seat MSI inside a local Hyper-V test VM
 | `vm.ps1` | host (dot-source) | `Reset-TestVm`, `Install-TestMsi`, `Invoke-Vm`, `Invoke-Seatctl`, `Get-VmReport` over PowerShell Direct. |
 | `ui.ps1` | host | Synthetic keyboard and screenshots over Hyper-V WMI (`-Do "key:0x5B+0x52; type:cmd; key:0x0D; shot:x"`); `cred:<name>` types a VM password from the credential file without printing it. |
 | `scenarios.ps1` | host (dot-source after `vm.ps1`) | `Set-U1Config`, `Start-U1Seat`, `Set-U3Config`, `Update-VmConfig`, `Get-SeatSummary`. |
-| `testsign.ps1` | host | **VM driver round only (TEST ONLY).** `-Action Cert` makes the self-signed test certificate under `%USERPROFILE%\.pulsar-seat\testsign\` (key DPAPI-protected, never printed, never in the repo); `-Action Sign` test-signs the built driver packages into `target\vm\testsigned\<Platform>\` (TEST ONLY minifilter altitude in the staged INF). `check-payload` refuses every such file (`test_signed`). |
+| `devnode.ps1` | VM (admin) | **TEST ONLY.** Root-enumerated devnodes over SetupAPI / newdev (devcon-like, no extra binary): `-Action Add -HardwareId Root\PulsarSeatIdd -Inf ...`, `Remove`, `List`. |
+| `testsign.ps1` | host | **VM driver round only (TEST ONLY).** `-Action Cert` makes the self-signed test certificate under `%USERPROFILE%\.pulsar-seat\testsign\` (key DPAPI-protected, never printed, never in the repo); `-Action Sign` test-signs the built driver packages into `target\vm\testsigned\<Platform>\` (`-Source` = build-drivers.ps1 `-OutRoot`, default `target\drivers`; `-Projects` re-signs a subset and clears the others) (TEST ONLY minifilter altitude in the staged INF). `check-payload` refuses every such file (`test_signed`). |
 
 Rules: Hyper-V Administrators membership is enough (no elevation on the host). Passwords
 travel only as `PSCredential` objects into the VM and are never printed. PowerShell
@@ -38,3 +39,19 @@ keyboard and mouse, one virtual display), USB ports, per-seat audio endpoints (t
 session has no audio device), GPU. Seat device assignments are therefore empty or share
 the one keyboard / mouse. With one monitor, kiosk seats (U3) cannot get a display: seat 1
 must keep one (`seat_one_no_display`) and monitors are exclusive.
+
+## VM round notes (2026-11-17)
+
+- `Restart-VM` is a hard reset: registry writes not yet flushed (`verifier /standard`)
+  were lost. Reboot from inside (`shutdown /r /t 3`) and wait for PowerShell Direct.
+- Programs that must run as SYSTEM (`idd_monitor`, `tscon`): a one-shot scheduled task
+  `/ru SYSTEM` that writes its output to a file (status.md, VM round 2026-11-17).
+- Back to pstest's console session after fast-user-switch tests: `tscon 1 /dest:console`
+  as SYSTEM (no password typed).
+- `ui.ps1 type:` (`Msvm_Keyboard.TypeText`) produced only a few raw-input packets for the
+  kiosk shell; discrete `key:` presses arrive one by one. Use `key:` for kiosk typing.
+- `crates/seat-display/examples/idd_monitor.rs`: `gpus` lists DXGI LUIDs, `multi <a> <b>`
+  exercises one IddCx adapter per render GPU.
+- Extra seat addresses: the VM's NIC set static with the DHCP address plus two addresses
+  (`SkipAsSource`); `pktmon` shows the source address on the wire. The checkpoint
+  restore undoes it.

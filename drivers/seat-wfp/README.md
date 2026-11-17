@@ -7,18 +7,30 @@ processes the seat's IPv4 address. Each seat can then bind the same port on its 
 (LAN games, per-seat network identity) without the program knowing about seats.
 
 **Status: built (WDK 10.0.28000, ARM64 + x64, Release + Debug, zero warnings, infverif /w,
-ApiValidator Universal and the WDK code analysis clean, 2026-11-17), unsigned, never
-loaded.** Our drivers stay unloaded until Microsoft-signed (docs/agents/plan.md). Until
-then the service reports `source_ip_callout: not_installed` and seats use the user-mode
-fallback (`PULSAR_SEAT_SOURCE_IP` in the environment of the programs the service starts,
-`seat_compat::srcip`). Everything here is **untested on hardware**.
+ApiValidator Universal and the WDK code analysis clean, 2026-11-17), unsigned; loaded only
+test-signed in the Hyper-V test VM (ARM64, HVCI on, Driver Verifier; results in "VM round
+2026-11-17" below).** Our drivers stay unloaded on real PCs until Microsoft-signed
+(docs/agents/plan.md). Until then the service reports `source_ip_callout: not_installed`
+and seats use the user-mode fallback (`PULSAR_SEAT_SOURCE_IP` in the environment of the
+programs the service starts, `seat_compat::srcip`). Untested on physical hardware and x64.
 
 ## What it does
 
 | Layer | When | Effect |
 | --- | --- | --- |
-| `FWPM_LAYER_ALE_BIND_REDIRECT_V4` | a TCP / UDP socket of a mapped process binds to `0.0.0.0` (explicit `bind`, or the implicit bind of the first `connect` / `sendto`) | the bind becomes `<seat address>:<same port>` |
-| `FWPM_LAYER_ALE_CONNECT_REDIRECT_V4` | an outbound TCP connect / UDP flow of a mapped process to a non-loopback destination, local address not yet the seat's | local address set to the seat address (backstop for sockets bound before the map arrived) |
+| `FWPM_LAYER_ALE_BIND_REDIRECT_V4` | a TCP socket of a mapped process binds to `0.0.0.0` with a port of its own (listeners); a UDP socket binds to `0.0.0.0` (explicit `bind`, or the implicit bind of the first `sendto`) | the bind becomes `<seat address>:<same port>` |
+| `FWPM_LAYER_ALE_CONNECT_REDIRECT_V4` | an outbound TCP connect / UDP flow of a mapped process to a non-loopback destination, local address not yet the seat's | local address set to the seat address: every TCP client socket (implicit bind, or a wildcard bind to port 0, both skipped by the bind layer since VM round 2026-11-17), and sockets bound before the map arrived |
+
+**TCP clients vs. UDP (VM round 2026-11-17).** The bind layer cannot see the destination.
+A seat address given to the implicit bind of a TCP client made every connect to `127/8`
+fail (`WSAEADDRNOTAVAIL`), so TCP client sockets (`FWP_CONDITION_FLAG_IS_IMPLICIT_BIND`,
+or `0.0.0.0:0`; the flag alone did not cover .NET clients) are left to the connect layer:
+the SYN to a LAN / internet address left with the seat address (pktmon) and loopback
+connects work. For UDP the connect layer's local address was **not** honoured for
+unconnected sends (the datagram left with the PC's default address), so UDP keeps the bind
+redirect. **Limit:** a seat program that sends UDP to `127/8` from a socket it never bound
+fails with `WSAEADDRNOTAVAIL`; put such a program on the seat's program list as an
+exception (`all_except_listed`).
 
 Left alone: explicit binds to a given address (the program chose it; the bind classify
 records the socket's transport endpoint handle and address in a 1024-slot table, and the
@@ -117,10 +129,29 @@ fast mutex: `FwpmXxx` calls must run at PASSIVE_LEVEL with APCs enabled.
 | `src/callout.c` | callout registration, BFE subscription, dynamic session objects, classify |
 | `src/guids.c` | GUID definitions |
 
+## VM round 2026-11-17 (ARM64 VM, test-signed, HVCI on, Secure Boot off)
+
+`verifier /standard /driver seatwfp.sys` + WDF verifier (`Parameters\Wdf\VerifierOn`):
+
+- **PASS:** loads at boot under HVCI and Verifier; `netsh wfp show filters` lists "Pulsar
+  Seat bind redirect" / "connect redirect" (`FWPM_LAYER_ALE_*_REDIRECT_V4`); the service
+  opens the control device (the SID-string SDDL is accepted) and reports `loaded` 1.0
+  (`source_ip.enforcement = driver`); `pnputil /add-driver /install` creates the service
+  but does not start it (HYPOTHESIS confirmed); four unloads (`sc stop`) and reloads under
+  Verifier without a violation, leak report, bugcheck or CodeIntegrity block.
+- **PASS, two seats (fast user switching, addresses .231 / .232 on one adapter, rule
+  `all_programs`):** a listener on `0.0.0.0:5000` in each seat binds to its seat address
+  (both at once, no conflict); UDP server `0.0.0.0:5001` gets the seat address; the TCP SYN
+  and the UDP datagram to a remote address leave with the seat address on the wire
+  (pktmon); explicit binds to `127.0.0.1` stay; TCP loopback works (after the fix above).
+- **Limit:** UDP to `127/8` from an unbound socket (see above).
+- Not run here: rule `only_listed` / `all_except_listed`, network-share app ids, dual-stack
+  sockets, `PassThrough`, BFE restart, x64.
+
 ## Driver Verifier and test plan (test VM, test-signed, `tools/vm/testsign.ps1`)
 
-Nothing below has run. On a Hyper-V VM (ARM64 and x64), Memory Integrity and Secure Boot
-on, test-signed package (VM only):
+Plan for the remaining steps (2026-11-17 ran 1, 2, 3, 5, 6 and 8 on ARM64, see above). On a
+Hyper-V VM (ARM64 and x64), Memory Integrity on, test-signed package (VM only):
 
 1. `verifier /standard /driver seatwfp.sys` plus `/irql` checking (IRQL rules matter
    here: classify runs up to DISPATCH_LEVEL, the map lock is an `EX_SPIN_LOCK`), reboot.
@@ -145,10 +176,12 @@ on, test-signed package (VM only):
 8. Unload with traffic running (`sc stop PulsarSeatWfp`) under Verifier: no leak report
    (pool tag `PsWf`), no bugcheck.
 
-Open questions (HYPOTHESIS until the VM run): PASSIVE_LEVEL classify for both layers; local
-address rewrite honoured at the connect-redirect layer for TCP and UDP; app id format for
-programs on network shares; dual-stack sockets classified at the V4 layers; the SID-string
-SDDL accepted by the control device.
+Answered in the VM (2026-11-17): the SID-string SDDL is accepted; the connect-redirect
+local-address rewrite is honoured for TCP, not for unconnected UDP sends; both layers
+classified the seat processes' sockets (the rewrites happened, so the session lookup ran
+at PASSIVE_LEVEL; `GET_STATS` itself was not read: the control device admits only the
+service). Still HYPOTHESIS: app id format for programs on network shares; dual-stack
+sockets classified at the V4 layers.
 
 ## Clean room
 

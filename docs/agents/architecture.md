@@ -706,6 +706,12 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
   the cursor onto it; a minimised full-screen window is restored unless the seat user
   minimised it. One exclusive full-screen window per PC at a time (one foreground); with
   `seat1_desktop = true` no kiosk app gets the foreground (seat 1 has it).
+- **Focus at launch / shim attach (VM 2026-11-17):** when several autostart apps show
+  their first window in one pass, the app launched last gets the focus
+  (`kiosk::latest_arrival`); before, the z-order walk's last window won and keys went to an
+  app behind the visible one. The shell attaches the per-process module only when the
+  opt-in AppHelp database is registered (`shimctl install`); in the VM the native ARM64
+  module (`shim\arm64\`) loaded into ARM64 charmap / cmd and seat keys reached cmd.
 - **Limits / open:** since the parity review the module answers `GetAsyncKeyState` /
   `GetKeyState` / `GetKeyboardState` from the seat's own key table and turns
   `SetCursorPos` / `SetPhysicalCursorPos` / `ClipCursor` into seat-cursor requests (section
@@ -1091,9 +1097,20 @@ monitor's same-container hub keeps a seat the monitor is not on.
      launch_env}`); the agent never gets it (children inherit the environment whatever the
      rule says). Without a loaded (Microsoft-signed) driver this is the only path.
   Driver limits: IPv4 only; explicit binds to an address and loopback traffic untouched;
-  per session, not per seat. HYPOTHESIS until the VM run (driver README test plan):
-  PASSIVE_LEVEL classify, connect-redirect local-address rewrite, app ids of network
-  paths, SID-string SDDL on the control device.
+  per session, not per seat. VM round 2026-11-17 (ARM64, test-signed, HVCI, Verifier; two
+  fast-user-switch seats): listeners and UDP sockets get the seat address at bind, TCP
+  clients at connect (SYN and datagrams left with the seat addresses, pktmon), loopback
+  TCP works, the SID-string SDDL is accepted. Limit: UDP to `127/8` from a socket the
+  program never bound fails (`WSAEADDRNOTAVAIL`; exception via the program list).
+  HYPOTHESIS: app ids of network paths, dual-stack sockets.
+- **Fast user switching from a logon-screen console (VM 2026-11-17):** when the console
+  has nobody signed in, seat 1 has no session of its own and used to follow the console
+  into a seat N hand-over session. Now: the credential provider's answer for a seat 1
+  without a user stays `pending` during a hand-over; `refresh_console_seat` never binds
+  seat 1 to a session a seat N holds (and gives it back once the seat's session is known);
+  session events of such a session go to the seat, not to seat 1; and a seat whose logon
+  screen went to another seat's hand-over before a sign-in is not restarted (it stopped
+  two seats from swapping the console for ever).
 - **SYSTEM children:** seat hosts get `D:P(A;;GA;;;SY)` as process / thread DACL
   (`win/platform.rs` `launch`); the console helper and seat-session SYSTEM launches pass
   `SpawnSpec.object_sddl = SYSTEM_ONLY_SDDL`.

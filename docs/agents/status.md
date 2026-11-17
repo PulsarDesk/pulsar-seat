@@ -2036,3 +2036,87 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
     without the module; WinRT camera enumeration; Ctrl+Alt+Del / Win+L from kiosk
     keyboards (Windows handles them before user mode). Hardware tests for everything
     above.
+- 2026-11-17 (parity round, package vm-tests, on main). VM round on `PulsarSeatTest-arm64`
+  only (maintainer approval relayed: Secure Boot off + test-signing, TEST ONLY certificate,
+  our drivers loaded there, Driver Verifier, Memory Integrity). Checkpoint
+  `testsigning-hvci` (VBS 2, HVCI running, testsigning on, Secure Boot off). ARM64 MSI built
+  from main with `build-installer.ps1 -Arch arm64` (last one 6058fa64...1500, tree b2d4679),
+  ARM64 drivers with `build-drivers.ps1` into `target\wf\drivers-review`, test-signed with
+  `tools/vm/testsign.ps1 -Source` into `target\vm\testsigned\ARM64` only. Verifier:
+  `verifier /standard /driver seatwfp.sys` (standard flags incl. IRQL, pool, DDI) + WDF
+  verifier (`Parameters\Wdf\VerifierOn`) for `PulsarSeatWfp` and `PulsarSeatIdd`; no
+  violation, bugcheck, dump or CodeIntegrity block (3033 / 3077 / 3087 / 3089) in the round.
+  At the end: MSI uninstalled, driver packages deleted, Verifier reset, VM restored to
+  `clean-logged-on` and Off.
+  - **Bugs found and fixed on main (each with gates green):**
+    - 027e66c `seat-host` alone did not build (`seat_pads` named in seat-input `hid.rs`
+      without the `local-pads` feature): `build-installer.ps1` failed with E0433.
+    - 0251da8 stray DLLs of the shared target dir (`split_pad.dll`, a `PulsarSplitShim.dll`)
+      landed in the MSI root (check-payload `shim_outside_folder`): held aside while tauri
+      bundles.
+    - 955be0c seat-idd local role failed to start with FP16 caps (`CM_PROB_FAILED_START`,
+      0xC000009E): `EvtIddCxMonitorSetGammaRamp` was missing.
+    - c7ba2f7 seat-wfp: TCP clients of a seat could not reach `127.0.0.1`
+      (`WSAEADDRNOTAVAIL`): TCP client sockets go to the connect layer now.
+    - 534a690, 61ce466, 27c0277 fast user switching from a logon-screen console: the
+      provider was told "seat 1, not pending" 26 ms before the grant (seat stayed at the
+      logon screen); seat 1 bound itself to the seat's session; the seat's Logon was handled
+      as seat 1's (agent refused, no startup apps); two pending seats swapped the console
+      every 5 s for ever. Four regression tests, each failing without its fix.
+    - b2d4679 kiosk: with charmap + cmd autostarted, keys went to charmap behind cmd (the
+      z-order walk's last window got the focus); the app launched last gets it now.
+  - **PASS / FAIL per item:**
+    - seat-wfp under Verifier + HVCI: **PASS** (loads at boot, two WFP filters, service
+      `loaded` 1.0 over the service-SID-only control device, `pnputil /install` does not
+      start the primitive service, 4 unload / reload cycles clean).
+    - Source-IP enforcement, two seats (fast user switching, seat 2 .231, seat 3 .232):
+      **PASS** for listeners (both seats on port 5000 at once), UDP server, TCP SYN and UDP
+      datagrams to a remote address (pktmon: seat addresses on the wire), explicit binds,
+      TCP loopback (after c7ba2f7). **FAIL (documented limit):** UDP to `127/8` from a
+      socket the program never bound (`WSAEADDRNOTAVAIL`; the connect layer's local address
+      is not honoured for unconnected UDP sends; program-list exception).
+    - Multi-adapter seat-idd: **PASS** (after 955be0c): 2 monitors add / remove on the root
+      adapter; `idd_monitor multi` with two LUIDs: root adapter bound to LUID A, the client
+      created `SWD\PulsarSeatIdd\gpu1` bound to LUID B (READY | BOUND | FP16), removes
+      routed, devnode gone when the client closed; service reports `idd` `loaded` 1.3.
+    - Remote IDD role: **NOT TESTABLE** (no provider on main creates the
+      `PulsarSplit_IndirectDisplay` device; a root devnode still ends in
+      `CM_PROB_FAILED_POST_START`, as on 2026-11-16).
+    - ARM64 shim inject + seat map: **PASS.** With the opt-in AppHelp database (shipped
+      ARM64 `shimctl install --arm64`), the kiosk shell attached `shim\arm64\PulsarSplitShim.dll`
+      to native ARM64 charmap and cmd; seat keys reached the shimmed cmd (`echo ok`). Shim
+      seat map: `Runtime\Seats\<session>` for the off-console FUS seat (seat id, user SID,
+      `hid_isolation`), `Runtime\KioskSeats\01` for the kiosk seat (devices, flags 7). The
+      seat on the console is left out by design. MSI uninstall removed the AppHelp
+      database and the System32 / SysWOW64 modules.
+    - Kiosk per-seat users: **NOT TESTABLE here** (a kiosk seat 2..N needs a monitor of its
+      own; the VM has one, which seat 1 must keep: seat 2 stays `waiting_for_display`, so no
+      `PulsarKiosk02` logon happens). Seat 1 kiosk shell, console delegation to conhost and
+      its restore at uninstall: PASS.
+    - Compat tweaks apply / revert: **PASS** (lock-screen image, driver-update exclusion,
+      hide fast user switching under `desktops`; refused under `fast_user_switch` by
+      validation as designed; per-user palm check `AAPThreshold` = 2 in the seat user's
+      hive; reverted on disable, re-applied on enable, reverted at uninstall).
+    - Deny-logon option (`same_account = deny`): **NOT TESTABLE on client Windows** (fast
+      user switching reconnects the same account's existing session, so one account never
+      has two sessions; unit test `same_account_deny_logs_the_second_seat_off` stands).
+      No other deny-logon option exists on main.
+    - Per-seat environment: **PASS** (startup apps of seat 2 / 3 got their own
+      `PULSAR_SEAT_SOURCE_IP` and `SDL_GAMECONTROLLER_IGNORE_DEVICES` /
+      `SDL_JOYSTICK_IGNORE_DEVICES`).
+    - Credential test (`test_seat_credentials`): **PASS** (`ok` for both stored passwords,
+      `1326` "user name or password is incorrect" for a wrong one, `missing_credentials`
+      for seat 1).
+    - MSI install / reinstall / uninstall: **PASS**; `REMOVEUSERDATA=1` left no service,
+      install dir, ProgramData, HKLM keys, accounts, groups, tasks, firewall rules,
+      credential provider / filter CLSIDs, tweak values or console delegation.
+  - New tools: `tools/vm/devnode.ps1` (root devnodes over SetupAPI), `testsign.ps1 -Source`,
+    `idd_monitor gpus` / `multi`; notes in tools/vm/README.md.
+  - Gates (main, after b2d4679 + docs): cargo test --workspace 1777 passed / 6 ignored (was
+    1773; +4 regression tests), clippy -D warnings aarch64 host + x86_64-pc-windows-msvc
+    clean, shim tests (1 + 8 + 3) + check x86_64 / i686 / aarch64, manager 217 tests / check
+    0 errors / build, bun test installer/scripts 63, build-drivers.ps1 seat-idd + seat-wfp
+    ARM64 + x64 Release + Debug clean (PE 0xAA64 / 0x8664). No test deleted.
+  - Open: x64 VM / hardware run of both drivers; UDP loopback limit; kiosk per-seat users
+    and seats 2..N kiosk need a second monitor (hardware); remote IDD role needs a protocol
+    provider; `same_account = deny` needs concurrent sessions (Server / RDS).
