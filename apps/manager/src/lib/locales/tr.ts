@@ -154,7 +154,10 @@ const t = {
     tooLong: (max: number) => `Liste çok uzun; kaydederken ilk ${max} satır tutulur.`,
     invalidPath: 'Yol boş olamaz.',
     openNetwork: 'Ağ bağlantılarını aç',
-    openDevices: 'Aygıt Yöneticisi’ni aç'
+    openDevices: 'Aygıt Yöneticisi’ni aç',
+    staticHelp: 'Yalnızca sabit IPv4 adresleri listelenir. Ek adres için ağ bağdaştırıcısına ikinci bir adres ekleyin.',
+    listNote: (n: string) => `Liste Gelişmiş › Ağ adresleri bölümünde, bütün koltuklar için ortak (${n}).`,
+    openList: 'Program listesini düzenle'
   },
 
   picture: {
@@ -201,7 +204,11 @@ const t = {
       assigned: 'Koltuk başlarken bu çıkışa bağlanır',
       forced: 'Çıkışa zorla atanacak',
       unassigned: 'Atanmadı'
-    } as Record<string, string>
+    } as Record<string, string>,
+    outputFor: (name: string) => `Çıkış: ${name}`,
+    cloneOutputs: 'Çıkışlar (klonlama)',
+    perMonitor: 'Bu ekranın seçenekleri',
+    machineWide: 'Bütün ekranlar'
   },
 
   camera: {
@@ -378,7 +385,41 @@ const t = {
     clear: 'Temizle',
     resetAll: 'Bütün ayarları sıfırla',
     resetAllHelp: 'Koltuklar, atamalar, kayıtlı parolalar ve sistem ayarları varsayılana döner. Geri alınamaz.',
-    resetButton: 'Sıfırla'
+    resetButton: 'Sıfırla',
+    // P4 (2026-11-17): eski koltuk tablosunun geri kalanı her koltuğun menüsünde.
+    startModeLabels: {
+      manual: 'Elle',
+      at_boot: 'Windows açılınca',
+      after_seat_one_logon: '1. koltukta biri oturum açınca'
+    } as Record<string, string>,
+    renameMenu: 'Adını değiştir…',
+    gpuMenu: 'Ekran kartı tercihi…',
+    padIgnoreMenu: 'SDL oyunlarının yok saydığı oyun kumandaları…',
+    wallpaperOn: 'Koltuk duvar kâğıdını aç',
+    wallpaperOff: 'Koltuk duvar kâğıdını kapat',
+    seatGroupSettings: 'Ayarlar',
+    seatGroupSeat: 'Koltuk',
+    logonScreenFact: 'Oturum açma ekranı',
+    autoLogonFact: (user: string) => `Kendiliğinden oturum: ${user}`,
+    passwordFailingFact: 'kayıtlı parola reddedildi',
+    remoteFact: 'Uzak koltuk',
+    kioskFact: (n: number) => `Kiosk: ${n} uygulama`,
+    gpuFact: 'ekran kartı tercihi',
+    padsFact: 'sanal oyun kumandası',
+    redirectFact: 'yönlendirme açık',
+    addSeat: 'Koltuk ekle',
+    seatLimit: 'Bir bilgisayarda en fazla 16 koltuk olabilir.',
+    kioskSeats: 'Kiosk koltukları',
+    windowsPanels: 'Windows ayarları',
+    lockScreenImage: 'Kilit ekranında koltuk resmi',
+    lockScreenImageHelp: 'Pulsar Seat açıkken kilit ekranında koltuğun resmi görünür.',
+    noShowGoodApply: 'Kaydettikten sonra başarı iletisini gösterme',
+    updatesCheckOn: 'denetim açık',
+    updatesCheckOff: 'denetim kapalı',
+    padIgnoreTitle: (seat: string) => `${seat}: SDL oyunlarının yok saydığı oyun kumandaları`,
+    padIgnoreLabel: 'Oyun kumandası kimlikleri',
+    padIgnoreBad: (list: string) => `0xVVVV/0xPPPP biçiminde değil, yok sayılır: ${list}`,
+    adminOnlyEdit: 'Bu ayarları yalnızca bir yönetici değiştirebilir.'
   },
 
   advancedPage: {
@@ -416,7 +457,69 @@ const t = {
     outputsHelp: 'Her ekranı besleyecek ekran kartı çıkışı, klonlama, yazılım imleci',
     cpuHelp: 'Koltuk başına çekirdek sınırı',
     cpuAll: 'Hepsi bütün çekirdekleri kullanıyor',
-    logLevelHelp: 'Hatalar ve uyarılar her zaman yazılır. Ek ayrıntı sorun ararken işe yarar.'
+    logLevelHelp: 'Hatalar ve uyarılar her zaman yazılır. Ek ayrıntı sorun ararken işe yarar.',
+    // P4 (2026-11-17)
+    gates: 'Aygıt erişim denetimi',
+    gatesHelp: 'Her biri bir aygıt türünü verildiği koltukla sınırlar.',
+    tocRdp: 'Parolasız koltuklar',
+    tocTweaks: 'Sistem ayarları',
+    tocApps: 'Koltuklardaki uygulamalar',
+    loopbackInactive: 'Yalnızca “Eşzamanlı tam oturumlar” oturum yöntemiyle kullanılır.',
+    loopbackEnabled: 'Parolası kayıtlı olmayan koltuklar için ayrı Uzak Masaüstü bağlantı noktası kullan',
+    loopbackPort: 'Bağlantı noktası',
+    loopbackPortHelp: '1024 ile 65535 arası, 3389 olamaz.',
+    loopbackAccounts: 'Bu bağlantı noktasından oturum açabilecek ek hesaplar',
+    loopbackAccountsHelp: 'Her satıra bir hesap: kullanıcı ya da ETKİALANI\\kullanıcı. Koltuklara atanmış hesaplar her zaman izinlidir; yöneticiler bu bağlantı noktasından oturum açamaz.',
+    restartTs: 'Uzak Masaüstü hizmetlerini yeniden başlat',
+    experimentalAcked: 'Deneysel uyarı onaylandı.',
+    experimentalRead: 'Uyarıyı oku',
+    startDelay: 'İlk koltuk başlamadan önce bekle',
+    betweenSeats: 'Koltuklar arası bekleme',
+    seatTimeout: 'Koltuk başlatma zaman aşımı',
+    seatTimeoutHelp: '30 ile 120 saniye arası.',
+    relogonDelay: 'Oturum kapandıktan sonra yeniden açma gecikmesi',
+    audioWait: 'Ses hizmetini bekleme süresi',
+    monitorIdle: 'Boşta kalan ek koltuğun ekranını kapat',
+    monitorIdleHelp: '0 = kapalı.',
+    uncleanHelp: 'Çökme ya da elektrik kesintisinden sonra döngüye girmemek için.',
+    crashLimit: 'Hizmet art arda çökerse güvenli kipte kal',
+    hotkey: 'Klavye/fare geçiş kısayolu',
+    hotkeyHelp: 'Bu kısayola basan klavye bir sonraki koltuğa geçer.',
+    logLevel: 'Günlük ayrıntısı',
+    logLevels: {
+      errors: 'Yalnızca hatalar ve uyarılar',
+      info: 'Bilgi',
+      debug: 'Hata ayıklama',
+      trace: 'İz (çok ayrıntılı)',
+      custom: 'Özel'
+    } as Record<string, string>,
+    classDefaults: 'Sınıf düzeyinde varsayılan erişim tanımları',
+    classDefaultsClasses: 'Kapsanan aygıt sınıfları',
+    outputs: 'Görüntü çıkışları',
+    cpu: 'İşlemci çekirdekleri',
+    cpuLimited: (n: number) => `${n} koltukta sınır var`,
+    palmCheck: 'Dokunmatik yüzey avuç algılama eşiği',
+    programAdd: 'Program ekle',
+    programBrowse: 'Gözat',
+    programFolder: 'Klasördeki programları ekle',
+    programNone: 'Listede henüz program yok.',
+    programTitle: 'Başlık',
+    programPath: 'Yol',
+    programEnabled: 'Etkin',
+    hyperv: 'Hyper-V sanal bağdaştırıcıları',
+    hypervState: 'Hyper-V',
+    hypervSeatNic: 'Koltuk bağdaştırıcısı',
+    wuDetails: 'Windows Update ayarları',
+    denyClasses: 'Engellenecek türler',
+    objectRuleFor: (n: number) => `Kural ${n}`,
+    steamProxyResult: 'Sonuç'
+  },
+
+  /** Tablolardaki satır işlemleri (P4). */
+  rowAction: {
+    remove: (what: string) => `Kaldır: ${what}`,
+    enabled: (what: string) => `Etkin: ${what}`,
+    row: (n: number) => `satır ${n}`
   },
 
   statusPage: {
@@ -613,7 +716,12 @@ const t = {
     invalidUser: 'Hesap adı boş olamaz ve \\ / " @ karakterlerini içeremez.',
     invalidDomain: 'Etki alanı adı geçersiz.',
     usersFailed: 'Yerel kullanıcılar alınamadı; adı elle yazabilirsiniz.',
-    savedHint: 'Parola hemen ve yalnızca hizmete gönderilir; dosyalara yazılmaz, sonradan görüntülenemez.'
+    savedHint: 'Parola hemen ve yalnızca hizmete gönderilir; dosyalara yazılmaz, sonradan görüntülenemez.',
+    accountType: 'Hesap türü',
+    signIn: 'Oturum açma',
+    localShort: 'Yerel',
+    domainShort: 'Etki alanı',
+    logonScreenHelp: 'Kullanıcı kendi parolasını yazar.'
   },
 
   basic: {
@@ -738,7 +846,15 @@ const t = {
       noEndpoint: 'Ses: koltuğa ayrı ses aygıtı atanmamış (1. koltuğun varsayılan aygıtı)',
       unsupported: 'Ses: bu Windows sürümünde uygulama başına ses aygıtı yok (1. koltuğun varsayılan aygıtı)',
       sharedApp: (seats: number[]) => `Aynı program ${seats.join(', ')}. koltukta da var: ses aygıtı ayarını paylaşırlar`
-    }
+    },
+    idleLabel: 'İşlem yapılmazsa oturumu kapat',
+    idleHelp: '0 = kapalı, en çok 1440.',
+    limitsTitle: 'Sınırlar',
+    limitsSummary: 'Kiosk koltuğu tam bir kilit değildir',
+    enableHelp: 'Koltuğun ekranlarında yalnızca aşağıdaki uygulamalar açılır.',
+    sub: 'Kiosk koltuğu 1. koltukla aynı Windows oturumunda çalışır.',
+    autostartFor: (name: string) => `Koltuk açılınca başlat: ${name}`,
+    more: 'Bağımsız değişkenler, mağaza uygulaması ve tam ekran'
   },
 
   startModes: {
@@ -1177,7 +1293,8 @@ const t = {
   conflicts: {
     title: 'Uygulanamayan atamalar',
     body: 'Aşağıdaki aygıtların ataması olduğu gibi uygulanamıyor. Yine de kaydedebilir ya da vazgeçip düzeltebilirsiniz.',
-    saveAnyway: 'Yine de kaydet'
+    saveAnyway: 'Yine de kaydet',
+    fix: 'Düzelt'
   },
 
   saved: {
@@ -1246,7 +1363,9 @@ const t = {
     confirm2Title: 'Emin misiniz?',
     confirm2Body: 'Son onay: bütün Pulsar Seat ayarları silinecek.',
     confirm: 'Sıfırla',
-    done: 'Ayarlar sıfırlandı.'
+    done: 'Ayarlar sıfırlandı.',
+    typeLabel: (word: string) => `Onaylamak için ${word} yazın`,
+    word: 'SIFIRLA'
   },
 
   quit: {
@@ -1309,7 +1428,9 @@ const t = {
     press: 'Alana tıklayıp bir tuşa basın',
     invalid: 'Bu tuş kullanılamaz.',
     off: 'Kısayolu kapat',
-    current: 'Seçilen'
+    current: 'Seçilen',
+    field: 'Kısayol',
+    fieldLabel: 'Kısayol: alana gelip bir tuşa basın'
   },
 
   diagnostics: {
@@ -1317,7 +1438,8 @@ const t = {
     body: 'Rapor bu bilgisayara kaydedilir; hiçbir yere gönderilmez. Parolalar asla rapora girmez.',
     maskUsers: 'Kullanıcı adlarını gizle (önerilen)',
     create: 'Raporu oluştur',
-    done: (path: string) => `Rapor kaydedildi: ${path}`
+    done: (path: string) => `Rapor kaydedildi: ${path}`,
+    maskHelp: 'Önerilen.'
   },
 
   import: {
@@ -1325,14 +1447,17 @@ const t = {
     body: 'Başka bir çoklu koltuk yazılımının dışa aktardığı aygıt atama dosyasının (JSON) içeriğini yapıştırın. Hiçbir şey kendiliğinden kaydedilmez; sonucu gözden geçirip kaydedin.',
     file: 'Dosya seç',
     run: 'İçe aktar',
-    done: 'İçe aktarılan yapılandırma yüklendi. Gözden geçirip kaydedin.'
+    done: 'İçe aktarılan yapılandırma yüklendi. Gözden geçirip kaydedin.',
+    content: 'İçerik'
   },
 
   experimental: {
     title: 'Deneysel oturum yöntemi',
     ack: 'Riskleri okudum ve anladım',
     enable: 'Deneysel yöntemi seç',
-    cancel: 'Vazgeç'
+    cancel: 'Vazgeç',
+    sub: 'Deneysel',
+    ackFirst: 'Önce onay kutusunu işaretleyin.'
   },
 
   wizard: {

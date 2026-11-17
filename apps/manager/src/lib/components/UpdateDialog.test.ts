@@ -32,7 +32,7 @@ describe('UpdateDialog', () => {
     const { api, p } = props();
     render(UpdateDialog, p);
     await screen.findByText(updateText.needsOptIn);
-    expect(screen.getByRole('button', { name: updateText.check })).toBeDisabled();
+    expect(screen.getByRole('button', { name: updateText.check })).toHaveAttribute('aria-disabled', 'true');
     expect(api.calls).not.toContain('check_for_update');
   });
 
@@ -42,7 +42,7 @@ describe('UpdateDialog', () => {
     render(UpdateDialog, p);
     await user.click(await screen.findByLabelText(updateText.optIn));
     expect(setSettings).toHaveBeenCalledWith({ check: true, weekly: false });
-    await waitFor(() => expect(screen.getByRole('button', { name: updateText.check })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: updateText.check })).not.toHaveAttribute('aria-disabled'));
     await user.click(screen.getByRole('button', { name: updateText.check }));
     await screen.findByText(updateText.state.available('0.2.0'));
     await user.click(screen.getByRole('button', { name: updateText.download }));

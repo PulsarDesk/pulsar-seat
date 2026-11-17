@@ -151,7 +151,7 @@ describe('SeatCompatDialog', () => {
     await user.click(screen.getByRole('button', { name: t.seatCompat.envAdd }));
     await fireEvent.input(screen.getByTestId('env-name'), { target: { value: 'GAME_PROFILE' } });
     await fireEvent.input(screen.getByTestId('env-value'), { target: { value: 'seat2' } });
-    await user.click(screen.getByTestId('deny-local-logon'));
+    await user.click(screen.getByRole('switch', { name: t.seatCompat.deny }));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenCalledWith([{ name: 'GAME_PROFILE', value: 'seat2' }], true);
   });
@@ -159,8 +159,9 @@ describe('SeatCompatDialog', () => {
   it('refuses a reserved name and explains when deny is not possible', async () => {
     render(SeatCompatDialog, { seat: 2, environment: [{ name: 'Path', value: 'x' }], denyLocalLogon: false, denyAllowed: false, onSave: vi.fn(), onCancel: vi.fn() });
     expect(screen.getByText(t.seatCompat.envInvalid)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByText(t.seatCompat.denyUnavailable)).toBeInTheDocument();
-    expect(screen.getByTestId('deny-local-logon')).toBeDisabled();
+    // Not possible here: a plain value, no switch (redesign P4).
+    expect(screen.queryByRole('switch', { name: t.seatCompat.deny })).toBeNull();
   });
 });

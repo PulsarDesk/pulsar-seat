@@ -1,11 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Update check (spec 90 §11 item 10): opt-in, the service checks / downloads / verifies,
-     installing always asks the administrator first. -->
+<!-- Update check (spec 90 §11 item 10; redesign 74-dlg-update): opt-in, the service checks /
+     downloads / verifies, installing always asks the administrator first. -->
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import Modal from './Modal.svelte';
-  import ConfirmDialog from './ConfirmDialog.svelte';
-  import { errorLabel, t } from '#lib/i18n.ts';
+  import { Button, ConfirmDialog, Group, Icon, LockedValue, Modal, Notice, Row, Switch } from '#lib/ui/index.ts';
+  import { archLabel, errorLabel, t } from '#lib/i18n.ts';
   import type { UpdateSettings, UpdateStatus } from '#lib/types.ts';
   import { canDownload, canInstall, describeUpdate, formatChecked, isBusy, updateText } from '#lib/update.ts';
 
@@ -59,10 +58,11 @@
     schedule();
   }
 
-  async function toggle(check: boolean, weekly: boolean) {
+  async function toggle(on: boolean, weekly: boolean) {
+    if (!s || busy) return;
     busy = true;
     error = null;
-    const ok = await setSettings({ check, weekly: check && weekly });
+    const ok = await setSettings({ check: on, weekly: on && weekly });
     busy = false;
     if (ok) await refresh();
   }
@@ -71,47 +71,49 @@
   onDestroy(() => {
     if (timer) clearTimeout(timer);
   });
+
+  const failed = $derived(s?.state === 'failed');
 </script>
 
-<Modal title={updateText.title} {onClose}>
-  <p>{updateText.intro}</p>
-  <label class="toggle">
-    <input
-      type="checkbox"
-      checked={s?.enabled ?? false}
-      disabled={!s || busy}
-      onchange={(e) => toggle(e.currentTarget.checked, s?.weekly ?? false)}
-    />
-    {updateText.optIn}
-  </label>
-  <label class="toggle">
-    <input
-      type="checkbox"
-      checked={s?.weekly ?? false}
-      disabled={!s || busy || !s.enabled}
-      onchange={(e) => toggle(true, e.currentTarget.checked)}
-    />
-    {updateText.weekly}
-  </label>
+<Modal title={updateText.title} size="md" {onClose}>
+  <p class="help">{updateText.intro}</p>
+  <Group>
+    <Row label={updateText.optIn}>
+      {#snippet control()}
+        {#if s}
+          <Switch checked={s.enabled} label={updateText.optIn} onchange={(on) => toggle(on, s?.weekly ?? false)} />
+        {:else}
+          <LockedValue text={t.loading} />
+        {/if}
+      {/snippet}
+    </Row>
+    {#if s?.enabled}
+      <Row label={updateText.weekly}>
+        {#snippet control()}
+          <Switch checked={s?.weekly ?? false} label={updateText.weekly} onchange={(on) => toggle(true, on)} />
+        {/snippet}
+      </Row>
+    {/if}
+  </Group>
   {#if s}
-    <p>{updateText.current(s.current_version, s.arch)}</p>
-    <p class="muted">{formatChecked(s.checked_unix_s)}</p>
-    <p role="status" class:error={s.state === 'failed'}>{describeUpdate(s)}</p>
-    {#if s.latest?.page_url}<p class="muted">{updateText.pageHint(s.latest.page_url)}</p>{/if}
-    {#if !s.enabled}<p class="muted">{updateText.needsOptIn}</p>{/if}
+    <div role="status"><Group>
+      <Row label={describeUpdate(s)} help={`${updateText.current(s.current_version, '')} · ${archLabel(s.arch)} · ${formatChecked(s.checked_unix_s)}`}>
+        {#snippet lead()}<Icon name={failed ? 'alert' : s?.state === 'up_to_date' ? 'check-circle' : 'info'} tone={failed ? 'warn' : undefined} />{/snippet}
+      </Row>
+    </Group></div>
+    {#if s.latest?.page_url}<p class="help">{updateText.pageHint(s.latest.page_url)}</p>{/if}
+    {#if !s.enabled}<p class="help">{updateText.needsOptIn}</p>{/if}
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#snippet buttons()}
-    <button type="button" disabled={!s?.enabled || busy || isBusy(s) || s?.state === 'installing'} onclick={() => step(check)}
-      >{updateText.check}</button
-    >
-    {#if canDownload(s)}
-      <button type="button" class="primary" disabled={busy || isBusy(s)} onclick={() => step(download)}>{updateText.download}</button>
-    {/if}
+  {#if error}<Notice kind="danger" text={error} />{/if}
+  {#snippet foot()}
     {#if canInstall(s)}
-      <button type="button" class="primary" disabled={busy} onclick={() => (confirm = true)}>{updateText.install}</button>
+      <Button kind="primary" label={updateText.install} disabled={busy} onclick={() => (confirm = true)} />
     {/if}
-    <button type="button" onclick={onClose}>{t.close}</button>
+    {#if canDownload(s)}
+      <Button kind={canInstall(s) ? 'secondary' : 'primary'} label={updateText.download} disabled={busy || isBusy(s)} onclick={() => step(download)} />
+    {/if}
+    <Button label={updateText.check} disabled={!s?.enabled || busy || isBusy(s) || s?.state === 'installing'} onclick={() => step(check)} />
+    <Button label={t.close} onclick={onClose} />
   {/snippet}
 </Modal>
 
@@ -130,10 +132,3 @@
     onCancel={() => (confirm = false)}
   />
 {/if}
-
-<style>
-  .muted {
-    opacity: 0.75;
-    font-size: 0.9em;
-  }
-</style>

@@ -50,17 +50,21 @@ describe('network tab', () => {
   it('assigns a static address with a rule and a program', async () => {
     const { api, store, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.network }));
+    // The shared program list is edited on the page (Advanced > Network addresses).
+    await user.click(screen.getByTestId('ip-program-add'));
+    const path = screen.getByTestId('ip-program-path') as HTMLInputElement;
+    await user.type(path, 'C:\\Oyunlar\\lan.exe');
+    path.dispatchEvent(new Event('change', { bubbles: true }));
     const rows = screen.getAllByTestId('ip-row');
-    await user.click(within(rows[1]).getByRole('button', { name: t.network.edit }));
+    await user.click(within(rows[1]).getByRole('button', { name: t.advancedPage.ipEditFor('Misafir') }));
     const dlg = await screen.findByRole('dialog', { name: t.ipDialog.title(2) });
-    const select = within(dlg).getByTestId('ip-address') as HTMLSelectElement;
-    // Only static addresses are offered.
+    const select = within(dlg).getByLabelText(t.ipDialog.address) as HTMLSelectElement;
+    // Only static addresses are offered (plus "not assigned").
     await vi.waitFor(() => expect(within(select).getAllByRole('option')).toHaveLength(3));
     expect(within(select).queryByText(/192\.168\.1\.57/)).not.toBeInTheDocument();
     await user.selectOptions(select, '192.168.1.21');
-    await user.click(within(dlg).getByLabelText(t.ipDialog.rules.only_listed));
-    await user.type(within(dlg).getByTestId('ip-new-path'), 'C:\\Oyunlar\\lan.exe');
-    await user.click(within(dlg).getByRole('button', { name: t.ipDialog.add }));
+    await user.click(within(dlg).getByRole('radio', { name: new RegExp(`^${t.ipDialog.rules.only_listed}`) }));
+    expect(within(dlg).getAllByText(t.ipDialog.listNote(t.network.programsCount(1))).length).toBeGreaterThan(0);
     await user.click(within(dlg).getByRole('button', { name: t.save }));
     expect(store.draft?.seats[1].ip_binding).toEqual({ address: '192.168.1.21', rule: 'only_listed' });
     expect(store.draft?.settings.ip_programs?.[0]).toEqual({ title: 'lan.exe', path: 'C:\\Oyunlar\\lan.exe', enabled: true });
@@ -92,11 +96,10 @@ describe('network tab', () => {
   it('adds programs from the browse and folder pickers without duplicates', async () => {
     const { store, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.network }));
-    await user.click(within(screen.getAllByTestId('ip-row')[1]).getByRole('button', { name: t.network.edit }));
-    const dlg = await screen.findByRole('dialog', { name: t.ipDialog.title(2) });
-    await user.click(within(dlg).getByTestId('ip-browse'));
-    await user.click(within(dlg).getByTestId('ip-add-folder'));
-    await user.click(within(dlg).getByRole('button', { name: t.save }));
+    await user.click(screen.getByTestId('ip-browse'));
+    await vi.waitFor(() => expect(store.draft?.settings.ip_programs?.length).toBe(1));
+    await user.click(screen.getByTestId('ip-add-folder'));
+    await vi.waitFor(() => expect(store.draft?.settings.ip_programs?.length).toBe(2));
     expect(store.draft?.settings.ip_programs?.map((p) => p.path)).toEqual(['C:\\Games\\game.exe', 'C:\\Games\\launcher.exe']);
   });
 });
@@ -117,14 +120,11 @@ describe('dialogs', () => {
     render(OutputsDialog, { config: normalize(demoConfig()), devices, onSave, onCancel: vi.fn() });
     const user = userEvent.setup();
     const row = screen.getAllByTestId('outputs-row')[0];
-    const boxes = within(row).getAllByRole('checkbox');
-    await user.click(boxes[0]);
-    if (boxes.length > 2) {
-      await user.click(boxes[1]);
-      // Without cloning the second pick replaces the first.
-      expect((boxes[0] as HTMLInputElement).checked).toBe(false);
-    }
-    await user.click(screen.getByLabelText(t.outputs.forceAtStart));
+    // Without cloning each monitor gets one output, chosen in a list.
+    const pick = within(row).getByRole('combobox');
+    const first = within(pick).getAllByRole('option')[1] as HTMLOptionElement;
+    await user.selectOptions(pick, first.value);
+    await user.click(screen.getByRole('switch', { name: t.outputs.forceAtStart }));
     await user.click(screen.getByRole('button', { name: t.save }));
     const r = onSave.mock.calls[0][0];
     expect(r.settings.force_assign_at_start).toBe(true);

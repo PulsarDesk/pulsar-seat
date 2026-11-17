@@ -23,7 +23,7 @@
   import Toasts from './Toasts.svelte';
   import Wizard from './Wizard.svelte';
   import { productLabel, safeModeText, t } from '#lib/i18n.ts';
-  import { clone, setCpuSets } from '#lib/model.ts';
+  import { clearAllPictures, clone, setCpuSets } from '#lib/model.ts';
   import type { Tab } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { Issue, SeatNumber } from '#lib/types.ts';
@@ -73,6 +73,8 @@
   /** Remote seat the remote seats tab opens with (seats tab "edit"). */
   let remoteSeat = $state<SeatNumber | null>(null);
   let remoteOpen = $state(0);
+  /** Section the Advanced page scrolls to (Settings seat menu IP dialog → program list). */
+  let advancedSection = $state<string | null>(null);
 
   /** Leaving a tab with unsaved changes asks save / discard / cancel (spec 10 §2.3). */
   function selectTab(id: Tab) {
@@ -280,9 +282,29 @@
         }}
       />
     {:else if tab === 'basic'}
-      <BasicTab {store} />
+      <BasicTab
+        {store}
+        onAdvanced={(section) => {
+          // Settings and Advanced share one draft: no unsaved-changes question between them.
+          advancedSection = section ?? null;
+          store.setPref('tab', 'advanced');
+        }}
+        onDialog={(k) => {
+          if (k === 'clearPictures') store.edit((c) => clearAllPictures(c));
+          else dialog = { kind: k };
+        }}
+      />
     {:else if tab === 'advanced'}
-      <AdvancedTab {store} onHotkey={() => (dialog = { kind: 'hotkey' })} onCpu={() => (dialog = { kind: 'cpu' })} />
+      <AdvancedTab
+        {store}
+        initialSection={advancedSection}
+        onBack={() => {
+          advancedSection = null;
+          store.setPref('tab', 'basic');
+        }}
+        onHotkey={() => (dialog = { kind: 'hotkey' })}
+        onCpu={() => (dialog = { kind: 'cpu' })}
+      />
     {:else if tab === 'network'}
       {#key ipOpen}
         <NetworkTab {store} initialSeat={ipSeat} />
@@ -426,7 +448,19 @@
 {:else if dialog?.kind === 'quit'}
   <ConfirmDialog title={t.quit.title} body={t.quit.body} confirmLabel={t.quit.confirm} onConfirm={() => store.api.quit()} onCancel={() => (dialog = null)} />
 {:else if dialog?.kind === 'reset1'}
-  <ConfirmDialog title={t.reset.title} body={t.reset.body} confirmLabel={t.reset.confirm} danger onConfirm={() => (dialog = { kind: 'reset2' })} onCancel={() => (dialog = null)} />
+  <!-- One dialog with a typed confirmation (redesign 54-dlg-reset) instead of two in a row. -->
+  <ConfirmDialog
+    title={t.reset.title}
+    body={t.reset.body}
+    confirmLabel={t.reset.confirm}
+    danger
+    typedConfirm={{ label: t.reset.typeLabel(t.reset.word), word: t.reset.word }}
+    onConfirm={() => {
+      dialog = null;
+      void store.reset();
+    }}
+    onCancel={() => (dialog = null)}
+  />
 {:else if dialog?.kind === 'reset2'}
   <ConfirmDialog
     title={t.reset.confirm2Title}
