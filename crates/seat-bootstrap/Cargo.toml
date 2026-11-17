@@ -24,6 +24,11 @@ windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security_WinTrust",
     "Win32_Security_Cryptography",
+    # WTHelperProvDataFromStateData / WTHelperGetProvSignerFromChain (signer pin). The
+    # workspace build got them through feature unification; build-setup.ps1 builds this
+    # crate alone (VM round 2, 2026-11-17).
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
     "Win32_System_Console",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
