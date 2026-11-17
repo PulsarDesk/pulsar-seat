@@ -155,8 +155,9 @@ describe('wizard page', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: t.wizard.pagePickButton }));
     // The demo service moves the picked monitor first: this page is seat 1 now.
-    expect(await screen.findByText(t.wizard.pageSeat(1))).toBeInTheDocument();
-    expect(screen.getByText(t.wizard.keyboard(1))).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: t.wizard.pageSeat(1) })).toBeInTheDocument();
+    const [before, after] = t.wizard.pageKeyHead();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(`${before}F1${after}`);
     api.emit({
       type: 'wizard_progress',
       data: { step: 'mouse', seat: 1, key_presses: 0, clicks: 0, assigned: [[1, 'kbd;x']], monitors: [mons[1], mons[0]], confirmed: [] }
@@ -177,7 +178,7 @@ describe('wizard (main window)', () => {
     await store.init();
     render(Wizard, { store, onClose: vi.fn() });
     expect(await screen.findByTestId('wizard-resolution')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.wizard.start })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.wizard.start })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('finds the main devices by touch, starts, sends them and opens the pages', async () => {
@@ -187,7 +188,7 @@ describe('wizard (main window)', () => {
     await store.init();
     render(Wizard, { store, onClose: vi.fn() });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: t.wizard.gather }));
+    await user.click(screen.getByRole('button', { name: t.wizard.findByTouch }));
     const kbd = api.state.inventory.find((d) => d.kind === 'keyboard')!;
     const mouse = api.state.inventory.find((d) => d.kind === 'mouse')!;
     api.emit({ type: 'device_activity', data: { key: kbd.key } });
@@ -196,5 +197,33 @@ describe('wizard (main window)', () => {
     await user.click(screen.getByRole('button', { name: t.wizard.start }));
     await vi.waitFor(() => expect(api.calls).toContain('wizard_start'));
     expect(api.calls.filter((c) => c === 'wizard_command').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('walks from the monitor pick to the keyboard step with progress, found devices and the key legend', async () => {
+    localStorage.clear();
+    const api = createDemoApi();
+    const store = new ManagerStore(api);
+    await store.init();
+    render(Wizard, { store, onClose: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: new RegExp(t.wizard.variantOptions.all_seats.label) }));
+    await user.click(screen.getByRole('button', { name: t.wizard.start }));
+    expect(await screen.findByRole('heading', { level: 1, name: t.wizard.pickHead })).toBeInTheDocument();
+    const mon = api.state.inventory.find((d) => d.kind === 'monitor' && d.present)!;
+    await user.click(screen.getByRole('button', { name: t.wizard.pickThisAria(mon.name) }));
+    const [before, after] = t.wizard.keyHead(1);
+    expect(await screen.findByRole('heading', { level: 1, name: `${before}F1${after}` })).toBeInTheDocument();
+    const steps = screen.getByRole('list', { name: t.wizard.progress });
+    expect(steps.querySelector('[aria-current="step"]')).toHaveTextContent(t.wizard.pageSeat(1));
+    expect(steps.querySelectorAll('li')).toHaveLength(api.state.inventory.filter((d) => d.kind === 'monitor' && d.present).length + 2);
+    // The current seat's monitor is listed under the found devices.
+    expect(screen.getByText(mon.name)).toBeInTheDocument();
+    // Enter and Shift+Esc stay visible; the rest sits under "Other shortcuts".
+    const legend = screen.getByRole('group', { name: t.wizard.keysIntro });
+    expect(legend).toHaveTextContent(t.wizard.keysList.enter.does);
+    expect(legend).toHaveTextContent(t.wizard.keysList.shiftEsc.does);
+    expect(screen.getByText(t.wizard.moreKeys)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: t.wizard.confirmSeat }));
+    await vi.waitFor(() => expect(api.calls.filter((c) => c === 'wizard_command').length).toBeGreaterThanOrEqual(3));
   });
 });

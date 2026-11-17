@@ -1337,7 +1337,7 @@ const t = {
 
   wizard: {
     title: 'Setup wizard',
-    intro: 'The wizard turns each monitor into a seat and finds each seat’s keyboard and mouse by touch. Before you start, make sure all devices are plugged in and will not change during the run.',
+    intro: 'The wizard turns each monitor into a seat and finds each seat’s keyboard and mouse when you press a key. Plug in every device before you start, and do not plug in or remove devices while the wizard runs.',
     firstRun: 'No seat is set up yet. Do you want to run the setup wizard?',
     variants: 'How do you want to go on?',
     all_seats: 'Each seat has its own keyboard and mouse: identify all seats (seat 1 too) in turn',
@@ -1391,6 +1391,35 @@ const t = {
       shiftBack: { keys: 'Shift+Backspace', does: 'resets all' },
       altF4: { keys: 'Alt+F4', does: 'quits without saving' }
     },
+    /** Start screen (prototype 40): the variants as label + help. */
+    variantsLabel: 'Wizard mode',
+    variantOptions: {
+      all_seats: { label: 'Each seat has its own keyboard and mouse', help: 'Identify all seats (seat 1 too) in turn.' },
+      keep_seat_one: { label: 'Keep seat 1’s current devices', help: 'Identify only seats 2 and later.' },
+      quick_two_seats: { label: 'Quick two seats', help: 'Seat 1’s devices stay on seat 1, everything else goes to seat 2.' }
+    },
+    mainDevices: 'Main keyboard and mouse',
+    findByTouch: 'Find by touch',
+    currentDevices: 'Seat 1 uses now',
+    extendLabel: 'Extend the desktop to all monitors',
+    extendHelp: 'Recommended. The wizard writes a number on each monitor.',
+    /** Step screen (prototype 41). */
+    progress: 'Progress',
+    finish: 'Finish',
+    /** Heading with the function key drawn inline: [text before the key, text after it]. */
+    keyHead: (n: number): [string, string] => ['Press ', ` twice on seat ${n}’s keyboard`],
+    seatStep: (n: number, total: number, kind: 'keyboard' | 'mouse') => `Seat ${n} of ${total}, ${kind === 'keyboard' ? 'keyboard' : 'mouse'} step.`,
+    pickHead: 'Press the number shown on seat 1’s monitor',
+    pickSub: 'Each monitor shows a large number. Press it on any keyboard (0 for 10), or choose the monitor here.',
+    pickThis: 'Choose',
+    pickThisAria: (name: string) => `Choose ${name} as seat 1’s monitor`,
+    lastDetected: 'last detected',
+    noneFound: 'No device found yet.',
+    /** Per-monitor page (prototype 42). */
+    pageKeyHead: (): [string, string] => ['Press ', ' twice on this seat’s keyboard'],
+    pagePickHead: 'Is this seat 1’s monitor?',
+    pageOwner: (n: number) => `This monitor is seat ${n}`,
+    pageKeysList: { enter: 'confirm', shiftEsc: 'quit without saving' },
     confirmSeat: 'Confirm this seat',
     resetSeat: 'Reset this seat',
     resetAll: 'Reset all',

@@ -23,7 +23,17 @@
       const os = isTauri() ? await api.uiLanguage().catch(() => null) : null;
       const lang = initLocale(os ? [os] : undefined);
       await api.setUiLanguage(lang).catch(() => {});
-      const preview = isTauri() ? null : new URLSearchParams(globalThis.location?.search ?? '').get('wizard-page');
+      const params = new URLSearchParams(globalThis.location?.search ?? '');
+      const preview = isTauri() ? null : params.get('wizard-page');
+      // Browser preview only: `&wizard-step=pick|keyboard` starts the demo wizard first, so
+      // the page shows that step (design review captures); `&wizard-seat1=<monitor key>`
+      // picks seat 1's monitor (default: this page's monitor).
+      const demoStep = preview ? params.get('wizard-step') : null;
+      if (preview && demoStep) {
+        await api.wizardStart('all_seats').catch(() => {});
+        const seat1 = params.get('wizard-seat1') ?? preview;
+        if (demoStep !== 'pick') await api.wizardCommand({ cmd: 'pick_console_monitor', key: seat1 }).catch(() => {});
+      }
       const monitor = preview ?? (await api.wizardPageMonitor().catch(() => null));
       if (monitor) {
         page = { api, monitor };

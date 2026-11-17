@@ -2648,3 +2648,41 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Next: P2 (app shell) in order, then P3-P7, P8 cleanup. The three behaviour changes
     (startup modal removal, restart-required on the seat card, remote staged save) are not in
     these packages; they stay "needs maintainer test before push" when P2 / P6 land.
+
+- 2026-11-17 (redesign P7, manager): the setup wizard in the new design
+  (`target/redesign/final` prototypes 40 / 41 / 42, IMPLEMENTATION.md "P7").
+  - `Wizard.svelte` start screen: brand line, title + intro, blocking reasons as danger
+    Notices (the start button points at them with `aria-describedby`), the variants as a
+    ChoiceList (label + help), "Seat 1 devices" Group with the touch search row (the found
+    or current seat 1 devices stay listed under its help) and the extend Switch, finish
+    hint, *Start the wizard* (primary) + *Cancel*.
+  - Step screen: brand + *Quit without saving* (quiet) / *Save and finish* (secondary) on
+    top; progress segments (seat 1's monitor, one per seat, Finish; done and current in
+    accent, `aria-current="step"`); an h1 with the function key drawn inline (`Kbd`), the
+    seat / step line, the key echo on the page background with the press count; the
+    monitor pick as plain rows (digit key + *Choose*); found devices as a plain Group
+    (current seat's monitor and units first, other seats' units with their seat, the last
+    detected unit marked); *Confirm this seat* / *Reset this seat* / *Reset all*; the
+    legend shows Enter (hidden during the pick, where it does nothing) and Shift+Esc, the
+    rest behind the *Other shortcuts* Disclosure. Invalid step: danger Notice + issue list.
+  - `WizardPage.svelte`: centred 220px PulseRings with the monitor / seat number, a 30px
+    instruction with the inline key, "This monitor is seat N · Pressed: k / 2", the
+    two-key legend at the bottom centre; pick page asks "Is this seat 1's monitor?" with
+    the primary pick button; mouse target kept (token radius / border).
+  - Keyboard handlers, `wizard.ts`, the store and the API are unchanged (no behaviour
+    change). New copy in the `wizard` group of en.ts / tr.ts (`variantOptions`,
+    `mainDevices`, `findByTouch`, `keyHead`, `seatStep`, `pickHead`, `pageKeyHead`,
+    `pageOwner`, `pageKeysList`, ...); the intro now follows the prototype wording.
+  - Browser preview only: `?wizard-page=<monitor>&wizard-step=pick|keyboard[&wizard-seat1=<monitor>]`
+    in `+page.svelte` starts the demo wizard so a page can be captured (never in Tauri).
+  - Tests: extras.test.ts lookups updated (Button uses `aria-disabled`, the touch button is
+    *Find by touch*, the page seat is the rings' image name, the instruction is the h1);
+    one new test walks pick -> keyboard step (progress, found devices, legend, confirm).
+  - Visual check: demo on port 5367, headless Edge, light + dark, 1280x800 + 1024x700,
+    `target/redesign/audit/p7-*.png` vs `shots/40`, `41`, `42`: same structure, hierarchy,
+    components and copy. Detector (`bunx impeccable detect --json --no-config`) on both
+    files: no findings. Server and Edge stopped.
+  - Gates: manager 272 tests (was 271), check 0 errors / 0 warnings, build OK; installer
+    scripts 89. No Rust, Tauri or driver code touched. No test deleted.
+  - HYPOTHESIS (hardware): the per-monitor page layout at real monitor sizes and DPI is
+    unverified, like the wizard itself.

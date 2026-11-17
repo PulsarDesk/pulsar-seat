@@ -3,12 +3,15 @@
      on one monitor (src-tauri wizard_pages.rs). It shows the big monitor number during the
      pick, then what this monitor's seat needs: F<N> twice (or any key when the seat is next),
      two click targets for the mouse, or the waiting page. Clicks on a target are reported
-     as `target_hit`, so the service can tell which mouse belongs here. Untested on hardware. -->
+     as `target_hit`, so the service can tell which mouse belongs here. Untested on hardware.
+     Layout: redesign prototype 42 (centred 220px neutral rings with the number, a 30px
+     instruction, the two-key legend at the bottom centre), read from across a room. -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Api } from '#lib/api.ts';
   import { errorLabel, issueText, t } from '#lib/i18n.ts';
   import type { DeviceKey, DeviceView, WizardCommand, WizardProgress } from '#lib/types.ts';
+  import { Button, Kbd, Notice, PulseRings } from '#lib/ui/index.ts';
   import { DIGIT_MONITORS, FKEY_SEATS, keyAction, pageView, randomTarget, seatOfMonitor } from '#lib/wizard.ts';
 
   interface Props {
@@ -82,106 +85,117 @@
 
 <svelte:window onkeydown={key} />
 
-<main class="page" data-testid="wizard-page">
-  {#if view.kind === 'pick'}
-    <p class="label">{t.wizard.pageNumber}</p>
-    <p class="number" data-testid="page-number">{view.number}</p>
-    <p class="text">{view.number > DIGIT_MONITORS ? t.wizard.pagePickButtonOnly : t.wizard.pagePick}</p>
-    <button type="button" class="primary" onclick={() => send({ cmd: 'pick_console_monitor', key: monitor })}>{t.wizard.pagePickButton}</button>
-  {:else if view.kind === 'no_seat'}
-    <p class="text">{t.wizard.pageNoSeat}</p>
-  {:else}
-    <p class="seat">{t.wizard.pageSeat(view.seat)}</p>
-    {#if view.kind === 'keyboard'}
-      <p class="text">{t.wizard.keyboard(view.seat)}</p>
-      {#if view.seat <= FKEY_SEATS}<p class="hint">{t.wizard.anyKey}</p>{/if}
-      <p class="count">{t.wizard.keyboardCount(view.presses)}</p>
-    {:else if view.kind === 'mouse'}
-      <p class="text">{t.wizard.mouse(view.seat)}</p>
-      <p class="count">{t.wizard.mouseCount(Math.max(view.clicks, Math.min(hits, 2)))}</p>
-      <button type="button" class="target" style:left="{target.x}%" style:top="{target.y}%" aria-label={t.wizard.pageTarget} onclick={hit}></button>
-    {:else if view.kind === 'other'}
-      <p class="text">{t.wizard.pageOtherSeat(view.current)}</p>
-    {:else if view.kind === 'kept'}
-      <p class="text">{t.wizard.pageKept}</p>
+<main class="wiz-page" data-testid="wizard-page">
+  <div class="wiz-page-in">
+    {#if view.kind === 'pick'}
+      <span class="wiz-rings" role="img" aria-label="{t.wizard.pageNumber}: {view.number}" data-testid="page-number"><PulseRings number={view.number} size={220} /></span>
+      <h1>{t.wizard.pagePickHead}</h1>
+      <p class="muted lead-text">{view.number > DIGIT_MONITORS ? t.wizard.pagePickButtonOnly : t.wizard.pagePick}</p>
+      <Button kind="primary" label={t.wizard.pagePickButton} onclick={() => send({ cmd: 'pick_console_monitor', key: monitor })} />
+    {:else if view.kind === 'no_seat'}
+      <h1>{t.wizard.pageNoSeat}</h1>
     {:else}
-      <p class="text">{t.wizard.pageDone}</p>
+      <span class="wiz-rings" role="img" aria-label={t.wizard.pageSeat(view.seat)}><PulseRings number={view.seat} size={220} /></span>
+      {#if view.kind === 'keyboard'}
+        {@const head = t.wizard.pageKeyHead()}
+        {#if view.seat <= FKEY_SEATS}
+          <h1>{head[0]}<Kbd keys={`F${view.seat}`} size="xl" />{head[1]}</h1>
+        {:else}
+          <h1>{t.wizard.keyboard(view.seat)}</h1>
+        {/if}
+        <p class="muted lead-text" role="status">{t.wizard.pageOwner(view.seat)} · {t.wizard.keyboardCount(view.presses)}</p>
+        {#if view.seat <= FKEY_SEATS}<p class="muted">{t.wizard.anyKey}</p>{/if}
+      {:else if view.kind === 'mouse'}
+        <h1>{t.wizard.mouse(view.seat)}</h1>
+        <p class="muted lead-text" role="status">{t.wizard.pageOwner(view.seat)} · {t.wizard.mouseCount(Math.max(view.clicks, Math.min(hits, 2)))}</p>
+      {:else}
+        <h1>{view.kind === 'other' ? t.wizard.pageOtherSeat(view.current) : view.kind === 'kept' ? t.wizard.pageKept : t.wizard.pageDone}</h1>
+        <p class="muted lead-text">{t.wizard.pageOwner(view.seat)}</p>
+      {/if}
+      {#if progress?.assigned.some(([s]) => s === view.seat)}
+        <ul class="found">
+          {#each progress.assigned.filter(([s]) => s === view.seat) as [, k] (k)}<li>{name(k)}</li>{/each}
+        </ul>
+      {/if}
     {/if}
-    {#if progress?.assigned.some(([s]) => s === view.seat)}
+    {#if progress?.step === 'invalid'}
+      <Notice kind="danger" text={t.wizard.invalid} />
       <ul class="found">
-        {#each progress.assigned.filter(([s]) => s === view.seat) as [, k] (k)}<li>{name(k)}</li>{/each}
+        {#each progress.issues ?? [] as code (code)}<li>{issueText[code] ?? code}</li>{/each}
       </ul>
     {/if}
+    {#if error}<Notice kind="danger" text={error} />{/if}
+  </div>
+  <div class="keys" role="group" aria-label={t.wizard.keysIntro}>
+    <span><Kbd keys={t.wizard.keysList.enter.keys} />{t.wizard.pageKeysList.enter}</span>
+    <span><Kbd keys={t.wizard.keysList.shiftEsc.keys} />{t.wizard.pageKeysList.shiftEsc}</span>
+  </div>
+  {#if view.kind === 'mouse'}
+    <button type="button" class="target" style:left="{target.x}%" style:top="{target.y}%" aria-label={t.wizard.pageTarget} onclick={hit}></button>
   {/if}
-  {#if progress?.step === 'invalid'}
-    <p class="error" role="alert">{t.wizard.invalid}</p>
-    <ul class="found">
-      {#each progress.issues ?? [] as code (code)}<li>{issueText[code] ?? code}</li>{/each}
-    </ul>
-  {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  <p class="keys">{t.wizard.keys}</p>
 </main>
 
 <style>
-  .page {
+  .wiz-page {
     position: fixed;
     inset: 0;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    place-items: center;
+    padding: var(--sp-7);
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+  }
+  .wiz-page-in {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 2rem;
-    background: var(--bg);
-    color: var(--text);
+    gap: var(--sp-5);
     text-align: center;
-    overflow: hidden;
+    max-width: 720px;
   }
-  .label {
-    margin: 0;
-    color: var(--muted);
-    font-size: 1.4rem;
+  .wiz-page h1 {
+    font-size: var(--fs-display);
+    line-height: var(--lh-display);
   }
-  .number {
-    margin: 0;
-    font-size: min(40vh, 40vw);
-    font-weight: 800;
-    line-height: 1;
-    color: var(--accent);
+  .wiz-page h1 :global(.keys) {
+    vertical-align: 0.1em;
   }
-  .seat {
-    margin: 0;
-    font-size: 3rem;
-    font-weight: 700;
+  .wiz-rings {
+    display: block;
   }
-  .text {
-    font-size: 1.6rem;
-    max-width: 50rem;
-  }
-  .count {
-    font-size: 1.3rem;
-  }
-  .keys {
-    position: absolute;
-    bottom: 1rem;
-    left: 2rem;
-    right: 2rem;
-    color: var(--muted);
-  }
-  .target {
-    position: absolute;
-    width: 5rem;
-    height: 5rem;
-    margin: -2.5rem 0 0 -2.5rem;
-    border-radius: 50%;
-    border: 0.6rem solid var(--accent);
-    background: color-mix(in srgb, var(--accent) 25%, transparent);
-    padding: 0;
+  .lead-text {
+    font-size: var(--fs-h2);
+    line-height: var(--lh-h2);
   }
   .found {
     list-style: none;
+    color: var(--text-muted);
+  }
+  .keys {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--sp-2) var(--sp-4);
+    color: var(--text-muted);
+    font-size: var(--fs-h3);
+  }
+  .keys > span {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .target {
+    position: absolute;
+    width: 80px;
+    height: 80px;
+    margin: -40px 0 0 -40px;
+    border-radius: var(--r-pill);
+    border: var(--sp-2) solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
     padding: 0;
-    color: var(--muted);
+    cursor: pointer;
   }
 </style>
