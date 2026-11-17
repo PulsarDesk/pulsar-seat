@@ -1,18 +1,21 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- DXVK per game (spec 50 §10.2): the service copies the pinned DXVK release next to a
-     game (journaled, originals backed up) or takes it away again. -->
+<!-- DXVK per game (spec 50 §10.2; prototype 24): the service copies the pinned DXVK release
+     next to a game (journaled, originals backed up) or takes it away again. Applies at once:
+     these are file operations, not settings, so nothing is staged here. -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
+  import { remoteErrorMessage as errorMessage, rt as t, t as seatT } from '#lib/i18n.ts';
   import type { DxvkStatus } from '#lib/remote/types.ts';
+  import { Breadcrumb, Button, Checkbox, Field, Group, Notice, PageHead, Row, Section } from '#lib/ui/index.ts';
 
   interface Props {
     load: () => Promise<DxvkStatus>;
     onSet: (exe: string, enabled: boolean, dlls: string[]) => Promise<void>;
     onPickExe?: (title: string) => Promise<string | null>;
     disabled?: boolean;
+    onBack?: () => void;
   }
-  let { load, onSet, onPickExe, disabled = false }: Props = $props();
+  let { load, onSet, onPickExe, disabled = false, onBack }: Props = $props();
 
   let status = $state<DxvkStatus | null>(null);
   let exe = $state('');
@@ -23,6 +26,7 @@
   let notice = $state<string | null>(null);
 
   const exeOk = $derived(/^[a-zA-Z]:\\.+\.exe$/i.test(exe.trim()));
+  const fileName = (p: string) => p.split('\\').pop() ?? p;
 
   async function reload() {
     try {
@@ -71,71 +75,88 @@
     const p = await onPickExe(t.dxvk.pickTitle).catch(() => null);
     if (p) exe = p;
   }
+
+  const locked = $derived(disabled || busy || !status?.release);
 </script>
 
-<section class="page">
-  <h1>{t.dxvk.title}</h1>
-  <p class="hint">{t.dxvk.intro}</p>
-  <button type="button" onclick={reload} disabled={busy}>↻ {t.dxvk.refresh}</button>
+<div class="page">
+  {#if onBack}<Breadcrumb items={[{ label: seatT.nav.remote, onclick: onBack }, { label: t.dxvk.title }]} />{/if}
+  <PageHead title={t.dxvk.title} sub={t.dxvk.intro}>
+    {#snippet actions()}<Button kind="secondary" icon="refresh" label={t.dxvk.refresh} disabled={busy} onclick={reload} />{/snippet}
+  </PageHead>
+
+  <div class="notes">
+    {#if status && !status.release}<Notice kind="warn" text={t.dxvk.noRelease} />{/if}
+    {#if error}<Notice kind="danger" text={error} />{/if}
+    {#if notice}<Notice kind="ok" text={notice} />{/if}
+  </div>
 
   {#if status}
-    {#if status.release}
-      <p>{t.dxvk.release(status.release)}</p>
-    {:else}
-      <p class="error" role="alert">{t.dxvk.noRelease}</p>
-    {/if}
-
-    <h2>{t.dxvk.games}</h2>
-    {#if status.games.length === 0}
-      <p class="hint">{t.dxvk.noGames}</p>
-    {:else}
-      <ul class="games">
-        {#each status.games as g (g.exe)}
-          <li>
-            <code>{g.exe}</code>
-            <span class="hint">
-              {#if g.error}{t.dxvk.markerUnreadable}{:else if g.deployed}{t.dxvk.deployed(g.version, g.dlls.join(', '))}{:else}{t.dxvk.notDeployed}{/if}
-            </span>
-            <button type="button" disabled={busy || disabled} onclick={() => run(() => onSet(g.exe, false, []), t.dxvk.disabled)}>
-              {t.dxvk.disable}
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/if}
+    <Section title={t.dxvk.games} help={status.release ? t.dxvk.release(status.release) : undefined}>
+      {#if status.games.length === 0}
+        <p class="help">{t.dxvk.noGames}</p>
+      {:else}
+        <Group>
+          {#each status.games as g (g.exe)}
+            <Row label={fileName(g.exe)}>
+              {#snippet control()}
+                <Button
+                  kind="secondary"
+                  compact
+                  label={t.dxvk.disable}
+                  aria-label={t.view.dxvkDisableLabel(fileName(g.exe))}
+                  disabled={busy || disabled}
+                  onclick={() => run(() => onSet(g.exe, false, []), t.dxvk.disabled)}
+                />
+              {/snippet}
+              <span class="mono help">{g.exe}</span>
+              <span class="help">
+                {#if g.error}{t.dxvk.markerUnreadable}{:else if g.deployed}{t.dxvk.deployed(g.version, g.dlls.join(', '))}{:else}{t.dxvk.notDeployed}{/if}
+              </span>
+            </Row>
+          {/each}
+        </Group>
+      {/if}
+    </Section>
   {/if}
 
-  <fieldset disabled={disabled || busy || !status?.release}>
-    <legend>{t.dxvk.enable}</legend>
-    <div class="row">
-      <label class="field">
-        <span>{t.dxvk.exe}</span>
-        <input bind:value={exe} placeholder={t.common.examplePath} />
-      </label>
-      {#if onPickExe}<button type="button" onclick={browse}>{t.dxvk.browse}</button>{/if}
-    </div>
-    <p>{t.dxvk.dlls}</p>
-    <label class="toggle"><input type="checkbox" bind:checked={d3d9} /> Direct3D 9</label>
-    <label class="toggle"><input type="checkbox" bind:checked={d3d8} /> Direct3D 8</label>
-    <button type="button" class="primary" onclick={enable}>{t.dxvk.enable}</button>
-  </fieldset>
-
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="ok" role="status">{notice}</p>{/if}
-</section>
+  <Section title={t.view.addGame}>
+    <Group>
+      <div class="row stack" inert={locked}>
+        <Field label={t.dxvk.exe}>
+          {#snippet children({ id })}
+            <div class="input-group">
+              <input class="input mono" {id} bind:value={exe} placeholder={t.common.examplePath} />
+              {#if onPickExe}<Button kind="secondary" label={t.dxvk.browse} onclick={browse} />{/if}
+            </div>
+          {/snippet}
+        </Field>
+        <Field label={t.dxvk.dlls} group>
+          {#snippet children()}
+            <div class="btnrow wide">
+              <Checkbox label="Direct3D 9" bind:checked={d3d9} />
+              <Checkbox label="Direct3D 8" bind:checked={d3d8} />
+            </div>
+          {/snippet}
+        </Field>
+        <div><Button kind="secondary" icon="check" label={t.dxvk.enable} {busy} onclick={enable} /></div>
+      </div>
+    </Group>
+  </Section>
+</div>
 
 <style>
-  .games {
-    list-style: none;
-    padding: 0;
+  .notes {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
-
-  .games li {
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    flex-wrap: wrap;
+  .notes:not(:empty) {
+    margin-bottom: var(--sp-6);
+  }
+  .page > :global(.section + .section) {
+    margin-top: var(--sp-6);
+  }
+  .mono.help {
+    font-family: var(--font-mono);
   }
 </style>

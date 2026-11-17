@@ -3,7 +3,7 @@
 // kind on the seats tab, edit it and keep the local draft.
 import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import App from '#lib/components/App.svelte';
 import { createDemoApi } from '#lib/demo.ts';
 import { rt, t } from '#lib/i18n.ts';
@@ -25,7 +25,7 @@ describe('remote seats tab', () => {
     const { api, user } = await setup();
     await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
     expect(await screen.findByText(rt.nav.noSeats)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: `+ ${rt.nav.newSeat}` }));
+    await user.click(screen.getByRole('button', { name: rt.nav.newSeat }));
     await user.type(screen.getByRole('textbox'), 'Salon');
     await user.click(screen.getByRole('button', { name: rt.newSeat.create }));
     const seat = api.state.config.seats.find((s) => s.name === 'Salon');
@@ -44,6 +44,35 @@ describe('remote seats tab', () => {
 
     await user.click(within(list).getByRole('button', { name: /Salon/ }));
     expect(await screen.findByRole('combobox', { name: rt.seat.streamBackend })).toBeInTheDocument();
+  });
+
+  it('docks the remote save bar in the shell and guards leaving with staged edits', async () => {
+    const { api, user } = await setup();
+    await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
+    await user.click(await screen.findByRole('button', { name: rt.nav.newSeat }));
+    await user.type(screen.getByRole('textbox'), 'Salon');
+    await user.click(screen.getByRole('button', { name: rt.newSeat.create }));
+    const name = (await screen.findByRole('textbox', { name: rt.seat.displayName })) as HTMLInputElement;
+    await user.type(name, '2');
+    const typed = name.value;
+    // One bar, docked by the shell under the scroll area (not inside the page).
+    const bars = screen.getAllByRole('region', { name: t.saveBar.region });
+    expect(bars).toHaveLength(1);
+    expect(bars[0].closest('.page')).toBeNull();
+    expect(bars[0].closest('main')).not.toBeNull();
+
+    // Leaving asks first; Cancel keeps the draft.
+    await user.click(screen.getByRole('link', { name: new RegExp(`^${t.nav.seats}`) }));
+    const ask = await screen.findByRole('alertdialog', { name: t.unsaved.title });
+    await user.click(within(ask).getByRole('button', { name: t.unsaved.cancel }));
+    expect(name).toHaveValue(typed);
+
+    const before = api.calls.filter((c) => c === 'apply_config').length;
+    await user.click(within(bars[0]).getByRole('button', { name: t.saveBar.save }));
+    await vi.waitFor(() => expect(api.calls.filter((c) => c === 'apply_config').length).toBeGreaterThan(before));
+    const seat = api.state.config.seats.find((s) => s.name === 'Salon');
+    expect(JSON.stringify(seat)).toContain(JSON.stringify(typed));
+    expect(screen.queryByRole('region', { name: t.saveBar.region })).toBeNull();
   });
 
   it('a remote edit keeps unsaved local edits in the draft', async () => {

@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- QR code drawn as SVG from the pure TS encoder (#lib/qr.ts); dark on white in both
-     themes so phone cameras read it. No network. -->
+     themes so phone cameras read it (`--qr-ink` on `--qr-paper`). No network. -->
 <script lang="ts">
   import { encodeQr, qrPath } from '#lib/remote/qr.ts';
 
@@ -29,14 +29,19 @@
     viewBox="0 0 {qr.size + 8} {qr.size + 8}"
     shape-rendering="crispEdges"
   >
-    <rect width={qr.size + 8} height={qr.size + 8} fill="#fff" />
-    <path d={qrPath(qr)} fill="#000" />
+    <rect width={qr.size + 8} height={qr.size + 8} class="paper" />
+    <path d={qrPath(qr)} class="ink" />
   </svg>
 {/if}
 
 <style>
   .qr {
     display: block;
-    border-radius: 4px;
+  }
+  .paper {
+    fill: var(--qr-paper);
+  }
+  .ink {
+    fill: var(--qr-ink);
   }
 </style>

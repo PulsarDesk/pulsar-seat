@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Test User Credentials (spec 10 §4.4). The service runs a logon test with the stored
-     password; the password never comes back. Enabling / unlocking the account happens only
-     after an explicit confirmation here (the spec's "ask first"). -->
+<!-- Test User Credentials (spec 10 §4.4; prototype 78). The service runs a logon test with
+     the stored password; the password never comes back. Enabling / unlocking the account
+     happens only after an explicit confirmation here (the spec's "ask first"). -->
 <script lang="ts">
   import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
   import type { CredentialTest } from '#lib/remote/types.ts';
+  import { Button, Modal, Notice, Spinner } from '#lib/ui/index.ts';
 
   interface Props {
     onTest: () => Promise<CredentialTest>;
@@ -50,41 +51,55 @@
   });
 
   const fixable = $derived(!!result && (result.disabled || result.locked_out));
+  const title = $derived(
+    pending
+      ? t.cred.title
+      : confirming
+        ? t.cred.confirmTitle
+        : error
+          ? t.cred.failTitle
+          : result?.ok
+            ? t.cred.okTitle
+            : (result?.message ?? t.cred.failTitle)
+  );
 </script>
 
-<div class="backdrop">
-  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="cred-title">
-    {#if pending}
-      <h2 id="cred-title">{t.cred.title}</h2>
-      <p role="status">{t.cred.pending}</p>
-    {:else if confirming}
-      <h2 id="cred-title">{t.cred.confirmTitle}</h2>
-      <p class="danger">{t.cred.confirmBody}</p>
-      <div class="buttons">
-        <button type="button" class="primary danger-btn" onclick={fix}>{t.cred.confirm}</button>
-        <button type="button" onclick={() => (confirming = false)}>{t.common.close}</button>
-      </div>
-    {:else}
-      {#if error}
-        <h2 id="cred-title">{t.cred.failTitle}</h2>
-        <p class="error" role="alert">{error}</p>
-      {:else if result?.ok}
-        <h2 id="cred-title">{t.cred.okTitle}</h2>
-        <p>{t.cred.okBody}</p>
-      {:else if result}
-        <h2 id="cred-title">{result.message ?? t.cred.failTitle}</h2>
-        <p>{t.cred.failHint}</p>
-      {/if}
-      {#if result?.disabled}<p class="hint" data-testid="cred-disabled">{t.cred.disabled}</p>{/if}
-      {#if result?.locked_out}<p class="hint" data-testid="cred-locked">{t.cred.locked}</p>{/if}
-      {#if result?.password_expired}<p class="hint">{t.cred.expired}</p>{/if}
-      <div class="buttons">
-        {#if fixable}
-          <button type="button" class="danger-btn" onclick={() => (confirming = true)}>{t.cred.fix}</button>
-        {/if}
-        <button type="button" onclick={test}>{t.cred.retest}</button>
-        <button type="button" class="primary" onclick={onClose}>{t.cred.close}</button>
-      </div>
+<Modal {title} size="sm" alert={confirming} {onClose}>
+  {#if pending}
+    <p role="status" class="line"><Spinner />{t.cred.pending}</p>
+  {:else if confirming}
+    <Notice kind="warn" text={t.cred.confirmBody} />
+  {:else}
+    {#if error}
+      <Notice kind="danger" text={error} />
+    {:else if result?.ok}
+      <p>{t.cred.okBody}</p>
+    {:else if result}
+      <p>{t.cred.failHint}</p>
     {/if}
-  </div>
-</div>
+    {#if result?.disabled}<p class="help" data-testid="cred-disabled">{t.cred.disabled}</p>{/if}
+    {#if result?.locked_out}<p class="help" data-testid="cred-locked">{t.cred.locked}</p>{/if}
+    {#if result?.password_expired}<p class="help">{t.cred.expired}</p>{/if}
+  {/if}
+  {#snippet foot()}
+    {#if confirming}
+      <Button kind="danger" label={t.cred.confirm} onclick={fix} />
+      <Button kind="secondary" label={t.common.close} onclick={() => (confirming = false)} />
+    {:else if !pending}
+      <Button kind={result?.ok ? 'secondary' : 'primary'} icon="refresh" label={t.cred.retest} onclick={test} />
+      {#if fixable}<Button kind="secondary" label={t.cred.fix} onclick={() => (confirming = true)} />{/if}
+      <Button kind={result?.ok ? 'primary' : 'secondary'} label={t.cred.close} onclick={onClose} />
+    {/if}
+  {/snippet}
+</Modal>
+
+<style>
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  p + p {
+    margin-top: var(--sp-2);
+  }
+</style>

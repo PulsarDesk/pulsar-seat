@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import VmPage from './VmPage.svelte';
@@ -29,45 +29,45 @@ describe('VmPage', () => {
       settings: defaultVmSettings(),
       load: vi.fn(async () => host()),
       onAction,
-      onSaveSettings: vi.fn(async () => {}),
-      onSaveSeat: vi.fn(async () => {})
+      onSaveSettings: vi.fn(async () => {})
     });
     await userEvent.click(await screen.findByRole('button', { name: t.vm.prepareNetwork }));
-    expect(screen.getByText(t.vm.confirmNetwork)).toBeInTheDocument();
+    const dlg = screen.getByRole('alertdialog');
+    expect(within(dlg).getByText(t.vm.confirmNetwork)).toBeInTheDocument();
     expect(onAction).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: seatT.ok }));
+    await userEvent.click(within(dlg).getByRole('button', { name: t.vm.prepareNetwork }));
     expect(onAction).toHaveBeenCalledWith({ type: 'prepare_host', confirm: true });
-    expect(await screen.findByText(new RegExp(t.vm.networkReady))).toBeInTheDocument();
+    expect(await screen.findByText(t.vm.networkReady)).toBeInTheDocument();
     expect(screen.getByText(t.vm.noRemoteSeats)).toBeInTheDocument();
     // No image chosen: the base disk cannot be built yet.
-    expect(screen.getByRole('button', { name: t.vm.buildBase })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.vm.buildBase })).toHaveAttribute('aria-disabled', 'true');
   });
 
-  it('turns VM mode on for a seat, adds a folder and saves', async () => {
-    const onSaveSeat = vi.fn(async () => {});
+  it('stages the shared settings, blocks an invalid value and saves through the save bar', async () => {
+    const onSaveSettings = vi.fn(async () => {});
+    const user = userEvent.setup();
     render(VmPage, {
-      seats: [{ number: 2, name: 'Salon', port: 48100, vm: null }],
+      seats: [{ number: 2, name: 'Salon', port: 48100, vm: defaultVmSeat() }],
       settings: defaultVmSettings(),
-      load: vi.fn(async () => host({ seats: [] })),
+      load: vi.fn(async () => host()),
       onAction: vi.fn(async () => host()),
-      onSaveSettings: vi.fn(async () => {}),
-      onSaveSeat
+      onSaveSettings,
+      onOpenSeat: vi.fn()
     });
-    await userEvent.click(await screen.findByLabelText(t.vm.vmMode));
-    await userEvent.type(screen.getByLabelText(t.vm.hostFolder), 'E:\\');
-    await userEvent.click(screen.getByRole('button', { name: t.vm.addFolder }));
-    expect(screen.getByDisplayValue('C:\\HostDrive')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: t.vm.addForward }));
-    // A new forward has no ports yet: saving is blocked with the reason.
-    expect(screen.getByText(t.vm.problems.port)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.vm.saveSeat })).toBeDisabled();
-    // Remove the forward again (the last Remove button), then save.
-    await userEvent.click(screen.getAllByRole('button', { name: t.vm.remove }).at(-1)!);
-    await userEvent.click(screen.getByRole('button', { name: t.vm.saveSeat }));
-    expect(onSaveSeat).toHaveBeenCalledTimes(1);
-    const [seat, vm] = onSaveSeat.mock.calls[0] as unknown as [number, ReturnType<typeof defaultVmSeat>];
-    expect(seat).toBe(2);
-    expect(vm.shared_folders.map((f) => [f.host_path, f.guest_path, f.read_only])).toEqual([['E:\\', 'C:\\HostDrive', true]]);
-    expect(vm.forwarded_ports).toEqual([]);
+    expect(screen.queryByRole('region', { name: seatT.saveBar.region })).toBeNull();
+    const pct = screen.getByRole('spinbutton', { name: t.vm.memoryPercent });
+    await user.clear(pct);
+    await user.type(pct, '95');
+    const bar = screen.getByRole('region', { name: seatT.saveBar.region });
+    expect(within(bar).getByText(t.vm.problems.memoryPercent)).toBeInTheDocument();
+    await user.click(within(bar).getByRole('button', { name: seatT.saveBar.save }));
+    expect(onSaveSettings).not.toHaveBeenCalled();
+    await user.clear(pct);
+    await user.type(pct, '60');
+    await user.click(within(bar).getByRole('button', { name: seatT.saveBar.save }));
+    expect(onSaveSettings).toHaveBeenCalledTimes(1);
+    expect((onSaveSettings.mock.calls[0] as unknown as [{ memory_percent: number }])[0].memory_percent).toBe(60);
+    // The seat list links to the seat page.
+    expect(screen.getByRole('button', { name: /Salon/ })).toBeInTheDocument();
   });
 });

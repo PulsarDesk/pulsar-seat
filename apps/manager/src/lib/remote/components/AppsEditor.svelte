@@ -1,75 +1,41 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Stream-server app list (what clients see). Unknown upstream keys are kept as they are. -->
+<!-- Stream-server app list (what clients see), as one stacked row of the seat page's
+     Apps section. Edits are staged in the seat page's draft (redesign P6); unknown upstream
+     keys of an entry are kept as they are. -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
+  import { rt as t } from '#lib/i18n.ts';
   import type { AppEntry } from '#lib/remote/types.ts';
+  import { Button, IconButton, ListTable } from '#lib/ui/index.ts';
 
-  interface Props {
-    load: () => Promise<AppEntry[]>;
-    save: (apps: AppEntry[]) => Promise<AppEntry[]>;
-    disabled: boolean;
-  }
-  let { load, save, disabled }: Props = $props();
-
-  let apps = $state<AppEntry[]>([]);
-  let error = $state<string | null>(null);
-  let notice = $state<string | null>(null);
-  let busy = $state(false);
-
-  onMount(async () => {
-    try {
-      apps = await load();
-    } catch (e) {
-      error = errorMessage(e);
-    }
-  });
-
-  function add() {
-    apps.push({ name: '', cmd: '' });
-  }
-
-  async function store() {
-    busy = true;
-    error = null;
-    notice = null;
-    try {
-      const clean = ($state.snapshot(apps) as AppEntry[])
-        .filter((a) => a.name.trim() !== '')
-        .map((a) => {
-          const c = { ...a, name: a.name.trim() };
-          if (!c.cmd || c.cmd.trim() === '') delete c.cmd;
-          return c;
-        });
-      apps = await save(clean);
-      notice = t.seat.appsSaved;
-    } catch (e) {
-      error = errorMessage(e);
-    } finally {
-      busy = false;
-    }
-  }
+  let { apps = $bindable() }: { apps: AppEntry[] } = $props();
 </script>
 
-<fieldset disabled={disabled || busy}>
-  <legend>{t.seat.apps}</legend>
-  {#each apps as app, i (i)}
-    <div class="app">
-      <label class="field">
-        <span>{t.seat.appName}</span>
-        <input bind:value={app.name} maxlength="128" />
-      </label>
-      <label class="field">
-        <span>{t.seat.appCmd}</span>
-        <input bind:value={app.cmd} />
-      </label>
-      <button type="button" onclick={() => apps.splice(i, 1)}>{t.seat.remove}</button>
-    </div>
-  {/each}
-  <div class="buttons">
-    <button type="button" onclick={add}>{t.seat.addApp}</button>
-    <button type="button" class="primary" onclick={store}>{t.seat.saveApps}</button>
+<div class="row stack">
+  <div class="label">
+    <b>{t.view.clientApps}</b>
+    <span>{t.view.clientAppsHelp}</span>
   </div>
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="ok" role="status">{notice}</p>{/if}
-</fieldset>
+  {#if apps.length > 0}
+    <ListTable
+      caption={t.view.clientApps}
+      columns={[
+        { key: 'name', label: t.seat.appName },
+        { key: 'cmd', label: t.seat.appCmd },
+        { key: 'x', label: t.seat.remove, end: true, srOnly: true }
+      ]}
+    >
+      {#each apps as app, i (i)}
+        <tr>
+          <td><input class="input" aria-label={t.seat.appName} bind:value={app.name} maxlength="128" /></td>
+          <td><input class="input mono" aria-label={t.seat.appCmd} bind:value={app.cmd} /></td>
+          <td class="end">
+            <IconButton icon="trash" label={t.view.removeItem(app.name || String(i + 1))} onclick={() => apps.splice(i, 1)} />
+          </td>
+        </tr>
+      {/each}
+    </ListTable>
+  {:else}
+    <p class="help">{t.view.noApps}</p>
+  {/if}
+  <div><Button kind="secondary" compact icon="plus" label={t.seat.addApp} onclick={() => apps.push({ name: '', cmd: '' })} /></div>
+</div>

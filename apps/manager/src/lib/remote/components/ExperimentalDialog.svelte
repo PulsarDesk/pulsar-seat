@@ -1,9 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Explicit warning before the EXPERIMENTAL client-SKU multi-session module (contracts §2.4). -->
+<!-- Explicit warning before the EXPERIMENTAL client-SKU multi-session module (contracts §2.4;
+     prototype 75). The wrapper is installed by the operator; Pulsar Seat only points the
+     Remote Desktop service at it after the acknowledgement. -->
 <script lang="ts">
   import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
   import type { TermwrapStatus } from '#lib/remote/types.ts';
-  import { WARNING_VERSION, warningText } from '#lib/warning.ts';
+  import { WARNING_VERSION, boldParts, warningText } from '#lib/warning.ts';
+  import { Button, Checkbox, Field, Modal, Notice, Select, Spinner } from '#lib/ui/index.ts';
 
   interface Props {
     status: TermwrapStatus;
@@ -25,13 +28,8 @@
     if (wrapper === '' && status.candidates.length > 0) wrapper = status.candidates[0].service_dll;
   });
 
-  /** `**bold**` segments of one line. */
-  function parts(line: string): { text: string; bold: boolean }[] {
-    return line.split('**').map((s, i) => ({ text: s, bold: i % 2 === 1 }));
-  }
-
   async function enable() {
-    if (!acknowledged) return;
+    if (!acknowledged || status.candidates.length === 0) return;
     busy = true;
     error = null;
     try {
@@ -44,64 +42,58 @@
   }
 </script>
 
-<div class="backdrop">
-  <div class="dialog wide" role="alertdialog" aria-modal="true" aria-labelledby="exp-title">
-    <h2 id="exp-title">{t.experimental.title}</h2>
-    <div class="warning" data-testid="warning-text">
+<Modal title={t.experimental.title} size="md" alert initialFocus="cancel" onClose={onCancel}>
+  <div class="stack">
+    <div class="warning" data-testid="warning-text" tabindex="-1">
       {#each paragraphs as line, i (i)}
         <p class:item={line.startsWith('- ')}>
-          {#each parts(line.replace(/^- /, '')) as p, j (j)}{#if p.bold}<strong>{p.text}</strong>{:else}{p.text}{/if}{/each}
+          {#each boldParts(line.replace(/^- /, '')) as p, j (j)}{#if p.bold}<strong>{p.text}</strong>{:else}{p.text}{/if}{/each}
         </p>
       {/each}
     </div>
     {#if status.candidates.length === 0}
-      <p class="error">{t.host.twNoCandidate}</p>
+      <Notice kind="warn" text={t.host.twNoCandidate} />
     {:else}
-      <label class="field">
-        <span>{t.experimental.wrapper}</span>
-        <select bind:value={wrapper}>
-          {#each status.candidates as c (c.service_dll)}
-            <option value={c.service_dll}>{c.service_dll}</option>
-          {/each}
-        </select>
-      </label>
+      <Field label={t.experimental.wrapper}>
+        {#snippet children({ id })}
+          <Select {id} wide mono options={status.candidates.map((c) => ({ value: c.service_dll, label: c.service_dll }))} bind:value={wrapper} />
+        {/snippet}
+      </Field>
     {/if}
-    <label class="toggle">
-      <input type="checkbox" bind:checked={acknowledged} />
-      {t.experimental.ack}
-    </label>
-    {#if busy}<p class="hint" role="status">{t.experimental.working}</p>{/if}
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <div class="buttons">
-      <button
-        type="button"
-        class="primary danger-btn"
-        disabled={!acknowledged || busy || status.candidates.length === 0}
-        onclick={enable}
-      >
-        {t.experimental.enable}
-      </button>
-      <button type="button" onclick={onCancel} disabled={busy}>{t.experimental.cancel}</button>
-    </div>
+    <Checkbox label={t.experimental.ack} bind:checked={acknowledged} />
+    {#if busy}<p class="line" role="status"><Spinner />{t.experimental.working}</p>{/if}
+    {#if error}<Notice kind="danger" text={error} />{/if}
   </div>
-</div>
+  {#snippet foot()}
+    <Button kind="primary" label={t.experimental.enable} disabled={!acknowledged || status.candidates.length === 0} {busy} onclick={enable} />
+    <Button kind="secondary" label={t.experimental.cancel} disabled={busy} onclick={onCancel} />
+  {/snippet}
+</Modal>
 
 <style>
-  .warning {
-    max-height: 45vh;
-    overflow-y: auto;
-    border: 1px solid var(--danger);
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
+  .stack {
+    display: grid;
+    gap: var(--sp-4);
   }
-  .warning p {
-    margin: 0.4rem 0;
+  .warning {
+    max-height: 40vh;
+    overflow-y: auto;
+    padding-right: var(--sp-2);
+    color: var(--text);
+  }
+  .warning p + p {
+    margin-top: var(--sp-2);
   }
   .warning p.item {
-    padding-left: 1rem;
-    text-indent: -0.8rem;
+    padding-left: var(--sp-4);
+    text-indent: calc(-1 * var(--sp-3));
   }
   .warning p.item::before {
-    content: '• ';
+    content: '\2022\00a0';
+  }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
 </style>

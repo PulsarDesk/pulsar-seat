@@ -21,10 +21,10 @@ describe('ExperimentalDialog', () => {
     expect(screen.getByTestId('warning-text')).toHaveTextContent('Experimental feature');
     expect(screen.getByTestId('warning-text')).toHaveTextContent('grey area');
     const enable = screen.getByRole('button', { name: t.experimental.enable });
-    expect(enable).toBeDisabled();
+    expect(enable).toHaveAttribute('aria-disabled', 'true');
     const user = userEvent.setup();
     await user.click(screen.getByRole('checkbox', { name: t.experimental.ack }));
-    expect(enable).toBeEnabled();
+    expect(enable).not.toHaveAttribute('aria-disabled');
     await user.click(enable);
     expect(onEnable).toHaveBeenCalledWith('C:\Program Files\RDP Wrapper\rdpwrap.dll', 1);
   });
@@ -32,6 +32,6 @@ describe('ExperimentalDialog', () => {
   it('cannot enable without a wrapper', () => {
     render(ExperimentalDialog, { status: { ...status, candidates: [] }, onEnable: vi.fn(), onCancel: vi.fn() });
     expect(screen.getByText(t.host.twNoCandidate)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.experimental.enable })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.experimental.enable })).toHaveAttribute('aria-disabled', 'true');
   });
 });

@@ -5,6 +5,7 @@
      through a service request, never through a shell in the manager. -->
 <script lang="ts">
   import { remoteErrorMessage as errorMessage, rt as t } from '#lib/i18n.ts';
+  import { Button, Modal, Notice, Spinner } from '#lib/ui/index.ts';
 
   interface Props {
     /** Direction: true = install / enable, false = remove / disable. */
@@ -21,6 +22,9 @@
   let error = $state<string | null>(null);
 
   const c = $derived(enable ? t.patching.install : t.patching.remove);
+  const title = $derived(
+    step === 'confirm' ? c.title : step === 'progress' ? c.progress : step === 'reboot' ? t.patching.rebootTitle : t.common.error
+  );
 
   async function apply() {
     step = 'progress';
@@ -47,43 +51,51 @@
   }
 </script>
 
-<div class="backdrop">
-  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="patch-title">
-    {#if step === 'confirm'}
-      <h2 id="patch-title">{c.title}</h2>
-      <ul>
-        {#each c.bullets as b (b)}<li>{b}</li>{/each}
-      </ul>
-      <p>{c.question}</p>
-      {#if enable}
-        <p class="danger"><strong>{t.patching.warning}</strong></p>
-        <p class="danger big" data-testid="patch-caution">{t.patching.caution}</p>
-      {/if}
-      <div class="buttons">
-        <button type="button" class="primary danger-btn" onclick={apply}>{c.confirm}</button>
-        <button type="button" onclick={onClose}>{t.patching.cancel}</button>
+<Modal {title} size="md" alert initialFocus="cancel" showClose={step !== 'progress'} onClose={() => step !== 'progress' && onClose()}>
+  {#if step === 'confirm'}
+    <ul class="bullets">
+      {#each c.bullets as b (b)}<li>{b}</li>{/each}
+    </ul>
+    <p>{c.question}</p>
+    {#if enable}
+      <div class="after">
+        <Notice kind="warn">
+          <span><strong>{t.patching.warning}</strong> <span data-testid="patch-caution">{t.patching.caution}</span></span>
+        </Notice>
       </div>
-    {:else if step === 'progress'}
-      <h2 id="patch-title">{c.progress}</h2>
-      <p role="status">{t.common.loading}</p>
-    {:else if step === 'reboot'}
-      <h2 id="patch-title">{t.patching.rebootTitle}</h2>
-      <p>{t.patching.rebootBody}</p>
-      <div class="buttons">
-        <button type="button" class="primary" onclick={reboot}>{t.patching.rebootNow}</button>
-        <button type="button" onclick={onClose}>{t.patching.rebootLater}</button>
-      </div>
-    {:else}
-      <h2 id="patch-title">{t.common.error}</h2>
-      <p class="error" role="alert">{error}</p>
-      <div class="buttons"><button type="button" onclick={onClose}>{t.common.close}</button></div>
     {/if}
-  </div>
-</div>
+  {:else if step === 'progress'}
+    <p class="line" role="status"><Spinner />{t.common.loading}</p>
+  {:else if step === 'reboot'}
+    <p>{t.patching.rebootBody}</p>
+  {:else}
+    <Notice kind="danger" text={error ?? ''} />
+  {/if}
+  {#snippet foot()}
+    {#if step === 'confirm'}
+      <Button kind={enable ? 'danger' : 'primary'} label={c.confirm} onclick={apply} />
+      <Button kind="secondary" label={t.patching.cancel} onclick={onClose} />
+    {:else if step === 'reboot'}
+      <Button kind="primary" icon="power" label={t.patching.rebootNow} onclick={reboot} />
+      <Button kind="secondary" label={t.patching.rebootLater} onclick={onClose} />
+    {:else if step === 'error'}
+      <Button kind="secondary" label={t.common.close} onclick={onClose} />
+    {/if}
+  {/snippet}
+</Modal>
 
 <style>
-  .big {
-    font-size: 1.4em;
-    font-weight: bold;
+  .bullets {
+    padding-left: var(--sp-5);
+    margin-bottom: var(--sp-3);
+    list-style: disc;
+  }
+  .bullets li + li {
+    margin-top: var(--sp-1);
+  }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
   }
 </style>

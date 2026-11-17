@@ -1,27 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// GPU warnings of the remote seat page (moved from avatar.test.ts when the avatar went away
+// in redesign P6).
 import { describe, expect, it } from 'vitest';
-import { applyLocale } from '../i18n.ts';
-import { avatarSrc, initial } from './avatar.ts';
 import { gpuWarnings } from './gpu.ts';
 import type { RenderAdapter } from './types.ts';
-
-describe('avatar', () => {
-  it('builds a data URL only for known image types and clean base64', () => {
-    expect(avatarSrc({ mime: 'image/png', data: 'iVBORw==' })).toBe('data:image/png;base64,iVBORw==');
-    expect(avatarSrc({ mime: 'image/svg+xml', data: 'PHN2Zy8+' })).toBeNull();
-    expect(avatarSrc({ mime: 'image/png', data: '' })).toBeNull();
-    expect(avatarSrc({ mime: 'image/png', data: 'a"onerror' })).toBeNull();
-    expect(avatarSrc(null)).toBeNull();
-  });
-  it('uses the first letter in the upper case of the UI language', () => {
-    expect(initial('istasyon')).toBe('I');
-    applyLocale('tr');
-    expect(initial('istasyon')).toBe('İ');
-    applyLocale('en');
-    expect(initial('  salon')).toBe('S');
-    expect(initial('')).toBe('?');
-  });
-});
 
 const gpu = (id: string, vendor: number, mem: number, hardware = true): RenderAdapter => ({
   pnp_instance_id: id,

@@ -8,7 +8,7 @@
        BasicTab   { store, onAdvanced, onDialog(kind) } kind: diagnostics|updates|import|reset1|clearPictures
        AdvancedTab{ store, onBack, onHotkey, onCpu, onOutputs, onIp(seat) }
        StatusTab  { store, onDiagnostics, onServiceAction(kind) }
-       RemoteTab  { store, initialSeat, onSeatsChanged }
+       RemoteTab  { store, initialSeat, onSeatsChanged, onOpenSettings }
      App renders `.scroll > .page`; a page renders from its page head down. The props are
      passed as spread objects so a page that does not declare a prop yet still type-checks. -->
 <script module lang="ts">
@@ -33,6 +33,7 @@
   import UpdateDialog from './UpdateDialog.svelte';
   import Wizard from './Wizard.svelte';
   import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
+  import { discardRemoteStage, provideStageDock, remoteDirty, remoteStage, saveRemoteStage } from '#lib/remote/stage.svelte.ts';
   import { summarizeChanges } from '#lib/changes.ts';
   import { safeModeText, t } from '#lib/i18n.ts';
   import {
@@ -141,7 +142,8 @@
 
   // The shell asks before closing the window while something is unsaved.
   $effect(() => {
-    const d = store.dirty;
+    // Staged remote page edits count too (redesign P6).
+    const d = store.dirty || remoteDirty();
     store.api.setUiDirty(d).catch(() => {});
   });
 
@@ -177,7 +179,7 @@
 
   /** Ask save / discard / cancel when there are unsaved changes (spec 10 §2.3). */
   function guard(then: () => void) {
-    if (store.dirty) dialog = { kind: 'unsaved', then };
+    if (store.dirty || remoteDirty()) dialog = { kind: 'unsaved', then };
     else then();
   }
 
@@ -281,7 +283,12 @@
     onIp: openIp
   });
   const statusProps = $derived({ store, onDiagnostics: () => (dialog = { kind: 'diagnostics' }), onServiceAction: serviceAction });
-  const remoteProps = $derived({ store, initialSeat: remoteSeat, onSeatsChanged: () => void store.refreshStatus() });
+  const remoteProps = $derived({
+    store,
+    initialSeat: remoteSeat,
+    onSeatsChanged: () => void store.refreshStatus(),
+    onOpenSettings: () => navigate('settings')
+  });
 
   // ------------------------------------------------------------ notices, save bar, toasts
 
@@ -324,6 +331,19 @@
 
   const toastItems = $derived(store.toasts.filter((m) => m.kind !== 'error').map((m) => ({ id: m.id, text: m.text, kind: m.kind })));
   const showSaveBar = $derived(store.dirty && tab !== 'remote' && !store.serviceDown);
+  // Remote pages keep their own draft (redesign P6); the shell docks its save bar here too.
+  provideStageDock();
+  const stage = $derived(tab === 'remote' && !store.serviceDown && remoteDirty() ? remoteStage.current : null);
+  let stageBusy = $state(false);
+  async function saveStage() {
+    if (stageBusy) return;
+    stageBusy = true;
+    try {
+      await saveRemoteStage();
+    } finally {
+      stageBusy = false;
+    }
+  }
   const changes = $derived(summarizeChanges(store.saved, store.draft, Object.keys(store.pendingPasswords).length));
   const saveDetail = $derived.by(() => {
     const m = changes.moved;
@@ -391,11 +411,21 @@
         onSave={() => void save()}
         onUndo={() => store.discard()}
       />
+    {:else if stage}
+      <SaveBar
+        count={stage.count}
+        detail={stage.detail}
+        busy={stageBusy}
+        saveDisabledReason={stage.invalid}
+        shortcut
+        onSave={() => void saveStage()}
+        onUndo={() => discardRemoteStage()}
+      />
     {/if}
   </main>
 </div>
 
-<Toasts items={toastItems} onDismiss={(id) => store.dismiss(Number(id))} raised={showSaveBar} />
+<Toasts items={toastItems} onDismiss={(id) => store.dismiss(Number(id))} raised={showSaveBar || stage !== null} />
 
 {#if store.pendingInputMove !== null && store.isAdmin && !dialog}
   <ConfirmDialog
@@ -505,13 +535,14 @@
         onclick={async () => {
           const next = then;
           dialog = null;
-          if (await save()) next();
+          if ((await saveRemoteStage()) && (!store.dirty || (await save()))) next();
         }}
       />
       <Button
         label={t.unsaved.discard}
         onclick={() => {
           const next = then;
+          discardRemoteStage();
           store.discard();
           dialog = null;
           next();
