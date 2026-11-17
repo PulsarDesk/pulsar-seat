@@ -17,6 +17,8 @@
   let { kind, active = true, size = 40, picture, userUrl = null }: Props = $props();
   const ref = $derived(parsePicture(picture));
   const id = $derived(ref.type === 'builtin' ? ref.id : '');
+  // One visual stroke weight at every size (about 1.4px; the 40-unit grid is scaled down).
+  const stroke = $derived(size <= 24 ? 3 : 2);
 </script>
 
 {#if userUrl}
@@ -28,7 +30,7 @@
     viewBox="0 0 40 40"
     fill="none"
     stroke="currentColor"
-    stroke-width="2"
+    stroke-width={stroke}
     stroke-linecap="round"
     stroke-linejoin="round"
     class:inactive={!active}
@@ -153,17 +155,18 @@
       <rect x="8" y="8" width="24" height="24" rx="4" />
       <path d="M16 20h8M20 16v8" />
     {/if}
-    {#if !active}<path d="M6 34L34 6" stroke-width="2.5" />{/if}
+    {#if !active}<path d="M6 34L34 6" />{/if}
   </svg>
 {/if}
 
 <style>
   svg {
     display: block;
-    color: var(--text);
+    flex: none;
+    color: inherit;
   }
   svg.inactive {
-    color: var(--muted);
+    color: var(--text-faint);
   }
   img {
     display: block;

@@ -1,9 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Seat name (spec 10 §7.2): one field, default = the number, 1..=64 characters. -->
+<!-- Seat name (spec 10 §7.2; redesign 61-dlg-seat-name): one field, default = the number,
+     1..=64 characters; the error shows inline under the field. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
   import { seatNameError } from '#lib/model.ts';
+  import { Button, Field, Modal } from '#lib/ui/index.ts';
 
   interface Props {
     seat: number;
@@ -15,6 +16,7 @@
   // svelte-ignore state_referenced_locally
   let value = $state(name);
   const error = $derived(seatNameError(value));
+  const formId = `seat-name-${Math.random().toString(36).slice(2, 9)}`;
 
   function submit(e: Event) {
     e.preventDefault();
@@ -22,16 +24,16 @@
   }
 </script>
 
-<Modal title={t.seatName.title(seat)} onClose={onCancel}>
-  <form id="seat-name" onsubmit={submit}>
-    <label class="field">
-      <span>{t.seatName.label}</span>
-      <input bind:value maxlength="80" aria-invalid={error ? 'true' : 'false'} />
-    </label>
-    {#if error}<p class="error" role="alert">{t.seatName.errors[error]}</p>{/if}
+<Modal title={t.seatName.title(seat)} size="sm" onClose={onCancel}>
+  <form id={formId} onsubmit={submit}>
+    <Field label={t.seatName.label} error={error ? t.seatName.errors[error] : undefined}>
+      {#snippet children({ id, describedby, invalid })}
+        <input class="input" {id} bind:value maxlength="80" aria-invalid={invalid ?? 'false'} aria-describedby={describedby} />
+      {/snippet}
+    </Field>
   </form>
-  {#snippet buttons()}
-    <button type="submit" form="seat-name" class="primary" disabled={!!error}>{t.save}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+  {#snippet foot()}
+    <Button kind="primary" type="submit" form={formId} label={t.save} disabled={!!error} />
+    <Button label={t.cancel} onclick={onCancel} />
   {/snippet}
 </Modal>

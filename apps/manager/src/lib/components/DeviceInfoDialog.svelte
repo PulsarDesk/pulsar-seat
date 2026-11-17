@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Device details: connection path (port chain up to the root hub) and sharing state
-     (spec 10 §3.2, §3.5). -->
+<!-- Device details (spec 10 §3.2, §3.5; redesign 57-dlg-device-info): one key/value list with the
+     description lines, the connection path (port chain up to the root hub) and the sharing
+     state; "Show (identify)" when the device can be indicated, then Close. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
   import { deviceLines, hubChain, isolationLabel, maskLabel, sourceLabel } from '#lib/describe.ts';
   import { t } from '#lib/i18n.ts';
+  import { Button, Modal } from '#lib/ui/index.ts';
   import type { DeviceKey, DeviceView, MaskSource, SeatMask } from '#lib/types.ts';
 
   interface Props {
@@ -14,53 +15,85 @@
     all: DeviceView[];
     showIds: boolean;
     deviceName: (k: DeviceKey) => string;
+    /** Present when the device can be indicated on its hardware (monitors, speakers). */
+    onIdentify?: (on: boolean) => void;
+    identifying?: boolean;
     onClose: () => void;
   }
-  let { view, mask, source, all, showIds, deviceName, onClose }: Props = $props();
+  let { view, mask, source, all, showIds, deviceName, onIdentify, identifying = false, onClose }: Props = $props();
 
   const chain = $derived(hubChain(view.device, new Map(all.map((v) => [v.device.key, v.device]))));
   const isolation = $derived(isolationLabel(view.isolation));
+  const named = (d: { name: string; label?: string }) => (d.label ? `${d.name} (${d.label})` : d.name);
+  /** "Kind: Keyboard" lines become key / value pairs; a line without a key spans the value. */
+  const lines = $derived(
+    deviceLines(view, mask, all, showIds).map((l) => {
+      const at = l.indexOf(': ');
+      return at > 0 ? { k: l.slice(0, at), v: l.slice(at + 2) } : { k: '', v: l };
+    })
+  );
 </script>
 
-<Modal title={view.device.name} onClose={onClose}>
-  <ul class="plain">
-    {#each deviceLines(view, mask, all, showIds) as line, i (i)}<li>{line}</li>{/each}
-  </ul>
-  <h3>{t.deviceMenu.path}</h3>
-  {#if chain.length}
-    <ol class="chain">
-      <li>{view.device.name}{view.device.label ? ` (${view.device.label})` : ''}</li>
-      {#each chain as hub (hub.key)}<li>{hub.name}{hub.label ? ` (${hub.label})` : ''}</li>{/each}
-    </ol>
-  {:else}
-    <p>{view.device.label ?? t.none}</p>
-  {/if}
-  <h3>{t.deviceMenu.sharing}</h3>
-  <p>{maskLabel(mask)} — {sourceLabel(source, deviceName)}</p>
-  {#if isolation}<p class="hint">{isolation}</p>{/if}
-  {#if showIds}
-    <p class="hint mono">{view.device.key}</p>
-    {#if view.device.instance_id}<p class="hint mono">{view.device.instance_id}</p>{/if}
-  {/if}
-  {#snippet buttons()}<button type="button" class="primary" onclick={onClose}>{t.close}</button>{/snippet}
+<Modal title={view.device.name} sub={t.device.infoSub} size="md" {onClose}>
+  <dl class="kv group">
+    {#each lines as l, i (i)}
+      <dt>{l.k}</dt>
+      <dd>{l.v}</dd>
+    {/each}
+    <dt>{t.deviceMenu.path}</dt>
+    <dd>
+      {#if chain.length}
+        <ol class="chain">
+          <li>{named(view.device)}</li>
+          {#each chain as hub (hub.key)}<li>{named(hub)}</li>{/each}
+        </ol>
+      {:else}
+        {view.device.label ?? t.none}
+      {/if}
+    </dd>
+    <dt>{t.deviceMenu.sharing}</dt>
+    <dd>
+      {maskLabel(mask)} · {sourceLabel(source, deviceName)}
+      {#if isolation}<span class="more">{isolation}</span>{/if}
+    </dd>
+    {#if showIds}
+      <dt>{t.describe.ids}</dt>
+      <dd>
+        <span class="mono">{view.device.key}</span>
+        {#if view.device.instance_id}<span class="mono">{view.device.instance_id}</span>{/if}
+      </dd>
+    {/if}
+  </dl>
+  {#snippet foot()}
+    {#if onIdentify}
+      <Button icon="eye" label={identifying ? t.deviceMenu.indicateStop : t.device.identify} onclick={() => onIdentify?.(!identifying)} />
+    {/if}
+    <Button label={t.close} onclick={onClose} />
+  {/snippet}
 </Modal>
 
 <style>
-  h3 {
-    font-size: 0.95rem;
-    margin: 0.75rem 0 0.25rem;
-  }
-  .plain {
-    list-style: none;
-    padding: 0;
-    margin: 0;
+  dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .chain {
-    margin: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .chain li + li::before {
+    content: '↑ ';
+    color: var(--text-muted);
+  }
+  .more {
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--fs-help);
+    line-height: var(--lh-help);
   }
   .mono {
-    font-family: ui-monospace, monospace;
-    font-size: 0.8em;
-    word-break: break-all;
+    display: block;
   }
 </style>

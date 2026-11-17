@@ -35,9 +35,10 @@ describe('App shell', () => {
     expect(nav(t.nav.seats)).toHaveAttribute('aria-current', 'page');
     expect(nav(t.nav.remote)).not.toHaveAttribute('aria-current');
     expect(screen.queryByRole('tab')).toBeNull();
-    const two = screen.getByRole('region', { name: `2. ${t.seat}` });
+    // Seat cards are named by the seat's title ("Misafir"; an unnamed seat is "Seat N").
+    const two = screen.getByRole('region', { name: 'Misafir' });
     expect(within(two).getByText('Kablosuz klavye')).toBeInTheDocument();
-    expect(within(two).getByText(t.health.ready)).toBeInTheDocument();
+    expect(within(two).getByText(t.seatN(2), { exact: false })).toBeInTheDocument();
   });
 
   it('the Status link names the service state', async () => {
@@ -69,7 +70,7 @@ describe('App shell', () => {
     expect(bar).toBeInTheDocument();
     expect(within(bar).getByText(t.saveBar.count(1))).toBeInTheDocument();
     expect(t.saveBar.count(1).endsWith('.')).toBe(false);
-    expect(screen.getByRole('region', { name: `3. ${t.seat}` })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: t.seatN(3) })).toBeInTheDocument();
     // Docked: the bar is a sibling after the scroll area inside main, not inside it.
     expect(bar.parentElement).toBe(screen.getByRole('main'));
     expect(bar.previousElementSibling).toHaveClass('scroll');
@@ -97,6 +98,23 @@ describe('App shell', () => {
     await user.click(within(dlg).getByRole('button', { name: t.power.openAndStart }));
     expect(api.state.product.state).toBe('enabled');
     // Turning on starts the seats (the former startup offer): the start question follows.
+    const confirm = await screen.findByRole('alertdialog', { name: t.start.confirmTitle });
+    await user.click(within(confirm).getByRole('button', { name: t.bar.start }));
+    expect(api.calls).toContain('start_seats');
+  });
+
+  it("the status line's Start seats goes through the start question", async () => {
+    const { api, store, user } = await setup();
+    tray(store, 'toggle_enabled');
+    await tick();
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: t.power.openAndStart }));
+    // Dismiss the start question that follows turning on; the seats stay stopped.
+    await screen.findByRole('alertdialog', { name: t.start.confirmTitle });
+    await user.keyboard('{Escape}');
+    await tick();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(api.calls).not.toContain('start_seats');
+    await user.click(screen.getAllByRole('button', { name: t.bar.start })[0]);
     const confirm = await screen.findByRole('alertdialog', { name: t.start.confirmTitle });
     await user.click(within(confirm).getByRole('button', { name: t.bar.start }));
     expect(api.calls).toContain('start_seats');
@@ -220,9 +238,9 @@ describe('App shell', () => {
 
   it('device menu sends a device to the spare pool', async () => {
     const { store, user } = await setup();
-    const two = screen.getByRole('region', { name: `2. ${t.seat}` });
-    await user.click(within(two).getByRole('button', { name: `${t.kinds.keyboard}: Kablosuz klavye` }));
-    await user.click(screen.getByRole('menuitem', { name: t.deviceMenu.spare }));
+    const two = screen.getByRole('region', { name: 'Misafir' });
+    await user.click(within(two).getByRole('button', { name: t.device.actions('Kablosuz klavye') }));
+    await user.click(screen.getByRole('menuitem', { name: t.move.toPool }));
     expect(store.draft?.devices.find((d) => d.key === 'kbd;loc=USB(2-1-1)')?.mask).toBe(0);
     const sys = screen.getByRole('region', { name: t.canvas.system });
     expect(within(sys).getByText('Kablosuz klavye')).toBeInTheDocument();

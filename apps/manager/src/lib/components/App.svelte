@@ -264,7 +264,9 @@
     ipBinding: openIp,
     openRemote,
     enable: askEnable,
-    startAll: () => requestStart(null),
+    startAll: () => {
+      if (adminGate()) requestStart(null);
+    },
     stopAll: () => void store.stopAllSeats(),
     openSettings: () => navigate('settings'),
     restartSeat: (n) => void store.restartSeat(n)

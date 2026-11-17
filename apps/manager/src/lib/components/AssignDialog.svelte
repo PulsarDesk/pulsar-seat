@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Assign a device to seats (spec 10 §7.1): radio buttons for exclusive kinds, checkboxes
-     plus "all seats" / "none" for shareable kinds. Save writes the new mask to the draft.
+<!-- Assign a device to seats (spec 10 §7.1): a choice list for exclusive kinds, checkboxes
+     (with "All seats" first) for shareable kinds; on ui/Modal (redesign 56-dlg-assign).
+     Save writes the new mask to the draft.
      With `portKey` / `containerKey` (spec 70 §5.1) the admin can instead assign the hub
      port the device is plugged into, or the whole physical device; those targets are
      shareable like a hub and saved through `onSaveTarget`. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import { Button, Checkbox, ChoiceList, Field, Group, Modal } from '#lib/ui/index.ts';
   import { t } from '#lib/i18n.ts';
   import * as M from '#lib/mask.ts';
   import { policyOf } from '#lib/model.ts';
@@ -62,63 +63,67 @@
     return M.fromSeats(seats.filter((s) => checked[s.number]).map((s) => s.number));
   }
 
-  function all() {
-    shared = true;
-    for (const s of seats) checked[s.number] = true;
-  }
-
-  function none() {
-    shared = false;
-    for (const s of seats) checked[s.number] = false;
-  }
+  const targets = $derived([
+    { value: 'device' as Target, label: t.assign.targetDevice },
+    ...(portKey ? [{ value: 'port' as Target, label: t.canvas.assignPort }] : []),
+    ...(containerKey ? [{ value: 'container' as Target, label: t.canvas.assignContainer }] : [])
+  ]);
+  const seatChoices = $derived([
+    { value: '0', label: t.assign.noSeat },
+    ...seats.map((s) => ({ value: String(s.number), label: t.assign.seatOption(s.number, s.name) }))
+  ]);
 </script>
 
-<Modal title={t.assign.title(device.name)} onClose={onCancel}>
+<Modal title={t.assign.title(device.name)} size="sm" onClose={onCancel}>
   {#if onSaveTarget && (portKey || containerKey) && policyOf(device.kind) !== 'never_gated'}
-    <fieldset class="choices">
-      <legend>{t.assign.target}</legend>
-      <label class="toggle"><input type="radio" name="target" checked={target === 'device'} onchange={() => pick('device')} /> {t.assign.targetDevice}</label>
-      {#if portKey}
-        <label class="toggle"><input type="radio" name="target" checked={target === 'port'} onchange={() => pick('port')} /> {t.canvas.assignPort}</label>
-      {/if}
-      {#if containerKey}
-        <label class="toggle"><input type="radio" name="target" checked={target === 'container'} onchange={() => pick('container')} /> {t.canvas.assignContainer}</label>
-      {/if}
-    </fieldset>
-    {#if target !== 'device'}<p class="hint">{t.assign.targetHint}</p>{/if}
+    <Field label={t.assign.target} group>
+      {#snippet children({ labelId })}
+        <ChoiceList name="assign-target" options={targets} value={target} labelledby={labelId} dense onchange={(v) => pick(v)} />
+      {/snippet}
+    </Field>
+    {#if target !== 'device'}<p class="help">{t.assign.targetHint}</p>{/if}
   {/if}
   {#if policy === 'never_gated'}
-    <p class="hint">{t.assign.networkHint}</p>
+    <p class="help">{t.assign.networkHint}</p>
   {:else if policy === 'exclusive'}
-    <p class="hint">{t.assign.exclusiveHint}</p>
-    <fieldset class="choices">
-      <legend>{t.seats}</legend>
-      <label class="toggle"><input type="radio" name="seat" value={0} bind:group={chosen} /> {t.assign.noSeat}</label>
-      {#each seats as s (s.number)}
-        <label class="toggle"><input type="radio" name="seat" value={s.number} bind:group={chosen} /> {t.assign.seatOption(s.number, s.name)}</label>
-      {/each}
-    </fieldset>
+    <Field label={t.seats} help={t.assign.exclusiveHint} group>
+      {#snippet children({ labelId })}
+        <ChoiceList
+          name="assign-seat"
+          options={seatChoices}
+          value={String(chosen)}
+          labelledby={labelId}
+          dense
+          onchange={(v) => (chosen = Number(v))}
+        />
+      {/snippet}
+    </Field>
   {:else}
-    <p class="hint">{t.assign.shareableHint}</p>
-    <fieldset class="choices">
-      <legend>{t.seats}</legend>
-      <label class="toggle"><input type="checkbox" bind:checked={shared} /> {t.assign.allSeats}</label>
-      {#each seats as s (s.number)}
-        <label class="toggle">
-          <input type="checkbox" disabled={shared} bind:checked={checked[s.number]} />
-          {t.assign.seatOption(s.number, s.name)}
-        </label>
-      {/each}
-    </fieldset>
-    <div class="actions">
-      <button type="button" onclick={all}>{t.assign.allSeats}</button>
-      <button type="button" onclick={none}>{t.assign.clearAll}</button>
-    </div>
+    <Field label={t.seats} help={t.assign.shareableHint} group>
+      {#snippet children({ labelId })}
+        <div role="group" aria-labelledby={labelId}>
+          <Group>
+            <div class="box"><Checkbox label={t.assign.allSeats} bind:checked={shared} /></div>
+            {#each seats as s (s.number)}
+              <div class="box"><Checkbox label={t.assign.seatOption(s.number, s.name)} disabled={shared} bind:checked={checked[s.number]} /></div>
+            {/each}
+          </Group>
+        </div>
+      {/snippet}
+    </Field>
   {/if}
-  {#snippet buttons()}
+  {#snippet foot()}
     {#if policy !== 'never_gated'}
-      <button type="button" class="primary" onclick={save}>{t.save}</button>
+      <Button kind="primary" label={t.save} onclick={save} />
+      <Button label={t.cancel} onclick={onCancel} />
+    {:else}
+      <Button label={t.close} onclick={onCancel} />
     {/if}
-    <button type="button" onclick={onCancel}>{policy === 'never_gated' ? t.close : t.cancel}</button>
   {/snippet}
 </Modal>
+
+<style>
+  .box {
+    padding: 4px var(--sp-4);
+  }
+</style>

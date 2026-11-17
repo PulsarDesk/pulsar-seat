@@ -2,20 +2,25 @@
 <!-- Page head: the h1, then one purpose line (`sub`) or one status line (`status` snippet), with
      right-aligned actions that wrap. A Breadcrumb goes *before* it, so the actions align with
      the h1. At most one primary among the actions. Inside the app shell the page's one notice
-     region (notice-host.svelte.ts) follows the head. -->
+     region (notice-host.svelte.ts) follows the head; a page's own notices (`notices`) join the
+     shell's items in that same region, after them. -->
 <script lang="ts">
   import { onMount, type Snippet } from 'svelte';
   import Notices from './Notices.svelte';
   import { noticeHost } from './notice-host.svelte.ts';
+  import type { NoticeItem } from './types.ts';
 
   interface Props {
     title: string;
     sub?: string;
     status?: Snippet;
     actions?: Snippet;
+    /** The page's own notices; shown in the one notice region after the shell's items. */
+    notices?: NoticeItem[];
   }
-  let { title, sub, status, actions }: Props = $props();
+  let { title, sub, status, actions, notices = [] }: Props = $props();
   const host = noticeHost();
+  const items = $derived([...(host?.items ?? []), ...notices]);
 
   onMount(() => {
     if (!host) return;
@@ -33,4 +38,4 @@
   </div>
   {#if actions}<div class="actions">{@render actions()}</div>{/if}
 </header>
-{#if host}<Notices items={host.items} />{/if}
+{#if host || notices.length}<Notices {items} />{/if}

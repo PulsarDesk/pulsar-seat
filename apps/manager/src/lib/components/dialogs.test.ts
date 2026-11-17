@@ -36,7 +36,7 @@ describe('AssignDialog', () => {
     await user.click(screen.getByLabelText('Seat 3'));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenLastCalledWith(0b101);
-    await user.click(screen.getByRole('button', { name: t.assign.allSeats }));
+    await user.click(screen.getByRole('checkbox', { name: t.assign.allSeats }));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenLastCalledWith(SHARED_MASK);
   });
@@ -154,8 +154,11 @@ describe('SeatNameDialog', () => {
     const user = userEvent.setup();
     const input = screen.getByRole('textbox');
     await user.clear(input);
-    expect(screen.getByRole('alert')).toHaveTextContent(t.seatName.errors.empty);
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByText(t.seatName.errors.empty)).toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave).not.toHaveBeenCalled();
     await user.type(input, ' Salon ');
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenCalledWith('Salon');

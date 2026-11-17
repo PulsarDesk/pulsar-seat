@@ -337,6 +337,14 @@ describe('PageHead notice region', () => {
     expect(await screen.findByTestId('heads')).toHaveTextContent('1');
   });
 
+  it("a page's own notices join the shell's in the same single region", () => {
+    render(NoticeHostFixture, { items: [{ kind: 'warn', text: 'Shell notice' }], pageNotices: [{ kind: 'info', text: 'Page notice' }] });
+    const region = screen.getByRole('group', { name: t.notices.region });
+    expect(within(region).getByText('Shell notice')).toBeInTheDocument();
+    expect(within(region).getByText('Page notice')).toBeInTheDocument();
+    expect(screen.getAllByText(t.notices.count(2))).toHaveLength(1);
+  });
+
   it('a page without a PageHead leaves the region to the shell', () => {
     render(NoticeHostFixture, { items: [{ kind: 'warn', text: 'x' }], withHead: false });
     expect(screen.getByTestId('heads')).toHaveTextContent('0');
