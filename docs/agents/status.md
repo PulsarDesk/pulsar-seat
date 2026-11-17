@@ -2120,3 +2120,73 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
   - Open: x64 VM / hardware run of both drivers; UDP loopback limit; kiosk per-seat users
     and seats 2..N kiosk need a second monitor (hardware); remote IDD role needs a protocol
     provider; `same_account = deny` needs concurrent sessions (Server / RDS).
+- 2026-11-17 (parity ship, on main). `installer/scripts/ci-local.ps1 -Payload -Drivers
+  -Installers` end to end on the ARM64 dev box, then both MSIs rebuilt from the clean
+  committed tree.
+  - **Bug found and fixed:** 8097f7f the first run stopped at "drivers x64 (WDK code
+    analysis)": `build-drivers.ps1 -OutRoot target/drivers-analyze` (relative) was resolved
+    by msbuild against each project folder, so the drivers were built into
+    `drivers/<name>/target/drivers-analyze/...`; seat-wfp had no package dir in the
+    repo-level folder and the other four drivers were checked against stale packages of an
+    earlier run. `-OutRoot` is now made absolute against the repository root; the stray
+    `drivers/*/target` folders were removed.
+  - **Second run: all 37 gates green** (workflow lint, bun install, cargo build / test /
+    clippy aarch64 + x86_64, manager frontend build, manager Rust test + clippy, API helper
+    test + clippy, manager check / test, bun test installer/scripts, shim x64 test + clippy
+    + x86 check, shim arm64 test + clippy, credprov ARM64 + x64 build / self-test / PE,
+    release binaries + API helper DLLs x86 / x64 / arm64 / arm64ec + payload / PE gate for
+    arm64 and x64, drivers x64 + ARM64 build / infverif / ApiValidator / WDK code analysis /
+    machine check, MSI arm64).
+  - **Not run locally (need GitHub or real signing):** the `-Release` tag gate (release key
+    list `check-signers --require`: no release key is listed yet), `PULSAR_SEAT_RELEASE=1`
+    builds, `actions/upload-artifact` steps, the x64 runner's native test pass (here the x64
+    shim tests ran under emulation; the root workspace tests ran native ARM64 only),
+    Authenticode signing of the MSIs, `write-sums.ps1` after signing and
+    `sign-release.ps1` (minisign of SHA256SUMS.txt). Scripts and checklist for these exist
+    (docs/release/checklist.md).
+  - **Gates (explicit, main 8097f7f):** cargo test --workspace 1777 passed / 6 ignored,
+    clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 217 tests /
+    check / build, bun test installer/scripts 63, shim tests + check x86_64 / i686 /
+    aarch64, build-drivers.ps1 ARM64 + x64 Release + Debug clean (zero warnings, infverif,
+    ApiValidator, code analysis). No test deleted.
+  - **MSIs** (`build-installer.ps1 -Arch arm64` / `-Arch x64` from the repo root, unsigned,
+    build records `commit: 8097f7f82dc0ccb1ba47c48d67ee3b9dcb91174c`, `dirty: false`,
+    `release: false`; `target/installer/dist/SHA256SUMS.txt` lists exactly these two):
+    - `PulsarSeat_0.1.0_arm64.msi`
+      SHA-256 `db9c144c028ea28b77c177ebcda4034c51d8dd51196777bc96dde844b5d05db7`
+    - `PulsarSeat_0.1.0_x64.msi`
+      SHA-256 `73112c1ea33348cd8d6971324d12b91f2fd7561b494d408673d92eaebd98e3f1`
+  - **PE machines inside the MSIs** (msiexec /a extraction + check-payload, no warning):
+    ARM64 MSI: service / host / agent / manager / credprov 0xAA64 (credprov ARM64X: CHPE
+    metadata present), apihelper arm64 0xAA64, arm64ec 0x8664 with CHPE metadata (ARM64EC),
+    x64 0x8664, x86 0x14C; shim arm64 0xAA64, x64 0x8664, x86 0x14C; stream server and its
+    tools 0xAA64; MttVDD 0xAA64. x64 MSI: every first-party binary 0x8664 except apihelper
+    x86 and shim x86 (0x14C). The usbip-win2 setup exe is the upstream x86 (0x14C)
+    bootstrapper in both MSIs (third party, pinned). Our own kernel drivers are not in either
+    MSI (unsigned; `driver_not_allowed` until a signed package exists).
+  - **Final parity summary (this round, 2026-11-17).**
+    - Complete in code, built and unit-tested on both arches: ARM64 parity (native ARM64
+      shim with Detours backend, ARM64EC helper, ARM64X credprov), per-seat source IP
+      (seat-wfp callout), kiosk seats (per-seat kiosk users, raw-input filter, seat cursor,
+      packaged / full-screen apps), every HID pad on local seats with Bluetooth feedback, pad
+      scoping, SDL ignore lists, controller audio section, pen fields, one IddCx adapter per
+      render GPU, HDR10 / VRR for seats 2..N, per-seat GPU preference, AVC444 on the GPU,
+      English default UI with Turkish locale, the review fixes (kiosk state / clipboard,
+      reset_graphics, remove_kiosk_user, hyper_v, frame source for kiosk seats, CPU
+      coverage, GameInputSvc opt-in, reader / camera rules, rumble fallbacks).
+    - Verified in the ARM64 VM (vm-tests entry above): seat-wfp under Verifier + HVCI,
+      multi-adapter seat-idd, ARM64 shim inject + seat map, compat tweaks, per-seat
+      environment, credential test, MSI install / reinstall / uninstall.
+    - HYPOTHESIS pending hardware: every x64 run of the drivers; physical pads, Bluetooth
+      feedback and controller audio; pen on real digitizers; HDR / VRR and multi-GPU on real
+      GPUs; vendor H.264 MFTs; kiosk seats 2..N and per-seat kiosk users (need a second
+      monitor); the remote IDD role (needs a protocol provider); `same_account = deny`
+      (needs concurrent sessions, Server / RDS); everything listed as HYPOTHESIS in the
+      package entries above.
+    - Documented limits: UDP to 127/8 from an unbound socket under seat-wfp.
+    - Still open in code (listed in the review-fixes entry): the Pulsar stream-server patch
+      set and its MSYS2 build (config side only), sandbox / VM seats.
+    - Out of scope by the round's rules (not built): concurrent sessions on client SKUs by
+      changing TermService / LSM, kernel patching / BYOVD / DSE workarounds, signing with
+      real certificates.
+    - Refused by the model provider's safety system: none recorded in this round.

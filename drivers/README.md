@@ -148,6 +148,8 @@ tasks.
 powershell -ExecutionPolicy Bypass -File installer\scripts\build-drivers.ps1
 # options: -Platforms ARM64,x64  -Configurations Release,Debug  -Projects seat-idd
 #          -Analyze (WDK code analysis, DriverRecommendedRules)  -SkipInfVerif  -OutRoot <dir>
+#          (a relative -OutRoot is taken against the repository root; msbuild itself would
+#          resolve it against each driver's folder)
 ```
 
 The script rebuilds every project into `target\drivers\<Platform>\<Configuration>\`
