@@ -352,9 +352,15 @@ impl Service {
     /// A hand-over to `seat` is under way and `session` is its fresh console session.
     fn handover_pending(&self, st: &State, session: u32, seat: Option<SeatNumber>) -> bool {
         let Some(h) = st.credprov.handover.as_ref() else { return false };
+        // Seat 1 with nobody signed in follows the console session, so LogonUI of the fresh
+        // hand-over session can be answered for seat 1 before the seat's session id is
+        // recorded (VM 2026-11-17: console at a logon screen after a service restart, the
+        // provider asked 26 ms before the grant was armed, saw "seat 1, not pending" and
+        // never asked again).
+        let console_unclaimed = |s: SeatNumber| s.is_console() && st.seats.get(&s).is_none_or(|c| c.logon.is_none());
         self.now().saturating_sub(h.since_ms) < HANDOVER_MS
             && h.from_session != Some(session)
-            && seat.is_none_or(|s| s == h.seat)
+            && seat.is_none_or(|s| s == h.seat || console_unclaimed(s))
             && self.platform.console_session() == Some(session)
     }
 

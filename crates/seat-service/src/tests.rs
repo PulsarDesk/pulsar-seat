@@ -1979,6 +1979,77 @@ fn a_new_handover_supersedes_an_earlier_password_less_switch() {
     assert!(!q.preselect && q.seat != Some(s(1)), "{q:?}");
 }
 
+/// Console at a logon screen (nobody signed in at seat 1, no seat 1 session of its own) when
+/// seat 2's hand-over starts: LogonUI of the fresh console session asks before seat 2's
+/// session id is recorded. Seat 1 follows the console there, so the answer named seat 1;
+/// it must still say "pending" so the provider asks again (VM 2026-11-17).
+#[test]
+fn handover_pending_while_seat_one_has_nobody_signed_in() {
+    let h = fus_harness();
+    h.p.users.lock().unwrap().remove(&1);
+    h.s.refresh_console_seat();
+    h.s.note_credprov_handover(s(2));
+    let fresh = 77;
+    *h.p.console.lock().unwrap() = Some(fresh);
+    h.s.refresh_console_seat();
+    let mut c = logonui(&h, 980, fresh);
+    credprov_hello(&h, &mut c).unwrap();
+    let q = query(&h, &mut c);
+    assert!(q.pending, "{q:?}");
+    // Somebody signed in at seat 1 (its own session on the console): not seat 2's hand-over.
+    h.p.sign_in(fresh, "konsol");
+    h.s.refresh_console_seat();
+    assert!(!query(&h, &mut c).pending);
+}
+
+/// `fast_user_switch`: seat 1 never takes the console session of a seat N hand-over (it
+/// has no session of its own then), so the two seats never share a session.
+#[test]
+fn seat_one_does_not_claim_a_handover_session() {
+    let h = fus_harness();
+    h.p.users.lock().unwrap().remove(&1);
+    h.s.refresh_console_seat();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let sess = seat_session_id(&h, s(2));
+    *h.p.console.lock().unwrap() = Some(sess);
+    h.s.refresh_console_seat();
+    let row = h.s.status().seats.into_iter().find(|r| r.seat == s(1)).unwrap();
+    assert_ne!(row.session_id, Some(sess), "{row:?}");
+}
+
+/// `fast_user_switch`: seat 2 still at its logon screen when seat 3's hand-over takes the
+/// console. Seat 2's session ends; restarting it would take the console back, and seat 3
+/// would do the same: an endless swap (VM 2026-11-17). Seat 2 stops instead. A seat whose
+/// user had signed in is restarted as before.
+#[test]
+fn superseded_logon_screen_is_not_restarted() {
+    let mut cfg = two_seat_config();
+    let mut three = SeatConfig::new(s(3));
+    three.account = SeatAccount::Local { user: "veli".into() };
+    cfg.seats.push(three);
+    let h = harness_with(cfg, None);
+    *h.f.session.availability.lock().unwrap() = Availability::Unavailable { reason: "edition_unsupported".into() };
+    h.s.reselect_backends();
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap();
+    let sess3 = seat_session_id(&h, s(3));
+    *h.p.console.lock().unwrap() = Some(sess3);
+    h.s.on_session_gone(s(2));
+    let state = |h: &Harness, n: u8| h.s.status().seats.into_iter().find(|r| r.seat == s(n)).unwrap().state;
+    assert_eq!(state(&h, 2), SeatState::Off);
+    assert!(!h.s.lock().seats[&s(2)].want);
+    // Seat 3 signed in, then its session ended: restarted (re-logon).
+    h.p.sign_in(sess3, "veli");
+    h.s.on_session_change(SessionChange::Logon, sess3);
+    *h.p.console.lock().unwrap() = Some(1);
+    h.s.on_session_gone(s(3));
+    assert!(h.s.lock().seats[&s(3)].want);
+    assert!(matches!(state(&h, 3), SeatState::Starting { .. }), "{:?}", state(&h, 3));
+}
+
 #[test]
 fn credprov_no_auto_submit_without_an_account() {
     let h = fus_harness();

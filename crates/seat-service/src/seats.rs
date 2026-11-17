@@ -237,13 +237,25 @@ impl Service {
     /// the seat N session on the console (VM test 2026-11-15: seat 1 took seat 2's fresh
     /// logon session, so the credential provider there was answered for seat 1).
     pub(crate) fn refresh_console_seat(&self) {
-        let away = self.backends().session.console_seat_away();
-        let console = away.or_else(|| self.platform.console_session());
-        let user = console.and_then(|c| self.platform.session_user(c));
-        let mut st = self.lock();
+        let b = self.backends();
+        let away = b.session.console_seat_away();
+        let fus = b.session.kind() == seat_core::backend::SessionBackendKind::FastUserSwitch;
+        let mut console = away.or_else(|| self.platform.console_session());
+        let st = self.lock();
         if !st.config.settings.enabled || Self::dedicated(&st) {
             return;
         }
+        // `fast_user_switch` with no seat 1 session of its own (the console was at a logon
+        // screen when the hand-over began): the console session belongs to the seat it was
+        // handed over to, not to seat 1. Binding seat 1 to it made both seats share one
+        // session (source IP, credential provider and status all saw seat 1 there; VM
+        // 2026-11-17).
+        if fus && away.is_none() && console.is_some_and(|c| st.seats.iter().any(|(n, s)| !n.is_console() && s.rt.session_id == Some(c))) {
+            console = None;
+        }
+        drop(st);
+        let user = console.and_then(|c| self.platform.session_user(c));
+        let mut st = self.lock();
         let state = match (&console, &user) {
             (Some(_), Some(u)) => SeatState::SignedIn { user: u.display() },
             (Some(_), None) => SeatState::AtLogon,
@@ -1303,7 +1315,30 @@ impl Service {
 
     /// The seat's session ended: return to the logon screen after the re-logon delay.
     pub(crate) fn on_session_gone(&self, seat: SeatNumber) {
-        let want = self.lock().seats.get(&seat).is_some_and(|s| s.want);
+        let fus = self.backends().session.kind() == seat_core::backend::SessionBackendKind::FastUserSwitch;
+        let console = self.platform.console_session();
+        let (mut want, superseded) = {
+            let st = self.lock();
+            let slot = st.seats.get(&seat);
+            // `fast_user_switch` has one console: a seat whose logon screen was taken over by
+            // another seat's hand-over before anybody signed in would, when restarted, take
+            // the console back from that seat, which then restarts too, for ever (VM
+            // 2026-11-17: seats 2 and 3 started one after the other swapped the console every
+            // 5 s). Such a seat stops instead; start it again when the console is free.
+            let superseded = fus
+                && slot.is_some_and(|s| s.logon.is_none())
+                && console.is_some_and(|c| {
+                    st.seats.iter().any(|(n, s)| *n != seat && !n.is_console() && s.is_active() && s.rt.session_id == Some(c))
+                });
+            (slot.is_some_and(|s| s.want), superseded)
+        };
+        if want && superseded {
+            log::info(&format!("seat {seat}: its logon screen went to another seat's hand-over before a sign-in; not restarted"));
+            if let Some(slot) = self.lock().seats.get_mut(&seat) {
+                slot.want = false;
+            }
+            want = false;
+        }
         log::info(&format!("seat {seat}: session ended"));
         self.cleanup_seat(seat, false, None);
         let mut st = self.lock();
