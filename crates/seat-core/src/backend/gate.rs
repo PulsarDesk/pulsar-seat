@@ -41,6 +41,14 @@ pub enum DeviceClassTarget {
     Cdrom,
     Volume,
     Ports,
+    /// Raw-open device classes added 2026-11-17 (compat-tweaks): same shape as CD-ROM /
+    /// Ports (opened by programs through a raw device path, never part of the system
+    /// disk path).
+    Modem,
+    MultiportSerial,
+    Floppy,
+    TapeDrive,
+    MediumChanger,
 }
 
 impl DeviceClassTarget {
@@ -55,6 +63,11 @@ impl DeviceClassTarget {
             Self::Cdrom => "4d36e965-e325-11ce-bfc1-08002be10318",
             Self::Volume => "71a27cdd-812a-11d0-bec7-08002be2092f",
             Self::Ports => "4d36e978-e325-11ce-bfc1-08002be10318",
+            Self::Modem => "4d36e96d-e325-11ce-bfc1-08002be10318",
+            Self::MultiportSerial => "50906cb8-ba12-11d1-bf5d-0000f805f530",
+            Self::Floppy => "4d36e980-e325-11ce-bfc1-08002be10318",
+            Self::TapeDrive => "6d807884-7d21-11cf-801c-08002be10318",
+            Self::MediumChanger => "ce5939ae-ebde-11d0-b181-0000f8753ec4",
         }
     }
 }

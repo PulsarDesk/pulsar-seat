@@ -24,6 +24,7 @@
 mod auth;
 mod backends;
 mod cli;
+mod compat;
 mod credprov;
 mod diag;
 mod eventid;

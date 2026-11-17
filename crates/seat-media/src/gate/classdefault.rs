@@ -26,7 +26,11 @@
 //!   normal users until its next start after the service wrote its open descriptor (replug,
 //!   reboot). No internal devnode is ever restarted by this code;
 //! - system change, off by default; the manager must only offer it after the maintainer's
-//!   sign-off. Supported classes: CD-ROM and Ports ([`DeviceClassTarget::DEFAULT`]).
+//!   sign-off. Supported classes: CD-ROM and Ports ([`DeviceClassTarget::DEFAULT`]),
+//!   since 2026-11-17 (compat-tweaks) also Modem, Multi-port serial, Floppy, Tape and
+//!   Medium changer: raw-open classes whose stock device objects carry the same open
+//!   default as CD-ROM / serial ports (HYPOTHESIS for each, untested on hardware). The
+//!   manager offers the switch since 2026-11-17 (opt-in, default off, with a warning).
 //! - **disk and volume classes are refused** ([`open_sddl`] is `None` for them, `apply`
 //!   reports `class_not_supported` and never closes them). Their members include the system
 //!   disk and the system volume. On stock Windows a normal user cannot open
@@ -61,7 +65,13 @@ pub const OPEN_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGWGX;;;WD)(A;;GRGX
 /// class must not be closed at all (disk and volume: see the module docs).
 pub const fn open_sddl(target: DeviceClassTarget) -> Option<&'static str> {
     match target {
-        DeviceClassTarget::Cdrom | DeviceClassTarget::Ports => Some(OPEN_SDDL),
+        DeviceClassTarget::Cdrom
+        | DeviceClassTarget::Ports
+        | DeviceClassTarget::Modem
+        | DeviceClassTarget::MultiportSerial
+        | DeviceClassTarget::Floppy
+        | DeviceClassTarget::TapeDrive
+        | DeviceClassTarget::MediumChanger => Some(OPEN_SDDL),
         DeviceClassTarget::DiskDrive | DeviceClassTarget::Volume => None,
     }
 }
@@ -76,8 +86,17 @@ pub fn closed_class_sddl(admins_bypass: bool) -> String {
     if admins_bypass { "D:P(A;;GA;;;SY)(A;;GA;;;BA)".into() } else { "D:P(A;;GA;;;SY)".into() }
 }
 
-const ALL: [DeviceClassTarget; 4] =
-    [DeviceClassTarget::DiskDrive, DeviceClassTarget::Cdrom, DeviceClassTarget::Volume, DeviceClassTarget::Ports];
+const ALL: [DeviceClassTarget; 9] = [
+    DeviceClassTarget::DiskDrive,
+    DeviceClassTarget::Cdrom,
+    DeviceClassTarget::Volume,
+    DeviceClassTarget::Ports,
+    DeviceClassTarget::Modem,
+    DeviceClassTarget::MultiportSerial,
+    DeviceClassTarget::Floppy,
+    DeviceClassTarget::TapeDrive,
+    DeviceClassTarget::MediumChanger,
+];
 
 fn target_of(class_guid: &str) -> Option<DeviceClassTarget> {
     ALL.into_iter().find(|t| t.class_guid().eq_ignore_ascii_case(class_guid))

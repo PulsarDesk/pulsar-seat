@@ -166,7 +166,14 @@ pub(crate) fn local_seat_map(st: &State, console: Option<u32>, parent_of: &dyn F
             user_sid: owner.user_sid,
             generation: 1,
             pad_instance_prefixes: prefixes,
-            flags: seat_shim_core::SeatFlags { hid_isolation: true, xinput_focus: false, steam: false, shared_account: false },
+            // Steam per local seat (compat-tweaks 2026-11-17): the module adds the seat's
+            // own `-master_ipc_name_override` to `steam.exe` in this session.
+            flags: seat_shim_core::SeatFlags {
+                hid_isolation: true,
+                xinput_focus: false,
+                steam: st.config.settings.apps.steam_per_seat,
+                shared_account: false,
+            },
         });
     }
     out

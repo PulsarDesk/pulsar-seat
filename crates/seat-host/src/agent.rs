@@ -191,7 +191,65 @@ mod win {
                 // A fresh thread: SetThreadDesktop needs a thread without windows / hooks.
                 std::thread::spawn(reset_graphics).join().unwrap_or_else(|_| Err(("reset_graphics_panicked".into(), None)))
             }
+            AgentTaskKind::RefreshEnvironment => refresh_environment(),
+            // The read-back itself is sent by the task loop (`AgentEvent::Dpi`).
+            AgentTaskKind::ReportDpi => Ok(()),
         }
+    }
+
+    /// `WM_SETTINGCHANGE("Environment")` to every top-level window of this session, so
+    /// Explorer reloads the user environment the service just wrote (compat-tweaks
+    /// 2026-11-17). HYPOTHESIS: Explorer re-reads `HKCU\Environment` on it, as for changes
+    /// made in System Properties.
+    fn refresh_environment() -> Result<(), (String, Option<u32>)> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE};
+        let what = wide("Environment");
+        let mut result = 0usize;
+        // SAFETY: NUL-terminated string valid for the call; 5 s per window at most.
+        let ok = unsafe { SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, what.as_ptr() as isize, SMTO_ABORTIFHUNG, 5000, &mut result) };
+        if ok == 0 { Err(last_error("SendMessageTimeoutW")) } else { Ok(()) }
+    }
+
+    /// Effective DPI of every monitor of this session (`GetDpiForMonitor`,
+    /// `MDT_EFFECTIVE_DPI`), read on a per-monitor-aware thread (a DPI-unaware caller
+    /// would always get 96).
+    pub fn monitor_dpis() -> Vec<seat_proto::MonitorDpi> {
+        std::thread::spawn(|| {
+            use windows_sys::Win32::Foundation::{LPARAM, RECT};
+            use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW};
+            use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetThreadDpiAwarenessContext};
+            unsafe extern "system" fn each(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> windows_sys::core::BOOL {
+                // SAFETY: `data` is the Vec passed below, alive during EnumDisplayMonitors.
+                let out = unsafe { &mut *(data as *mut Vec<seat_proto::MonitorDpi>) };
+                // SAFETY: plain-data struct; cbSize set before the call.
+                let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+                info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+                let (mut x, mut y) = (0u32, 0u32);
+                // SAFETY: valid monitor handle from the enumeration; out pointers valid.
+                let ok = unsafe { GetMonitorInfoW(m, (&mut info as *mut MONITORINFOEXW).cast::<MONITORINFO>()) } != 0
+                    && unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut x, &mut y) } >= 0;
+                if ok {
+                    let r = info.monitorInfo.rcMonitor;
+                    let n = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+                    out.push(seat_proto::MonitorDpi {
+                        device: String::from_utf16_lossy(&info.szDevice[..n]),
+                        dpi: x,
+                        width: (r.right - r.left).max(0) as u32,
+                        height: (r.bottom - r.top).max(0) as u32,
+                    });
+                }
+                1
+            }
+            let mut out: Vec<seat_proto::MonitorDpi> = Vec::new();
+            // SAFETY: affects this fresh thread only; the callback gets a pointer to `out`.
+            unsafe {
+                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(each), &mut out as *mut _ as LPARAM);
+            }
+            out
+        })
+        .join()
+        .unwrap_or_default()
     }
 
     /// Win+Ctrl+Shift+B (graphics driver restart) into the session's input desktop
@@ -456,6 +514,12 @@ mod win {
     }
 
     pub fn run() -> i32 {
+        // One-shot DPI read-back for remote seats (compat-tweaks 2026-11-17): the remote
+        // engine starts the agent with this switch as the seat user and reads the line.
+        if std::env::args().any(|a| a == "--report-dpi") {
+            println!("{}", seat_proto::dpi_report_line(&monitor_dpis()));
+            return 0;
+        }
         let Some(sid) = session_id() else {
             eprintln!("pulsar-seat-agent: session id unknown");
             return 1;
@@ -488,6 +552,12 @@ mod win {
             while let Some(t) = queue.pop() {
                 if !done.insert(t.id) {
                     continue;
+                }
+                if matches!(t.task, AgentTaskKind::ReportDpi) {
+                    match report(&mut ctl, sid, AgentEvent::Dpi { monitors: monitor_dpis() }) {
+                        Ok(rest) => queue.extend(rest.into_iter().filter(|r| !done.contains(&r.id))),
+                        Err(e) => eprintln!("pulsar-seat-agent: DPI report failed: {e}"),
+                    }
                 }
                 let event = match run_task(&t.task) {
                     Ok(()) => AgentEvent::TaskDone { task_id: t.id },

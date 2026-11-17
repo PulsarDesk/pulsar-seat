@@ -292,6 +292,33 @@ pub trait Platform: Send + Sync {
     fn revert_gpu_preferences(&self) -> Result<usize, String> {
         Ok(0)
     }
+    /// Publish the named-object rules for the module (`Shim\ObjectRules`,
+    /// compat-tweaks 2026-11-17; empty = removed). Default: nothing.
+    fn publish_object_rules(&self, rules: &[seat_shim_core::objects::ObjectRule]) -> Result<(), String> {
+        let _ = rules;
+        Ok(())
+    }
+    /// "Deny log on locally" for exactly these accounts (`seat_compat::rights::sync`,
+    /// journaled; empty = remove ours). Returns a one-line summary. Default: nothing.
+    fn sync_deny_logon(&self, sids: &[String]) -> Result<String, String> {
+        let _ = sids;
+        Ok(String::new())
+    }
+    /// Make user `sid`'s seat environment variables match `vars`
+    /// (`seat_compat::user_env::sync_user`, journaled). Default: nothing.
+    fn sync_user_environment(&self, sid: &str, vars: &[seat_core::config::EnvVar]) -> Result<String, String> {
+        let _ = (sid, vars);
+        Ok(String::new())
+    }
+    /// Undo every user's seat environment variables (product disabled). Default: nothing.
+    fn revert_user_environments(&self) -> Result<usize, String> {
+        Ok(0)
+    }
+    /// Steam legacy proxy-DLL report / quarantine / restore (`seat_compat::steam`).
+    fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
+        let _ = action;
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "steam_proxy_unsupported", "not on this platform"))
+    }
 }
 
 /// Driver status of an installed driver from its version probe (`(major, minor, build)`
@@ -405,6 +432,15 @@ pub mod mock {
         /// `sync_gpu_preference` calls: (sid, apps, pref).
         pub gpu_prefs: Mutex<Vec<GpuPrefCall>>,
         pub gpu_pref_reverts: AtomicU32,
+        /// Last published object rules.
+        pub object_rules: Mutex<Vec<seat_shim_core::objects::ObjectRule>>,
+        /// `sync_deny_logon` calls.
+        pub deny_logon: Mutex<Vec<Vec<String>>>,
+        /// `sync_user_environment` calls: (sid, variables).
+        pub user_env: Mutex<Vec<(String, Vec<seat_core::config::EnvVar>)>>,
+        pub user_env_reverts: AtomicU32,
+        /// `steam_proxy` actions.
+        pub steam_actions: Mutex<Vec<seat_proto::steam::SteamProxyAction>>,
         next_pid: AtomicU32,
     }
 
@@ -592,6 +628,26 @@ pub mod mock {
         fn revert_gpu_preferences(&self) -> Result<usize, String> {
             self.gpu_pref_reverts.fetch_add(1, Ordering::SeqCst);
             Ok(0)
+        }
+        fn publish_object_rules(&self, rules: &[seat_shim_core::objects::ObjectRule]) -> Result<(), String> {
+            *lock(&self.object_rules) = rules.to_vec();
+            Ok(())
+        }
+        fn sync_deny_logon(&self, sids: &[String]) -> Result<String, String> {
+            lock(&self.deny_logon).push(sids.to_vec());
+            Ok(format!("{} accounts", sids.len()))
+        }
+        fn sync_user_environment(&self, sid: &str, vars: &[seat_core::config::EnvVar]) -> Result<String, String> {
+            lock(&self.user_env).push((sid.to_string(), vars.to_vec()));
+            Ok(String::new())
+        }
+        fn revert_user_environments(&self) -> Result<usize, String> {
+            self.user_env_reverts.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        }
+        fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
+            lock(&self.steam_actions).push(action.clone());
+            Ok(seat_proto::steam::SteamProxyStatus { steam_dirs: vec![r"C:\Steam".into()], ..Default::default() })
         }
 
     }

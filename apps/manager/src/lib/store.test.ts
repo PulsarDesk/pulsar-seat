@@ -97,6 +97,20 @@ describe('ManagerStore', () => {
     expect(api.calls.filter((c) => c === 'hyper_v').length).toBe(4);
   });
 
+  it('Steam add-on DLL: report, quarantine, restore', async () => {
+    const { api } = await ready();
+    const st = await api.steamProxy({ type: 'status' });
+    expect(st.found.length).toBe(1);
+    const path = st.found[0];
+    const q = await api.steamProxy({ type: 'quarantine', path });
+    expect(q.found).toEqual([]);
+    expect(q.quarantined.map((x) => x.original)).toEqual([path]);
+    await expect(api.steamProxy({ type: 'quarantine', path: 'C:\\Windows\\x.dll' })).rejects.toMatchObject({ code: 'invalid_value' });
+    const back = await api.steamProxy({ type: 'restore', path });
+    expect(back.found).toEqual([path]);
+    expect(api.calls.filter((c) => c === 'steam_proxy_dll').length).toBe(4);
+  });
+
   it('enable, start and errors with codes', async () => {
     const { api, store } = await ready();
     expect(await store.startSeats(null)).toBe(false);

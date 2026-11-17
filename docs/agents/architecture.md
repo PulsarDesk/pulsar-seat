@@ -2015,3 +2015,44 @@ in either language, so a language change never turns our account into a "foreign
 Preflight check titles are localized on the console (`seat_compat::preflight::title`), the
 setup log uses English titles (`title_en`, `BLOCKED` / `WARNING` prefixes).
 
+
+## Compatibility options (compat-tweaks, 2026-11-17)
+
+Every option is a visible opt-in in the manager (Advanced > Compatibility, seat menu
+"Environment and sign-in…", system menu "USB dock wizard…"), off by default, written by
+the service only, journaled before each change (`seat_compat::journal`) and undone when
+the option is turned off, when the product is disabled (`Service::sync_tweaks` /
+`sync_compat(false)`) and at uninstall (`Journal::revert_all`). Nothing is written
+silently and nothing blocks Windows Update.
+
+| Option | Config | Mechanism (documented) | Journal entry |
+| --- | --- | --- | --- |
+| Fast startup off | `settings.tweaks.fast_startup_off` | `HiberbootEnabled` = 0 (`TweakId::FastStartupOff`, restart needed) | `Registry` |
+| Windows Update deferral / active hours / no restart while signed in | `settings.tweaks.windows_update` | Windows Update for Business policies under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate` (+ `\AU\NoAutoRebootWithLoggedOnUsers`); values that a changed config no longer wants are reverted (`Journal::revert_owner_except`) | `Registry` |
+| Device-install deny | `settings.tweaks.device_install_deny` (classes from `DeviceInstallClass`, never display / input / audio / USB / disk / network) | Device Installation Restrictions: `DenyDeviceClasses` = 1, numbered `{GUID}` values in `...\Restrictions\DenyDeviceClasses` (operator entries are reused, never removed), `AllowAdminInstall` | `Registry` (numbered names allowed by `is_tweak_target`) |
+| Defender exclusions | `settings.tweaks.defender_exclusions` | WMI `MSFT_MpPreference` (`root/Microsoft/Windows/Defender`): read lists, static `Add` / `Remove` through `Invoke-CimMethod`; install folder, data folder, service / host / agent executables by full path; only items not already listed | `DefenderExclusion` |
+| Class-level default descriptors | `settings.devices.class_default_descriptors` + classes | switch enabled in the manager; classes CD-ROM, Ports, Modem, Multi-port serial, Floppy, Tape, Medium changer (disk / volume refused, §4.5) | gate journal (seat-media) |
+| Seat environment variables | `seats[].environment` (both kinds) | `HKEY_USERS\<seat SID>\Environment` at each logon (`seat_compat::user_env`), agent task `refresh_environment` (`WM_SETTINGCHANGE("Environment")`), launch env of startup apps / launcher / remote autostart | `UserEnvironment` |
+| Deny log on locally | `seats[].deny_local_logon` | `SeDenyInteractiveLogonRight` through `LsaAddAccountRights` / `LsaRemoveAccountRights`, only for RDP-signed-in seats with an account (validation `deny_local_logon_unsupported`), only when the account lacked it | `AccountRight` |
+| Steam per local seat | `settings.apps.steam_per_seat` | local seat map flag `steam` (shim adds `-master_ipc_name_override` to `steam.exe` in a seat's own session) | none (volatile seat map) |
+| Single-instance programs | `settings.apps.object_rules` | `Shim\ObjectRules` (`seat_shim_core::objects`), module hooks `Create*/Open*` of mutex / event / semaphore / file mapping in listed programs: per-seat name suffix (`Global\` names for own-session seats, every match for kiosk seats) | none (cleared on disable) |
+| Steam add-on DLL | — | pre-flight check `steam_proxy_dll` (warning); request `steam_proxy_dll` (`status` / `quarantine` / `restore`) moves a reported `version.dll` into `<data>\quarantine\` and back | `QuarantinedFile` |
+| DPI read-back | — | agent task `report_dpi` → `AgentEvent::Dpi` (`GetDpiForMonitor`, per-monitor-aware thread); remote seats with a static scale: one-shot `pulsar-seat-agent --report-dpi` in the seat session, output line `PULSAR_SEAT_DPI <json>`; notice `dpi_mismatch` (local) / host warning `dpi_mismatch` (remote) beyond 12 % points | none |
+| USB dock wizard | — | manager only (`compat.ts` `usbDocks`, `docks.ts` `assignDocks`): hubs with a monitor plus input / sound behind them; assigns the dock's container / hub key and each device | — |
+
+Protocol: `RequestBody::SteamProxyDll` (admin) / `ResponseBody::SteamProxy`,
+`AgentTaskKind::{RefreshEnvironment, ReportDpi}`, `AgentEvent::Dpi`, all additive.
+`ServerFrame` carries `#[allow(clippy::large_enum_variant)]` (the config view grew).
+
+HYPOTHESIS (nothing ran on hardware): every Windows effect in the table: policy values
+honoured on Pro (Home ignores them), Defender changes allowed for LocalSystem under Tamper
+Protection, the deny right effective without a reboot, Explorer reloading the environment
+on the broadcast, the module's object hooks reached by the listed programs, Steam honouring
+the IPC override on local seats, the DPI read-back values, dock detection on real
+multi-seat USB docks (container ids and parent hubs as assumed).
+
+Documented limits: the Steam library folder is per Steam install (two seats sharing one
+install share the library and the machine-wide Steam Client Service; a seat that needs its
+own library uses its own Steam install folder, started from its startup apps); named-object
+isolation only reaches programs on the shim target list (never anti-cheat games); the deny
+right is ordinary local policy that domain Group Policy may overwrite.

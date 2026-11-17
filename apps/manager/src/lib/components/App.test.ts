@@ -90,6 +90,31 @@ describe('App', () => {
     expect(screen.getByTestId('loopback-port')).toBeDisabled();
   });
 
+  it('advanced tab: compatibility options are opt-in and edit the draft', async () => {
+    const { store, user } = await setup();
+    await user.click(screen.getByRole('tab', { name: t.tabs.advanced }));
+    const box = screen.getByTestId('compat-settings');
+    expect(box).toBeInTheDocument();
+    expect(store.draft?.settings.tweaks.fast_startup_off ?? false).toBe(false);
+    await user.click(screen.getByTestId('fast-startup-off'));
+    expect(store.draft?.settings.tweaks.fast_startup_off).toBe(true);
+    await user.click(screen.getByTestId('wu-enabled'));
+    expect(store.draft?.settings.tweaks.windows_update?.enabled).toBe(true);
+    await user.click(screen.getByTestId('defender-exclusions'));
+    expect(store.draft?.settings.tweaks.defender_exclusions).toBe(true);
+    await user.click(screen.getByTestId('steam-per-seat'));
+    expect(store.draft?.settings.apps?.steam_per_seat).toBe(true);
+    await user.click(within(box).getByLabelText(t.compat.installClasses.wpd));
+    expect(store.draft?.settings.tweaks.device_install_deny?.classes).toEqual(['wpd']);
+    await user.click(screen.getByTestId('class-defaults'));
+    expect(store.draft?.settings.devices.class_default_descriptors).toBe(true);
+    await user.click(screen.getByTestId('object-rule-add'));
+    expect(store.draft?.settings.apps?.object_rules?.length).toBe(1);
+    expect(screen.getByText(t.compat.objectInvalid)).toBeInTheDocument();
+    await user.click(screen.getByTestId('steam-proxy-check'));
+    expect(await screen.findByRole('button', { name: t.compat.steamProxyQuarantine })).toBeInTheDocument();
+  });
+
   it('basic tab: start mode and seat autostart edit the draft', async () => {
     const { store, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.basic }));

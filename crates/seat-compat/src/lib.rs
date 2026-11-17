@@ -19,6 +19,10 @@
 //! | [`importer`] | reference `default_configuration.json` -> our config |
 //! | [`seatapi`] | "which seat am I on" pipe client + drop-in name mapping |
 //! | [`apps`] | known single-instance / profile-locking apps, `Local\` object names |
+//! | [`defender`] | opt-in Microsoft Defender exclusions for our folders / processes (`MSFT_MpPreference`), journaled |
+//! | [`rights`] | opt-in "Deny log on locally" for RDP-signed-in seat accounts (`LsaAddAccountRights`), journaled |
+//! | [`user_env`] | per-seat environment variables in the seat user's `Environment` key, journaled |
+//! | [`steam`] | Steam folders, legacy proxy-DLL report, journaled quarantine / restore |
 //! | [`setup`] | install / uninstall steps for the service sub-commands, exit codes |
 //! | `winsec` (Windows) | trust checks for SYSTEM-only files: owner, DACL, links; owner + DACL hardening |
 //!
@@ -26,11 +30,14 @@
 //! separate crate `apihelper/` (own workspace) on top of [`seatapi`].
 //!
 //! No kernel components of its own (the [`wfp`] driver is a separate package), no injection, no Windows Update blocking, no silent policy
-//! writes, no firewall rules, no security-state changes.
+//! writes, no firewall rules, no security-state changes. Policies, Defender exclusions and
+//! logon rights are written only as visible opt-ins the administrator turns on, each
+//! journaled and undone on disable / uninstall (compat-tweaks 2026-11-17).
 
 pub mod apps;
 pub mod coexist;
 pub mod cpu;
+pub mod defender;
 pub mod drivers;
 pub mod gpu_pref;
 pub mod hyperv;
@@ -38,16 +45,21 @@ pub mod importer;
 pub mod journal;
 pub mod ops;
 pub mod preflight;
+pub mod rights;
 pub mod seatapi;
 pub mod setup;
 pub mod srcip;
+pub mod steam;
 pub mod tweaks;
+pub mod user_env;
 pub mod wfp;
 
 #[cfg(windows)]
 pub mod launcher;
 #[cfg(windows)]
 pub mod win;
+#[cfg(windows)]
+pub mod win_extra;
 #[cfg(windows)]
 pub mod winsec;
 

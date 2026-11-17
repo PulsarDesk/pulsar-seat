@@ -1161,7 +1161,16 @@ impl Platform for WinPlatform {
             Err(e) => return vec![TweakOutcome { tweak: "journal".into(), result: Err(e.to_string()) }],
         };
         let img = lock_image.map(|p| p.display().to_string());
-        tweak_outcomes(seat_compat::tweaks::sync_config(&j, &seat_compat::WinOps, tweaks, img.as_deref()))
+        let mut out = tweak_outcomes(seat_compat::tweaks::sync_config(&j, &seat_compat::WinOps, tweaks, img.as_deref()));
+        // Defender exclusions for our own folders and processes (compat-tweaks 2026-11-17).
+        let own = seat_compat::defender::OwnItems::for_install(&self.install_dir().display().to_string(), &self.data_dir.display().to_string());
+        let want = tweaks.defender_exclusions.then_some(&own);
+        let r = seat_compat::defender::sync(&j, &seat_compat::WinOps, want).map_err(|e| e.to_string()).and_then(|r| match r.failed.first() {
+            Some((what, e)) => Err(format!("{what}: {e}")),
+            None => Ok(()),
+        });
+        out.push(TweakOutcome { tweak: "defender_exclusions".into(), result: r });
+        out
     }
 
     fn revert_tweaks(&self) -> Vec<TweakOutcome> {
@@ -1170,12 +1179,93 @@ impl Platform for WinPlatform {
             Ok(j) => j,
             Err(e) => return vec![TweakOutcome { tweak: "journal".into(), result: Err(e.to_string()) }],
         };
-        tweak_outcomes(
-            [TweakId::LockScreenImage, TweakId::HideFastUserSwitching, TweakId::ExcludeDriverUpdates]
+        let mut out = tweak_outcomes(
+            [
+                TweakId::LockScreenImage,
+                TweakId::HideFastUserSwitching,
+                TweakId::ExcludeDriverUpdates,
+                TweakId::FastStartupOff,
+                TweakId::WindowsUpdate,
+                TweakId::DeviceInstallDeny,
+            ]
+            .into_iter()
+            .map(|t| (t, revert(&j, &seat_compat::WinOps, t).map(|_| ()).map_err(|e| e.to_string())))
+            .collect(),
+        );
+        let r = seat_compat::defender::sync(&j, &seat_compat::WinOps, None).map(|_| ()).map_err(|e| e.to_string());
+        out.push(TweakOutcome { tweak: "defender_exclusions".into(), result: r });
+        out
+    }
+
+    fn publish_object_rules(&self, rules: &[seat_shim_core::objects::ObjectRule]) -> Result<(), String> {
+        static LAST: Mutex<Option<Vec<seat_shim_core::objects::ObjectRule>>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(rules) {
+            return Ok(());
+        }
+        seat_shim_core::win::write_object_rules(rules).map_err(|e| e.to_string())?;
+        *last = Some(rules.to_vec());
+        Ok(())
+    }
+
+    fn sync_deny_logon(&self, sids: &[String]) -> Result<String, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = seat_compat::rights::sync(&j, &seat_compat::WinOps, sids).map_err(|e| e.to_string())?;
+        if let Some((who, e)) = r.failed.first() {
+            return Err(format!("{who}: {e}"));
+        }
+        Ok(if r.added + r.removed == 0 { String::new() } else { format!("{} added, {} removed", r.added, r.removed) })
+    }
+
+    fn sync_user_environment(&self, sid: &str, vars: &[seat_core::config::EnvVar]) -> Result<String, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = seat_compat::user_env::sync_user(&j, &seat_compat::WinOps, sid, vars).map_err(|e| e.to_string())?;
+        if let Some((n, e)) = r.failed.first() {
+            return Err(format!("{n}: {e}"));
+        }
+        Ok(if r.no_profile {
+            "no profile".into()
+        } else if r.written + r.reverted == 0 {
+            String::new()
+        } else {
+            format!("{} written, {} undone", r.written, r.reverted)
+        })
+    }
+
+    fn revert_user_environments(&self) -> Result<usize, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let (n, failed) = seat_compat::user_env::revert_all(&j, &seat_compat::WinOps).map_err(|e| e.to_string())?;
+        match failed.first() {
+            Some(e) => Err(format!("{} failed: {e}", failed.len())),
+            None => Ok(n),
+        }
+    }
+
+    fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
+        use seat_proto::steam::{QuarantinedFile, SteamProxyAction as A, SteamProxyStatus};
+        let fail = |reason: &str, e: String| BackendError::new(ErrorKind::Os, reason, e);
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| fail("journal", e.to_string()))?;
+        let ops = seat_compat::WinOps;
+        match action {
+            A::Status => {}
+            A::Quarantine { path } => {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                seat_compat::steam::quarantine(&j, &ops, path, &self.data_dir.display().to_string(), stamp)
+                    .map_err(|e| fail("steam_proxy_quarantine", e.to_string()))?;
+            }
+            A::Restore { path } => {
+                seat_compat::steam::restore(&j, &ops, path).map_err(|e| fail("steam_proxy_restore", e.to_string()))?;
+            }
+        }
+        Ok(SteamProxyStatus {
+            steam_dirs: seat_compat::steam::steam_dirs(&ops),
+            found: seat_compat::steam::proxy_dlls(&ops),
+            quarantined: seat_compat::steam::quarantined(&j)
+                .map_err(|e| fail("journal", e.to_string()))?
                 .into_iter()
-                .map(|t| (t, revert(&j, &seat_compat::WinOps, t).map(|_| ()).map_err(|e| e.to_string())))
+                .map(|(original, quarantined)| QuarantinedFile { original, quarantined })
                 .collect(),
-        )
+        })
     }
 
     fn gpu_ranks(&self) -> (Option<u64>, Option<u64>) {

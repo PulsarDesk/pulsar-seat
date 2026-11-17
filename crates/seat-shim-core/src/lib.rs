@@ -35,6 +35,7 @@ pub mod kiosk;
 pub mod kiosk_clip;
 pub mod kiosk_cursor;
 pub mod launch;
+pub mod objects;
 pub mod readers;
 pub mod regval;
 pub mod sdb;
@@ -114,6 +115,9 @@ pub mod values {
     pub const READER_RULES: &str = "ReaderRules";
     /// `REG_MULTI_SZ`: camera rules (same format, rule name = device instance id).
     pub const CAMERA_RULES: &str = "CameraRules";
+    /// `REG_MULTI_SZ`: named-object rules (`crate::objects::encode`; compat-tweaks
+    /// 2026-11-17).
+    pub const OBJECT_RULES: &str = "ObjectRules";
     pub const TARGETS_SUBKEY: &str = "Targets";
 }
 

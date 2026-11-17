@@ -207,6 +207,24 @@ pub struct SeatConfig {
     /// 2026-11-17 (additive, both kinds).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pad_ignore_devices: Vec<String>,
+    /// Environment variables of the seat (spec/remote 50 §9.2; compat-tweaks 2026-11-17,
+    /// additive, both kinds): written into the seat user's `Environment` key at each logon
+    /// (journaled, undone when the product is turned off or uninstalled), announced to
+    /// the seat's shell by the agent (`WM_SETTINGCHANGE("Environment")`), and set directly
+    /// on the processes the service starts in the seat. At most [`MAX_SEAT_ENV`] entries;
+    /// names follow [`env_name_ok`], values [`env_value_ok`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<EnvVar>,
+    /// "Deny log on locally" for the seat's account (spec/remote 30 §10; compat-tweaks
+    /// 2026-11-17, additive): the service adds `SeDenyInteractiveLogonRight` to the
+    /// account with `LsaAddAccountRights` (journaled; removed again on disable / uninstall
+    /// only when Pulsar Seat added it), so the seat user cannot sign in at the console or
+    /// on another physical seat while the seat itself signs in through Remote Desktop.
+    /// Only for seats that sign in through RDP (remote seats, local seats on
+    /// `rds_loopback` / `termsrv_wrapper`) and have an account; validation
+    /// `deny_local_logon_unsupported`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deny_local_logon: bool,
     /// Physical-seat part; set iff `kind == local`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSeat>,
@@ -525,6 +543,61 @@ pub struct IpProgram {
 pub const MAX_IP_PROGRAMS: usize = 256;
 /// Most entries of [`SeatConfig::pad_ignore_devices`].
 pub const MAX_PAD_IGNORE_DEVICES: usize = 64;
+/// Most entries of [`SeatConfig::environment`].
+pub const MAX_SEAT_ENV: usize = 32;
+/// Longest value of a seat environment variable (characters).
+pub const MAX_SEAT_ENV_VALUE: usize = 2048;
+
+/// One per-seat environment variable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+/// Variables Windows or Pulsar Seat own: a seat may not set them (they would break the
+/// user's session or override our own per-seat values). Compared case-insensitively.
+pub const RESERVED_ENV_NAMES: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "__COMPAT_LAYER",
+    "SDL_GAMECONTROLLER_IGNORE_DEVICES",
+    "SDL_JOYSTICK_IGNORE_DEVICES",
+    "STEAM_MASTER_IPC_NAME_OVERRIDE",
+];
+
+/// A seat environment variable name: 1..=255 characters of letters, digits and
+/// `_ - . ( )`, not starting with a digit, not one of [`RESERVED_ENV_NAMES`], not
+/// `PULSAR_SEAT_*` (ours).
+pub fn env_name_ok(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '(' | ')'))
+        && !RESERVED_ENV_NAMES.contains(&up.as_str())
+        && !up.starts_with("PULSAR_SEAT_")
+}
+
+/// A seat environment value: at most [`MAX_SEAT_ENV_VALUE`] characters and no control
+/// characters (NUL would cut the registry value, line breaks confuse programs).
+pub fn env_value_ok(value: &str) -> bool {
+    value.chars().count() <= MAX_SEAT_ENV_VALUE && !value.chars().any(char::is_control)
+}
 
 fn yes() -> bool {
     true
@@ -546,6 +619,8 @@ impl SeatConfig {
             ip_binding: None,
             startup_apps: Vec::new(),
             pad_ignore_devices: Vec::new(),
+            environment: Vec::new(),
+            deny_local_logon: false,
             local: Some(LocalSeat::default()),
             remote: None,
         }
@@ -892,6 +967,198 @@ pub struct Tweaks {
     pub exclude_driver_updates: bool,
     /// Touchpad palm-check threshold per seat user (`AAPThreshold`).
     pub touchpad_palm_check: Option<u32>,
+    /// Fast startup (`HiberbootEnabled`) off, so a shutdown really ends every seat session
+    /// (spec/remote 30 §10, spec/local 20 §7.5). Needs a restart. Added 2026-11-17
+    /// (compat-tweaks, additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fast_startup_off: bool,
+    /// Windows Update deferral and active hours through the documented Windows Update for
+    /// Business policies (spec/local 80 §8, §11.7: visible, never silent). Added
+    /// 2026-11-17 (compat-tweaks, additive).
+    #[serde(skip_serializing_if = "WindowsUpdatePolicy::is_off")]
+    pub windows_update: WindowsUpdatePolicy,
+    /// Device Installation Restrictions policy: Windows does not install drivers for new
+    /// devices of these setup classes (meant for classes no seat uses). Empty = off.
+    /// Added 2026-11-17 (compat-tweaks, additive).
+    #[serde(skip_serializing_if = "DeviceInstallDeny::is_off")]
+    pub device_install_deny: DeviceInstallDeny,
+    /// Microsoft Defender exclusions for Pulsar Seat's own folders (install folder, data
+    /// folder) and processes (service, seat host, agent), through the documented
+    /// `MSFT_MpPreference` WMI class. Added 2026-11-17 (compat-tweaks, additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub defender_exclusions: bool,
+}
+
+/// Windows Update for Business policies Pulsar Seat may write (all off by default).
+/// Values under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`
+/// (`DeferFeatureUpdates`, `DeferFeatureUpdatesPeriodInDays`, `DeferQualityUpdates`,
+/// `DeferQualityUpdatesPeriodInDays`, `SetActiveHours`, `ActiveHoursStart`,
+/// `ActiveHoursEnd`) and `...\WindowsUpdate\AU` (`NoAutoRebootWithLoggedOnUsers`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowsUpdatePolicy {
+    pub enabled: bool,
+    /// Feature-update deferral, 0..=365 days (0 = no deferral value written).
+    pub feature_defer_days: u16,
+    /// Quality-update deferral, 0..=30 days (0 = none).
+    pub quality_defer_days: u16,
+    /// Active hours (0..=23, start != end, at most 18 hours apart); `None` = not set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_hours_start: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_hours_end: Option<u8>,
+    /// No automatic restart while users are signed in (the seat sessions).
+    pub no_auto_restart_with_users: bool,
+}
+
+/// Longest feature / quality deferral the policies accept (days).
+pub const MAX_FEATURE_DEFER_DAYS: u16 = 365;
+pub const MAX_QUALITY_DEFER_DAYS: u16 = 30;
+/// Longest active-hours window Windows accepts (hours).
+pub const MAX_ACTIVE_HOURS: u8 = 18;
+
+impl WindowsUpdatePolicy {
+    pub fn is_off(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Length of the active-hours window in hours (wraps over midnight).
+    pub fn active_hours_len(start: u8, end: u8) -> u8 {
+        ((u16::from(end) + 24 - u16::from(start % 24)) % 24) as u8
+    }
+
+    /// The values are in range (validation `invalid_windows_update_policy`).
+    pub fn is_valid(&self) -> bool {
+        let hours = match (self.active_hours_start, self.active_hours_end) {
+            (None, None) => true,
+            (Some(s), Some(e)) => s < 24 && e < 24 && s != e && Self::active_hours_len(s, e) <= MAX_ACTIVE_HOURS,
+            _ => false,
+        };
+        hours && self.feature_defer_days <= MAX_FEATURE_DEFER_DAYS && self.quality_defer_days <= MAX_QUALITY_DEFER_DAYS
+    }
+}
+
+/// Setup classes the device-install deny policy may name. Never classes a seat needs
+/// (display, keyboards, mice, HID, audio, USB, disks, network).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceInstallClass {
+    Printer,
+    Image,
+    Camera,
+    Wpd,
+    Modem,
+    Cdrom,
+    Ports,
+    SmartCardReader,
+}
+
+impl DeviceInstallClass {
+    pub const ALL: [DeviceInstallClass; 8] =
+        [Self::Printer, Self::Image, Self::Camera, Self::Wpd, Self::Modem, Self::Cdrom, Self::Ports, Self::SmartCardReader];
+
+    /// System-defined setup class GUID (Microsoft Learn, "System-Defined Device Setup
+    /// Classes Available to Vendors"), lowercase, no braces.
+    pub const fn class_guid(self) -> &'static str {
+        match self {
+            Self::Printer => "4d36e979-e325-11ce-bfc1-08002be10318",
+            Self::Image => "6bdd1fc6-810f-11d0-bec7-08002be2092f",
+            Self::Camera => "ca3e7ab9-b4c3-4ae6-8251-579ef933890f",
+            Self::Wpd => "eec5ad98-8080-425f-922a-dabf3de3f69a",
+            Self::Modem => "4d36e96d-e325-11ce-bfc1-08002be10318",
+            Self::Cdrom => "4d36e965-e325-11ce-bfc1-08002be10318",
+            Self::Ports => "4d36e978-e325-11ce-bfc1-08002be10318",
+            Self::SmartCardReader => "50dd5230-ba8a-11d1-bf5d-0000f805f530",
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Printer => "printer",
+            Self::Image => "image",
+            Self::Camera => "camera",
+            Self::Wpd => "wpd",
+            Self::Modem => "modem",
+            Self::Cdrom => "cdrom",
+            Self::Ports => "ports",
+            Self::SmartCardReader => "smart_card_reader",
+        }
+    }
+}
+
+/// Device-install deny policy (see [`Tweaks::device_install_deny`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceInstallDeny {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<DeviceInstallClass>,
+    /// Administrators may still install such devices (`AllowAdminInstall`).
+    pub admins_override: bool,
+}
+
+impl Default for DeviceInstallDeny {
+    fn default() -> Self {
+        Self { classes: Vec::new(), admins_override: true }
+    }
+}
+
+impl DeviceInstallDeny {
+    pub fn is_off(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// App compatibility on seats (spec/local 80 §3, §11.1; spec/remote 50 §6). Added
+/// 2026-11-17 (compat-tweaks, additive).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppCompatSettings {
+    /// Steam per local seat: the module gives `steam.exe` in a local seat's own session the
+    /// per-seat `-master_ipc_name_override` (as on remote seats), so each seat runs its own
+    /// Steam client. Seat 1 (the console) keeps Steam's default name.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub steam_per_seat: bool,
+    /// Named-object isolation per seat for single-instance programs (only programs the
+    /// module is loaded into, i.e. on the shim target list): matching mutex / event /
+    /// semaphore / file-mapping names get a per-seat suffix. At most [`MAX_OBJECT_RULES`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub object_rules: Vec<ObjectRule>,
+}
+
+/// One named-object rule: in program `exe` (file name, case-insensitive), object names
+/// equal to an entry of `names` (case-sensitive, without the `Global\` / `Local\`
+/// prefix; a trailing `*` matches a prefix) are made per seat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectRule {
+    pub exe: String,
+    pub names: Vec<String>,
+}
+
+impl AppCompatSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+pub const MAX_OBJECT_RULES: usize = 32;
+pub const MAX_OBJECT_NAMES: usize = 16;
+
+impl ObjectRule {
+    /// `exe` is a file name ending in `.exe` (no folder); 1..=[`MAX_OBJECT_NAMES`] names of
+    /// at most 200 characters without `\`, tab or `|`, not a bare `*`.
+    pub fn is_valid(&self) -> bool {
+        let exe = self.exe.trim();
+        !exe.is_empty()
+            && exe.len() <= 260
+            && exe.to_ascii_lowercase().ends_with(".exe")
+            && !exe.contains(['\\', '/', '\t', ':', '|'])
+            && !self.names.is_empty()
+            && self.names.len() <= MAX_OBJECT_NAMES
+            && self.names.iter().all(|n| {
+                let n = n.trim();
+                !n.is_empty() && n != "*" && n.len() <= 200 && !n.contains(['\\', '\t', '|']) && !n.chars().any(char::is_control)
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -922,6 +1189,10 @@ pub struct GlobalSettings {
     pub outputs: OutputSettings,
     /// Kiosk-seat options (spec 35 §5.1). Added 2026-11-13 (additive).
     pub kiosk: KioskSettings,
+    /// App compatibility: Steam per local seat, named-object isolation (compat-tweaks
+    /// 2026-11-17, additive).
+    #[serde(skip_serializing_if = "AppCompatSettings::is_default")]
+    pub apps: AppCompatSettings,
     /// Remote seat machine settings (Pulsar Split's old global settings; schema 2).
     pub remote: crate::remote::RemoteSettings,
 }
@@ -987,6 +1258,7 @@ impl Default for GlobalSettings {
             log: LogSettings::default(),
             outputs: OutputSettings::default(),
             kiosk: KioskSettings::default(),
+            apps: AppCompatSettings::default(),
             remote: crate::remote::RemoteSettings::default(),
         }
     }

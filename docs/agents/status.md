@@ -2190,3 +2190,38 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       changing TermService / LSM, kernel patching / BYOVD / DSE workarounds, signing with
       real certificates.
     - Refused by the model provider's safety system: none recorded in this round.
+- 2026-11-17 (parity round, package compat-tweaks, branch worktree-wf_41b135b3-32a-2).
+  Visible opt-in compatibility options, each off by default, journaled and undone on
+  disable / uninstall (architecture.md "Compatibility options"):
+  - Built: Windows Update for Business deferral / active hours / no automatic restart
+    while signed in (`TweakId::WindowsUpdate`), fast startup off from the config,
+    Device Installation Restrictions per setup class with a "no seat uses" suggestion
+    (`TweakId::DeviceInstallDeny`, operator entries kept), Defender exclusions for our
+    folders / processes (`seat_compat::defender`, WMI `MSFT_MpPreference`), the class-level
+    default descriptors switch enabled in the manager plus Modem / multi-port serial /
+    floppy / tape / medium changer classes, per-seat environment variables
+    (`seat_compat::user_env`, agent `refresh_environment`, launch env, remote autostart env),
+    "Deny log on locally" for RDP-signed-in seat accounts (`seat_compat::rights`,
+    `LsaAddAccountRights`), Steam per local seat (seat map flag), per-seat named-object
+    rewrite in the shim (`seat_shim_core::objects`, `rt/objects.rs`, `Shim\ObjectRules`),
+    Steam legacy proxy-DLL report (pre-flight `steam_proxy_dll`) with journaled quarantine /
+    restore (`steam_proxy_dll` request), DPI read-back (agent `report_dpi` /
+    `AgentEvent::Dpi`, one-shot `--report-dpi` for remote seats with a static scale, notice
+    `dpi_mismatch`), USB dock wizard in the manager (generic, spec 10 §8.8), manager README
+    "not built" list fixed (the minimum-resolution gap was already closed).
+  - HYPOTHESIS (nothing ran on hardware): every Windows effect above (policy values on Pro,
+    Defender changes under Tamper Protection, deny right without reboot, Explorer reloading
+    the environment, object hooks reached, Steam IPC override on local seats, DPI values,
+    dock detection on real docks).
+  - Documented limits: Steam library is per Steam install (a seat needing its own library
+    uses its own install); object isolation only for shim-target programs (never
+    anti-cheat games); domain Group Policy may overwrite the deny right.
+  - Gates (worktree): cargo test --workspace 1805 passed / 6 ignored (was 1777), doc tests
+    green, clippy -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 229
+    tests (was 217) / check 0 errors / build, shim tests (1 + 8 + 3) + check x86_64 / i686 /
+    aarch64 + clippy aarch64, bun test installer/scripts 63. No driver touched. No test
+    deleted; changed on purpose: `same_account_deny_logs_the_second_seat_off` counts the
+    agent tasks without the new per-logon `report_dpi` task.
+  - Open: hardware / VM run of every option; the shared target dir hazard showed again
+    (another worktree's `seat-core` replaced ours mid-run; touching and re-running helped).
+  - Refused by the model provider's safety system: none.

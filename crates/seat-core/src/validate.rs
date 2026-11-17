@@ -137,6 +137,22 @@ pub enum IssueCode {
     /// (`fast_user_switch`, `desktops`): it cannot start (`session_unavailable`). Added
     /// 2026-11-14, warning.
     SessionUnavailable,
+    /// A seat environment variable: more than [`crate::config::MAX_SEAT_ENV`] entries, a
+    /// name that fails [`crate::config::env_name_ok`] (reserved, invalid characters), a
+    /// value that fails [`crate::config::env_value_ok`], or a name twice. Added 2026-11-17
+    /// (compat-tweaks), error.
+    InvalidSeatEnvironment,
+    /// "Deny log on locally" on a seat that signs in locally (seat 1, a local seat on
+    /// `fast_user_switch` / `desktops`) or that has no account: the seat would lock its
+    /// own user out. Added 2026-11-17 (compat-tweaks), error.
+    DenyLocalLogonUnsupported,
+    /// Windows Update policy out of range: deferral beyond 365 / 30 days, active hours
+    /// not both set, equal, outside 0..=23 or longer than 18 hours. Added 2026-11-17
+    /// (compat-tweaks), error.
+    InvalidWindowsUpdatePolicy,
+    /// A named-object rule (`settings.apps.object_rules`) is not valid or there are more
+    /// than [`crate::config::MAX_OBJECT_RULES`]. Added 2026-11-17 (compat-tweaks), error.
+    InvalidObjectRule,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +292,7 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
     }
     ip_checks(config, &mut out);
     pad_ignore_checks(config, &mut out);
+    compat_checks(config, &mut out);
     kiosk_checks(config, &mut out);
     gpu_preference_checks(config, &mut out);
     kind_checks(config, &mut out);
@@ -467,6 +484,40 @@ pub fn is_vid_pid(s: &str) -> bool {
         x.len() == 4 && x.chars().all(|c| c.is_ascii_hexdigit())
     };
     ok(v) && ok(p)
+}
+
+/// Seat environment, deny-logon option, Windows Update policy, object rules
+/// (compat-tweaks 2026-11-17).
+fn compat_checks(config: &Config, out: &mut Vec<Issue>) {
+    use crate::backend::SessionBackendKind as S;
+    use crate::config::{MAX_OBJECT_RULES, MAX_SEAT_ENV, env_name_ok, env_value_ok};
+    for s in &config.seats {
+        let env = &s.environment;
+        let mut names: Vec<String> = env.iter().map(|e| e.name.to_ascii_uppercase()).collect();
+        names.sort();
+        let dup = names.windows(2).any(|w| w[0] == w[1]);
+        if env.len() > MAX_SEAT_ENV || dup || env.iter().any(|e| !env_name_ok(&e.name) || !env_value_ok(&e.value)) {
+            out.push(Issue::new(Severity::Error, IssueCode::InvalidSeatEnvironment).seat(s.number).field("environment"));
+        }
+        if s.deny_local_logon {
+            let rdp = match s.kind {
+                crate::config::SeatKind::Remote => true,
+                crate::config::SeatKind::Local => {
+                    s.number != SeatNumber::CONSOLE && matches!(config.settings.backends.session, S::RdsLoopback | S::TermsrvWrapper)
+                }
+            };
+            if !rdp || s.account.domain_user().is_none() {
+                out.push(Issue::new(Severity::Error, IssueCode::DenyLocalLogonUnsupported).seat(s.number).field("deny_local_logon"));
+            }
+        }
+    }
+    if !config.settings.tweaks.windows_update.is_valid() {
+        out.push(Issue::new(Severity::Error, IssueCode::InvalidWindowsUpdatePolicy).field("settings.tweaks.windows_update"));
+    }
+    let rules = &config.settings.apps.object_rules;
+    if rules.len() > MAX_OBJECT_RULES || rules.iter().any(|r| !r.is_valid()) {
+        out.push(Issue::new(Severity::Error, IssueCode::InvalidObjectRule).field("settings.apps.object_rules"));
+    }
 }
 
 /// SDL ignore lists per seat (2026-11-17).
@@ -980,5 +1031,80 @@ mod tests {
         let mut c = Config::default();
         c.settings.backends.session = crate::backend::SessionBackendKind::Desktops;
         assert!(!codes(&validate(&c, None)).contains(&IssueCode::SessionUnavailable));
+    }
+
+    #[test]
+    fn compat_options_are_validated() {
+        use crate::config::{EnvVar, ObjectRule, SeatConfig};
+        let mut c = Config::default();
+        c.seats.push(SeatConfig::new(s(2)));
+        let has = |c: &Config, code: IssueCode| validate(c, None).iter().any(|i| i.code == code && i.severity == Severity::Error);
+        // Environment: valid, reserved, duplicate, control character, too many.
+        c.seats[1].environment = vec![EnvVar { name: "GAME_PROFILE".into(), value: "seat2".into() }];
+        assert!(!has(&c, IssueCode::InvalidSeatEnvironment));
+        for bad in [("Path", "x"), ("PULSAR_SEAT_X", "x"), ("1A", "x"), ("A B", "x"), ("OK", "a\nb")] {
+            c.seats[1].environment = vec![EnvVar { name: bad.0.into(), value: bad.1.into() }];
+            assert!(has(&c, IssueCode::InvalidSeatEnvironment), "{bad:?}");
+        }
+        c.seats[1].environment = vec![EnvVar { name: "A".into(), value: "1".into() }, EnvVar { name: "a".into(), value: "2".into() }];
+        assert!(has(&c, IssueCode::InvalidSeatEnvironment));
+        c.seats[1].environment = (0..33).map(|i| EnvVar { name: format!("V{i}"), value: String::new() }).collect();
+        assert!(has(&c, IssueCode::InvalidSeatEnvironment));
+        c.seats[1].environment.clear();
+        // Deny log on locally: needs RDP sign-in and an account, never seat 1.
+        c.seats[1].deny_local_logon = true;
+        c.seats[1].account = SeatAccount::Local { user: "seat2".into() };
+        c.settings.backends.session = crate::backend::SessionBackendKind::FastUserSwitch;
+        assert!(has(&c, IssueCode::DenyLocalLogonUnsupported));
+        c.settings.backends.session = crate::backend::SessionBackendKind::RdsLoopback;
+        assert!(!has(&c, IssueCode::DenyLocalLogonUnsupported));
+        c.seats[1].account = SeatAccount::LogonScreen;
+        assert!(has(&c, IssueCode::DenyLocalLogonUnsupported));
+        c.seats[1].deny_local_logon = false;
+        c.seats[0].deny_local_logon = true;
+        c.seats[0].account = SeatAccount::Local { user: "one".into() };
+        assert!(has(&c, IssueCode::DenyLocalLogonUnsupported));
+        c.seats[0].deny_local_logon = false;
+        // Windows Update policy ranges.
+        let wu = &mut c.settings.tweaks.windows_update;
+        wu.enabled = true;
+        wu.feature_defer_days = 365;
+        wu.quality_defer_days = 30;
+        wu.active_hours_start = Some(20);
+        wu.active_hours_end = Some(8);
+        assert!(!has(&c, IssueCode::InvalidWindowsUpdatePolicy));
+        c.settings.tweaks.windows_update.active_hours_end = Some(16); // 20 hours
+        assert!(has(&c, IssueCode::InvalidWindowsUpdatePolicy));
+        c.settings.tweaks.windows_update.active_hours_end = None;
+        assert!(has(&c, IssueCode::InvalidWindowsUpdatePolicy));
+        c.settings.tweaks.windows_update.active_hours_start = None;
+        c.settings.tweaks.windows_update.quality_defer_days = 31;
+        assert!(has(&c, IssueCode::InvalidWindowsUpdatePolicy));
+        c.settings.tweaks.windows_update.quality_defer_days = 0;
+        // Object rules.
+        c.settings.apps.object_rules = vec![ObjectRule { exe: "Launcher.exe".into(), names: vec!["MyApp_Instance*".into()] }];
+        assert!(!has(&c, IssueCode::InvalidObjectRule));
+        for (exe, name) in [(r"C:\x\a.exe", "n"), ("a.dll", "n"), ("a.exe", "*"), ("a.exe", r"Global\n")] {
+            c.settings.apps.object_rules = vec![ObjectRule { exe: exe.into(), names: vec![name.into()] }];
+            assert!(has(&c, IssueCode::InvalidObjectRule), "{exe} {name}");
+        }
+    }
+
+    #[test]
+    fn compat_settings_roundtrip_and_stay_absent_by_default() {
+        let j = serde_json::to_value(Config::default()).unwrap();
+        assert!(j["settings"].get("apps").is_none());
+        assert!(j["settings"]["tweaks"].get("windows_update").is_none());
+        assert!(j["settings"]["tweaks"].get("device_install_deny").is_none());
+        let mut c = Config::default();
+        c.settings.tweaks.device_install_deny.classes = vec![crate::config::DeviceInstallClass::Printer];
+        c.settings.tweaks.defender_exclusions = true;
+        c.settings.apps.steam_per_seat = true;
+        let back: Config = serde_json::from_value(serde_json::to_value(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+        for k in crate::config::DeviceInstallClass::ALL {
+            assert_eq!(k.class_guid().len(), 36);
+            assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
+        }
     }
 }

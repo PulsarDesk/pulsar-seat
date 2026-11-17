@@ -735,6 +735,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn raw_open_classes_are_supported_and_disk_paths_never() {
+        use super::super::classdefault::{OPEN_SDDL, open_sddl, supported};
+        use seat_core::backend::gate::DeviceClassTarget as T;
+        for t in [T::Cdrom, T::Ports, T::Modem, T::MultiportSerial, T::Floppy, T::TapeDrive, T::MediumChanger] {
+            assert!(supported(t), "{t:?}");
+            assert_eq!(open_sddl(t), Some(OPEN_SDDL));
+            assert_eq!(t.class_guid().len(), 36);
+        }
+        for t in [T::DiskDrive, T::Volume] {
+            assert!(!supported(t));
+        }
+    }
+
+    #[test]
     fn class_defaults_revert_all_restores_class() {
         use crate::inventory::class;
         use seat_core::backend::gate::DeviceClassTarget;

@@ -1137,6 +1137,9 @@ impl Service {
             (pref, luid)
         };
         self.sync_seat_gpu_preference(seat, &user.sid, &gpu_pref, gpu_luid);
+        // Per-seat environment variables and the DPI read-back (compat-tweaks 2026-11-17).
+        self.sync_seat_environment(seat, session_id, &user.sid);
+        let seat_env = self.lock().config.seat(seat).map(|c| seat_compat::user_env::launch_env(&c.environment)).unwrap_or_default();
         if agent_needed {
             let exe = self.platform.install_dir().join(AGENT_EXE);
             let spec = LaunchSpec {
@@ -1176,7 +1179,12 @@ impl Service {
             }
             let spec = LaunchSpec {
                 session_id,
-                env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().chain(sdl.iter().cloned()).collect(),
+                env: seat_env
+                    .iter()
+                    .cloned()
+                    .chain(seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()))
+                    .chain(sdl.iter().cloned())
+                    .collect(),
                 exe,
                 args: app.args.clone(),
                 log_name: format!("app-{session_id}-{i}.log"),
@@ -1286,9 +1294,10 @@ impl Service {
             return Err(ProtoError::new(ErrorCode::AccessDenied, "only the seat's signed-in user may start apps in it"));
         }
         let sdl = self.pad_sdl_env(seat);
+        let seat_env = self.lock().config.seat(seat).map(|c| seat_compat::user_env::launch_env(&c.environment)).unwrap_or_default();
         let spec = LaunchSpec {
             session_id: caller.session_id,
-            env: seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()).into_iter().chain(sdl).collect(),
+            env: seat_env.into_iter().chain(seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string())).chain(sdl).collect(),
             exe,
             args: args.to_vec(),
             log_name: format!("app-{}-launcher.log", caller.session_id),

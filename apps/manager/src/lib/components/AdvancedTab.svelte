@@ -3,6 +3,7 @@
      experimental client-SKU option behind an explicit warning, timings, safety, hotkey,
      devices and the reversible system tweaks. -->
 <script lang="ts">
+  import CompatSettings from './CompatSettings.svelte';
   import ExperimentalDialog from './ExperimentalDialog.svelte';
   import { availabilityLabel, backendName, noteLabel, t } from '#lib/i18n.ts';
   import { hotkeyLabel } from '#lib/hotkey.ts';
@@ -36,7 +37,8 @@
   let { store, onHotkey, onCpu }: Props = $props();
 
   let experimentalFor = $state<string | null>(null);
-  const CLASS_TARGETS: DeviceClassTarget[] = ['cdrom', 'ports', 'disk_drive', 'volume'];
+  // Disks and volumes are refused by the service (system disk); never offered.
+  const CLASS_TARGETS: DeviceClassTarget[] = ['cdrom', 'ports', 'modem', 'multiport_serial', 'floppy', 'tape_drive', 'medium_changer'];
   /** The service's choice when none is stored (`DeviceClassTarget::DEFAULT`). */
   const DEFAULT_CLASSES: DeviceClassTarget[] = ['cdrom', 'ports'];
   const draft = $derived(store.draft);
@@ -326,11 +328,15 @@
       <input type="checkbox" checked={draft.settings.devices.admins_bypass} onchange={(e) => settings((c) => (c.settings.devices.admins_bypass = e.currentTarget.checked))} />
       {t.advanced.adminsBypass}
     </label>
-    <!-- Class-level default descriptors (spec 70 §5.2(2)) are built in the service but are a
-         system change: the switch stays off until the maintainer signs it off after a
-         hardware test. The class choice is stored already and kept on save. -->
+    <!-- Class-level default descriptors (spec 70 §5.2(2)): a system change, opt-in and off
+         by default (compat-tweaks 2026-11-17); the service journals and undoes it. -->
     <label class="toggle">
-      <input type="checkbox" checked={draft.settings.devices.class_default_descriptors} disabled />
+      <input
+        type="checkbox"
+        checked={draft.settings.devices.class_default_descriptors}
+        onchange={(e) => settings((c) => (c.settings.devices.class_default_descriptors = e.currentTarget.checked))}
+        data-testid="class-defaults"
+      />
       {t.advanced.classDefaults}
     </label>
     <p class="hint">{t.advanced.classDefaultsSoon}</p>
@@ -388,6 +394,8 @@
       </select>
     </label>
   </fieldset>
+
+  <CompatSettings {store} {readOnly} />
 {/if}
 
 {#if experimentalFor}

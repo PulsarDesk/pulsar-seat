@@ -249,6 +249,7 @@ impl Service {
             B::ResetGraphics { seat } => self.reset_graphics(seat),
             B::RemoveKioskUser { seat } => self.remove_kiosk_user(seat),
             B::HyperV { action } => self.hyperv(action),
+            B::SteamProxyDll { action } => self.steam_proxy(action),
             B::RequestReboot => {
                 log::info(&format!("reboot requested by pid {}", caller.pid));
                 self.platform.reboot()?;
@@ -382,6 +383,12 @@ impl Service {
                     }
                     AgentEvent::Stopping => {
                         st.agent_tasks.remove(&report.session_id);
+                    }
+                    AgentEvent::Dpi { monitors } => {
+                        let monitors = monitors.clone();
+                        drop(st);
+                        self.on_dpi_report(report.session_id, &monitors);
+                        st = self.lock();
                     }
                 }
                 let tasks = st.agent_tasks.get(&report.session_id).cloned().unwrap_or_default();
