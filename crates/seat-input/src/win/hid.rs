@@ -18,9 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_LINK_COLLECTION_NODE, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, HidD_FreePreparsedData,
     HidD_GetPreparsedData, HidP_GetButtonCaps, HidP_GetCaps, HidP_GetLinkCollectionNodes, HidP_GetSpecificValueCaps,
-    HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_InitializeReportForID, HidP_Input, HidP_Output,
-    HidP_SetUsageValue, HidP_SetUsages, PHIDP_PREPARSED_DATA,
+    HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_Input, PHIDP_PREPARSED_DATA,
 };
+#[cfg(feature = "local-pads")]
+use windows_sys::Win32::Devices::HumanInterfaceDevice::{HidP_InitializeReportForID, HidP_Output, HidP_SetUsageValue, HidP_SetUsages};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, ERROR_SHARING_VIOLATION, GENERIC_READ,
     GetLastError, HANDLE, INVALID_HANDLE_VALUE,
@@ -222,6 +223,13 @@ impl HidDevice {
         (st == HIDP_STATUS_SUCCESS).then_some(v)
     }
 
+}
+
+/// HID PID force feedback (`seat_pads::ff`): only with the `local-pads` feature, whose
+/// `pad_io` is the one caller (`seat-pads` is an optional dependency, so a build of
+/// `seat-host` alone must not name it).
+#[cfg(feature = "local-pads")]
+impl HidDevice {
     /// Output report id and logical maximum of a PID (page 0x0F) value usage.
     fn pid_value(&self, usage: u16) -> Option<(u8, i32)> {
         let mut caps = vec![HIDP_VALUE_CAPS::default(); 128];
@@ -320,7 +328,9 @@ impl HidDevice {
         }
         out
     }
+}
 
+impl HidDevice {
     /// Every input value usage (ranges expanded, at most 64), for game pads
     /// (`seat_pads::generic` layouts).
     pub fn value_caps(&self) -> Vec<ValueCap> {
