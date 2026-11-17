@@ -220,13 +220,7 @@ fn install(out: &Out, opts: &Options) -> i32 {
                 }
             };
             let p = dir.0.join(e.name);
-            // One handle writes, hashes and holds the file: no other writer between.
-            let r = locked(&p, true).and_then(|mut f| {
-                use std::io::Write as _;
-                f.write_all(e.bytes)?;
-                f.flush()?;
-                plan::sha256_reader(&mut f).map(|h| (h, f))
-            });
+            let r = write_and_hold(&p, e.bytes);
             match r {
                 Ok((h, f)) if h == e.sha256 => _lock = f,
                 Ok(_) => {
@@ -286,6 +280,24 @@ fn install(out: &Out, opts: &Options) -> i32 {
     launch(out, &msi, opts)
 }
 
+/// Write the unpacked MSI to the new file `p`, then hold it through a read-only handle and
+/// hash it from that handle. msiexec opens the package deny-write, which fails
+/// (`STG_E_SHAREVIOLATION`, exit 1619) while a handle with write access is open (VM round
+/// 2, 2026-11-17), so the writing handle is closed first. The hash read through the held
+/// handle is of the bytes msiexec gets: nobody can write between that hash and the end of
+/// msiexec.
+fn write_and_hold(p: &Path, bytes: &[u8]) -> std::io::Result<(String, std::fs::File)> {
+    {
+        use std::io::Write as _;
+        let mut w = locked(p, true)?;
+        w.write_all(bytes)?;
+        w.flush()?;
+    }
+    let mut f = locked(p, false)?;
+    let h = plan::sha256_reader(&mut f)?;
+    Ok((h, f))
+}
+
 /// Open (or with `create`, newly create) the MSI shared for reading only, so no other
 /// process can write, rename or delete it while the handle is open.
 fn locked(p: &Path, create: bool) -> std::io::Result<std::fs::File> {
@@ -323,4 +335,37 @@ fn launch(out: &Out, msi: &Path, opts: &Options) -> i32 {
 fn launch(out: &Out, _msi: &Path, _opts: &Options) -> i32 {
     out.error(&text::LAUNCH_FAILED.fmt(&[&"Windows only"]));
     exit::FAILURE
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// msiexec opens the package read + deny-write (`STGM_SHARE_DENY_WRITE`); that open
+    /// must succeed while the setup program holds the MSI (VM round 2: exit 1619).
+    fn open_like_msiexec(p: &Path) -> std::io::Result<std::fs::File> {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new().read(true).share_mode(0x1).open(p)
+    }
+
+    #[test]
+    fn held_package_opens_for_msiexec_and_stays_unwritable() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.0.join("x.msi");
+        let (h, held) = write_and_hold(&p, b"package bytes").unwrap();
+        assert_eq!(h, plan::sha256_hex(b"package bytes"));
+        assert!(open_like_msiexec(&p).is_ok(), "deny-write reader must get in");
+        assert!(std::fs::OpenOptions::new().write(true).open(&p).is_err(), "no writer while held");
+        assert!(std::fs::remove_file(&p).is_err(), "no delete while held");
+        drop(held);
+    }
+
+    #[test]
+    fn a_writing_handle_blocks_the_msiexec_open() {
+        // The shape before the fix: the hold kept write access.
+        let dir = TempDir::new().unwrap();
+        let p = dir.0.join("y.msi");
+        let _w = locked(&p, true).unwrap();
+        assert!(open_like_msiexec(&p).is_err());
+    }
 }
