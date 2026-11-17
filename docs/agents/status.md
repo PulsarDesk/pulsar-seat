@@ -3223,3 +3223,62 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Open: Steam client per seat, RDP drive / reader redirection, DPI warning, WRDS session
     hosting and TermService restart need Server / RDS or hardware; Hyper-V seats need a host
     with nested virtualization; DXVK redirect and legacy verifier registration not built.
+- 2026-11-17 (ship, on main). `installer/scripts/ci-local.ps1 -Payload -Drivers -Installers`
+  end to end, then both MSIs and both setup programs from the clean committed tree.
+  - **Fixed on main:** 4f325ec: `ci-local.ps1` did not parse (PowerShell read `$arch:` in the
+    stream-server warning as a drive-qualified variable), so no local run reached a gate.
+    A first rerun failed once with `E0463 can't find crate for quote` in the shared
+    `target/wf` (another checkout's build of the host proc-macro deps); a plain rebuild
+    passed and the next full run was green. No other failure.
+  - **ci-local, all 39 gates green (38 min):** workflow lint, cargo build / test / clippy
+    (aarch64 native, x86_64 cross), manager frontend build, manager Rust test / clippy, API
+    helper test / clippy, manager check / test (361), installer scripts (94), public-repo
+    scan, shim x64 / x86 / arm64, credprov ARM64 + x64 (build, self-test, PE), release
+    binaries + API helper DLLs (x86 / x64 / arm64 / arm64ec) + payload PE gate for both
+    arches, drivers x64 + ARM64 (build, infverif, WDK code analysis 0 errors, PE machine),
+    unsigned submission CABs, MSI arm64. cargo test 1946 passed / 6 ignored.
+  - **Skipped (need GitHub or real signing):** `-StreamServer` (build-sunshine.ps1 clones
+    upstream Sunshine and downloads MSYS2 packages; an older partial run left only a log in
+    `target/wf/sunshine-out/arm64`), `-Release` (release key list: no release key exists),
+    sdv job (mounted 22H2 EWDK ISO), js-notices.ts (tag builds, cargo-about from CI).
+  - **Shipped test builds** (`build-installer.ps1 -Arch arm64|x64 -UpstreamStreamServer`,
+    commit 4f325ec, `dirty: false`, `release: false`, unsigned; `target/installer/dist`,
+    emptied first, so `SHA256SUMS.txt` lists exactly these four files):
+
+    | File | PE | SHA-256 |
+    | --- | --- | --- |
+    | `PulsarSeat_0.1.0_arm64.msi` | payload 0xAA64 | `3778ecd523807e0d3c3890fc50a14dfa45f50fde3b8d266dbf6cf4c30dacc96e` |
+    | `PulsarSeat_0.1.0_arm64_setup.exe` | 0xAA64 | `b210cb3aeb8c9030f57996aadfa8b9a052ea5642abd55cae3f53afaa04240723` |
+    | `PulsarSeat_0.1.0_x64.msi` | payload 0x8664 | `fd63f3ed61c5ebee07cec713c948dc16e104ac343ff991af3090ca114bfd67e1` |
+    | `PulsarSeat_0.1.0_x64_setup.exe` | 0x8664 | `68b28824c8172ee57acd4e79f0b019d9621eb23035987561c6846fa3866d8158` |
+
+    Payload check clean for both arches, before and inside the MSI (service, host, agent,
+    manager, credprov, WRDS DLL native; API helpers per arch, arm64ec as 0x8664 by design;
+    shim x86 / x64 / arm64; third-party USBip setup is an x86 installer as pinned).
+    These MSIs carry upstream Sunshine, not the Pulsar patch set: a release MSI needs the
+    Pulsar stream-server build (CI artifact or a local build-sunshine.ps1 run).
+  - **Final summary:**
+    - Parity: per the parity round entries above, every spec item is built in code except
+      the two refused ones below (this ship round added no feature).
+    - HYPOTHESIS, pending hardware / Server: Steam per seat, RDP drive / smart card reader
+      redirection, the remote-seat DPI warning, WRDS session hosting and a real TermService
+      restart (Windows Server + RDS), Hyper-V seats (host with nested virtualization), VM
+      seat guest link, provider audio, mode helper, setup signer pin, the Pulsar stream
+      server patch set at run time, every own driver (IDD, pad, WFP callout, filters) on
+      real hardware with production signatures.
+    - Refused by the model provider's safety system (not built, not retried): the
+      system-wide DXVK DLL redirect opt-in (spec/remote 50 §10) and the legacy verifier
+      per-executable registration (§11).
+    - Redesign / behaviour changes needing the maintainer's test before any push: the new
+      manager (P0..P8: shell, Seats board, Settings / Advanced, status page, remote pages
+      with staged save, setup wizard), seat card Restart (re-logon / wait), the Pulsar stream
+      server as default payload, the release setup's signer pin, VM seat share accounts, the
+      TermService restart offered only under RDS, missing-device lines following the running
+      backends.
+    - Signing: nothing signed (no certificate exists); scripts and docs in
+      `docs/release/checklist.md`, `signing-dry-run.md`, `driver-submission.md`.
+  - Worktrees left: `.claude/worktrees/wf_b025704c-d7f-5` (branch
+    `worktree-wf_b025704c-d7f-5`, 639c02c, clean). That commit is not on main by hash; main
+    carries the same change as 5599a16. Left for the maintainer to remove. The scratchpad
+    preview worktree (f814116, on main) was removed.
+  - No test deleted; no driver source touched.
