@@ -298,7 +298,8 @@ const t = {
     actions: (name: string) => `${name}: move or details`,
     faceActions: (name: string, id: string) => `${name} (${id}): move or details`,
     identify: 'Show (identify)',
-    infoMenu: 'Device details…'
+    infoMenu: 'Device details…',
+    infoSub: 'The details help when you look for a problem.'
   },
 
   move: {
@@ -331,7 +332,8 @@ const t = {
     kioskMenu: 'Kiosk seat…',
     ipMenu: 'IP address…',
     removeMenu: 'Delete seat…',
-    atLogon: 'at the sign-in screen'
+    atLogon: 'at the sign-in screen',
+    gpuMenu: 'Graphics card…'
   },
 
   startup: {
@@ -525,6 +527,7 @@ const t = {
     removeKioskUserTitle: (n: number) => `Delete the kiosk user of seat ${n}?`,
     removeKioskUserBody:
       'Pulsar Seat made a Windows user for this seat’s kiosk shell. When the kiosk shell is turned off the user is only disabled and its files (saves, browser profiles) are kept. Deleting it removes the user and all its files for good.',
+    removeKioskUserConfirm: 'Delete the user',
     removeKioskUserDone: 'The seat’s kiosk user was deleted.',
     compat: 'Environment and sign-in…'
   },
@@ -1237,6 +1240,7 @@ const t = {
 
   remove: {
     title: (n: number) => `Delete seat ${n}?`,
+    titleNamed: (name: string) => `Delete ${name}?`,
     body: 'The devices of this seat become spare. The change takes effect when saved.'
   },
 
@@ -1425,6 +1429,7 @@ const t = {
   describe: {
     seatsOf: (seats: number[]) => (seats.length === 1 ? `Seat ${seats[0]}` : `Seats ${seats.join(', ')}`),
     explicit: 'Assigned by hand',
+    ids: 'Hardware IDs',
     output: {
       internal: 'built-in',
       hdmi: 'HDMI',

@@ -276,7 +276,13 @@
           hotkey: () => (dialog = { kind: 'hotkey' }),
           moveAssignment,
           ipBinding: openIp,
-          openRemote
+          openRemote,
+          enable: (on) => {
+            if (adminGate()) dialog = { kind: 'enable', on };
+          },
+          startAll: () => {
+            if (adminGate()) requestStart(null);
+          }
         }}
       />
     {:else if tab === 'basic'}

@@ -1,72 +1,113 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Seats tab (spec 10 §3): the system pool and one container per seat, drag and drop,
-     device / seat / system menus, status colours, indication and identify-by-touch. -->
+<!-- Seats board (spec 10 §3; redesign P3, target/redesign/final DESIGN.md "Koltuklar"): one head
+     row (title + status line, "Add seat" + one overflow menu), at most one notice region, the
+     unassigned devices, the seat grid (monitor faces, device rows, missing-device lines), the
+     keyboard move hint and the remote seats as link rows. Devices move by drag and drop or,
+     without dragging, through the Move menu of each row / face (click or Enter); a polite live
+     region announces every move. The seat menu holds the run actions and every per-seat
+     setting dialog that exists today. -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import AssignDialog from './AssignDialog.svelte';
   import CameraPreview from './CameraPreview.svelte';
-  import LogLevelDialog from './LogLevelDialog.svelte';
+  import CompareDialog from './CompareDialog.svelte';
+  import DeviceInfoDialog from './DeviceInfoDialog.svelte';
+  import DeviceRow from './DeviceRow.svelte';
+  import GpuPreferenceDialog from './GpuPreferenceDialog.svelte';
+  import KioskShellDialog from './KioskShellDialog.svelte';
+  import MissingSlot from './MissingSlot.svelte';
+  import MonitorFace from './MonitorFace.svelte';
   import OutputsDialog from './OutputsDialog.svelte';
   import PictureDialog from './PictureDialog.svelte';
-  import CompareDialog from './CompareDialog.svelte';
-  import ConfirmDialog from './ConfirmDialog.svelte';
-  import Container from './Container.svelte';
-  import DeviceInfoDialog from './DeviceInfoDialog.svelte';
-  import DeviceTile from './DeviceTile.svelte';
-  import Menu, { type MenuItem } from './Menu.svelte';
+  import Pool from './Pool.svelte';
   import SeatAccountDialog from './SeatAccountDialog.svelte';
-  import SeatNameDialog from './SeatNameDialog.svelte';
+  import SeatCard from './SeatCard.svelte';
   import SeatCompatDialog from './SeatCompatDialog.svelte';
+  import SeatNameDialog from './SeatNameDialog.svelte';
   import UsbDockWizard from './UsbDockWizard.svelte';
-  import { denyLogonAllowed } from '#lib/compat.ts';
   import ViewSettingsDialog from './ViewSettingsDialog.svelte';
+  import { isNamed, isUp, missingKinds, movedKeys, powerLine, seatFact, seatStatus, seatTitle, treeOrder } from '#lib/board.ts';
+  import { denyLogonAllowed } from '#lib/compat.ts';
   import { seatLabel, t } from '#lib/i18n.ts';
   import * as M from '#lib/mask.ts';
-  import { builtinsFor, categoryOf, parsePicture, userPictureUrl } from '#lib/pictures.ts';
   import {
     addSeat,
     addedMonitorsToSpare,
-    clearAllPictures,
     clearDeviceMask,
-    setLogLevels,
-    setMonitorOutputs,
-    setOutputSettings,
-    setPicture,
+    localOf,
     moveDevice,
+    policyOf,
     removeSeat,
     renameSeat,
     seatHealth,
     seatOneFirstMonitorAdvice,
     setDeviceMask,
-    setKeyMask,
-    setSeatCompat,
     setDisplayOption,
+    setGpuPreference,
+    setKeyMask,
+    setKioskShell,
+    setMonitorOutputs,
+    setOutputSettings,
+    setPicture,
+    setSeatCompat,
     setSoftwareCursor,
+    setVirtualPads,
     type CanvasItem,
     type DropTarget
   } from '#lib/model.ts';
+  import { builtinsFor, categoryOf, parsePicture, userPictureUrl } from '#lib/pictures.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { ConfigDiff, DeviceKey, Panel, SeatNumber } from '#lib/types.ts';
+  import { SHARED_MASK, type ConfigDiff, type DeviceKey, type Panel, type SeatConfig, type SeatNumber } from '#lib/types.ts';
+  import {
+    Button,
+    ConfirmDialog,
+    Group,
+    Icon,
+    LinkRow,
+    Menu,
+    Notices,
+    PageHead,
+    Section,
+    Status,
+    StatusLine,
+    type MenuEntry,
+    type NoticeItem
+  } from '#lib/ui/index.ts';
 
   export interface SeatsTabCommands {
     startSeat: (seat: SeatNumber) => void;
     wizard: () => void;
-    reset: () => void;
-    importConfig: () => void;
+    /** Per-seat processor cores (the CPU sets dialog). */
     cpu: () => void;
-    hotkey: () => void;
     /** Service-side move; App runs it through the unsaved-changes guard. */
     moveAssignment: (from: DeviceKey, to: DeviceKey) => void;
-    /** Per-seat IP address dialog (network tab). */
+    /** Per-seat IP address dialog. */
     ipBinding?: (seat: SeatNumber) => void;
-    /** Open a remote seat on the remote seats tab. */
+    /** Open a remote seat on the remote seats page. */
     openRemote?: (seat: SeatNumber) => void;
+    /** Turn the product on / off; App asks first (the enable confirm). */
+    enable?: (on: boolean) => void;
+    /** Start the seats (App gates it: safe mode, off, the start confirm). */
+    startAll?: () => void;
+    /** Stop every running seat but seat 1; without it the board stops them one by one. */
+    stopAll?: () => void;
+    /** Restart one seat after a save that needs it; without it: stop, then start. */
+    restartSeat?: (seat: SeatNumber) => void;
+    /** Settings page (P2 contract); unused by the board itself. */
+    openSettings?: () => void;
+    /** Older callers only: these moved to Settings > Maintenance / Advanced (redesign P4). */
+    reset?: () => void;
+    importConfig?: () => void;
+    hotkey?: () => void;
   }
 
   interface Props {
     store: ManagerStore;
     commands: SeatsTabCommands;
+    /** Seats a save left needing a restart (the store's `restartRequired`, redesign P2). */
+    restartRequired?: Iterable<SeatNumber>;
   }
-  let { store, commands }: Props = $props();
+  let { store, commands, restartRequired }: Props = $props();
 
   type Dialog =
     | { kind: 'assign'; item: CanvasItem }
@@ -76,29 +117,58 @@
     | { kind: 'remove'; seat: SeatNumber }
     | { kind: 'removeKioskUser'; seat: SeatNumber }
     | { kind: 'compat'; seat: SeatNumber }
+    | { kind: 'kiosk'; seat: SeatNumber }
+    | { kind: 'gpu'; seat: SeatNumber }
     | { kind: 'usbDock' }
     | { kind: 'compare'; diff: ConfigDiff }
     | { kind: 'view' }
     | { kind: 'picture'; item: CanvasItem }
     | { kind: 'outputs' }
-    | { kind: 'camera'; name: string }
-    | { kind: 'log' };
+    | { kind: 'camera'; name: string };
 
   let dialog = $state<Dialog | null>(null);
-  let menu = $state<{ x: number; y: number; items: MenuItem[]; label: string } | null>(null);
+  /** The Move menu of one device row or face (anchored at it). */
+  let move = $state<{ anchor: HTMLElement; item: CanvasItem; from: DropTarget } | null>(null);
+  let moveOpen = $state(false);
   let identifyingMonitors = $state(false);
+  /** The device "Find by touch" just found (highlighted while its menu is open). */
+  let found = $state<DeviceKey | null>(null);
+  /** Polite announcement of the last move (screen readers). */
+  let announce = $state('');
+  let board: HTMLDivElement | undefined = $state();
 
   const draft = $derived(store.draft);
   const canvas = $derived(store.canvas);
   const seats = $derived(draft?.seats ?? []);
-  // Devices go to local seats only; remote seats are listed below the canvas.
-  const visibleSeats = $derived(
-    seats.filter((s) => (s.kind ?? 'local') === 'local' && (s.number === 1 || M.contains(store.prefs.visibleSeats, s.number)))
-  );
+  const localSeats = $derived(seats.filter((s) => (s.kind ?? 'local') === 'local'));
+  // Devices go to local seats only; remote seats are listed below the grid.
+  const visibleSeats = $derived(localSeats.filter((s) => s.number === 1 || M.contains(store.prefs.visibleSeats, s.number)));
   const remoteSeats = $derived(seats.filter((s) => s.kind === 'remote'));
-  const small = $derived(store.prefs.scaleIcons && (globalThis.innerWidth ?? 1200) < 1100);
   const issueDevices = $derived(new Set(store.issues.concat(store.serverIssues).filter((i) => i.severity !== 'warning').map((i) => i.device)));
   const advice = $derived(draft ? seatOneFirstMonitorAdvice(draft, store.devices) : null);
+  /** Devices every seat shares (speakers, cameras): a seat does not lack what it shares. */
+  const sharedPool = $derived(canvas?.system.filter((i) => i.shared) ?? []);
+  const moved = $derived(movedKeys(store.saved, draft, store.devices));
+  const product = $derived(store.status?.product);
+  const kioskMode = $derived(draft?.settings.backends.session === 'desktops');
+  const restartSet = $derived(
+    new Set<SeatNumber>(restartRequired ?? (store as unknown as { restartRequired?: Iterable<SeatNumber> }).restartRequired ?? [])
+  );
+  const anyRunning = $derived(seats.some((s) => s.number !== 1 && running(s.number)));
+  const power = $derived(
+    draft ? powerLine(product, seats, runtimeOf, (n) => seatHealth(draft, n, store.devices)) : null
+  );
+  const addKind = $derived(product?.state === 'disabled' || store.dirty ? 'secondary' : 'primary');
+  const atLimit = $derived(seats.length >= 16);
+
+  const notices = $derived.by(() => {
+    const out: NoticeItem[] = [];
+    if (store.picking) {
+      out.push({ kind: 'info', icon: 'locate', text: `${t.canvas.pickByTouch}: ${t.canvas.pickByTouchHint}`, action: { label: t.canvas.pickCancel, onclick: () => store.stopPicking() } });
+    }
+    if (advice) out.push({ kind: 'info', text: t.seatOneAdvice });
+    return out;
+  });
 
   // User pictures in use: load their category folders once.
   $effect(() => {
@@ -126,84 +196,127 @@
     return store.status?.seats.find((s) => s.seat === n);
   }
 
+  function running(n: SeatNumber): boolean {
+    const rt = runtimeOf(n);
+    return !!rt && rt.state.state !== 'off' && rt.state.state !== 'error';
+  }
+
+  function seatByNumber(n: SeatNumber): SeatConfig | undefined {
+    return seats.find((s) => s.number === n);
+  }
+
+  function titleOf(n: SeatNumber): string {
+    const s = seatByNumber(n);
+    return s ? seatTitle(s) : t.seatN(n);
+  }
+
   function itemByKey(key: DeviceKey): CanvasItem | undefined {
     if (!canvas) return undefined;
     return canvas.system.find((i) => i.view.device.key === key) ?? [...canvas.seats.values()].flat().find((i) => i.view.device.key === key);
   }
 
+  /** Move a device: the same store call for a drop and for the Move menu, then announce it. */
+  function moveTo(item: CanvasItem, from: DropTarget, to: DropTarget) {
+    const d = item.view.device;
+    store.edit((c) => moveDevice(c, d, item.mask, from, to));
+    announce = to === 'system' ? t.move.announcePool(d.name) : t.move.announce(d.name, titleOf(to));
+  }
+
   function drop(key: DeviceKey, from: DropTarget, to: DropTarget) {
     const item = itemByKey(key);
-    if (!item) return;
-    store.edit((c) => moveDevice(c, item.view.device, item.mask, from, to));
+    if (item) moveTo(item, from, to);
   }
 
-  function at(e: MouseEvent | KeyboardEvent): { x: number; y: number } {
-    if ('clientX' in e && (e.clientX || e.clientY)) return { x: e.clientX, y: e.clientY };
-    const r = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
-    return r ? { x: r.left + 8, y: r.bottom } : { x: 100, y: 100 };
-  }
-
-  function deviceMenu(e: MouseEvent | KeyboardEvent, item: CanvasItem) {
+  function shareAll(item: CanvasItem) {
     const d = item.view.device;
+    store.edit((c) => setDeviceMask(c, d, SHARED_MASK));
+    announce = t.move.announceShare(d.name);
+  }
+
+  function openMove(anchor: HTMLElement, item: CanvasItem, from: DropTarget) {
+    move = { anchor, item, from };
+    moveOpen = true;
+  }
+
+  function closeMove() {
+    move = null;
+    moveOpen = false;
+    found = null;
+  }
+
+  function moveItems(item: CanvasItem, from: DropTarget): MenuEntry[] {
+    const d = item.view.device;
+    const policy = policyOf(d.kind);
+    const fixed = policy === 'never_gated';
+    const out: MenuEntry[] = [{ group: t.move.title }];
+    for (const s of localSeats) {
+      const here = !M.isShared(item.mask) && M.contains(item.mask, s.number) && (policy === 'exclusive' || M.count(item.mask) === 1);
+      out.push({
+        label: seatTitle(s),
+        hint: isNamed(s) ? t.move.seatHint(s.number) : undefined,
+        disabled: fixed || here,
+        action: () => moveTo(item, from, s.number)
+      });
+    }
+    out.push({ label: t.move.toPool, disabled: fixed || M.isSpare(item.mask), action: () => moveTo(item, from, 'system') });
+    if (policy === 'shareable') out.push({ label: t.move.share, disabled: M.isShared(item.mask), action: () => shareAll(item) });
+    if (!fixed) out.push({ label: t.deviceMenu.assign, action: () => (dialog = { kind: 'assign', item }) });
+    if (item.source.type === 'explicit') out.push({ label: t.deviceMenu.reset, action: () => store.edit((c) => clearDeviceMask(c, d.key)) });
+    for (const w of d.warnings ?? []) {
+      if (w.code === 'moved_from') out.push({ label: t.deviceMenu.moveHere, action: () => commands.moveAssignment(w.old_key, d.key) });
+    }
+    out.push({ separator: true });
     const ident = !!store.identifying[d.key];
     // Webcams: the indication is a live preview in this window (spec 10 §3.5.1).
-    const canIndicate = ['monitor', 'audio_render'].includes(d.kind) && d.present;
+    if (d.kind === 'webcam') {
+      out.push({ label: t.deviceMenu.preview, disabled: !d.present, action: () => (dialog = { kind: 'camera', name: d.name }) });
+    } else {
+      const canIndicate = ['monitor', 'audio_render'].includes(d.kind) && d.present;
+      out.push({ label: ident ? t.deviceMenu.indicateStop : t.device.identify, disabled: !canIndicate || !store.isAdmin, action: () => store.identify(d.key, !ident) });
+    }
     const hasPictures = builtinsFor(d.kind).length > 0 || categoryOf(d.kind) !== null;
-    const soft = draft?.devices.find((x) => x.key === d.key)?.options?.software_cursor ?? false;
-    const items: MenuItem[] = [
-      { label: t.deviceMenu.assign, action: () => (dialog = { kind: 'assign', item }), disabled: d.kind === 'network' },
-      { label: t.deviceMenu.spare, action: () => store.edit((c) => setDeviceMask(c, d, 0)), disabled: d.kind === 'network' || M.isSpare(item.mask) },
-      {
-        label: t.deviceMenu.reset,
-        action: () => store.edit((c) => clearDeviceMask(c, d.key)),
-        disabled: item.source.type !== 'explicit'
-      },
-      { separator: true, label: '' },
-      d.kind === 'webcam'
-        ? { label: t.deviceMenu.preview, action: () => (dialog = { kind: 'camera', name: d.name }), disabled: !d.present }
-        : { label: ident ? t.deviceMenu.indicateStop : t.deviceMenu.indicate, action: () => store.identify(d.key, !ident), disabled: !canIndicate || !store.isAdmin },
-      { label: t.deviceMenu.picture, action: () => (dialog = { kind: 'picture', item }), disabled: !hasPictures },
-      { label: t.deviceMenu.path, action: () => (dialog = { kind: 'info', item }) },
-      { label: t.deviceMenu.sharing, action: () => (dialog = { kind: 'info', item }) },
-      { label: store.prefs.showIds ? t.deviceMenu.hideIds : t.deviceMenu.showIds, action: () => store.setPref('showIds', !store.prefs.showIds) }
-    ];
+    out.push({ label: t.deviceMenu.picture, disabled: !hasPictures, action: () => (dialog = { kind: 'picture', item }) });
+    out.push({ label: t.device.infoMenu, action: () => (dialog = { kind: 'info', item }) });
     if (d.kind === 'monitor') {
-      items.push({ separator: true, label: '' });
-      items.push({
-        label: soft ? t.deviceMenu.hardwareCursor : t.deviceMenu.softwareCursor,
-        action: () => store.edit((c) => setSoftwareCursor(c, d, !soft, item.mask))
-      });
-      items.push({ label: t.deviceMenu.outputs, action: () => (dialog = { kind: 'outputs' }) });
+      const soft = draft?.devices.find((x) => x.key === d.key)?.options?.software_cursor ?? false;
+      out.push({ separator: true });
+      out.push({ label: soft ? t.deviceMenu.hardwareCursor : t.deviceMenu.softwareCursor, action: () => store.edit((c) => setSoftwareCursor(c, d, !soft, item.mask)) });
+      out.push({ label: t.deviceMenu.outputs, action: () => (dialog = { kind: 'outputs' }) });
     }
-    for (const w of d.warnings ?? []) {
-      if (w.code === 'moved_from') items.push({ label: t.deviceMenu.moveHere, action: () => commands.moveAssignment(w.old_key, d.key) });
-    }
-    menu = { ...at(e), items, label: t.canvas.deviceMenu(d.name) };
+    return out;
   }
 
-  function seatMenu(e: MouseEvent, n: SeatNumber) {
-    const rt = runtimeOf(n);
-    const running = rt && rt.state.state !== 'off' && rt.state.state !== 'error';
-    const items: MenuItem[] = [
+  function seatMenu(s: SeatConfig): MenuEntry[] {
+    const n = s.number;
+    const up = running(n);
+    const pads = localOf(s).virtual_pads ?? false;
+    const out: MenuEntry[] = [
+      { label: t.seatMenu.start, disabled: n === 1 || !store.enabled || up, action: () => commands.startSeat(n) },
+      { label: t.seatMenu.relogon, disabled: !up, action: () => void store.relogon(n) },
+      { label: t.seatMenu.resetGraphics, disabled: !up && n !== 1, action: () => void store.resetGraphics(n) },
+      { label: t.seatMenu.stop, disabled: n === 1 || !up, action: () => void store.stopSeat(n) },
+      { separator: true },
       { label: t.seatMenu.rename, action: () => (dialog = { kind: 'name', seat: n }) },
-      { label: t.seatMenu.account, action: () => (dialog = { kind: 'account', seat: n }) },
-      { label: t.seatMenu.ip, action: () => commands.ipBinding?.(n), disabled: !commands.ipBinding },
-      { label: t.seatMenu.cpu, action: commands.cpu },
-      { label: t.seatMenu.compat, action: () => (dialog = { kind: 'compat', seat: n }), disabled: !store.isAdmin },
-      { separator: true, label: '' },
-      { label: t.seatMenu.start, action: () => commands.startSeat(n), disabled: n === 1 || !store.enabled || !!running },
-      { label: t.seatMenu.relogon, action: () => store.relogon(n), disabled: !running },
-      { label: t.seatMenu.resetGraphics, action: () => store.resetGraphics(n), disabled: !running && n !== 1 },
-      { label: t.seatMenu.stop, action: () => store.stopSeat(n), disabled: n === 1 || !running }
+      { label: t.seatMenu.account, action: () => (dialog = { kind: 'account', seat: n }) }
     ];
+    if (kioskMode && n !== 1) out.push({ label: t.seatCard.kioskMenu, action: () => (dialog = { kind: 'kiosk', seat: n }) });
+    out.push(
+      { label: t.seatCard.ipMenu, disabled: !commands.ipBinding, action: () => commands.ipBinding?.(n) },
+      { label: t.seatMenu.cpu, action: commands.cpu },
+      { label: t.seatCard.gpuMenu, action: () => (dialog = { kind: 'gpu', seat: n }) },
+      { label: t.seatMenu.compat, disabled: !store.isAdmin, action: () => (dialog = { kind: 'compat', seat: n }) },
+      { label: pads ? t.settingsPage.padsOff : t.settingsPage.padsOn, action: () => store.edit((c) => setVirtualPads(c, n, !pads)) }
+    );
     if (n !== 1) {
-      items.push({ separator: true, label: '' });
-      const kiosk = !!draft?.seats.find((s) => s.number === n)?.local?.kiosk_shell;
-      // A former kiosk seat's own Windows user stays (disabled) until removed here.
-      items.push({ label: t.seatMenu.removeKioskUser, danger: true, disabled: kiosk, action: () => (dialog = { kind: 'removeKioskUser', seat: n }) });
-      items.push({ label: t.seatMenu.remove, danger: true, action: () => (dialog = { kind: 'remove', seat: n }) });
+      const kiosk = !!localOf(s).kiosk_shell;
+      out.push(
+        { separator: true },
+        // A former kiosk seat's own Windows user stays (disabled) until removed here.
+        { label: t.seatMenu.removeKioskUser, danger: true, disabled: kiosk, action: () => (dialog = { kind: 'removeKioskUser', seat: n }) },
+        { label: t.seatCard.removeMenu, danger: true, action: () => (dialog = { kind: 'remove', seat: n }) }
+      );
     }
-    menu = { ...at(e), items, label: t.canvas.seatMenu(n) };
+    return out;
   }
 
   async function compare() {
@@ -219,33 +332,52 @@
     store.api.openPanel(p).catch((e) => store.fail(e));
   }
 
-  function systemMenu(e: MouseEvent) {
-    const items: MenuItem[] = [
-      { label: t.systemMenu.compare, action: compare, disabled: !store.isAdmin },
-      { label: t.systemMenu.view, action: () => (dialog = { kind: 'view' }) },
-      { label: t.systemMenu.cpu, action: commands.cpu },
-      { label: t.systemMenu.hotkey, action: commands.hotkey },
-      { label: t.systemMenu.wizard, action: commands.wizard, disabled: !store.isAdmin },
-      { label: t.systemMenu.import, action: commands.importConfig, disabled: !store.isAdmin },
-      { label: t.systemMenu.outputs, action: () => (dialog = { kind: 'outputs' }) },
-      { label: t.systemMenu.usbDock, action: () => (dialog = { kind: 'usbDock' }), disabled: !store.isAdmin },
-      { label: t.systemMenu.logLevel, action: () => (dialog = { kind: 'log' }) },
-      {
-        label: t.systemMenu.clearPictures,
-        action: () => store.edit((c) => clearAllPictures(c)),
-        disabled: !draft?.devices.some((a) => a.options?.picture)
-      },
-      { separator: true, label: '' },
-      { label: t.systemMenu.deviceManager, action: () => panel('device_manager') },
-      { label: t.systemMenu.displaySettings, action: () => panel('display_settings') },
-      { label: t.systemMenu.soundSettings, action: () => panel('sound_settings') },
-      { label: t.systemMenu.networkConnections, action: () => panel('network_connections') },
-      { label: t.systemMenu.userAccounts, action: () => panel('user_accounts') },
-      { separator: true, label: '' },
-      { label: t.systemMenu.reset, danger: true, action: commands.reset, disabled: !store.isAdmin }
-    ];
-    menu = { ...at(e), items, label: t.canvas.menu };
+  async function stopAll() {
+    if (commands.stopAll) {
+      commands.stopAll();
+      return;
+    }
+    for (const s of seats) {
+      if (s.number !== 1 && running(s.number)) await store.stopSeat(s.number);
+    }
   }
+
+  async function restart(n: SeatNumber) {
+    if (commands.restartSeat) {
+      commands.restartSeat(n);
+      return;
+    }
+    if (running(n) && n !== 1) await store.stopSeat(n);
+    commands.startSeat(n);
+  }
+
+  const moreItems = $derived<MenuEntry[]>([
+    {
+      label: store.picking ? t.canvas.pickCancel : t.canvas.pickByTouch,
+      disabled: !store.picking && !store.link,
+      action: () => (store.picking ? store.stopPicking() : store.startPicking())
+    },
+    { label: identifyingMonitors ? t.canvas.identifyMonitorsStop : t.canvas.identifyMonitors, disabled: !store.isAdmin, action: () => void toggleMonitors() },
+    { separator: true },
+    { label: t.systemMenu.wizard, disabled: !store.isAdmin, action: commands.wizard },
+    { label: t.systemMenu.view, action: () => (dialog = { kind: 'view' }) },
+    { label: t.systemMenu.compare, disabled: !store.isAdmin, action: () => void compare() },
+    { label: t.systemMenu.usbDock, disabled: !store.isAdmin, action: () => (dialog = { kind: 'usbDock' }) },
+    { separator: true },
+    { label: t.power.stopAll, disabled: !store.isAdmin || !anyRunning, action: () => void stopAll() },
+    { label: t.power.close, disabled: !store.isAdmin || !store.enabled || !commands.enable, action: () => commands.enable?.(false) },
+    { separator: true },
+    {
+      label: t.canvas.windowsSettings,
+      submenu: [
+        { label: t.systemMenu.deviceManager, action: () => panel('device_manager') },
+        { label: t.systemMenu.displaySettings, action: () => panel('display_settings') },
+        { label: t.systemMenu.soundSettings, action: () => panel('sound_settings') },
+        { label: t.systemMenu.networkConnections, action: () => panel('network_connections') },
+        { label: t.systemMenu.userAccounts, action: () => panel('user_accounts') }
+      ]
+    }
+  ]);
 
   function add() {
     store.edit((c) => addSeat(c)?.config ?? c);
@@ -256,147 +388,201 @@
     await store.identifyMonitors(identifyingMonitors);
   }
 
-  // Identify by touch: the first device that sends input opens its assignment dialog.
+  // Identify by touch: the first device that sends input opens its Move menu.
   $effect(() => {
     const key = store.picked;
     if (!key) return;
     const item = itemByKey(key);
     store.picked = null;
-    if (item) {
-      store.toast('ok', t.canvas.pickFound(item.view.device.name));
-      dialog = { kind: 'assign', item };
-    }
+    if (!item) return;
+    store.toast('ok', t.canvas.pickFound(item.view.device.name));
+    void (async () => {
+      await tick();
+      const el = board?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+      if (!el) {
+        dialog = { kind: 'assign', item };
+        return;
+      }
+      const card = el.closest<HTMLElement>('[data-seat]');
+      const from: DropTarget = card ? Number(card.dataset.seat) : 'system';
+      el.focus();
+      found = key;
+      openMove(el, item, from);
+    })();
   });
 
-  function seatSubtitle(n: SeatNumber): string {
-    const s = seats.find((x) => x.number === n)!;
-    const parts: string[] = [];
-    if (s.name !== String(n)) parts.push(s.name);
-    const rt = runtimeOf(n);
-    if (rt) parts.push(seatLabel(rt.state));
-    return parts.join(' · ');
+  function isExpanded(key: DeviceKey): boolean {
+    return moveOpen && move?.item.view.device.key === key;
   }
 </script>
 
-<div class="toolbar">
-  <button type="button" onclick={add} disabled={!draft || seats.length >= 16 || !store.isAdmin}>{t.canvas.addSeat}</button>
-  {#if store.picking}
-    <button type="button" class="primary" onclick={() => store.stopPicking()}>{t.canvas.pickCancel}</button>
-    <span class="hint" role="status">{t.canvas.pickByTouchHint}</span>
-  {:else}
-    <button type="button" onclick={() => store.startPicking()} disabled={!store.link}>{t.canvas.pickByTouch}</button>
-  {/if}
-  <button type="button" onclick={toggleMonitors} disabled={!store.isAdmin}>
-    {identifyingMonitors ? t.canvas.identifyMonitorsStop : t.canvas.identifyMonitors}
-  </button>
-  {#if seats.length >= 16}<span class="hint">{t.canvas.seatLimit}</span>{/if}
-</div>
+<PageHead title={t.nav.seats}>
+  {#snippet status()}
+    {#if power}
+      <StatusLine kind={power.kind} status={power.status} summary={power.summary || undefined}>
+        {#snippet action()}
+          {#if power?.action === 'start' && commands.startAll}
+            <Button compact label={t.power.startAll} disabled={!store.isAdmin || store.busy} onclick={() => commands.startAll?.()} />
+          {:else if power?.action === 'enable' && commands.enable}
+            <Button compact kind="primary" label={t.power.openAndStart} disabled={!store.isAdmin || store.busy} onclick={() => commands.enable?.(true)} />
+          {/if}
+        {/snippet}
+      </StatusLine>
+    {/if}
+  {/snippet}
+  {#snippet actions()}
+    <Button
+      kind={addKind}
+      icon="plus"
+      label={t.canvas.addSeat}
+      disabled={!draft || !store.isAdmin}
+      disabledReason={atLimit ? t.canvas.seatLimit : undefined}
+      onclick={add}
+    />
+    <Menu items={moreItems} label={t.canvas.more} align="end" />
+  {/snippet}
+</PageHead>
 
-{#if advice}
-  <p class="banner info">{t.seatOneAdvice}</p>
+{#if notices.length}
+  <div class="notices"><Notices items={notices} /></div>
 {/if}
+
+<p class="sr-only" aria-live="polite" data-testid="move-announce">{announce}</p>
 
 {#if canvas && draft}
-  <div class="canvas" class:even={store.prefs.evenRows}>
-    <Container
-      target="system"
-      title={t.canvas.system}
-      hint={t.canvas.systemHint}
-      onDrop={drop}
-      onMenu={systemMenu}
-      empty={canvas.system.length === 0}
-      count={canvas.system.length}
-      {small}
-    >
-      {#each canvas.system as item (item.view.device.key)}
-        <DeviceTile
-          {item}
+  <div class="board" bind:this={board}>
+    <Pool onDrop={drop}>
+      {#each treeOrder(canvas.system) as p (p.item.view.device.key)}
+        {@const k = p.item.view.device.key}
+        <DeviceRow
+          item={p.item}
           from="system"
           all={store.devices}
-          activity={store.activity[item.view.device.key] ?? 0}
-          arrived={!!store.arrivals[item.view.device.key]}
-          identifying={!!store.identifying[item.view.device.key]}
-          attention={issueDevices.has(item.view.device.key)}
+          moved={moved.has(k)}
+          activity={store.activity[k] ?? 0}
+          arrived={!!store.arrivals[k]}
+          highlight={!!store.identifying[k] || found === k}
+          attention={issueDevices.has(k)}
           showIds={store.prefs.showIds}
-          {small}
           flashSeconds={store.prefs.flashSeconds}
-          picture={pictureOf(item.view.device.key)}
-          userUrl={userUrlOf(item)}
-          onMenu={deviceMenu}
-          onOpen={(i) => (dialog = { kind: 'assign', item: i })}
+          picture={pictureOf(k)}
+          userUrl={userUrlOf(p.item)}
+          expanded={isExpanded(k)}
+          onOpen={openMove}
         />
       {/each}
-    </Container>
-    {#each visibleSeats as s (s.number)}
-      {@const health = seatHealth(draft, s.number, store.devices)}
-      {@const list = canvas.seats.get(s.number) ?? []}
-      <Container
-        target={s.number}
-        title={`${s.number}. ${t.seat}`}
-        subtitle={seatSubtitle(s.number)}
-        colour={health.colour}
-        statusText={t.health[health.readiness]}
-        onDrop={drop}
-        onMenu={(e) => seatMenu(e, s.number)}
-        empty={list.length === 0}
-        count={list.length}
-        {small}
-      >
-        {#snippet badges()}
-          <span class="badge kind" title={t.seatKind.localHint}>{t.seatKind.local}</span>
-          {#if s.account.kind !== 'logon_screen'}<span class="badge" title={t.account.autoLogon}>{s.account.user}</span>{/if}
-          {#if store.view?.password_set.includes(s.number)}<span class="badge" title={t.account.passwordSet}>•••</span>{/if}
-          {#if store.view?.password_failing.includes(s.number)}<span class="badge bad" title={t.account.passwordFailing}>!</span>{/if}
-        {/snippet}
-        {#each list as item (item.view.device.key)}
-          <DeviceTile
-            {item}
-            from={s.number}
-            all={store.devices}
-            activity={store.activity[item.view.device.key] ?? 0}
-            arrived={!!store.arrivals[item.view.device.key]}
-            identifying={!!store.identifying[item.view.device.key]}
-            attention={issueDevices.has(item.view.device.key)}
-            showIds={store.prefs.showIds}
-            {small}
-            flashSeconds={store.prefs.flashSeconds}
-            picture={pictureOf(item.view.device.key)}
-            userUrl={userUrlOf(item)}
-            onMenu={deviceMenu}
-            onOpen={(i) => (dialog = { kind: 'assign', item: i })}
-          />
-        {/each}
-      </Container>
-    {/each}
+    </Pool>
+
+    <div class="seats">
+      {#each visibleSeats as s (s.number)}
+        {@const list = canvas.seats.get(s.number) ?? []}
+        {@const monitors = list.filter((i) => i.view.device.kind === 'monitor')}
+        {@const others = treeOrder(list.filter((i) => i.view.device.kind !== 'monitor'))}
+        {@const health = seatHealth(draft, s.number, store.devices)}
+        {@const rt = runtimeOf(s.number)}
+        <SeatCard
+          seat={s.number}
+          title={seatTitle(s)}
+          status={seatStatus(rt, health, restartSet.has(s.number))}
+          fact={seatFact(s, rt)}
+          menu={seatMenu(s)}
+          restart={restartSet.has(s.number)}
+          restartDisabled={!store.isAdmin || store.busy}
+          onRestart={() => void restart(s.number)}
+          onDrop={drop}
+        >
+          {#snippet faces()}
+            {#each monitors as m (m.view.device.key)}
+              {@const k = m.view.device.key}
+              <MonitorFace
+                item={m}
+                seat={s.number}
+                all={store.devices}
+                moved={moved.has(k)}
+                highlight={!!store.identifying[k] || found === k}
+                attention={issueDevices.has(k)}
+                showIds={store.prefs.showIds}
+                expanded={isExpanded(k)}
+                onOpen={openMove}
+              />
+            {/each}
+          {/snippet}
+          {#if others.length}
+            <ul class="devs">
+              {#each others as p (p.item.view.device.key)}
+                {@const k = p.item.view.device.key}
+                <DeviceRow
+                  item={p.item}
+                  from={s.number}
+                  all={store.devices}
+                  depth={p.depth}
+                  moved={moved.has(k)}
+                  activity={store.activity[k] ?? 0}
+                  arrived={!!store.arrivals[k]}
+                  highlight={!!store.identifying[k] || found === k}
+                  attention={issueDevices.has(k)}
+                  showIds={store.prefs.showIds}
+                  flashSeconds={store.prefs.flashSeconds}
+                  picture={pictureOf(k)}
+                  userUrl={userUrlOf(p.item)}
+                  expanded={isExpanded(k)}
+                  onOpen={openMove}
+                />
+              {/each}
+            </ul>
+          {/if}
+          {#each missingKinds(list.concat(sharedPool)) as miss (miss.kind)}
+            <MissingSlot kind={miss.kind} block={miss.block} />
+          {/each}
+          {#if store.view?.password_failing.includes(s.number)}
+            <p class="password"><Icon name="key" size={16} /><span>{t.account.passwordFailing}</span></p>
+          {/if}
+        </SeatCard>
+      {/each}
+      {#if localSeats.length === 1}
+        <section class="seat-add" aria-labelledby="seat-add-h">
+          <h2 class="h3" id="seat-add-h">{t.canvas.addSecondTitle}</h2>
+          <p class="help">{t.canvas.addSecondBody}</p>
+          <div class="btnrow">
+            <Button icon="wand" label={t.canvas.startWizard} disabled={!store.isAdmin} onclick={commands.wizard} />
+            <Button kind="quiet" label={t.canvas.addEmpty} disabled={!store.isAdmin} onclick={add} />
+          </div>
+        </section>
+      {/if}
+    </div>
+
+    <p class="hint-line"><Icon name="info" size={16} /><span>{t.canvas.moveHint}</span></p>
+
+    {#if remoteSeats.length}
+      <div class="after-seats">
+        <Section title={t.seatKind.remoteList} help={t.canvas.remoteHint}>
+          <Group>
+            {#each remoteSeats as s (s.number)}
+              {@const rt = runtimeOf(s.number)}
+              <LinkRow
+                label={seatTitle(s)}
+                help={[isNamed(s) ? t.seatN(s.number) : '', rt ? seatLabel(rt.state) : ''].filter(Boolean).join(' · ') || undefined}
+                onclick={() => commands.openRemote?.(s.number)}
+              >
+                {#snippet value()}
+                  <Status kind={isUp(rt?.state) ? 'ok' : 'off'} text={isUp(rt?.state) ? t.seatCard.running : t.seatCard.off} />
+                {/snippet}
+              </LinkRow>
+            {/each}
+          </Group>
+        </Section>
+      </div>
+    {/if}
   </div>
-  {#if remoteSeats.length}
-    <section class="remote-list" aria-label={t.seatKind.remoteList}>
-      <h2>{t.seatKind.remoteList}</h2>
-      <p class="hint">{t.seatKind.remoteListHint}</p>
-      <ul>
-        {#each remoteSeats as s (s.number)}
-          {@const rt = runtimeOf(s.number)}
-          <li data-testid="remote-seat">
-            <span class="badge kind remote" title={t.seatKind.remoteHint}>{t.seatKind.remote}</span>
-            <strong>{s.number}. {s.name}</strong>
-            {#if rt}<span class="hint">{seatLabel(rt.state)}</span>{/if}
-            {#if commands.openRemote}
-              <button type="button" onclick={() => commands.openRemote?.(s.number)}>{t.seatKind.open}</button>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    </section>
-  {/if}
-  <p class="hint">{t.advanced.gpuHint}</p>
 {:else if store.needsElevation}
-  <p class="hint">{t.adminToView}</p>
+  <p class="help">{t.adminToView}</p>
 {:else if !store.serviceDown}
-  <p class="hint">{t.loading}</p>
+  <p class="help">{t.loading}</p>
 {/if}
 
-{#if menu}
-  <Menu items={menu.items} x={menu.x} y={menu.y} label={menu.label} onClose={() => (menu = null)} />
+{#if move}
+  {@const m = move}
+  <Menu items={moveItems(m.item, m.from)} label={t.device.actions(m.item.view.device.name)} anchor={m.anchor} align="start" bind:open={moveOpen} onClose={closeMove} />
 {/if}
 
 {#if dialog?.kind === 'assign' && draft}
@@ -420,20 +606,24 @@
     onCancel={() => (dialog = null)}
   />
 {:else if dialog?.kind === 'info'}
+  {@const item = dialog.item}
+  {@const d = item.view.device}
   <DeviceInfoDialog
-    view={dialog.item.view}
-    mask={dialog.item.mask}
-    source={dialog.item.source}
+    view={item.view}
+    mask={item.mask}
+    source={item.source}
     all={store.devices}
     showIds={store.prefs.showIds}
     deviceName={(k) => store.deviceName(k)}
+    identifying={!!store.identifying[d.key]}
+    onIdentify={['monitor', 'audio_render'].includes(d.kind) && d.present && store.isAdmin ? (on) => void store.identify(d.key, on) : undefined}
     onClose={() => (dialog = null)}
   />
 {:else if dialog?.kind === 'name'}
   {@const n = dialog.seat}
   <SeatNameDialog
     seat={n}
-    name={seats.find((s) => s.number === n)?.name ?? String(n)}
+    name={seatByNumber(n)?.name ?? String(n)}
     onSave={(name) => {
       store.edit((c) => renameSeat(c, n, name));
       dialog = null;
@@ -444,7 +634,7 @@
   {@const n = dialog.seat}
   <SeatAccountDialog
     seat={n}
-    account={seats.find((s) => s.number === n)?.account ?? { kind: 'logon_screen' }}
+    account={seatByNumber(n)?.account ?? { kind: 'logon_screen' }}
     passwordSet={store.view?.password_set.includes(n) ?? false}
     passwordFailing={store.view?.password_failing.includes(n) ?? false}
     loadUsers={() => store.api.localUsers()}
@@ -459,7 +649,7 @@
 {:else if dialog?.kind === 'remove'}
   {@const n = dialog.seat}
   <ConfirmDialog
-    title={t.remove.title(n)}
+    title={t.remove.titleNamed(titleOf(n))}
     body={t.remove.body}
     confirmLabel={t.seatMenu.remove}
     danger
@@ -474,7 +664,7 @@
   <ConfirmDialog
     title={t.seatMenu.removeKioskUserTitle(n)}
     body={t.seatMenu.removeKioskUserBody}
-    confirmLabel={t.seatMenu.removeKioskUser}
+    confirmLabel={t.seatMenu.removeKioskUserConfirm}
     danger
     onConfirm={() => {
       dialog = null;
@@ -484,7 +674,7 @@
   />
 {:else if dialog?.kind === 'compat' && draft}
   {@const n = dialog.seat}
-  {@const sc = draft.seats.find((s) => s.number === n)}
+  {@const sc = seatByNumber(n)}
   <SeatCompatDialog
     seat={n}
     environment={sc?.environment}
@@ -492,6 +682,28 @@
     denyAllowed={denyLogonAllowed(draft, n)}
     onSave={(env, deny) => {
       store.edit((c) => setSeatCompat(c, n, env, deny));
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'kiosk' && draft}
+  {@const n = dialog.seat}
+  <KioskShellDialog
+    seat={n}
+    shell={localOf(seatByNumber(n)).kiosk_shell ?? null}
+    onSave={(shell) => {
+      store.edit((c) => setKioskShell(c, n, shell));
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'gpu' && draft}
+  {@const n = dialog.seat}
+  <GpuPreferenceDialog
+    seat={n}
+    pref={localOf(seatByNumber(n)).gpu_preference}
+    onSave={(p) => {
+      store.edit((c) => setGpuPreference(c, n, p));
       dialog = null;
     }}
     onCancel={() => (dialog = null)}
@@ -550,7 +762,6 @@
           if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
           if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
           if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
-
         }
         return n;
       });
@@ -560,61 +771,52 @@
   />
 {:else if dialog?.kind === 'camera'}
   <CameraPreview name={dialog.name} onClose={() => (dialog = null)} />
-{:else if dialog?.kind === 'log' && draft}
-  <LogLevelDialog
-    levels={draft.settings.log ?? { info: true, debug: false, trace: false }}
-    onSave={(l) => {
-      store.edit((c) => setLogLevels(c, l));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
 {:else if dialog?.kind === 'view'}
   <ViewSettingsDialog prefs={store.prefs} {seats} onChange={(k, v) => store.setPref(k, v)} onClose={() => (dialog = null)} />
 {/if}
 
 <style>
-  .remote-list ul {
+  .notices {
+    margin-bottom: var(--sp-6);
+  }
+  .seats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: var(--sp-4);
+    align-items: start;
+  }
+  .devs {
     list-style: none;
-    padding: 0;
-    margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
   }
-
-  .remote-list li {
+  .password {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .toolbar {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-    margin-bottom: 0.75rem;
-  }
-  .canvas {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
     align-items: flex-start;
+    gap: 10px;
+    padding: 6px;
+    color: var(--warn-ink);
+    font-size: var(--fs-help);
+    line-height: var(--lh-help);
   }
-  .canvas.even {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  .seat-add {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-5);
+    align-self: center;
   }
-  .badge {
-    font-size: 0.8em;
-    padding: 0 0.35rem;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--muted);
+  .hint-line {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: var(--sp-5);
+    color: var(--text-muted);
+    font-size: var(--fs-help);
+    line-height: var(--lh-help);
   }
-  .badge.bad {
-    color: var(--danger);
-    border-color: var(--danger);
+  .after-seats {
+    margin-top: var(--sp-6);
   }
 </style>

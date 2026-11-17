@@ -36,13 +36,13 @@ describe('remote seats tab', () => {
 
     await user.click(screen.getByRole('tab', { name: t.tabs.seats }));
     const list = screen.getByRole('region', { name: t.seatKind.remoteList });
-    expect(within(list).getByText(t.seatKind.remote)).toBeInTheDocument();
-    expect(within(list).getByText(`${seat!.number}. Salon`)).toBeInTheDocument();
-    // No device container for a remote seat; local seats carry the local badge.
-    expect(screen.queryByRole('region', { name: `${seat!.number}. ${t.seat}` })).toBeNull();
-    expect(screen.getAllByText(t.seatKind.local).length).toBeGreaterThan(0);
+    // A link row: the name, "Seat N" as help and the state word.
+    expect(within(list).getByText('Salon')).toBeInTheDocument();
+    expect(within(list).getByText(t.seatN(seat!.number), { exact: false })).toBeInTheDocument();
+    // No seat card (device container) for a remote seat.
+    expect(screen.queryByRole('region', { name: 'Salon' })).toBeNull();
 
-    await user.click(within(list).getByRole('button', { name: t.seatKind.open }));
+    await user.click(within(list).getByRole('button', { name: /Salon/ }));
     expect(await screen.findByRole('combobox', { name: rt.seat.streamBackend })).toBeInTheDocument();
   });
 

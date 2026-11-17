@@ -26,9 +26,10 @@ describe('App', () => {
     await setup();
     expect(screen.getByTestId('product-state')).toHaveTextContent('Off');
     expect(screen.getByRole('region', { name: t.canvas.system })).toBeInTheDocument();
-    const two = screen.getByRole('region', { name: `2. ${t.seat}` });
+    // Seat cards are named by the seat's title ("Misafir"; an unnamed seat is "Seat N").
+    const two = screen.getByRole('region', { name: 'Misafir' });
     expect(within(two).getByText('Kablosuz klavye')).toBeInTheDocument();
-    expect(within(two).getByText(t.health.ready)).toBeInTheDocument();
+    expect(within(two).getByText(t.seatN(2), { exact: false })).toBeInTheDocument();
   });
 
   it('adding a seat enables Save; saving writes the config', async () => {
@@ -37,7 +38,7 @@ describe('App', () => {
     expect(save).toBeDisabled();
     await user.click(screen.getByRole('button', { name: t.canvas.addSeat }));
     expect(save).toBeEnabled();
-    expect(screen.getByRole('region', { name: `3. ${t.seat}` })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: t.seatN(3) })).toBeInTheDocument();
     await user.click(save);
     expect(api.state.config.seats).toHaveLength(3);
     expect(save).toBeDisabled();
@@ -49,7 +50,8 @@ describe('App', () => {
     const dlg = screen.getByRole('alertdialog');
     await user.click(within(dlg).getByRole('button', { name: t.bar.enable }));
     expect(api.state.product.state).toBe('enabled');
-    await user.click(screen.getByRole('button', { name: t.bar.start }));
+    // The status line's "Start seats" (first) goes through the same gate as the footer's.
+    await user.click(screen.getAllByRole('button', { name: t.bar.start })[0]);
     const confirm = screen.getByRole('alertdialog');
     await user.click(within(confirm).getByRole('button', { name: t.bar.start }));
     expect(api.calls).toContain('start_seats');
@@ -128,9 +130,9 @@ describe('App', () => {
 
   it('device menu sends a device to the spare pool', async () => {
     const { store, user } = await setup();
-    const two = screen.getByRole('region', { name: `2. ${t.seat}` });
-    await user.click(within(two).getByRole('button', { name: `${t.kinds.keyboard}: Kablosuz klavye` }));
-    await user.click(screen.getByRole('menuitem', { name: t.deviceMenu.spare }));
+    const two = screen.getByRole('region', { name: 'Misafir' });
+    await user.click(within(two).getByRole('button', { name: t.device.actions('Kablosuz klavye') }));
+    await user.click(screen.getByRole('menuitem', { name: t.move.toPool }));
     expect(store.draft?.devices.find((d) => d.key === 'kbd;loc=USB(2-1-1)')?.mask).toBe(0);
     const sys = screen.getByRole('region', { name: t.canvas.system });
     expect(within(sys).getByText('Kablosuz klavye')).toBeInTheDocument();

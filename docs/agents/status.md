@@ -2648,3 +2648,56 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Next: P2 (app shell) in order, then P3-P7, P8 cleanup. The three behaviour changes
     (startup modal removal, restart-required on the seat card, remote staged save) are not in
     these packages; they stay "needs maintainer test before push" when P2 / P6 land.
+- 2026-11-17 (redesign P3, Seats board): `apps/manager` Seats page on the new kit.
+  - **New:** `SeatCard`, `Pool`, `DeviceRow`, `MonitorFace`, `MissingSlot` (components),
+    `drag.svelte.ts` (payload + `DropZone`, dashed outline only while a drag is inside),
+    `src/lib/board.ts` (seat title / status word / fact, status-line summary, hub tree order,
+    unsaved-move keys, missing kinds, kind icons). `Container.svelte` and `DeviceTile.svelte`
+    are deleted (replaced). `DeviceIcon` keeps one stroke weight at 18px and inherits colour.
+  - **Head:** title + `StatusLine` (on: "Start seats"; off: primary "Turn on and start" and
+    "Add seat" drops to secondary; it is also secondary while changes are staged, maintainer
+    decision), one overflow menu: Find by touch / Number the monitors | Setup wizard, View
+    settings, Compare, USB dock wizard (parity, kept) | Stop all seats, Turn Pulsar Seat off |
+    Windows settings submenu (Device Manager, Display, Sound, Network Connections, User
+    accounts). One notice region (find by touch with "Stop searching", seat-1 monitor advice).
+  - **Board:** pool grid, even seat grid, monitor faces with neutral rings, device rows (hub
+    indentation, shared / unplugged / attention as 14px icons with sr-only words, "Moved, not
+    saved" from saved-vs-draft effective masks), missing-device lines (screen / keyboard block;
+    a device every seat shares counts), password-rejected line, "add a second seat" panel
+    with one local seat, move hint, remote seats as `LinkRow`s with `Status`.
+  - **Move without dragging:** click / Enter / Space / ArrowDown / context menu on a row or
+    face opens the Move menu (seats with "Seat N" hints, To unassigned devices, Share with all
+    seats for shareable kinds, Assign to seats..., Restore default, Move the assignment to this
+    port, then Show (identify) / Camera preview, Change its picture..., Device details...,
+    monitors: pointer + Display outputs...). Same `moveDevice` call as a drop; a polite live
+    region announces every move. Find by touch now opens the found device's Move menu
+    (highlighted) instead of the assign dialog (falls back to it).
+  - **Seat menu (parity):** start / sign in again / restart graphics driver / stop | rename,
+    account, kiosk seat (desktops method only), IP address, processor cores, graphics card
+    (`GpuPreferenceDialog`), environment and sign-in, virtual gamepad on / off | delete kiosk
+    user, delete seat (confirm "Delete <name>?").
+  - **Dialogs on `ui/Modal`:** AssignDialog (no duplicate All / None buttons), DeviceInfoDialog
+    (kv list + Show (identify)), PictureDialog, CameraPreview (`--media-*`), CompareDialog
+    (rows with kind icons), ViewSettingsDialog (switches; "shrink pictures" and "even rows"
+    removed: one row size, the grid is always even), SeatNameDialog (inline error).
+  - **Contract for P2 (App shell):** `SeatsTabCommands` gained optional `enable(on)`,
+    `startAll()`, `stopAll()`, `restartSeat(n)`, `openSettings()`; `reset` / `importConfig` /
+    `hotkey` stay optional for older callers. `SeatsTab` takes `restartRequired?: Iterable<SeatNumber>`
+    and otherwise reads `store.restartRequired` when P2 adds it. `SeatsTab` renders no `.page`
+    wrapper (the shell owns it). App.svelte got only the `enable` / `startAll` wiring.
+  - **Moved out of the Seats menu (plan: P4, Settings > Maintenance / Advanced):** import,
+    reset, clear pictures, log level, hotkey, global display outputs. Until P4 lands they are
+    reachable only through Advanced (hotkey, CPU) and the monitor Move menu (Display outputs);
+    import / reset / clear pictures / log level need P4.
+  - **BEHAVIOUR, needs maintainer test before push:** restart required on the seat card
+    (status + "Restart"; fallback = stop, then start), "Turn on and start" in the status line
+    (the startup modal removal itself is P2), find by touch opening the Move menu.
+  - Copy added (en + tr): `seatCard.gpuMenu`, `remove.titleNamed`,
+    `seatMenu.removeKioskUserConfirm`, `device.infoSub`, `describe.ids`.
+  - Visual check: demo on port 5363, headless Edge, light + dark, 1280x800 + 1024x700
+    (`target/redesign/audit/p3-*.png`): 01, 02, 03, 04, 05, 06, 53, 56, 57, 58, 59, 61, 68, 69
+    match the shots in structure, hierarchy and copy; the shell around them is still the old
+    one until P2. Detector: no findings. Server and Edge stopped.
+  - Gates: manager 293 tests (was 271; +11 board, +11 SeatsTab), check
+    0 / 0, build OK. Test lookups updated in App.test.ts, dialogs.test.ts and RemoteTab.test.ts
+    (seat-board cases only). No test deleted. No Rust, Tauri or driver code touched.

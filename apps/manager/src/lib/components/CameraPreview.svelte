@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <!-- Webcam indication (spec 10 §3.5.1, ARM64 notes: WebView getUserMedia): a live preview
      of one camera, chosen by matching the device name to the WebView's video inputs. The
-     stream stops when the window closes. Untested on hardware. -->
+     stream stops when the window closes. Untested on hardware. Redesign 59-dlg-camera: the
+     picture sits on the media tokens (`--media-bg` / `--media-ink`) in both themes. -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Modal from './Modal.svelte';
   import { t } from '#lib/i18n.ts';
+  import { Button, Modal, Notice, Spinner } from '#lib/ui/index.ts';
 
   interface Props {
     name: string;
@@ -61,24 +62,40 @@
   });
 </script>
 
-<Modal title={t.camera.title(name)} wide {onClose}>
-  {#if phase === 'starting'}<p class="hint" role="status">{t.camera.starting}</p>{/if}
-  {#if phase === 'denied'}<p class="error" role="alert">{t.camera.denied}</p>{/if}
-  {#if phase === 'unsupported'}<p class="error" role="alert">{t.camera.unsupported}</p>{/if}
-  {#if fallback}<p class="hint">{t.camera.notFound}</p>{/if}
-  <!-- svelte-ignore a11y_media_has_caption -->
-  <video bind:this={video} autoplay playsinline muted class:hidden={phase !== 'live'}></video>
-  {#snippet buttons()}
-    <button type="button" onclick={onClose}>{t.close}</button>
+<Modal title={t.camera.title(name)} size="md" {onClose}>
+  {#if phase === 'denied'}<Notice kind="danger" text={t.camera.denied} />{/if}
+  {#if phase === 'unsupported'}<Notice kind="danger" text={t.camera.unsupported} />{/if}
+  {#if fallback}<p class="help">{t.camera.notFound}</p>{/if}
+  <div class="media">
+    {#if phase === 'starting'}<span class="wait" role="status"><Spinner />{t.camera.starting}</span>{/if}
+    <!-- svelte-ignore a11y_media_has_caption -->
+    <video bind:this={video} autoplay playsinline muted class:hidden={phase !== 'live'}></video>
+  </div>
+  {#snippet foot()}
+    <Button label={t.close} onclick={onClose} />
   {/snippet}
 </Modal>
 
 <style>
+  .media {
+    aspect-ratio: 16 / 9;
+    border-radius: var(--r);
+    background: var(--media-bg);
+    color: var(--media-ink);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .wait {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
   video {
     width: 100%;
-    max-height: 55vh;
-    background: #000;
-    border-radius: 6px;
+    height: 100%;
+    object-fit: contain;
+    background: var(--media-bg);
   }
   .hidden {
     display: none;

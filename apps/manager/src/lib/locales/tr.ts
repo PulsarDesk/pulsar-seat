@@ -297,7 +297,8 @@ const t = {
     actions: (name: string) => `${name}: taşı ya da bilgi`,
     faceActions: (name: string, id: string) => `${name} (${id}): taşı ya da bilgi`,
     identify: 'Göster (tanıt)',
-    infoMenu: 'Aygıt bilgileri…'
+    infoMenu: 'Aygıt bilgileri…',
+    infoSub: 'Ayrıntılar sorun ararken işe yarar.'
   },
 
   move: {
@@ -330,7 +331,8 @@ const t = {
     kioskMenu: 'Kiosk koltuğu…',
     ipMenu: 'IP adresi…',
     removeMenu: 'Koltuğu sil…',
-    atLogon: 'oturum açma ekranında'
+    atLogon: 'oturum açma ekranında',
+    gpuMenu: 'Ekran kartı…'
   },
 
   startup: {
@@ -524,6 +526,7 @@ const t = {
     removeKioskUserTitle: (n: number) => `${n}. koltuğun kiosk kullanıcısı silinsin mi?`,
     removeKioskUserBody:
       'Pulsar Seat bu koltuğun kiosk kabuğu için bir Windows kullanıcısı oluşturdu. Kiosk kabuğu kapatılınca kullanıcı yalnızca devre dışı bırakılır ve dosyaları (kayıtlar, tarayıcı profilleri) korunur. Silmek kullanıcıyı ve bütün dosyalarını kalıcı olarak kaldırır.',
+    removeKioskUserConfirm: 'Kullanıcıyı sil',
     removeKioskUserDone: 'Koltuğun kiosk kullanıcısı silindi.',
     compat: 'Ortam ve oturum açma…'
   },
@@ -1237,6 +1240,7 @@ const t = {
 
   remove: {
     title: (n: number) => `${n}. koltuk silinsin mi?`,
+    titleNamed: (name: string) => `${name} silinsin mi?`,
     body: 'Bu koltuğun aygıtları boşa çıkarılır. Değişiklik kaydedilince geçerli olur.'
   },
 
@@ -1425,6 +1429,7 @@ const t = {
   describe: {
     seatsOf: (seats: number[]) => `${seats.map((s) => `${s}.`).join(', ')} koltuk`,
     explicit: 'Elle atandı',
+    ids: 'Donanım kimlikleri',
     output: {
       internal: 'yerleşik',
       hdmi: 'HDMI',
