@@ -86,6 +86,18 @@ describe('ManagerStore', () => {
     store.dispose();
   });
 
+  it('Remote Desktop Services restart stops the seats first', async () => {
+    const { api, store } = await ready();
+    expect(await store.setEnabled(true)).toBe(true);
+    expect(await store.startSeats(null)).toBe(true);
+    const running = store.status?.seats.filter((s) => s.seat !== 1 && s.state.state !== 'off').length ?? 0;
+    expect(await store.restartTermService()).toBe(true);
+    expect(api.calls).toContain('restart_term_service');
+    expect(store.toasts.at(-1)?.text).toBe(t.advanced.restartTsDone(running));
+    expect(store.status?.seats.filter((s) => s.seat !== 1 && s.state.state !== 'off').length ?? 0).toBe(0);
+    store.dispose();
+  });
+
   it('Hyper-V helper: feature, then a seat adapter', async () => {
     const { api } = await ready();
     expect((await api.hyperV({ type: 'status' })).feature).toBe('disabled');

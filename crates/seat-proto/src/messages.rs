@@ -167,6 +167,13 @@ pub enum RequestBody {
     /// virtual adapter with a fixed address on an internal switch). Answers
     /// [`ResponseBody::HyperV`]. Added 2026-11-17 (parity review, additive, admin).
     HyperV { action: crate::hyperv::HyperVAction },
+    /// Restart Remote Desktop Services (TermService) on the operator's request, e.g. so a
+    /// new or changed second listener (`rds_loopback`) is loaded. `confirm` must be true
+    /// (the manager asked). Every running seat except seat 1 is stopped first (their
+    /// sessions would drop anyway); the service restarts TermService and its dependants
+    /// and answers [`ResponseBody::TermServiceRestart`]. Seats are not started again by
+    /// themselves. Added 2026-11-17 (rdp-listener, additive, admin).
+    RestartTermService { confirm: bool },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -237,6 +244,28 @@ pub enum RequestBody {
         #[serde(default)]
         suppressed: u32,
     },
+    /// The seat host's audio bridge state changed: whether the seat's render / capture
+    /// stream is open and its snake_case notes (`render_absent`, `render_open_failed`,
+    /// `render_lost`, `capture_absent`, ...). Stored in `SeatRuntime.audio_notes` for the
+    /// manager. Answered with `Ack`. Added 2026-11-17 (rdp-listener, additive): an older
+    /// service answers an error the host ignores.
+    HostAudioReport {
+        seat: SeatNumber,
+        #[serde(default)]
+        render_open: bool,
+        #[serde(default)]
+        capture_open: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notes: Vec<String>,
+    },
+    /// The seat host asks for its link to the seat's drive broker (ACL'd volumes served as
+    /// the seat user by the seat's agent, architecture §"Drive broker"). The service makes
+    /// two fresh anonymous pipes (one per direction), duplicates one end of each into the
+    /// host and the other into the seat session's agent (agent task `drive_broker`) and
+    /// answers [`ResponseBody::DriveBroker`]. Refused (`not_ready`) while the seat has no
+    /// agent, `no_acl_drives` when the seat has no ACL'd volume to share.
+    /// Added 2026-11-17 (rdp-listener, additive).
+    HostDriveBroker { seat: SeatNumber },
 
     // ---- session agent only ----
     AgentReport { report: AgentReport },
@@ -382,7 +411,9 @@ impl RequestBody {
             R::HostGetAssignment { seat }
             | R::HostTakeCredentials { seat }
             | R::HostReport { seat, .. }
-            | R::HostRedirectRefusal { seat, .. } => {
+            | R::HostRedirectRefusal { seat, .. }
+            | R::HostAudioReport { seat, .. }
+            | R::HostDriveBroker { seat } => {
                 Access::Host(*seat)
             }
             R::AgentReport { .. } | R::AgentSwitchTargets | R::AgentSwitch { .. } => Access::Agent,
@@ -411,6 +442,7 @@ impl RequestBody {
             | R::ResetGraphics { .. }
             | R::RemoveKioskUser { .. }
             | R::HyperV { .. }
+            | R::RestartTermService { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -466,6 +498,8 @@ impl RequestBody {
             | R::HostTakeCredentials { seat }
             | R::HostReport { seat, .. }
             | R::HostRedirectRefusal { seat, .. }
+            | R::HostAudioReport { seat, .. }
+            | R::HostDriveBroker { seat }
             | R::CredprovSwitch { seat }
             | R::AgentSwitch { seat } => Some((*seat, SeatKind::Local)),
             R::GetRemoteRuntime { seat }
@@ -631,6 +665,26 @@ pub enum ResponseBody {
     DxvkStatus(remote::DxvkStatus),
     UserPicture(remote::UserPicture),
     AudioCleanup(remote::AudioCleanup),
+    /// Answer of `restart_term_service` (added 2026-11-17, additive).
+    TermServiceRestart(TermServiceRestart),
+    /// Answer of `host_drive_broker`: the host's ends of the broker pipes (handle values
+    /// valid in the host process: `read` from the broker, `write` to it). Added
+    /// 2026-11-17, additive.
+    DriveBroker { read: u64, write: u64 },
+}
+
+/// Result of `restart_term_service`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TermServiceRestart {
+    /// Seats stopped before the restart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stopped_seats: Vec<SeatNumber>,
+    /// TermService was restarted.
+    pub restarted: bool,
+    /// Snake_case reason when it was not (`restart_needs_reboot`,
+    /// `termservice_restart_failed`, `passive`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1050,6 +1104,25 @@ pub enum AgentTaskKind {
     /// desktop (`SendInput`). HYPOTHESIS: Windows honours the shortcut from injected input.
     /// Added 2026-11-17, additive.
     ResetGraphics,
+    /// Serve the seat's ACL'd volumes (at most these, `drives`) as this session's user
+    /// over two pipe ends the service duplicated into the agent process (`read` from the
+    /// seat host, `write` to it): the seat host forwards the drive IRPs of the seat's RDP
+    /// session (`seat_rdp::channels::broker`). A newer task starts a new link; the old one
+    /// ends when its host end closes. Added 2026-11-17 (rdp-listener, additive).
+    DriveBroker { read: u64, write: u64, drives: Vec<crate::DriveBrokerDrive> },
+}
+
+/// One volume the drive broker may serve: the service's allowlist. The host names the
+/// drives it activates over the pipe; the broker refuses any root not listed here, so a
+/// compromised seat host cannot reach other files of the seat user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveBrokerDrive {
+    /// Drive-letter root (`E:\`).
+    pub root: String,
+    /// Volume GUID path the letter must still name.
+    pub volume: String,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// A CCD display target of this boot (adapter LUID + target id).

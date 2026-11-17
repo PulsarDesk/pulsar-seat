@@ -38,13 +38,18 @@
 //!   the port, no other listener key on the port, TermService (only) listening on
 //!   `127.0.0.2:<port>`.
 //!
-//! **Deviation from "bound to loopback only" (open item in status.md):** the listener
-//! listens on every interface and the firewall rule keeps it loopback-only. A WinStation
-//! can only be bound to a LAN adapter (`LanAdapter`, a LANA number), not to an address, and
-//! the loopback interface has no LANA (**HYPOTHESIS**, hardware test in status.md). We set
-//! `LanAdapter = 0` (all adapters) ourselves instead of inheriting RDP-Tcp's value, so the
-//! bind is defined here. That is why a firewall that is off or ignores local rules refuses
-//! the listener.
+//! **Deviation from "bound to loopback only" (decided 2026-11-17, rdp-listener):** the
+//! listener listens on every interface and the firewall rule keeps it loopback-only. The
+//! documented ways to restrict a listener (the per-listener `LanAdapter` value, the WMI
+//! `Win32_TSNetworkAdapterSetting.SetNetworkAdapterLanaID` method behind the old "Network
+//! adapter" tab of the RD Session Host configuration) pick a **network adapter by LANA
+//! number**, never an address; there is no documented per-listener address value. The
+//! loopback interface has no LANA (**HYPOTHESIS**, hardware test in status.md), so binding
+//! the listener to it is not possible the documented way. We set `LanAdapter = 0` (all
+//! adapters) ourselves instead of inheriting RDP-Tcp's value, so the bind is defined here.
+//! That is why a firewall that is off or ignores local rules refuses the listener. The
+//! manager's "Restart Remote Desktop Services" button ([`LoopbackListener::operator_restart`],
+//! request `restart_term_service`) loads a new listener at once after stopping the seats.
 //!
 //! TermService reads WinStation keys when it starts (**HYPOTHESIS**, matches the public
 //! "change the listening port" guidance that asks for a restart). A new / changed listener
@@ -864,6 +869,28 @@ impl LoopbackListener {
                 Restart::Failed
             }
         })
+    }
+
+    /// Operator restart (manager button `restart_term_service`, rdp-listener 2026-11-17):
+    /// the operator confirmed and the service stopped every seat first, so neither the
+    /// "no user session" rule nor the rate limit applies. Journaled like the automatic
+    /// restart. `Err(reason)` = a [`why`] code (`restart_needs_reboot`,
+    /// `termservice_restart_failed`).
+    pub fn operator_restart(&self) -> Result<(), &'static str> {
+        log::info!("loopback listener: restarting TermService (operator request)");
+        let r = self.host.restart_termservice(RESTART_TIMEOUT);
+        let now = RegValue::Sz(self.clock.now_ms().to_string());
+        if let Err(e) = self.journal("termservice_restart", "TermService", RegValue::Absent, now, RecordStatus::Done) {
+            log::warn!("loopback listener: restart not journaled: {e}");
+        }
+        match r {
+            Ok(()) => Ok(()),
+            Err(RestartError::NotStoppable) => Err(why::RESTART_NEEDS_REBOOT),
+            Err(RestartError::Sys(e)) => {
+                log::warn!("loopback listener: TermService restart failed: {e}");
+                Err(why::RESTART_FAILED)
+            }
+        }
     }
 
     /// Roll back a key build / removal a crash interrupted (`intent` without `done`): the

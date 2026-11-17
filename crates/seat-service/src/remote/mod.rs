@@ -399,6 +399,7 @@ pub fn runtime_of(seat: SeatNumber, s: &rp::SeatStatus, now: u64) -> SeatRuntime
         degraded,
         redirect_notes: Vec::new(),
         redirect_refusals: Vec::new(),
+        audio_notes: Vec::new(),
     }
 }
 

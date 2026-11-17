@@ -529,6 +529,16 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       if (action.type === 'remove_seat_nic') hyperv.seat_nics = hyperv.seat_nics.filter((n) => n.seat !== action.seat);
       return { ...hyperv, reboot_required: hyperv.feature === 'enable_pending' };
     },
+    restartTermService: async () => {
+      await step('restart_term_service');
+      needAdmin();
+      const stopped = state.seats.filter((x) => x.seat !== 1 && x.state.state !== 'off').map((x) => x.seat);
+      for (const seat of stopped) {
+        state.seats = state.seats.filter((x) => x.seat !== seat);
+        emit({ type: 'seat_state', data: { runtime: { seat, state: { state: 'off' }, since_ms: Date.now() } } });
+      }
+      return { stopped_seats: stopped, restarted: true };
+    },
     removeKioskUser: async (seat) => {
       await step('remove_kiosk_user');
       needAdmin();

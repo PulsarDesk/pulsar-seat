@@ -490,6 +490,61 @@ impl Platform for WinPlatform {
         Ok(())
     }
 
+    fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<crate::platform::BrokerPipes> {
+        use windows_sys::Win32::Foundation::{DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DuplicateHandle};
+        use windows_sys::Win32::System::Threading::PROCESS_DUP_HANDLE;
+        /// Closed on drop unless moved out.
+        struct H(HANDLE);
+        impl Drop for H {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: a handle this function owns.
+                    unsafe { CloseHandle(self.0) };
+                }
+            }
+        }
+        let pipe = || -> BackendResult<(H, H)> {
+            let (mut r, mut w): (HANDLE, HANDLE) = (ptr::null_mut(), ptr::null_mut());
+            // SAFETY: out-pointers valid; default security, not inheritable.
+            if unsafe { CreatePipe(&mut r, &mut w, ptr::null(), 64 * 1024) } == 0 {
+                return Err(os_err("broker_pipe_failed", "CreatePipe"));
+            }
+            Ok((H(r), H(w)))
+        };
+        let open = |pid: u32| -> BackendResult<H> {
+            // SAFETY: plain open; the handle is closed by `H`.
+            let h = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, pid) };
+            if h.is_null() {
+                return Err(os_err("broker_pipe_failed", "OpenProcess"));
+            }
+            Ok(H(h))
+        };
+        // Moves `src` into `target` (closed here either way).
+        let give = |src: H, target: &H| -> BackendResult<u64> {
+            let mut out: HANDLE = ptr::null_mut();
+            let s = src.0;
+            std::mem::forget(src);
+            // SAFETY: `s` is ours; DUPLICATE_CLOSE_SOURCE closes it even on failure.
+            let ok = unsafe {
+                DuplicateHandle(GetCurrentProcess(), s, target.0, &mut out, 0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)
+            };
+            if ok == 0 {
+                return Err(os_err("broker_pipe_failed", "DuplicateHandle"));
+            }
+            Ok(out as usize as u64)
+        };
+        let (host, agent) = (open(host_pid)?, open(agent_pid)?);
+        // Pipe 1: host -> broker. Pipe 2: broker -> host.
+        let (to_broker_r, to_broker_w) = pipe()?;
+        let (to_host_r, to_host_w) = pipe()?;
+        Ok(crate::platform::BrokerPipes {
+            host_write: give(to_broker_w, &host)?,
+            agent_read: give(to_broker_r, &agent)?,
+            agent_write: give(to_host_w, &agent)?,
+            host_read: give(to_host_r, &host)?,
+        })
+    }
+
     fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
         use seat_compat::hyperv as hv;
         use seat_proto::hyperv::HyperVAction as A;

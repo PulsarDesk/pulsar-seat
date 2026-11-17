@@ -587,7 +587,21 @@ const t = {
     loopbackAccountsHint: 'Koltuklara atanmış hesaplar her zaman izinlidir. Yöneticiler bu bağlantı noktasından oturum açamaz.',
     loopbackAllowed: (list: string) => `Şu hesaplar bu bağlantı noktasından oturum açabilir: ${list}.`,
     loopbackNoAccounts: (seats: string) =>
-      `Oturum açma ekranındaki koltuklar (${seats}) için izinli hesap yok; bu koltuklar başlayamaz. Yukarıya bu koltuklarda oturum açacak hesapları yazın.`
+      `Oturum açma ekranındaki koltuklar (${seats}) için izinli hesap yok; bu koltuklar başlayamaz. Yukarıya bu koltuklarda oturum açacak hesapları yazın.`,
+    loopbackBinding:
+      'Windows bir Uzak Masaüstü bağlantı noktasını yalnızca bir ağ bağdaştırıcısına bağlayabilir, geri döngü adresine bağlayamaz; bu bağlantı noktasını bilgisayarın içinde tutan güvenlik duvarı kuralıdır.',
+    restartTs: 'Uzak Masaüstü Hizmetlerini yeniden başlat…',
+    restartTsHint: 'Yeni ya da değişen bağlantı noktası hemen yüklenir. Çalışan koltuklar önce durdurulur.',
+    restartTsTitle: 'Uzak Masaüstü Hizmetleri yeniden başlatılsın mı?',
+    restartTsBody:
+      'Önce çalışan bütün koltuklar (1. koltuk hariç) durdurulur ve oturumları kapatılır, ardından Uzak Masaüstü Hizmetleri yeniden başlar. Bu bilgisayara yapılan diğer Uzak Masaüstü bağlantıları da kesilir. Koltuklar kendiliğinden yeniden başlamaz.',
+    restartTsConfirm: 'Koltukları durdur ve yeniden başlat',
+    restartTsDone: (n: number): string =>
+      n ? `Uzak Masaüstü Hizmetleri yeniden başlatıldı (${n} koltuk durduruldu)` : 'Uzak Masaüstü Hizmetleri yeniden başlatıldı',
+    restartTsFailed: (reason: string): string =>
+      reason === 'restart_needs_reboot'
+        ? 'Bu Windows sürümünde Uzak Masaüstü Hizmetleri durdurulamıyor; bunun yerine bilgisayarı yeniden başlatın.'
+        : 'Uzak Masaüstü Hizmetleri yeniden başlatılamadı (hizmet günlüğüne bakın).'
   },
 
   backendNames: {
@@ -697,6 +711,17 @@ const t = {
     seat_one_sees_other_endpoints: '1. koltuk diğer koltukların ses aygıtlarını da görür',
     display_fallback: 'Ekran tam ekran pencereyle gösteriliyor (1. koltuktan gizli değil)',
     audio_console_shared: 'Ses 1. koltuğun aygıtlarından çıkıyor',
+    audio_no_endpoint: 'Bu koltuğa ses aygıtı verilmemiş; koltuk sessiz',
+    audio_not_bound: 'Koltuğun sesi kurulamadı (hizmet günlüğüne bakın)',
+    audio_service_not_running: 'Windows ses hizmeti çalışmıyor; koltuk sessiz',
+    render_absent: 'Koltuğun hoparlörü ya da kulaklığı yok; koltuk sessiz',
+    render_open_failed: 'Koltuğun hoparlörü ya da kulaklığı açılamadı',
+    render_lost: 'Koltuğun hoparlörü ya da kulaklığı çıkarıldı',
+    capture_absent: 'Koltuğun mikrofonu yok',
+    capture_open_failed: 'Koltuğun mikrofonu açılamadı',
+    capture_lost: 'Koltuğun mikrofonu çıkarıldı',
+    drive_served_as_seat_user:
+      'NTFS / ReFS sürücüler koltuğun kullanıcısı adına (koltuğun kendi yardımcısıyla) sunulur; sürücünün izinleri geçerlidir',
     same_account_warning: 'Bu hesap başka bir koltukta da açık',
     one_seat_at_a_time: 'Aynı anda yalnızca bir koltuk etkin',
     fus_inactive_frozen:
@@ -719,7 +744,7 @@ const t = {
     no_seat_drives: 'Bu koltuğa ait yönlendirilebilecek sürücü yok',
     drive_without_global_letter: 'Koltuğa ait bir sürücünün harfi yalnızca koltuğun oturumunda görünüyor; bu sürücü yönlendirilmez',
     drive_acl_volume_refused:
-      'NTFS gibi izinli dosya sistemleri yönlendirilmez (yalnızca FAT32 / exFAT); koltuk oturumu bu sürücüyü doğrudan görür',
+      'Bir sürücünün dosya sistemi denetimden sonra değişti (FAT / NTFS); koltuk yeniden bağlanana kadar yönlendirilmez',
     drive_letter_moved: 'Bir sürücü harfi artık başka bir birimi gösteriyor; bu sürücü yönlendirilmez',
     drive_volume_unknown: 'Bir sürücünün birimi belirlenemedi; bu sürücü yönlendirilmez',
     no_seat_readers: 'Bu koltuğa atanmış akıllı kart okuyucu yok',
@@ -778,7 +803,7 @@ const t = {
     drives: 'Sürücüler',
     driveModes: { off: 'Kapalı', read_only: 'Salt okunur', read_write: 'Okuma-yazma' } as Record<string, string>,
     drivesHint:
-      'Yalnızca bu koltuğa ait, FAT32 / exFAT biçimli sürücüler (ör. USB bellek) yönlendirilir. NTFS sürücüler izinleri koltuk kullanıcısına göre denetlenemediği için yönlendirilmez.',
+      'Yalnızca tek başına bu koltuğa ait sürücüler (ör. USB bellek ya da ikinci bir disk) yönlendirilir. FAT32 / exFAT sürücüler koltuğun arka plan hesabıyla, NTFS / ReFS sürücüler koltuğun kullanıcısı adına sunulur; böylece izinleri geçerli olur (kullanıcı oturum açınca görünürler). Değişiklikler bağlı koltuğa hemen ulaşır.',
     smartcards: 'Akıllı kart',
     smartcardsLabel: 'Bu koltuğa atanmış akıllı kart okuyucularını koltuk oturumuna aç',
     smartcardsHint: 'Koltuk oturumu yalnızca kendi okuyucularını görür. Aynı modelden iki okuyucu varsa okuyucu kimliği okunamazsa ikisi de kapalı kalır.',
@@ -826,8 +851,18 @@ const t = {
     list_readers_failed: 'okuyucular listelenemedi',
     drive_letter_moved: 'sürücü harfi artık başka bir birimi gösteriyor',
     drive_volume_unknown: 'sürücünün birimi belirlenemedi',
-    drive_acl_volume_refused: 'izinli dosya sistemi (NTFS) yönlendirilmez',
+    drive_acl_volume_refused: 'sürücünün dosya sistemi denetimden sonra değişti; bir sonraki bağlantıya kadar yönlendirilmez',
     drive_unassigned: 'sürücü artık bu koltuğa ait değil; oturumdan çıkarıldı',
+    drive_broker_unavailable: 'koltuğun sürücü yardımcısı henüz çalışmıyor (kullanıcı oturum açmadı)',
+    drive_broker_lost: 'koltuğun sürücü yardımcısıyla bağlantı koptu',
+    drive_broker_refused: 'koltuğun sürücü yardımcısı sürücüyü reddetti',
+    drive_add_failed: 'yeni sürücü oturuma eklenemedi',
+    printer_unassigned: 'yazıcı artık bu koltuğa ait değil; oturumdan çıkarıldı',
+    printer_add_failed: 'yeni yazıcı oturuma eklenemedi',
+    printer_remove_failed: 'yazıcı oturumdan çıkarılamadı',
+    drive_remove_failed: 'sürücü oturumdan çıkarılamadı',
+    drive_broker_answer_dropped: 'koltuğun sürücü yardımcısından gelen geçersiz bir yanıt atıldı',
+    list_reader_groups_failed: 'okuyucu grupları listelenemedi',
     drive_is_system_drive: 'Windows sürücüsü yönlendirilmez',
     drive_root_invalid: 'geçersiz sürücü kökü',
     drive_root_unavailable: 'sürücü açılamadı',

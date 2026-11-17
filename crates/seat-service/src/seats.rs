@@ -689,9 +689,7 @@ impl Service {
             if b.input.kind() == seat_core::backend::InputBackendKind::RawInputHost && !Self::dedicated(&st) {
                 degraded.push("input_not_isolated".to_string());
             }
-            if route.as_ref().is_none_or(|r| r.render_endpoint_id.is_none()) {
-                degraded.push("audio_console_shared".to_string());
-            }
+            degraded.extend(audio_degraded(b.audio.kind(), route.as_ref()));
             if let Some(slot) = st.seats.get_mut(&seat) {
                 slot.rt.degraded = degraded;
             }
@@ -873,6 +871,7 @@ impl Service {
             slot.rt.session_id = None;
             slot.rt.user_sid = None;
             slot.rt.degraded.clear();
+            slot.rt.audio_notes.clear();
             st.run.known_sessions.retain(|k| k.seat != seat);
             st.run.set_host(seat, None);
             st.ownership_dirty = true;
@@ -1622,5 +1621,49 @@ mod tests {
         assert_eq!(failure_reason(&BackendError::new(ErrorKind::NotReady, "edition_unsupported", "")), FailureReason::EditionUnsupported);
         assert_eq!(failure_reason(&BackendError::new(ErrorKind::Timeout, "x", "")), FailureReason::SessionTimeout);
         assert_eq!(client_name(SeatNumber::new(3).unwrap()), "PSEAT-03");
+    }
+}
+
+/// Degradation notes of a seat's audio route (rdp-listener 2026-11-17): with the per-seat
+/// bridge (`rdp_bridge`) a seat without a playback endpoint is silent, not on seat 1's
+/// devices (`audio_no_endpoint`; `audio_not_bound` when binding failed; the route's own
+/// `audio_service_not_running`); the other backends keep `audio_console_shared` /
+/// `audio_off`.
+pub(crate) fn audio_degraded(kind: seat_core::backend::AudioBackendKind, route: Option<&seat_core::backend::audio::AudioRoute>) -> Vec<String> {
+    use seat_core::backend::AudioBackendKind as K;
+    let mut out = Vec::new();
+    match (kind, route) {
+        (K::RdpBridge, None) => out.push("audio_not_bound".to_string()),
+        (K::RdpBridge, Some(r)) => {
+            if r.notes.iter().any(|n| n == "audio_service_not_running") {
+                out.push("audio_service_not_running".to_string());
+            } else if r.render_endpoint_id.is_none() {
+                out.push("audio_no_endpoint".to_string());
+            }
+        }
+        (K::None, _) => out.push("audio_off".to_string()),
+        (_, r) if r.is_none_or(|r| r.render_endpoint_id.is_none()) => out.push("audio_console_shared".to_string()),
+        _ => {}
+    }
+    out
+}
+
+#[cfg(test)]
+mod audio_degraded_tests {
+    use super::audio_degraded;
+    use seat_core::backend::AudioBackendKind as K;
+    use seat_core::backend::audio::AudioRoute;
+
+    #[test]
+    fn rdp_seat_without_endpoint_is_reported() {
+        let none = AudioRoute::default();
+        let with = AudioRoute { render_endpoint_id: Some("{0.0.0.00000000}.{x}".into()), ..Default::default() };
+        assert_eq!(audio_degraded(K::RdpBridge, Some(&none)), vec!["audio_no_endpoint"]);
+        assert!(audio_degraded(K::RdpBridge, Some(&with)).is_empty());
+        assert_eq!(audio_degraded(K::RdpBridge, None), vec!["audio_not_bound"]);
+        let svc = AudioRoute { notes: vec!["audio_service_not_running".into()], ..Default::default() };
+        assert_eq!(audio_degraded(K::RdpBridge, Some(&svc)), vec!["audio_service_not_running"]);
+        assert_eq!(audio_degraded(K::ConsoleShared, Some(&none)), vec!["audio_console_shared"]);
+        assert_eq!(audio_degraded(K::None, None), vec!["audio_off"]);
     }
 }

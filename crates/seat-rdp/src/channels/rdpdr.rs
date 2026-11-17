@@ -27,7 +27,9 @@
 //!   smart-card configuration); the smart-card data cache (`ReadCache` / `WriteCache`,
 //!   shared by every session of the PC) is kept per connection only: reads miss, writes are
 //!   dropped. Card handles exist only for allowed readers, so calls on handles pass.
-//!   `ListReaderGroups` is forwarded (group names are PC-wide configuration, not devices).
+//!   `ListReaderGroups` is answered here too (rdp-listener 2026-11-17): only the groups
+//!   that hold at least one of the seat's readers, so group names made for another seat's
+//!   readers stay hidden.
 //!
 //!   The PnP pseudo reader (`\\?PnP?\Notification`) carries the reader count in the high
 //!   word of its state. The seat's count (filtered) is translated to the PC's count before
@@ -45,27 +47,29 @@
 //!
 //! Every refusal goes to the refusal log. **Untested on hardware**.
 
+use super::broker::{self, BrokerEvent, BrokerLink};
 use super::{LiveRedirection, RefusalLog};
 use crate::policy::same_volume;
 use ironrdp_core::impl_as_any;
 use ironrdp_pdu::PduResult;
 use ironrdp_pdu::utils::{CharacterSet, encoded_multistring_len};
-use ironrdp_rdpdr::Rdpdr;
 use ironrdp_rdpdr::backend::RdpdrBackend;
+use ironrdp_rdpdr::{Rdpdr, RdpdrPrinter};
 use ironrdp_rdpdr::pdu::RdpdrPdu;
 use ironrdp_rdpdr::pdu::efs::{
     AnyIoCtlCode, DecodedDeviceControlRequest, DeviceCloseResponse, DeviceControlRequest, DeviceIoRequest, DeviceIoResponse, NtStatus,
     PrinterIoRequest, ServerDeviceAnnounceResponse, ServerDriveIoRequest,
 };
 use ironrdp_rdpdr::pdu::esc::{
-    CardStateFlags, GetStatusChangeCall, ListReadersCall, ListReadersReturn, LongReturn, ReturnCode, ScardCall, ScardIoCtlCode,
-    complete_call,
+    CardStateFlags, GetStatusChangeCall, ListReaderGroupsCall, ListReadersCall, ListReadersReturn, LongReturn, ReturnCode, ScardCall,
+    ScardIoCtlCode, complete_call,
 };
 use ironrdp_rdpdr::pdu::esp::PortIoRequest;
 use ironrdp_svc::SvcMessage;
 use seat_core::backend::session::RedirectDrive;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub const CHANNEL_DRIVES: &str = "drives";
 pub const CHANNEL_SMARTCARD: &str = "smartcard";
@@ -86,6 +90,17 @@ pub trait ReaderSource: Send + Sync + core::fmt::Debug {
     fn list(&self, groups: &[String]) -> Result<Vec<String>, ReturnCode>;
     /// Whether `reader` belongs to the seat.
     fn allowed(&self, reader: &str) -> bool;
+    /// Reader groups WinSCard knows now (`SCardListReaderGroups`).
+    fn groups(&self) -> Result<Vec<String>, ReturnCode>;
+}
+
+/// The groups of `src` that hold at least one of the seat's readers (in WinSCard's order).
+pub fn seat_groups(src: &dyn ReaderSource) -> Result<Vec<String>, ReturnCode> {
+    let groups = src.groups()?;
+    Ok(groups
+        .into_iter()
+        .filter(|g| src.list(std::slice::from_ref(g)).is_ok_and(|rs| rs.iter().any(|r| src.allowed(r))))
+        .collect())
 }
 
 /// Checks a drive right before its root is opened (Windows:
@@ -100,6 +115,8 @@ pub enum ScardDecision {
     Answer { code: ReturnCode, reason: Option<&'static str>, detail: String },
     /// Answer `ListReaders` with these readers.
     Readers(Vec<String>),
+    /// Answer `ListReaderGroups` with these groups.
+    Groups(Vec<String>),
 }
 
 fn refuse(code: ReturnCode, reason: &'static str, detail: impl Into<String>) -> ScardDecision {
@@ -120,6 +137,12 @@ pub fn scard_decision(call: &ScardCall, src: &dyn ReaderSource) -> ScardDecision
         ScardCall::ListReadersCall(c) => {
             return match src.list(&c.groups) {
                 Ok(all) => ScardDecision::Readers(all.into_iter().filter(|r| src.allowed(r)).collect()),
+                Err(code) => ScardDecision::Answer { code, reason: None, detail: String::new() },
+            };
+        }
+        ScardCall::ListReaderGroupsCall(_) => {
+            return match seat_groups(src) {
+                Ok(g) => ScardDecision::Groups(g),
                 Err(code) => ScardDecision::Answer { code, reason: None, detail: String::new() },
             };
         }
@@ -186,15 +209,25 @@ pub fn rewrite_pnp_reply(bytes: &mut [u8], completion_id: u32, index: usize, fil
 /// `ListReaders_Return` for `readers`, honouring the caller's buffer size (MS-RDPESC
 /// 2.2.3.4: size probe, `SCARD_AUTOALLOCATE`, too small).
 fn list_readers_reply(req: DeviceControlRequest<ScardIoCtlCode>, call: &ListReadersCall, readers: Vec<String>) -> SvcMessage {
-    let cs = if req.io_control_code == ScardIoCtlCode::ListReadersA { CharacterSet::Ansi } else { CharacterSet::Unicode };
+    multistring_reply(req, call.readers_is_null, call.readers_size, readers)
+}
+
+/// `ListReaderGroups_Return` (same layout as `ListReaders_Return`, MS-RDPESC 2.2.3.4).
+fn list_groups_reply(req: DeviceControlRequest<ScardIoCtlCode>, call: &ListReaderGroupsCall, groups: Vec<String>) -> SvcMessage {
+    multistring_reply(req, call.groups_is_null, call.groups_size, groups)
+}
+
+fn multistring_reply(req: DeviceControlRequest<ScardIoCtlCode>, is_null: bool, size: u32, readers: Vec<String>) -> SvcMessage {
+    let ansi = matches!(req.io_control_code, ScardIoCtlCode::ListReadersA | ScardIoCtlCode::ListReaderGroupsA);
+    let cs = if ansi { CharacterSet::Ansi } else { CharacterSet::Unicode };
     let out: Box<dyn ironrdp_rdpdr::pdu::esc::rpce::Encode> = if readers.is_empty() {
         Box::new(ListReadersReturn::probe(ReturnCode::NoReadersAvailable, 0, cs))
     } else {
         let need_bytes = u32::try_from(encoded_multistring_len(&readers, cs)).unwrap_or(u32::MAX);
         let need_chars = if cs == CharacterSet::Unicode { need_bytes / 2 } else { need_bytes };
-        if call.readers_is_null || call.readers_size == 0 {
+        if is_null || size == 0 {
             Box::new(ListReadersReturn::probe(ReturnCode::Success, need_bytes, cs))
-        } else if call.readers_size != AUTOALLOCATE && call.readers_size < need_chars {
+        } else if size != AUTOALLOCATE && size < need_chars {
             Box::new(ListReadersReturn::probe(ReturnCode::InsufficientBuffer, need_bytes, cs))
         } else {
             Box::new(ListReadersReturn::new(ReturnCode::Success, readers, cs))
@@ -212,13 +245,61 @@ fn answer(req: DeviceControlRequest<ScardIoCtlCode>, call: &ScardCall, code: Ret
     SvcMessage::from(RdpdrPdu::DeviceControlResponse(call.error_response(req, code)))
 }
 
+/// Builds the back-end of one drive added while the channel is open (Windows: IronRDP's
+/// drive back-end over that root). `Err(reason)` = not offered.
+pub type DriveMaker = Arc<dyn Fn(u32, &RedirectDrive) -> Result<Box<dyn RdpdrBackend>, &'static str> + Send + Sync>;
+
+/// Finds the queues of a printer selection and builds a back-end that prints to them
+/// (Windows: IronRDP's printer back-end). The printers carry the back-end's own device ids.
+pub type PrinterMaker =
+    Arc<dyn Fn(&seat_core::backend::session::HostRedirection) -> Result<(Box<dyn RdpdrBackend>, Vec<RdpdrPrinter>), String> + Send + Sync>;
+
+/// Asks the service for a link to the seat's drive broker (`host_drive_broker`).
+pub type BrokerConnector = Arc<dyn Fn() -> Result<BrokerLink, String> + Send + Sync>;
+
+/// First device id of a drive added while the channel is open (above the ids of the
+/// drives of the connection and of the smart card).
+pub const FIRST_LIVE_DRIVE_ID: u32 = 0x3000_0000;
+/// First device id of a printer added while the channel is open (below IronRDP's printer
+/// ids, which count down from `0xFFFF_FFFE`).
+pub const FIRST_LIVE_PRINTER_ID: u32 = 0x4000_0000;
+/// A drive that failed its check is not offered again before this.
+pub const RETRY_FAILED_DRIVE: Duration = Duration::from_secs(10);
+/// Pause between two broker link attempts.
+pub const BROKER_RETRY: Duration = Duration::from_secs(5);
+
+/// What the channel ticker applies to the open channel after a live update.
+#[derive(Debug, Default)]
+pub struct LiveChanges {
+    pub remove_drives: Vec<u32>,
+    /// (device id, RDPDR name).
+    pub add_drives: Vec<(u32, String)>,
+    pub remove_printers: Vec<u32>,
+    pub add_printers: Vec<RdpdrPrinter>,
+}
+
+/// Printers added while the channel is open: their back-end and the id map (session id ->
+/// back-end id).
+struct PrinterBatch {
+    backend: Box<dyn RdpdrBackend>,
+    ids: HashMap<u32, u32>,
+}
+
+/// State of the link to the drive broker.
+enum Broker {
+    None,
+    /// A link attempt runs on its own thread.
+    Connecting(Arc<Mutex<Option<Result<BrokerLink, String>>>>),
+    Up(Arc<BrokerLink>),
+}
+
 /// The seat's device-redirection back-end: the Windows back-end behind the policy.
 pub struct SeatRdpdr {
     inner: Box<dyn RdpdrBackend>,
     /// `None` = no smart-card device announced; any smart-card IRP is refused.
     readers: Option<Arc<dyn ReaderSource>>,
     log: RefusalLog,
-    /// Drives of this channel by device id.
+    /// Drives of this channel by device id (the session has them or is getting them).
     drives: Vec<(u32, RedirectDrive)>,
     check: Option<DriveCheck>,
     live: Option<LiveRedirection>,
@@ -228,8 +309,28 @@ pub struct SeatRdpdr {
     live_seen: u64,
     /// PnP waits in flight: completion id -> index of the PnP entry.
     pnp: HashMap<u32, usize>,
-    /// Device ids of the printers this channel announced.
+    /// Device ids of the printers the inner back-end serves (announced with the channel).
     printers: HashSet<u32>,
+    /// Queue name per announced printer (session device id), inner and live ones.
+    printer_names: HashMap<u32, String>,
+    /// Back-ends of drives added while the channel is open (FAT family).
+    extra: HashMap<u32, Box<dyn RdpdrBackend>>,
+    maker: Option<DriveMaker>,
+    printer_maker: Option<PrinterMaker>,
+    batches: Vec<PrinterBatch>,
+    /// Drives served by the drive broker (ACL'd volumes).
+    broker_ids: HashSet<u32>,
+    broker: Broker,
+    connector: Option<BrokerConnector>,
+    last_connect: Option<Instant>,
+    /// Broker answers not handed out yet.
+    out: Vec<SvcMessage>,
+    /// Root -> when a failed drive may be offered again.
+    retry_at: HashMap<String, Instant>,
+    next_drive: u32,
+    next_printer: u32,
+    /// Live revision whose printers were looked up.
+    printers_seen: u64,
 }
 
 impl core::fmt::Debug for SeatRdpdr {
@@ -239,6 +340,48 @@ impl core::fmt::Debug for SeatRdpdr {
 }
 
 impl_as_any!(SeatRdpdr);
+
+fn root_key(d: &RedirectDrive) -> String {
+    d.root.to_ascii_uppercase()
+}
+
+/// The resolved drive `n` still allows the offered drive `d` (same root, volume and kind;
+/// a read-only offer stays valid when the policy became writable).
+fn still_allows(n: &RedirectDrive, d: &RedirectDrive) -> bool {
+    n.root.eq_ignore_ascii_case(&d.root) && same_volume(&n.volume, &d.volume) && n.acl == d.acl && (d.read_only || !n.read_only)
+}
+
+/// Same as [`still_allows`] in both directions (nothing to change).
+fn same_offer(n: &RedirectDrive, d: &RedirectDrive) -> bool {
+    still_allows(n, d) && n.read_only == d.read_only
+}
+
+/// Rewrite the device id of an encoded I/O completion from `from` to `to`; other PDUs pass.
+fn remap_completion(m: SvcMessage, from: u32, to: u32) -> SvcMessage {
+    let Ok(mut b) = m.encode_unframed_pdu() else { return m };
+    match broker::completion_ids(&b) {
+        Some((d, _)) if d == from => {
+            b[4..8].copy_from_slice(&to.to_le_bytes());
+            SvcMessage::from(b)
+        }
+        _ => SvcMessage::from(b),
+    }
+}
+
+/// A copy of `p` announced under `device_id` (not the default printer: the session keeps
+/// its own default).
+fn printer_as(p: &RdpdrPrinter, device_id: u32) -> RdpdrPrinter {
+    RdpdrPrinter::new(device_id, p.name().to_owned(), p.driver_name().to_owned())
+        .with_network(p.network())
+        .with_explicit_driver(p.explicit_driver())
+        .with_cached_config_data(p.cached_config_data().to_vec())
+        .with_default(false)
+}
+
+/// The resolution still selects the queue `name`.
+fn printer_selected(r: &seat_core::backend::session::HostRedirection, name: &str) -> bool {
+    r.all_printers || r.printers.iter().any(|q| q.eq_ignore_ascii_case(name))
+}
 
 impl SeatRdpdr {
     pub fn new(inner: Box<dyn RdpdrBackend>, readers: Option<Arc<dyn ReaderSource>>, log: RefusalLog) -> Self {
@@ -254,6 +397,20 @@ impl SeatRdpdr {
             live_seen: 0,
             pnp: HashMap::new(),
             printers: HashSet::new(),
+            printer_names: HashMap::new(),
+            extra: HashMap::new(),
+            maker: None,
+            printer_maker: None,
+            batches: Vec::new(),
+            broker_ids: HashSet::new(),
+            broker: Broker::None,
+            connector: None,
+            last_connect: None,
+            out: Vec::new(),
+            retry_at: HashMap::new(),
+            next_drive: FIRST_LIVE_DRIVE_ID,
+            next_printer: FIRST_LIVE_PRINTER_ID,
+            printers_seen: 0,
         }
     }
 
@@ -264,18 +421,47 @@ impl SeatRdpdr {
         self
     }
 
+    /// The announced printers with their queue names (live removal needs the names).
+    pub fn with_printer_names(mut self, printers: &[RdpdrPrinter]) -> Self {
+        for p in printers {
+            self.printers.insert(p.device_id());
+            self.printer_names.insert(p.device_id(), p.name().to_owned());
+        }
+        self
+    }
+
     /// The drives of this channel (device id, what the service resolved), the check before
     /// each root is opened again, and the live resolution they must stay in.
     pub fn with_drives(mut self, drives: Vec<(u32, RedirectDrive)>, check: Option<DriveCheck>, live: Option<LiveRedirection>) -> Self {
         self.live_seen = live.as_ref().map_or(0, LiveRedirection::revision);
+        self.printers_seen = self.live_seen;
         self.drives = drives;
         self.check = check;
         self.live = live;
         self
     }
 
+    /// Live updates: how drives and printers assigned while the channel is open are built,
+    /// and how the drive broker (ACL'd volumes) is reached.
+    pub fn with_live_makers(mut self, drives: Option<DriveMaker>, printers: Option<PrinterMaker>, broker: Option<BrokerConnector>) -> Self {
+        self.maker = drives;
+        self.printer_maker = printers;
+        self.connector = broker;
+        self
+    }
+
     fn drive(&self, device_id: u32) -> Option<&RedirectDrive> {
         self.drives.iter().find(|(id, _)| *id == device_id).map(|(_, d)| d)
+    }
+
+    fn mark_failed(&mut self, device_id: u32) {
+        if !self.failed.contains(&device_id) {
+            self.failed.push(device_id);
+        }
+        if let Some(d) = self.drive(device_id) {
+            let k = root_key(d);
+            self.retry_at.insert(k, Instant::now() + RETRY_FAILED_DRIVE);
+        }
     }
 
     /// `Err(())` = do not open this drive (logged, queued for removal).
@@ -285,9 +471,7 @@ impl SeatRdpdr {
             Ok(()) => Ok(()),
             Err(reason) => {
                 self.log.refuse(CHANNEL_DRIVES, reason, d.root.clone());
-                if !self.failed.contains(&device_id) {
-                    self.failed.push(device_id);
-                }
+                self.mark_failed(device_id);
                 Err(())
             }
         }
@@ -297,6 +481,7 @@ impl SeatRdpdr {
     /// (after a live update) drives the service no longer assigns, or no longer as
     /// writable. Each id is returned once.
     pub fn drives_to_remove(&mut self) -> Vec<u32> {
+        self.poll_broker();
         let mut out: Vec<u32> = std::mem::take(&mut self.failed);
         if let Some(live) = &self.live {
             let rev = live.revision();
@@ -304,10 +489,7 @@ impl SeatRdpdr {
                 self.live_seen = rev;
                 let now = live.drives().unwrap_or_default();
                 for (id, d) in &self.drives {
-                    let kept = now.iter().any(|n| {
-                        n.root.eq_ignore_ascii_case(&d.root) && same_volume(&n.volume, &d.volume) && (d.read_only || !n.read_only)
-                    });
-                    if !kept {
+                    if !now.iter().any(|n| still_allows(n, d)) {
                         self.log.refuse(CHANNEL_DRIVES, "drive_unassigned", d.root.clone());
                         out.push(*id);
                     }
@@ -315,7 +497,247 @@ impl SeatRdpdr {
             }
         }
         out.retain(|id| self.removed.insert(*id));
+        self.drives.retain(|(id, _)| !out.contains(id));
         out
+    }
+
+    /// Everything to apply to the open channel now: removals first (see
+    /// [`Self::drives_to_remove`]), then drives and printers the service assigned since
+    /// the channel opened. ACL'd drives wait for the drive broker.
+    pub fn live_changes(&mut self) -> LiveChanges {
+        let mut c = LiveChanges { remove_drives: self.drives_to_remove(), ..Default::default() };
+        let Some(live) = self.live.clone() else { return c };
+        let r = live.get_or(&Default::default());
+        // Drives.
+        let now = Instant::now();
+        let wanted: Vec<RedirectDrive> = r
+            .drives
+            .iter()
+            .filter(|n| !self.drives.iter().any(|(_, d)| same_offer(n, d)))
+            .filter(|n| self.retry_at.get(&root_key(n)).is_none_or(|t| now >= *t))
+            .cloned()
+            .collect();
+        let needs_broker = wanted.iter().any(|d| d.acl);
+        if needs_broker && !matches!(self.broker, Broker::Up(_)) {
+            self.connect_broker();
+        }
+        let sys = self.system_drive();
+        for d in wanted {
+            if let Err(reason) = crate::policy::drive_root_allowed(&d.root, sys) {
+                self.log.refuse(CHANNEL_DRIVES, reason, d.root.clone());
+                self.retry_at.insert(root_key(&d), now + RETRY_FAILED_DRIVE);
+                continue;
+            }
+            let id = self.next_drive;
+            if d.acl {
+                if !matches!(self.broker, Broker::Up(_)) {
+                    continue;
+                }
+                self.broker_ids.insert(id);
+            } else {
+                let Some(make) = self.maker.clone() else { continue };
+                if let Some(check) = self.check.clone()
+                    && let Err(reason) = check(&d)
+                {
+                    self.log.refuse(CHANNEL_DRIVES, reason, d.root.clone());
+                    self.retry_at.insert(root_key(&d), now + RETRY_FAILED_DRIVE);
+                    continue;
+                }
+                match make(id, &d) {
+                    Ok(b) => {
+                        self.extra.insert(id, b);
+                    }
+                    Err(reason) => {
+                        self.log.refuse(CHANNEL_DRIVES, reason, d.root.clone());
+                        self.retry_at.insert(root_key(&d), now + RETRY_FAILED_DRIVE);
+                        continue;
+                    }
+                }
+            }
+            self.next_drive += 1;
+            eprintln!("seat-rdp: drive {} added{}{}", d.root, if d.read_only { " (read-only)" } else { "" }, if d.acl { " (as the seat user)" } else { "" });
+            c.add_drives.push((id, rdpdr_name(&d.name, &d.root)));
+            self.drives.push((id, d));
+        }
+        // Printers: queues no longer selected leave, new ones are announced.
+        let gone: Vec<u32> = self.printer_names.iter().filter(|(_, n)| !printer_selected(&r, n)).map(|(id, _)| *id).collect();
+        for id in gone {
+            if let Some(n) = self.printer_names.remove(&id) {
+                self.log.refuse(CHANNEL_PRINTERS, "printer_unassigned", n);
+            }
+            self.printers.remove(&id);
+            for b in &mut self.batches {
+                b.ids.remove(&id);
+            }
+            c.remove_printers.push(id);
+        }
+        self.batches.retain(|b| !b.ids.is_empty());
+        let known: Vec<String> = self.printer_names.values().map(|n| n.to_ascii_lowercase()).collect();
+        let missing = r.all_printers || r.printers.iter().any(|q| !known.contains(&q.to_ascii_lowercase()));
+        if missing
+            && super::printers_wanted(&r)
+            && self.printers_due(&live)
+            && let Some(make) = self.printer_maker.clone()
+        {
+            match make(&r) {
+                Ok((backend, found)) => {
+                    let mut ids = HashMap::new();
+                    for p in found.iter().filter(|p| !known.contains(&p.name().to_ascii_lowercase())) {
+                        let sid = self.next_printer;
+                        self.next_printer += 1;
+                        ids.insert(sid, p.device_id());
+                        self.printer_names.insert(sid, p.name().to_owned());
+                        eprintln!("seat-rdp: printer {} added (driver {})", p.name(), p.driver_name());
+                        c.add_printers.push(printer_as(p, sid));
+                    }
+                    if !ids.is_empty() {
+                        self.batches.push(PrinterBatch { backend, ids });
+                    }
+                }
+                Err(e) => self.log.refuse(CHANNEL_PRINTERS, "printer_discovery_failed", e),
+            }
+        }
+        c
+    }
+
+    /// Printer discovery runs once per live revision (it enumerates the PC's queues).
+    fn printers_due(&mut self, live: &LiveRedirection) -> bool {
+        let rev = live.revision();
+        let due = self.printers_seen != rev;
+        self.printers_seen = rev;
+        due
+    }
+
+    fn system_drive(&self) -> Option<char> {
+        #[cfg(windows)]
+        {
+            super::win::system_drive()
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    /// Start a broker link attempt (at most every [`BROKER_RETRY`]).
+    fn connect_broker(&mut self) {
+        if !matches!(self.broker, Broker::None) {
+            return;
+        }
+        let Some(conn) = self.connector.clone() else {
+            self.log.refuse(CHANNEL_DRIVES, "drive_broker_unavailable", "no connector");
+            return;
+        };
+        if self.last_connect.is_some_and(|t| t.elapsed() < BROKER_RETRY) {
+            return;
+        }
+        self.last_connect = Some(Instant::now());
+        let slot: Arc<Mutex<Option<Result<BrokerLink, String>>>> = Arc::default();
+        let s = slot.clone();
+        let spawned = std::thread::Builder::new().name("seat-broker-connect".into()).spawn(move || {
+            let r = conn();
+            *s.lock().unwrap_or_else(|p| p.into_inner()) = Some(r);
+        });
+        if spawned.is_ok() {
+            self.broker = Broker::Connecting(slot);
+        }
+    }
+
+    /// Pick up a finished link attempt, the broker's answers and a lost link.
+    fn poll_broker(&mut self) {
+        if let Broker::Connecting(slot) = &self.broker {
+            let done = slot.lock().unwrap_or_else(|p| p.into_inner()).take();
+            match done {
+                Some(Ok(link)) => {
+                    eprintln!("seat-rdp: drive broker connected");
+                    self.broker = Broker::Up(Arc::new(link));
+                }
+                Some(Err(e)) => {
+                    self.log.refuse(CHANNEL_DRIVES, "drive_broker_unavailable", e);
+                    self.broker = Broker::None;
+                }
+                None => {}
+            }
+        }
+        let Broker::Up(link) = &self.broker else { return };
+        let link = link.clone();
+        self.take_broker_events(link.drain());
+        if link.closed() {
+            self.broker = Broker::None;
+            let ids: Vec<u32> = self.broker_ids.iter().copied().collect();
+            for id in ids {
+                if let Some(d) = self.drive(id) {
+                    self.log.refuse(CHANNEL_DRIVES, "drive_broker_lost", d.root.clone());
+                }
+                if !self.failed.contains(&id) {
+                    self.failed.push(id);
+                }
+            }
+        }
+    }
+
+    /// Sort the broker's answers: completions of its own devices go to the server,
+    /// refusals take the drive out.
+    fn take_broker_events(&mut self, events: Vec<BrokerEvent>) {
+        let mut pdus = Vec::new();
+        for e in events {
+            match e {
+                BrokerEvent::Pdu(p) => pdus.push(p),
+                BrokerEvent::Refused { device_id, reason } => {
+                    if self.broker_ids.contains(&device_id) {
+                        let root = self.drive(device_id).map(|d| d.root.clone()).unwrap_or_default();
+                        self.log.refuse(CHANNEL_DRIVES, "drive_broker_refused", format!("{root} {reason}"));
+                        self.mark_failed(device_id);
+                    }
+                }
+                BrokerEvent::Deactivated { .. } => {}
+            }
+        }
+        let (ok, dropped) = broker::filter_answers(pdus, &self.broker_ids);
+        if dropped > 0 {
+            self.log.refuse(CHANNEL_DRIVES, "drive_broker_answer_dropped", format!("{dropped}"));
+        }
+        self.out.extend(ok.into_iter().map(SvcMessage::from));
+    }
+
+    fn link(&self) -> Option<Arc<BrokerLink>> {
+        match &self.broker {
+            Broker::Up(l) => Some(l.clone()),
+            _ => None,
+        }
+    }
+
+    /// Send a frame to the broker; a failure counts as a lost link at the next poll.
+    fn send_to_broker(&mut self, f: &broker::Frame) -> bool {
+        match self.link() {
+            Some(l) => l.send(f).is_ok(),
+            None => false,
+        }
+    }
+
+    fn activate_on_broker(&mut self, device_id: u32) -> PduResult<()> {
+        let Some(d) = self.drive(device_id).cloned() else { return Ok(()) };
+        let f = broker::Frame::Activate { device_id, read_only: d.read_only, root: d.root.clone(), volume: d.volume.clone() };
+        if !self.send_to_broker(&f) {
+            self.log.refuse(CHANNEL_DRIVES, "drive_broker_unavailable", d.root);
+            self.mark_failed(device_id);
+        }
+        Ok(())
+    }
+
+    /// Forward one IRP to the broker and wait briefly for its completion.
+    fn forward(&mut self, irp: Result<Vec<u8>, String>) -> PduResult<Vec<SvcMessage>> {
+        let irp = irp.map_err(|e| ironrdp_pdu::pdu_other_err!("broker IRP encode").with_source(std::io::Error::other(e)))?;
+        let Some(link) = self.link() else {
+            return Ok(broker::failure_completion(&irp).into_iter().map(SvcMessage::from).collect());
+        };
+        let cid = broker::irp_ids(&irp).map(|(_, c)| c);
+        if link.send(&broker::Frame::Irp(irp.clone())).is_err() {
+            return Ok(broker::failure_completion(&irp).into_iter().map(SvcMessage::from).collect());
+        }
+        let ev = link.wait_for(broker::IRP_WAIT, |e| matches!(e, BrokerEvent::Pdu(p) if broker::completion_ids(p).map(|x| x.1) == cid));
+        self.take_broker_events(ev);
+        Ok(std::mem::take(&mut self.out))
     }
 
     fn reader_counts(src: &dyn ReaderSource) -> Option<(u16, u16)> {
@@ -349,6 +771,17 @@ impl SeatRdpdr {
             })
             .collect()
     }
+
+    /// The live printer batch serving `device_id` and the back-end's own id.
+    fn batch_of(&mut self, device_id: u32) -> Option<(&mut PrinterBatch, u32)> {
+        self.batches.iter_mut().find_map(|b| b.ids.get(&device_id).copied().map(|bid| (b, bid)))
+    }
+}
+
+/// RDPDR names: ASCII letters / digits, at most [`MAX_DRIVE_NAME`] characters.
+pub fn rdpdr_name(name: &str, root: &str) -> String {
+    let n: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).take(crate::policy::MAX_DRIVE_NAME).collect();
+    if n.is_empty() { root.chars().take(1).collect() } else { n }
 }
 
 impl RdpdrBackend for SeatRdpdr {
@@ -357,6 +790,15 @@ impl RdpdrBackend for SeatRdpdr {
     }
     fn reset(&mut self) -> PduResult<()> {
         self.pnp.clear();
+        for b in self.extra.values_mut() {
+            b.reset()?;
+        }
+        for b in &mut self.batches {
+            b.backend.reset()?;
+        }
+        if !self.broker_ids.is_empty() {
+            let _ = self.send_to_broker(&broker::Frame::Reset);
+        }
         self.inner.reset()
     }
     fn restore_drive(&mut self, device_id: u32) -> PduResult<()> {
@@ -365,15 +807,44 @@ impl RdpdrBackend for SeatRdpdr {
             // removes it from the session.
             return Ok(());
         }
+        if self.broker_ids.contains(&device_id) {
+            return self.activate_on_broker(device_id);
+        }
+        if let Some(b) = self.extra.get_mut(&device_id) {
+            return b.restore_drive(device_id);
+        }
         self.inner.restore_drive(device_id)
     }
     fn add_drive(&mut self, device_id: u32) -> PduResult<()> {
         if self.removed.contains(&device_id) || self.check_before_open(device_id).is_err() {
             return Err(ironrdp_pdu::pdu_other_err!("drive refused by the seat policy"));
         }
+        if self.broker_ids.contains(&device_id) {
+            return self.activate_on_broker(device_id);
+        }
+        if let Some(b) = self.extra.get_mut(&device_id) {
+            return b.add_drive(device_id);
+        }
         self.inner.add_drive(device_id)
     }
     fn remove_drive(&mut self, device_id: u32) -> PduResult<Vec<SvcMessage>> {
+        if self.broker_ids.remove(&device_id) {
+            let mut out = Vec::new();
+            if let Some(link) = self.link()
+                && link.send(&broker::Frame::Deactivate { device_id }).is_ok()
+            {
+                let ev = link.wait_for(broker::DEACTIVATE_WAIT, |e| matches!(e, BrokerEvent::Deactivated { device_id: d } if *d == device_id));
+                // Completions of the drive's cancelled IRPs still belong to the session.
+                self.broker_ids.insert(device_id);
+                self.take_broker_events(ev);
+                self.broker_ids.remove(&device_id);
+                out = std::mem::take(&mut self.out);
+            }
+            return Ok(out);
+        }
+        if let Some(mut b) = self.extra.remove(&device_id) {
+            return b.remove_drive(device_id);
+        }
         self.inner.remove_drive(device_id)
     }
     fn handle_server_device_announce_response(&mut self, pdu: ServerDeviceAnnounceResponse) -> PduResult<()> {
@@ -401,6 +872,10 @@ impl RdpdrBackend for SeatRdpdr {
                 ScardCall::ListReadersCall(c) => Ok(vec![list_readers_reply(req, c, r)]),
                 _ => Ok(vec![answer(req, &call, ReturnCode::InternalError)]),
             },
+            ScardDecision::Groups(g) => match &call {
+                ScardCall::ListReaderGroupsCall(c) => Ok(vec![list_groups_reply(req, c, g)]),
+                _ => Ok(vec![answer(req, &call, ReturnCode::InternalError)]),
+            },
             ScardDecision::Answer { code, reason, detail } => {
                 if let Some(reason) = reason {
                     self.log.refuse(CHANNEL_SMARTCARD, reason, detail);
@@ -410,13 +885,39 @@ impl RdpdrBackend for SeatRdpdr {
         }
     }
     fn handle_drive_io_request(&mut self, req: ServerDriveIoRequest) -> PduResult<Vec<SvcMessage>> {
+        let id = broker::drive_device_id(&req);
+        if self.broker_ids.contains(&id) {
+            return self.forward(broker::encode_drive_irp(&req));
+        }
+        if let Some(b) = self.extra.get_mut(&id) {
+            return b.handle_drive_io_request(req);
+        }
         self.inner.handle_drive_io_request(req)
     }
     fn handle_drive_device_control(&mut self, req: DecodedDeviceControlRequest<AnyIoCtlCode>) -> PduResult<Vec<SvcMessage>> {
+        let id = req.request.header.device_id;
+        if self.broker_ids.contains(&id) {
+            return self.forward(broker::encode_drive_control(&req));
+        }
+        if let Some(b) = self.extra.get_mut(&id) {
+            return b.handle_drive_device_control(req);
+        }
         self.inner.handle_drive_device_control(req)
     }
     fn poll_deferred_messages(&mut self) -> PduResult<Vec<SvcMessage>> {
-        let out = self.inner.poll_deferred_messages()?;
+        let mut out = self.inner.poll_deferred_messages()?;
+        for b in self.extra.values_mut() {
+            out.extend(b.poll_deferred_messages()?);
+        }
+        for batch in &mut self.batches {
+            let msgs = batch.backend.poll_deferred_messages()?;
+            for m in msgs {
+                let m = batch.ids.iter().fold(m, |m, (sid, bid)| remap_completion(m, *bid, *sid));
+                out.push(m);
+            }
+        }
+        self.poll_broker();
+        out.append(&mut self.out);
         Ok(self.fix_pnp(out))
     }
     fn handle_user_logged_on(&mut self, rdpdr: &mut Rdpdr) -> PduResult<Vec<SvcMessage>> {
@@ -426,6 +927,16 @@ impl RdpdrBackend for SeatRdpdr {
         let id = printer_device_id(&req);
         if self.printers.contains(&id) {
             return self.inner.handle_printer_io_request(req);
+        }
+        if let Some((batch, bid)) = self.batch_of(id) {
+            let mut req = req;
+            match &mut req {
+                PrinterIoRequest::Create(r) => r.device_io_request.device_id = bid,
+                PrinterIoRequest::Write(r) => r.device_io_request.device_id = bid,
+                PrinterIoRequest::Close(r) => r.device_io_request.device_id = bid,
+            }
+            let out = batch.backend.handle_printer_io_request(req)?;
+            return Ok(out.into_iter().map(|m| remap_completion(m, bid, id)).collect());
         }
         // Not a printer of this channel: NOT_SUPPORTED, the back-end never sees it.
         self.log.refuse(CHANNEL_PRINTERS, "printer_not_redirected", format!("device {id}"));
@@ -438,6 +949,13 @@ impl RdpdrBackend for SeatRdpdr {
         self.inner.handle_port_io_request(req)
     }
     fn reject_printer_write(&mut self, req: DeviceIoRequest) -> PduResult<Vec<SvcMessage>> {
+        let id = req.device_id;
+        if let Some((batch, bid)) = self.batch_of(id) {
+            let mut r = req;
+            r.device_id = bid;
+            let out = batch.backend.reject_printer_write(r)?;
+            return Ok(out.into_iter().map(|m| remap_completion(m, bid, id)).collect());
+        }
         self.inner.reject_printer_write(req)
     }
 }
@@ -484,6 +1002,58 @@ mod tests {
         fn allowed(&self, r: &str) -> bool {
             r == "Mine 0"
         }
+        fn groups(&self) -> Result<Vec<String>, ReturnCode> {
+            Ok(vec!["SCard$DefaultReaders".into()])
+        }
+    }
+
+    #[derive(Debug)]
+    struct Grouped;
+    impl ReaderSource for Grouped {
+        fn list(&self, groups: &[String]) -> Result<Vec<String>, ReturnCode> {
+            Ok(match groups.first().map(String::as_str) {
+                Some("Other Seat Group") => vec!["Other 0".into()],
+                Some("Empty Group") => vec![],
+                _ => vec!["Mine 0".into(), "Other 0".into()],
+            })
+        }
+        fn allowed(&self, r: &str) -> bool {
+            r == "Mine 0"
+        }
+        fn groups(&self) -> Result<Vec<String>, ReturnCode> {
+            Ok(vec!["SCard$DefaultReaders".into(), "Other Seat Group".into(), "Empty Group".into()])
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoneMine;
+    impl ReaderSource for NoneMine {
+        fn list(&self, _g: &[String]) -> Result<Vec<String>, ReturnCode> {
+            Ok(vec!["Other 0".into()])
+        }
+        fn allowed(&self, _r: &str) -> bool {
+            false
+        }
+        fn groups(&self) -> Result<Vec<String>, ReturnCode> {
+            Ok(vec!["SCard$DefaultReaders".into()])
+        }
+    }
+
+    #[test]
+    fn reader_groups_are_filtered_per_seat() {
+        let call = ScardCall::ListReaderGroupsCall(ListReaderGroupsCall { context: ScardContext::new(1), groups_is_null: false, groups_size: AUTOALLOCATE });
+        assert_eq!(scard_decision(&call, &Grouped), ScardDecision::Groups(vec!["SCard$DefaultReaders".into()]));
+        // Through the back-end: answered here, encoded as a multistring.
+        let (mut b, calls, _) = seat(Some(Arc::new(Grouped)));
+        let out = b.handle_scard_call(req(ScardIoCtlCode::ListReaderGroupsW, 4), call).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(calls.lock().unwrap().is_empty(), "never forwarded to WinSCard");
+        let bytes = out[0].encode_unframed_pdu().unwrap();
+        assert_eq!(u32_at(&bytes, 36), u32::from(ReturnCode::Success));
+        // "SCard$DefaultReaders", NUL, NUL in UTF-16: (20 + 2) * 2 bytes.
+        assert_eq!(u32_at(&bytes, 40), 44);
+        // A seat without readers sees no group.
+        assert_eq!(seat_groups(&NoneMine), Ok(vec![]));
     }
 
     /// Inner back-end that records the calls it gets and answers GetStatusChange with
@@ -527,6 +1097,10 @@ mod tests {
         }
         fn restore_drive(&mut self, device_id: u32) -> PduResult<()> {
             self.calls.lock().unwrap().push(format!("restore {device_id}"));
+            Ok(())
+        }
+        fn add_drive(&mut self, device_id: u32) -> PduResult<()> {
+            self.calls.lock().unwrap().push(format!("add {device_id}"));
             Ok(())
         }
         fn poll_deferred_messages(&mut self) -> PduResult<Vec<SvcMessage>> {
@@ -732,7 +1306,7 @@ mod tests {
     }
 
     fn drive(l: char, read_only: bool) -> RedirectDrive {
-        RedirectDrive { root: format!("{l}:\\"), name: l.to_string(), read_only, volume: format!("\\\\?\\Volume{{{l}}}\\") }
+        RedirectDrive { root: format!("{l}:\\"), name: l.to_string(), read_only, volume: format!("\\\\?\\Volume{{{l}}}\\"), acl: false }
     }
 
     #[test]
@@ -762,5 +1336,114 @@ mod tests {
         live2.set(HostRedirection { drives: vec![drive('E', true)], ..Default::default() });
         assert_eq!(b2.drives_to_remove(), vec![1]);
         assert!(b2.add_drive(1).is_err(), "a removed drive is never opened again");
+    }
+
+    fn maker(calls: Seen<String>) -> DriveMaker {
+        Arc::new(move |id: u32, d: &RedirectDrive| {
+            calls.lock().unwrap().push(format!("make {id} {}", d.root));
+            Ok(Box::new(Inner { calls: calls.clone(), deferred: Vec::new() }) as Box<dyn RdpdrBackend>)
+        })
+    }
+
+    fn printer_maker(calls: Seen<String>) -> PrinterMaker {
+        Arc::new(move |r: &HostRedirection| {
+            calls.lock().unwrap().push(format!("discover {:?}", r.printers));
+            let list = r.printers.iter().map(|q| RdpdrPrinter::new(0xFFFF_FFFE, q.clone(), "Driver".into())).collect();
+            Ok((Box::new(Inner { calls: calls.clone(), deferred: Vec::new() }) as Box<dyn RdpdrBackend>, list))
+        })
+    }
+
+    #[test]
+    fn live_drives_and_printers_join_and_leave_the_open_channel() {
+        let base = HostRedirection { drives: vec![drive('E', false)], drives_on: true, printers_on: true, ..Default::default() };
+        let live = LiveRedirection::new(base.clone());
+        let (b, calls, seen) = seat(None);
+        let mut b = b
+            .with_drives(vec![(1, drive('E', false))], None, Some(live.clone()))
+            .with_live_makers(Some(maker(calls.clone())), Some(printer_maker(calls.clone())), None);
+        let c = b.live_changes();
+        assert!(c.add_drives.is_empty() && c.remove_drives.is_empty() && c.add_printers.is_empty());
+
+        // A drive and a printer assigned while connected: announced on the open channel.
+        live.set(HostRedirection { drives: vec![drive('E', false), drive('F', true)], printers: vec!["Laser".into()], ..base.clone() });
+        let c = b.live_changes();
+        assert_eq!(c.add_drives, vec![(FIRST_LIVE_DRIVE_ID, "F".to_string())]);
+        assert_eq!(c.add_printers.len(), 1);
+        let p = &c.add_printers[0];
+        assert_eq!((p.device_id(), p.name(), p.is_default()), (FIRST_LIVE_PRINTER_ID, "Laser", false));
+        // The new drive opens on its own back-end; its IRPs and the printer's reach theirs.
+        b.add_drive(FIRST_LIVE_DRIVE_ID).unwrap();
+        assert!(b.handle_printer_io_request(printer_close(FIRST_LIVE_PRINTER_ID)).unwrap().is_empty());
+        {
+            let log = calls.lock().unwrap();
+            assert!(log.contains(&format!("make {FIRST_LIVE_DRIVE_ID} F:\\")));
+            assert!(log.contains(&"printer 4294967294".to_string()), "live printer IRPs use the back-end's own id: {log:?}");
+        }
+        assert!(b.live_changes().add_drives.is_empty(), "added once");
+
+        // Both unassigned: they leave the session.
+        live.set(base.clone());
+        let c = b.live_changes();
+        assert_eq!(c.remove_drives, vec![FIRST_LIVE_DRIVE_ID]);
+        assert_eq!(c.remove_printers, vec![FIRST_LIVE_PRINTER_ID]);
+        let r = seen.lock().unwrap();
+        assert!(r.iter().any(|x| x.reason == "drive_unassigned") && r.iter().any(|x| x.reason == "printer_unassigned"));
+    }
+
+    #[test]
+    fn acl_drives_are_served_by_the_broker() {
+        let g = RedirectDrive { acl: true, ..drive('G', false) };
+        let live = LiveRedirection::new(HostRedirection { drives: vec![g.clone()], drives_on: true, ..Default::default() });
+        let allow = vec![broker::BrokerDrive { root: g.root.clone(), volume: g.volume.clone(), read_only: false }];
+        let (link, broker_calls) = broker::test_support::fake_broker(allow);
+        let slot = Arc::new(Mutex::new(Some(link)));
+        let connector: BrokerConnector = Arc::new(move || slot.lock().unwrap().take().ok_or_else(|| "used".to_string()));
+        let (b, calls, _) = seat(None);
+        let mut b = b.with_drives(Vec::new(), None, Some(live)).with_live_makers(None, None, Some(connector));
+        // The first tick starts the link; the drive joins once it is up.
+        let mut added = Vec::new();
+        for _ in 0..200 {
+            added = b.live_changes().add_drives;
+            if !added.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(added, vec![(FIRST_LIVE_DRIVE_ID, "G".to_string())]);
+        b.add_drive(FIRST_LIVE_DRIVE_ID).unwrap();
+        let close = ServerDriveIoRequest::DeviceCloseRequest(ironrdp_rdpdr::pdu::efs::DeviceCloseRequest::decode(DeviceIoRequest {
+            device_id: FIRST_LIVE_DRIVE_ID,
+            file_id: 1,
+            completion_id: 31,
+            major_function: MajorFunction::Close,
+            minor_function: MinorFunction::from(0),
+        }));
+        let out = b.handle_drive_io_request(close).unwrap();
+        let mut got: Vec<Vec<u8>> = out.into_iter().map(|m| m.encode_unframed_pdu().unwrap()).collect();
+        for _ in 0..100 {
+            if !got.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            got.extend(b.poll_deferred_messages().unwrap().into_iter().map(|m| m.encode_unframed_pdu().unwrap()));
+        }
+        assert_eq!(got.iter().filter_map(|p| broker::completion_ids(p)).collect::<Vec<_>>(), vec![(FIRST_LIVE_DRIVE_ID, 31)]);
+        assert!(calls.lock().unwrap().is_empty(), "the host's own back-end never sees the ACL'd drive");
+        b.remove_drive(FIRST_LIVE_DRIVE_ID).unwrap();
+        assert_eq!(*broker_calls.lock().unwrap(), vec![format!("add {FIRST_LIVE_DRIVE_ID}"), format!("irp {FIRST_LIVE_DRIVE_ID}"), format!("remove {FIRST_LIVE_DRIVE_ID}")]);
+    }
+
+    #[test]
+    fn dynamic_printers_on_the_vendored_channel() {
+        // Pulsar's patch of ironrdp-rdpdr (third_party/ironrdp-rdpdr/PATCHES.md): before the
+        // post-logon announcement a dynamic printer waits for that batch; removal works for
+        // configured and dynamic printers; ids are not reused.
+        let (b, _, _) = seat(None);
+        let mut r = Rdpdr::new(Box::new(b), "PSEAT-02".into()).with_printer_capability();
+        assert!(r.add_dynamic_printer(RdpdrPrinter::new(FIRST_LIVE_PRINTER_ID, "Laser".into(), "Driver".into())).unwrap().is_empty());
+        assert!(r.add_dynamic_printer(RdpdrPrinter::new(FIRST_LIVE_PRINTER_ID, "Again".into(), "Driver".into())).is_err());
+        assert!(r.remove_printer(FIRST_LIVE_PRINTER_ID).unwrap().is_empty(), "never accepted: nothing to send");
+        assert!(r.remove_printer(FIRST_LIVE_PRINTER_ID).is_err());
+        assert!(r.remove_printer(7).is_err(), "not a printer");
     }
 }

@@ -3178,3 +3178,79 @@ fn gpu_preference_follows_the_seat_gpu_at_logon_and_reverts_on_disable() {
     call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
     assert!(h.p.gpu_pref_reverts.load(Ordering::SeqCst) >= 1);
 }
+
+/// rdp-listener 2026-11-17: an NTFS volume of seat 2 goes to the seat user's drive broker;
+/// the service links the host and the agent with fresh pipes and the agent's allowlist.
+#[test]
+fn drive_broker_links_the_host_with_the_seat_agent() {
+    use seat_core::config::DriveRedirect;
+    use seat_core::device::{DeviceDetails, StorageInfo};
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().redirect.drives = DriveRedirect::ReadOnly;
+    c.devices.push(assign("stor;n", DeviceKind::Storage, s(2).mask()));
+    let h = harness_with(c, None);
+    let mut stor = device("stor;n", DeviceKind::Storage);
+    stor.details = DeviceDetails::Storage(StorageInfo {
+        removable: false,
+        optical: false,
+        volumes: vec!["\\\\?\\Volume{n}\\".into()],
+        letters: vec!['Q'],
+        file_system: "NTFS".into(),
+    });
+    *h.f.gate.devices.lock().unwrap() = vec![stor];
+    h.s.boot();
+    h.s.refresh_inventory();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let sid = seat_session_id(&h, s(2));
+    let e = h.s.host_drive_broker(s(2)).unwrap_err();
+    assert_eq!((e.code, e.reason.as_deref()), (ErrorCode::NotReady, Some("not_ready")), "no agent yet");
+    let host_pid = h.s.lock().seats.get(&s(2)).and_then(|x| x.host.as_ref().map(|h| h.pid)).unwrap();
+    h.s.lock().seats.get_mut(&s(2)).unwrap().agent_pid = Some(77);
+    let ResponseBody::DriveBroker { read, write } = h.s.host_drive_broker(s(2)).unwrap() else { panic!() };
+    assert_eq!((read, write), (0x10, 0x14));
+    assert_eq!(*h.p.broker_links.lock().unwrap(), vec![(host_pid, 77)]);
+    let tasks = h.s.lock().agent_tasks.get(&sid).cloned().unwrap_or_default();
+    let want = seat_proto::DriveBrokerDrive { root: "Q:\\".into(), volume: "\\\\?\\Volume{n}\\".into(), read_only: true };
+    assert!(
+        tasks.iter().any(|t| t.task == AgentTaskKind::DriveBroker { read: 0x20, write: 0x24, drives: vec![want.clone()] }),
+        "{tasks:?}"
+    );
+    // A seat without ACL'd volumes gets no link.
+    h.s.lock().config.seats[1].local_mut().unwrap().redirect.drives = DriveRedirect::Off;
+    assert_eq!(h.s.host_drive_broker(s(2)).unwrap_err().reason.as_deref(), Some("no_acl_drives"));
+}
+
+/// rdp-listener 2026-11-17: the operator restart stops the seats first, then restarts
+/// Remote Desktop Services; it needs the confirmation and an RDP session backend.
+#[test]
+fn termservice_restart_stops_the_seats_first() {
+    let h = harness();
+    let mut a = admin();
+    assert_eq!(call(&h, &mut a, RequestBody::RestartTermService { confirm: false }).unwrap_err().code, ErrorCode::InvalidValue);
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    assert!(state(&h, s(2)) != SeatState::Off);
+    let ResponseBody::TermServiceRestart(r) = call(&h, &mut a, RequestBody::RestartTermService { confirm: true }).unwrap() else { panic!() };
+    assert!(r.restarted);
+    assert_eq!(r.stopped_seats, vec![s(2)]);
+    assert_eq!(state(&h, s(2)), SeatState::Off);
+    let calls = h.f.session.rec.calls();
+    let logoff = calls.iter().position(|c| c.starts_with("log_off")).expect("seat signed out");
+    let restart = calls.iter().position(|c| c == "restart_termservice").expect("restarted");
+    assert!(logoff < restart, "{calls:?}");
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::RestartTermService { confirm: true }).unwrap_err().code, ErrorCode::AccessDenied);
+}
+
+/// rdp-listener 2026-11-17: the host's audio notes reach the seat's runtime (manager).
+#[test]
+fn host_audio_notes_reach_the_seat_runtime() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.s.on_host_audio_report(s(2), false, true, vec!["render_absent".into(), "Not A Code".into()]);
+    let rt = h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap();
+    assert_eq!(rt.audio_notes, vec!["render_absent".to_string()]);
+    h.s.on_host_audio_report(s(2), true, true, vec![]);
+    assert!(h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap().audio_notes.is_empty());
+}

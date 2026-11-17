@@ -342,7 +342,7 @@ mod tests {
         let no_files = HostRedirection { clipboard: ClipboardRedirect { files: false, ..full }, ..Default::default() };
         assert!(!ClientPolicy::from_redirection(&no_files).0.redirect_clipboard);
         let dev = HostRedirection {
-            drives: vec![RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new() }],
+            drives: vec![RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new(), acl: false }],
             smartcards: true,
             printers: vec!["Laser".into()],
             ..Default::default()

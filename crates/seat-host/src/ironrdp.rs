@@ -787,7 +787,20 @@ mod win {
         // The service's latest resolution; `Reconfigure` refreshes it (reassigned readers
         // stop matching, unassigned drives leave the session).
         let live = seat_rdp::channels::LiveRedirection::new((*asg.redirection).clone());
-        let mut channels = seat_rdp::channels::Channels { log: log.clone(), live: live.clone(), ..Default::default() };
+        // ACL'd volumes are served as the seat user by the seat's agent: the service links
+        // the two on request (`host_drive_broker`), when such a volume is assigned.
+        let broker: seat_rdp::channels::rdpdr::BrokerConnector = {
+            let (ctl, seat) = (ctl.clone(), args.seat);
+            Arc::new(move || match lock(&ctl).call(RequestBody::HostDriveBroker { seat }) {
+                Ok(ResponseBody::DriveBroker { read, write }) => {
+                    seat_rdp::channels::broker::BrokerLink::from_handles(read, write).map_err(|e| e.to_string())
+                }
+                Ok(other) => Err(format!("unexpected answer {other:?}")),
+                Err(e) => Err(e.to_string()),
+            })
+        };
+        let mut channels =
+            seat_rdp::channels::Channels { log: log.clone(), live: live.clone(), broker: Some(broker), ..Default::default() };
         for n in &params.redirect.channels.notes {
             eprintln!("seat host: redirection note {n}");
         }
@@ -823,8 +836,11 @@ mod win {
             // few seconds, streams whose endpoint was missing when they started; log what
             // the bridge notes (spec 60 §8.3: no audio device on the seat).
             let (b, stop, pb, cp) = (bridge.clone(), stop_audio.clone(), playback.clone(), capture.clone());
+            let (ctl, seat) = (ctl.clone(), args.seat);
             std::thread::spawn(move || {
-                let mut last_notes: Vec<String> = Vec::new();
+                // `None` = never reported: the first state is always sent (rdp-listener
+                // 2026-11-17: the manager shows a seat without a sound device).
+                let mut last: Option<(bool, bool, Vec<String>)> = None;
                 let mut tick = 0u32;
                 while !stop.load(Ordering::SeqCst) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -834,12 +850,17 @@ mod win {
                         pb.reopen_if_closed();
                         cp.reopen_if_closed();
                     }
-                    let notes = b.status().notes;
-                    if notes != last_notes {
-                        // HYPOTHESIS / open: the manager should show these (needs an additive
-                        // host report field, seat-proto + service + manager).
-                        eprintln!("seat host: audio notes {notes:?}");
-                        last_notes = notes;
+                    let st = b.status();
+                    let now = (st.render_open, st.capture_open, st.notes);
+                    if last.as_ref() != Some(&now) {
+                        eprintln!("seat host: audio notes {:?}", now.2);
+                        let _ = lock(&ctl).call(RequestBody::HostAudioReport {
+                            seat,
+                            render_open: now.0,
+                            capture_open: now.1,
+                            notes: now.2.clone(),
+                        });
+                        last = Some(now);
                     }
                 }
             });
@@ -1047,7 +1068,7 @@ mod tests {
         let off = redirect_policy(&a);
         assert!(!off.clipboard_on() && !off.rdpdr_on(), "nothing resolved: no channel");
         a.redirection.clipboard.direction = ClipboardDirection::ToSeat;
-        a.redirection.drives.push(RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new() });
+        a.redirection.drives.push(RedirectDrive { root: "E:\\".into(), name: "E".into(), read_only: true, volume: String::new(), acl: false });
         a.redirection.smartcards = true;
         a.redirection.readers.push(SmartCardReaderRef { instance_id: "USB\\X\\1".into(), name: "Reader".into(), name_unique: false });
         let p = redirect_policy(&a);

@@ -5,6 +5,9 @@ resolver = "3"
 # One manager for both seat kinds (apps/manager, merge-plan.md step 9). shim/,
 # drivers/split-pad and crates/seat-compat/apihelper are separate workspaces.
 members = ["crates/*", "apps/manager/src-tauri"]
+# Vendored upstream crates with a small patch (third_party/*/PATCHES.md); not members, so
+# the root gates do not lint upstream code.
+exclude = ["third_party"]
 # `cargo build` / `cargo test` at the root cover every crate but not the Tauri manager: it
 # needs its frontend built first (`bun run build` in apps/manager, or `bun tauri build`).
 default-members = [
@@ -68,6 +71,10 @@ log = "0.4.35"
 windows-sys = "0.61.2"
 windows-service = "0.8.1"
 winreg = "0.56.0"
+
+# IronRDP's rdpdr channel with dynamic printers (third_party/ironrdp-rdpdr/PATCHES.md).
+[patch.crates-io]
+ironrdp-rdpdr = { path = "third_party/ironrdp-rdpdr" }
 
 [profile.release]
 lto = "thin"

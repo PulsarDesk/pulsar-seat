@@ -34,6 +34,10 @@ describe('seat redirection model', () => {
   it('notes and refusals have text', () => {
     expect(noteLabel('clipboard_shared_with_host_session')).toContain('host session');
     expect(noteLabel('drive_acl_volume_refused')).toContain('NTFS');
+    expect(noteLabel('drive_served_as_seat_user')).toContain('seat’s user');
+    expect(noteLabel('audio_no_endpoint')).toContain('silent');
+    expect(noteLabel('render_absent')).toContain('silent');
+    expect(refusalLabel({ channel: 'drives', reason: 'drive_broker_unavailable' })).toContain('helper');
     expect(refusalLabel({ channel: 'smartcard', reason: 'reader_not_assigned', suppressed: 2 })).toBe('Smart card: the reader does not belong to this seat (+2)');
     expect(refusalLabel({ channel: 'x', reason: 'unknown_reason' })).toBe('x: unknown_reason');
   });

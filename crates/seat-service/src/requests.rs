@@ -249,6 +249,7 @@ impl Service {
             B::ResetGraphics { seat } => self.reset_graphics(seat),
             B::RemoveKioskUser { seat } => self.remove_kiosk_user(seat),
             B::HyperV { action } => self.hyperv(action),
+            B::RestartTermService { confirm } => self.restart_term_service(confirm),
             B::RequestReboot => {
                 log::info(&format!("reboot requested by pid {}", caller.pid));
                 self.platform.reboot()?;
@@ -323,6 +324,11 @@ impl Service {
                 self.on_redirect_refusal(seat, channel, reason, detail, suppressed);
                 Ok(ResponseBody::Ack)
             }
+            B::HostAudioReport { seat, render_open, capture_open, notes } => {
+                self.on_host_audio_report(seat, render_open, capture_open, notes);
+                Ok(ResponseBody::Ack)
+            }
+            B::HostDriveBroker { seat } => self.host_drive_broker(seat),
             B::ConsoleInputReport { events } => self.console_input_report(caller.pid, events),
             B::CredprovQuery { scenario } => self.credprov_query(caller, scenario),
             B::CredprovTakeCredentials => self.credprov_take(caller),
@@ -950,29 +956,7 @@ impl Service {
         let input = st.config.settings.input.clone();
         // Clipboard / drive / smart-card redirection for the host's IronRDP client: the
         // seat's policy narrowed to the devices it owns (spec 70).
-        let redirection = match st.config.seat(seat) {
-            Some(cfg) => {
-                let live: Vec<seat_core::device::Device> = st.inventory.live().cloned().collect();
-                // Each drive letter is pinned to the volume it names now; the host refuses it
-                // when the letter names another volume by the time it opens it.
-                #[cfg(windows)]
-                let volume_of = seat_rdp::policy::volume::name_of_letter;
-                #[cfg(not(windows))]
-                let volume_of = |_: char| None::<String>;
-                // Print queues of seat-owned printers (spooler lookup, only when the seat's
-                // printer policy is `seat`).
-                let queues_of = |id: &str| seat_media::printer_queues_for_device(id);
-                seat_rdp::policy::host_redirection_with(
-                    seat,
-                    &cfg.local_settings().redirect,
-                    &st.inventory.effective(&st.config),
-                    &live,
-                    &volume_of,
-                    &queues_of,
-                )
-            }
-            None => Default::default(),
-        };
+        let redirection = Self::seat_redirection(&st, seat);
         // The manager shows the notes next to the seat.
         if let Some(slot) = st.seats.get_mut(&seat)
             && slot.rt.redirect_notes != redirection.notes
@@ -1015,6 +999,67 @@ impl Service {
         let rt = slot.rt.clone();
         drop(st);
         self.events.publish(seat_proto::Event::SeatState { runtime: rt });
+    }
+
+    /// `host_audio_report`: the seat host's audio bridge notes, kept for the manager. A seat
+    /// without a playback endpoint (`render_absent`) is also logged once per change.
+    pub(crate) fn on_host_audio_report(&self, seat: SeatNumber, render_open: bool, capture_open: bool, notes: Vec<String>) {
+        let notes = audio_report_notes(render_open, capture_open, notes);
+        let mut st = self.lock();
+        let Some(slot) = st.seats.get_mut(&seat) else { return };
+        if slot.rt.audio_notes == notes {
+            return;
+        }
+        if notes.is_empty() {
+            log::info(&format!("seat {seat}: sound works again"));
+        } else {
+            log::warn(&format!("seat {seat}: audio: {notes:?}"));
+        }
+        slot.rt.audio_notes = notes;
+        let rt = slot.rt.clone();
+        drop(st);
+        self.events.publish(seat_proto::Event::SeatState { runtime: rt });
+    }
+
+    /// The seat's redirection: its policy narrowed to the devices it owns (spec 70).
+    fn seat_redirection(st: &crate::service::State, seat: SeatNumber) -> seat_core::backend::session::HostRedirection {
+        let Some(cfg) = st.config.seat(seat) else { return Default::default() };
+        let live: Vec<seat_core::device::Device> = st.inventory.live().cloned().collect();
+        // Each drive letter is pinned to the volume it names now; the host refuses it when
+        // the letter names another volume by the time it opens it.
+        #[cfg(windows)]
+        let volume_of = seat_rdp::policy::volume::name_of_letter;
+        #[cfg(not(windows))]
+        let volume_of = |_: char| None::<String>;
+        // Print queues of seat-owned printers (spooler lookup, only when the seat's printer
+        // policy is `seat`).
+        let queues_of = |id: &str| seat_media::printer_queues_for_device(id);
+        seat_rdp::policy::host_redirection_with(seat, &cfg.local_settings().redirect, &st.inventory.effective(&st.config), &live, &volume_of, &queues_of)
+    }
+
+    /// `host_drive_broker` (rdp-listener 2026-11-17): link the seat host with the seat
+    /// session's agent, which serves the seat's ACL'd volumes as the seat user. Fresh pipes
+    /// per call; the agent gets the allowlist (only these volumes, as resolved now).
+    pub(crate) fn host_drive_broker(&self, seat: SeatNumber) -> R {
+        let mut st = self.lock();
+        let slot = st.seats.get(&seat).ok_or_else(|| err(ErrorCode::NotFound, "no such seat"))?;
+        let host_pid = slot.host.as_ref().map(|h| h.pid).ok_or_else(|| err(ErrorCode::SeatNotRunning, "no host"))?;
+        let session_id = slot.rt.session_id.ok_or_else(|| err(ErrorCode::NotReady, "the seat has no session").with_reason("not_ready"))?;
+        let agent_pid =
+            slot.agent_pid.ok_or_else(|| err(ErrorCode::NotReady, "the seat's agent is not running (no user signed in)").with_reason("not_ready"))?;
+        let drives: Vec<seat_proto::DriveBrokerDrive> = Self::seat_redirection(&st, seat)
+            .drives
+            .into_iter()
+            .filter(|d| d.acl)
+            .map(|d| seat_proto::DriveBrokerDrive { root: d.root, volume: d.volume, read_only: d.read_only })
+            .collect();
+        if drives.is_empty() {
+            return Err(err(ErrorCode::InvalidValue, "the seat has no volume with permissions to share").with_reason("no_acl_drives"));
+        }
+        let pipes = self.platform.broker_pipes(host_pid, agent_pid).map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
+        log::info(&format!("seat {seat}: drive broker linked (agent pid {agent_pid}, {} volume(s))", drives.len()));
+        self.queue_agent_task(&mut st, session_id, seat_proto::AgentTaskKind::DriveBroker { read: pipes.agent_read, write: pipes.agent_write, drives });
+        Ok(ResponseBody::DriveBroker { read: pipes.host_read, write: pipes.host_write })
     }
 
     fn host_credentials(&self, seat: SeatNumber) -> R {
@@ -1063,4 +1108,33 @@ pub(crate) fn cpu_issues(cfg: &Config, infos: &[seat_proto::CpuSetInfo]) -> Vec<
             Some(Issue { severity, code, seat: Some(i.seat), device: None, field: Some("seats.cpu_sets".into()), reason: None })
         })
         .collect()
+}
+
+/// Notes kept from a `host_audio_report`: snake_case codes only (at most 8, 48 characters
+/// each), no duplicates, sorted. An open stream drops the matching `*_absent` /
+/// `*_open_failed` / `*_lost` note (a stale one the bridge did not clear yet).
+pub(crate) fn audio_report_notes(render_open: bool, capture_open: bool, notes: Vec<String>) -> Vec<String> {
+    let mut v: Vec<String> = notes
+        .into_iter()
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty() && n.len() <= 48 && n.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'))
+        .filter(|n| !(render_open && n.starts_with("render_")) && !(capture_open && n.starts_with("capture_")))
+        .collect();
+    v.sort();
+    v.dedup();
+    v.truncate(8);
+    v
+}
+
+#[cfg(test)]
+mod audio_report_tests {
+    use super::audio_report_notes;
+
+    #[test]
+    fn audio_notes_are_codes_only() {
+        let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(audio_report_notes(false, true, n(&["render_absent", "capture_lost", "Bad Note", "render_absent"])), n(&["render_absent"]));
+        assert!(audio_report_notes(true, true, n(&["render_lost"])).is_empty());
+        assert_eq!(audio_report_notes(false, false, (0..20).map(|i| format!("n{i}")).collect()).len(), 8);
+    }
 }

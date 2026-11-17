@@ -3,6 +3,7 @@
      experimental client-SKU option behind an explicit warning, timings, safety, hotkey,
      devices and the reversible system tweaks. -->
 <script lang="ts">
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import ExperimentalDialog from './ExperimentalDialog.svelte';
   import { availabilityLabel, backendName, noteLabel, t } from '#lib/i18n.ts';
   import { hotkeyLabel } from '#lib/hotkey.ts';
@@ -36,6 +37,7 @@
   let { store, onHotkey, onCpu }: Props = $props();
 
   let experimentalFor = $state<string | null>(null);
+  let restartAsk = $state(false);
   const CLASS_TARGETS: DeviceClassTarget[] = ['cdrom', 'ports', 'disk_drive', 'volume'];
   /** The service's choice when none is stored (`DeviceClassTarget::DEFAULT`). */
   const DEFAULT_CLASSES: DeviceClassTarget[] = ['cdrom', 'ports'];
@@ -198,6 +200,15 @@
               {/if}
             {/if}
           </div>
+        {/if}
+        {#if cat === 'session' && (draft.settings.backends.session === 'rds_loopback' || draft.settings.backends.session === 'termsrv_wrapper')}
+          <p class="hint" data-testid="loopback-binding">{t.advanced.loopbackBinding}</p>
+          <p class="hint">
+            <button type="button" data-testid="restart-termservice" disabled={!store.isAdmin} onclick={() => (restartAsk = true)}
+              >{t.advanced.restartTs}</button
+            >
+            {t.advanced.restartTsHint}
+          </p>
         {/if}
         {#if cat === 'session' && draft.settings.backends.session === 'termsrv_wrapper'}
           <p class="hint">
@@ -401,6 +412,20 @@
       experimentalFor = null;
     }}
     onCancel={() => (experimentalFor = null)}
+  />
+{/if}
+
+{#if restartAsk}
+  <ConfirmDialog
+    title={t.advanced.restartTsTitle}
+    body={t.advanced.restartTsBody}
+    confirmLabel={t.advanced.restartTsConfirm}
+    danger
+    onConfirm={() => {
+      restartAsk = false;
+      void store.restartTermService();
+    }}
+    onCancel={() => (restartAsk = false)}
   />
 {/if}
 

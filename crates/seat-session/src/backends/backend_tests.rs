@@ -893,3 +893,29 @@ fn rds_plan_after_restore_does_not_recreate_the_listener() {
     assert!(!w.registry.key_exists(LISTENER_KEY).unwrap());
     assert!(w.loopback.rules().is_empty());
 }
+
+/// rdp-listener 2026-11-17: the operator restart runs even with a seat session (the
+/// service stopped the seats before), is journaled, and reports a build that cannot stop
+/// TermService.
+#[test]
+fn rds_operator_restart_of_termservice() {
+    use seat_core::backend::session::LoopbackListenerPlan;
+    use std::sync::atomic::Ordering;
+    let w = FakeWorld::server();
+    w.wts.set_account_sid(".", "ali", "S-1-5-21-1-1002");
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    b.set_listener_plan(&LoopbackListenerPlan { accounts: vec![(".".into(), "ali".into())], passwordless_seats: true });
+    b.prepare_host(&GlobalSettings::default()).unwrap();
+    let before = w.loopback.restarts();
+    // A session that the automatic restart would wait for.
+    w.wts.add(FakeWts::rdp(5, "PSEAT-02", "ali"));
+    let notes = b.restart_termservice().unwrap();
+    assert!(notes.contains(&"termservice_restarted".to_string()), "{notes:?}");
+    assert_eq!(w.loopback.restarts(), before + 1);
+    w.loopback.not_stoppable.store(true, Ordering::SeqCst);
+    let e = b.restart_termservice().unwrap_err();
+    assert_eq!(e.reason, "restart_needs_reboot");
+    // Backends without TermService refuse.
+    let fus = create_backend(SessionBackendKind::FastUserSwitch, w.deps());
+    assert!(fus.restart_termservice().is_err());
+}

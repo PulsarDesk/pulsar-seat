@@ -150,20 +150,26 @@ dispatches the sub-command before anything else (`crates/seat-host/src/headless.
   session's** clipboard, so it is shared with seat 1's user and every other seat that has
   it on (off by default). An empty format list never wipes the seat's own clipboard;
   console copies made in another seat are refused unless `cross_seat`; late answers of an
-  earlier connection are dropped. Drives (`rdpdr`): only FAT / FAT32 / exFAT volumes the
-  seat owns alone, by drive letter pinned to its volume GUID path (re-checked right before
-  each open: `drive_letter_moved`), never the system drive, read-only when the policy says
-  so. NTFS / ReFS are refused (`drive_acl_volume_refused`): drive IRPs run under the seat
-  host's token, not the seat user's, so ACLs could not be honoured. Drives the service
-  unassigns while connected leave the session (`drive_unassigned`). A seat volume whose
+  earlier connection are dropped. Drives (`rdpdr`): only volumes the seat owns alone, by
+  drive letter pinned to its volume GUID path (re-checked right before each open:
+  `drive_letter_moved`), never the system drive, read-only when the policy says so.
+  FAT / FAT32 / exFAT volumes are served by the host; NTFS / ReFS (any volume with ACLs)
+  by the **drive broker** (`channels::broker`, 2026-11-17): the seat session's agent opens
+  the files as the seat user, the host forwards the IRPs over two service-made anonymous
+  pipes, and the broker serves only the service's allowlist. Live changes (2026-11-17):
+  drives and printers the service assigns or unassigns while connected join or leave the
+  open channel (`SeatRdpdr::live_changes`; `drive_unassigned`, `printer_unassigned`), ACL'd
+  drives once the broker is linked (`drive_broker_unavailable` until the user signed in). A seat volume whose
   letter moved into the seat's own logon session (`session_drive_letters` gate) cannot be
   opened by the host and is skipped (`drive_without_global_letter`). Smart cards: only the
   seat's readers are listed (per requested group); readers are matched by device instance
   id (`SCardGetReaderDeviceInstanceIdW`), by friendly name only when it is unique on the
   PC, else refused (`reader_name_ambiguous`); calls naming another reader get
   `SCARD_E_UNKNOWN_READER`, reader administration `SCARD_E_NO_ACCESS`, the shared card
-  cache is not used; the PnP notification count is the seat's filtered count. Printers and
-  ports are never redirected (the session sees the PC's own queues and ports). Every
+  cache is not used; the PnP notification count is the seat's filtered count. Printers: opt-in
+  (see `policy`), added and removed live too (Pulsar's patch of `ironrdp-rdpdr`, folder
+  `third_party/ironrdp-rdpdr`). Ports are never redirected. `ListReaderGroups` lists only
+  groups that hold one of the seat's readers. Every
   refusal is logged (`seat-rdp: refused <channel>: <reason>`, at most once per 10 s per
   reason) and reported to the service (manager, Durum tab). Asked-for channels without
   resolved data are still logged as `*_redirect_unavailable`. A seat never gets more than
@@ -211,7 +217,8 @@ dispatches the sub-command before anything else (`crates/seat-host/src/headless.
 
 - IronRDP (`ironrdp-connector`, `-session`, `-blocking`, `-pdu`, `-core`, `-graphics`,
   `-svc`, `-dvc`, `-rdpsnd`, `-rdpeai`, `-rdpei`, `-displaycontrol`, `-egfx` and their
-  sub-crates; `ironrdp-egfx` also credits Teleport):
+  sub-crates; `ironrdp-egfx` also credits Teleport; `ironrdp-rdpdr` 0.9.0 is vendored with
+  a small patch in `third_party/ironrdp-rdpdr`, licence files kept, see its `PATCHES.md`):
   Devolutions Inc. and contributors, MIT OR Apache-2.0, https://github.com/Devolutions/IronRDP
 - sspi-rs (`sspi`), picky: Devolutions Inc., MIT OR Apache-2.0
 - `native-tls`, `schannel`, `sha1`, `x509-cert`, `num-traits`, `zeroize`: MIT / Apache-2.0

@@ -1621,6 +1621,58 @@ impl Service {
         Ok(ResponseBody::Ack)
     }
 
+    /// `restart_term_service` (rdp-listener 2026-11-17): the operator confirmed in the
+    /// manager. Every running seat except seat 1 on the console is stopped first (local
+    /// seats on this thread, remote seats through their worker), then the session backend
+    /// restarts TermService and re-checks the second listener. Seats are not restarted.
+    pub(crate) fn restart_term_service(&self, confirm: bool) -> Result<ResponseBody, ProtoError> {
+        use seat_core::backend::session::SessionBackendKind as K;
+        if !confirm {
+            return Err(err(ErrorCode::InvalidValue, "confirmation needed").with_reason("confirm"));
+        }
+        let b = self.backends();
+        if !matches!(b.session.kind(), K::RdsLoopback | K::TermsrvWrapper) {
+            return Err(err(ErrorCode::Unsupported, "the session backend does not use Remote Desktop Services").with_reason("not_rds"));
+        }
+        let running: Vec<SeatNumber> = {
+            let st = self.lock();
+            let mut v: Vec<SeatNumber> = st
+                .seats
+                .iter()
+                .filter(|(n, s)| Service::managed(&st, **n) && !n.is_console() && (s.is_active() || s.want || s.retry_at.is_some()))
+                .map(|(n, _)| *n)
+                .collect();
+            v.sort();
+            v
+        };
+        for seat in &running {
+            log::info(&format!("seat {seat}: stopped for a Remote Desktop Services restart"));
+            self.stop_seat_now(*seat, true);
+        }
+        let mut stopped = running;
+        let remote: Vec<SeatNumber> = self.lock().remote_rt.iter().filter(|(_, r)| {
+            use seat_core::state::SeatState as S;
+            matches!(r.state, S::Starting { .. } | S::AtLogon | S::SignedIn { .. } | S::Locked { .. } | S::Stopping)
+        }).map(|(n, _)| *n).collect();
+        if !remote.is_empty() {
+            let _ = self.with_remote(|w| w.stop_all());
+            stopped.extend(remote);
+        }
+        stopped.sort();
+        log::info("Remote Desktop Services restart requested by the operator");
+        let out = match b.session.restart_termservice() {
+            Ok(notes) => {
+                log::info(&format!("Remote Desktop Services restarted ({notes:?})"));
+                seat_proto::TermServiceRestart { stopped_seats: stopped, restarted: true, reason: None }
+            }
+            Err(e) => {
+                log::warn(&format!("Remote Desktop Services restart failed: {e}"));
+                seat_proto::TermServiceRestart { stopped_seats: stopped, restarted: false, reason: Some(e.reason.clone()) }
+            }
+        };
+        Ok(ResponseBody::TermServiceRestart(out))
+    }
+
     /// `hyper_v` (parity review 2026-11-17): the Hyper-V helper of the source-IP tools.
     /// Turning the feature on needs `confirm`; a seat adapter needs a configured seat.
     pub(crate) fn hyperv(&self, action: seat_proto::hyperv::HyperVAction) -> Result<ResponseBody, ProtoError> {

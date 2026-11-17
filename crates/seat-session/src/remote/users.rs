@@ -92,9 +92,39 @@ pub trait Profiles: Send + Sync {
     fn ensure_profile(&self, user: &str, password: &Secret) -> Result<(), SessionError>;
 }
 
+/// `ERROR_LOGON_TYPE_NOT_GRANTED`: the password was accepted, the logon type is denied.
+pub const LOGON_TYPE_NOT_GRANTED: u32 = 1385;
+
+/// Credential test order (spec/remote 10 §4.4, rdp-listener 2026-11-17): an **interactive**
+/// logon against the local machine first, as the spec says. Windows checks the password
+/// before the logon right, so `ERROR_LOGON_TYPE_NOT_GRANTED` already proves the password;
+/// seat users of RDP seats may be denied local logon on purpose (spec/local 30 §10), so
+/// only then a network logon confirms the account (it also catches a password that
+/// expired between the two calls). Every other result of the interactive logon is final.
+pub fn credential_test_order(
+    interactive: impl FnOnce() -> Result<(), u32>,
+    network: impl FnOnce() -> Result<(), u32>,
+) -> Result<(), u32> {
+    match interactive() {
+        Err(LOGON_TYPE_NOT_GRANTED) => network(),
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_test_is_interactive_first() {
+        let mut net = 0;
+        assert_eq!(credential_test_order(|| Ok(()), || { net += 1; Ok(()) }), Ok(()));
+        assert_eq!(net, 0, "no network logon after an interactive success");
+        assert_eq!(credential_test_order(|| Err(1326), || Ok(())), Err(1326), "wrong password is final");
+        assert_eq!(credential_test_order(|| Err(1331), || Ok(())), Err(1331), "disabled is final");
+        assert_eq!(credential_test_order(|| Err(LOGON_TYPE_NOT_GRANTED), || Ok(())), Ok(()), "right denied: network confirms");
+        assert_eq!(credential_test_order(|| Err(LOGON_TYPE_NOT_GRANTED), || Err(1330)), Err(1330));
+    }
     use crate::remote::fake::FakeAccounts;
 
     #[test]
