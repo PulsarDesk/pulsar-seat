@@ -44,6 +44,15 @@ pub(crate) fn object_rules(c: &Config) -> Vec<seat_shim_core::objects::ObjectRul
         .collect()
 }
 
+/// A seat startup app the shim module must be in from the start: a program with named-object
+/// rules, or `steam.exe` with Steam per seat. The service then starts it through the shim
+/// launcher (VM round 2, 2026-11-17: on ARM64 the AppHelp database did not load the module,
+/// the launcher did).
+pub(crate) fn needs_module_at_start(c: &Config, exe: &std::path::Path) -> bool {
+    let Some(name) = exe.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()) else { return false };
+    object_rules(c).iter().any(|r| r.exe == name) || (c.settings.apps.steam_per_seat && name == "steam.exe")
+}
+
 /// Scale the seat asks for (`None` = Windows decides: local seats, remote seats that
 /// follow the client).
 pub(crate) fn expected_scale(c: &Config, seat: SeatNumber) -> Option<u32> {

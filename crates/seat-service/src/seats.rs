@@ -1169,6 +1169,7 @@ impl Service {
             }
         }
         let sdl = self.pad_sdl_env(seat);
+        let compat_cfg = self.lock().config.clone();
         for (i, app) in apps.into_iter().enumerate() {
             let exe = std::path::PathBuf::from(app.command.trim());
             if !exe.is_absolute() {
@@ -1176,16 +1177,28 @@ impl Service {
                 log::warn(&format!("seat {seat}: startup app {i} skipped: path is not absolute"));
                 continue;
             }
+            let env: Vec<(String, String)> = seat_env
+                .iter()
+                .cloned()
+                .chain(seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()))
+                .chain(sdl.iter().cloned())
+                .collect();
+            // Programs with named-object rules (and Steam per seat) start through the shim
+            // launcher: the AppHelp database did not load the module on ARM64 (VM round 2),
+            // so this is the path that gives them their per-seat names.
+            let (exe, args) = if crate::compat::needs_module_at_start(&compat_cfg, &exe) {
+                let launcher = self.platform.install_dir().join(seat_shim_core::launch::native_launcher(seat_shim_core::launch::Arch::current()));
+                let mut a = vec!["--".to_string(), exe.display().to_string()];
+                a.extend(app.args.iter().cloned());
+                (launcher, a)
+            } else {
+                (exe, app.args.clone())
+            };
             let spec = LaunchSpec {
                 session_id,
-                env: seat_env
-                    .iter()
-                    .cloned()
-                    .chain(seat_compat::srcip::launch_env(addr.as_ref(), &exe.display().to_string()))
-                    .chain(sdl.iter().cloned())
-                    .collect(),
+                env,
                 exe,
-                args: app.args.clone(),
+                args,
                 log_name: format!("app-{session_id}-{i}.log"),
                 as_system: false,
                 job: job.clone(),

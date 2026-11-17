@@ -3296,6 +3296,29 @@ fn seat_environment_at_logon() {
     assert!(tasks.iter().any(|t| t.task == AgentTaskKind::ReportDpi));
 }
 
+/// VM round 2 (2026-11-17): a startup app with named-object rules (or Steam with Steam per
+/// seat) starts through the shim launcher; other apps start as they are.
+#[test]
+fn startup_apps_with_object_rules_start_through_the_launcher() {
+    let mut c = two_seat_config();
+    c.settings.apps.object_rules = vec![seat_core::config::ObjectRule { exe: "Single.exe".into(), names: vec!["One".into()] }];
+    c.seats[1].startup_apps = vec![
+        seat_core::config::KioskApp { command: r"C:\Apps\single.exe".into(), args: vec!["-x".into()] },
+        seat_core::config::KioskApp { command: r"C:\Apps\other.exe".into(), args: vec![] },
+    ];
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let launched = h.p.launched();
+    let via = launched.iter().find(|x| x.args.iter().any(|a| a.ends_with("single.exe"))).expect("single.exe started");
+    assert!(via.exe.ends_with(seat_shim_core::launch::native_launcher(seat_shim_core::launch::Arch::current())), "{via:?}");
+    assert_eq!(via.args, vec!["--".to_string(), r"C:\Apps\single.exe".into(), "-x".into()]);
+    assert!(launched.iter().any(|x| x.exe.ends_with("other.exe") && x.args.is_empty()));
+}
+
 /// The Steam proxy-DLL request is admin only and refuses paths that are not DLLs.
 #[test]
 fn steam_proxy_request() {

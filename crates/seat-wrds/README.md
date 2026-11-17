@@ -76,10 +76,27 @@ cargo build --release -p seat-wrds          # target\<triple>\release\pulsar_sea
 
 `build-installer.ps1` builds it with the service and ships it as `pulsar-seat-wrds.dll`.
 
+## Seen on the test VM (Windows 11 Pro 26300 ARM64, VM round 2, 2026-11-17)
+
+Client edition, so no provider session was hosted (that needs Server + RD Session Host);
+only registration and loading were exercised:
+
+- Registration (`settings.remote.display_backend = pulsar_idd` with a remote seat account
+  known to the engine) wrote the `PulsarSeat-Idd` WinStation and the COM class; TermService
+  loaded `pulsar-seat-wrds.dll` **within seconds, without a restart**, and the provider
+  said hello on `\\.\pipe\PulsarSeat.Wrds` (TermService pid checked). The first HYPOTHESIS
+  below is therefore wrong on this build; the status still says `wrds_restart_needed`
+  until the hello arrives.
+- Setting the display backend back removed both keys at once; TermService keeps the DLL
+  loaded until it restarts. MSI uninstall removed everything and the DLL was unloaded.
+- The engine registers only once it knows a remote seat account (service start or the
+  seat's first start); a remote seat added later without a start leaves it unregistered.
+
 ## HYPOTHESIS (nothing ran: needs Windows Server with the RD Session Host role)
 
-- TermService loads a listener's provider only when it starts, so a new registration needs
-  a TermService restart (status `wrds_restart_needed` until the provider says hello).
+- (Contradicted on Windows 11 Pro 26300, see above.) TermService loads a listener's
+  provider only when it starts, so a new registration needs a TermService restart (status
+  `wrds_restart_needed` until the provider says hello).
 - Call order of TermService into the provider as drawn above; `OnReady` right after
   `OnConnected` is accepted.
 - Null keyboard / mouse / beep handles (`GetInputHandles`) and a null video handle

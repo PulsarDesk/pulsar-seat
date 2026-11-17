@@ -86,6 +86,18 @@ listed by name only stay in (HYPOTHESIS: an x64 process that matches them skips 
 unloadable module without harm). The manager says x64 apps on ARM64 get the module only
 when Pulsar Seat starts them.
 
+**VM round 2 (2026-11-17, Windows 11 Pro 26300 ARM64): the AppHelp path did not load the
+module.** With the database installed by `shimctl install --arm64 ... --x86 ... --target
+pseat-single.exe` (InstalledSDB + `Custom\pseat-single.exe` present, ARM64 module in
+System32, x86 in SysWOW64), neither a native ARM64 nor an x86 build of the stand-in
+program had `PulsarSplitShim.dll` loaded, in the console or in a fast user switching
+seat. Rebuilding the database with `OS_PLATFORM` absent, 0x0D, 0x15 or 0x25 changed
+nothing. The launcher path (`shim\arm64\pulsar-split-launch.exe -- <exe>`) loaded it every
+time. So on ARM64 only programs Pulsar Seat starts through the launcher (or the kiosk
+shell's `--attach`) get the module today; why AppHelp skips the custom shim DLL is open
+(HYPOTHESIS: the shim engine on ARM64 needs another database tag or refuses non-Microsoft
+shim DLLs; x64 Windows not checked).
+
 ARM64EC (HYPOTHESIS, not run): an ARM64EC app's image carries the x64 machine, so the
 launcher treats it as x64 and injects the x64 module; the loader runs x64 DLLs in ARM64EC
 processes. Exports of the system DLLs there are x64-callable thunks ("fast-forward
