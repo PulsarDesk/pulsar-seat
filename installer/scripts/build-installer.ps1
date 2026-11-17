@@ -316,12 +316,27 @@ Invoke-Checked "bundle config" {
 $env:PULSAR_SEAT_BIN = $payload
 $oldFlags = $env:RUSTFLAGS
 $env:RUSTFLAGS = "-C target-feature=+crt-static"
+# Tauri's MSI bundler adds every DLL next to the manager exe in <target>\<triple>\release.
+# A shared target dir collects DLLs of other builds there (split-pad from build-drivers.ps1,
+# a shim built without its own --target-dir), which then landed in the MSI root (VM round
+# 2026-11-17: check-payload `shim_outside_folder`). Hold them aside while tauri runs.
+$releaseDir = Join-Path $CargoTargetDir "$triple\release"
+$held = Join-Path $releaseDir "held-dlls"
+$heldDlls = @(Get-ChildItem $releaseDir -File -Filter *.dll -ErrorAction SilentlyContinue)
+if ($heldDlls) {
+    New-Item -ItemType Directory -Force $held | Out-Null
+    $heldDlls | ForEach-Object { Write-Host "holding aside $($_.Name) (not part of the MSI)"; Move-Item $_.FullName $held -Force }
+}
 Push-Location (Join-Path $repo "apps\manager")
 try {
     Invoke-Checked "tauri build --bundles msi" { bun run tauri build --target $triple --bundles msi --config $config }
 } finally {
     Pop-Location
     $env:RUSTFLAGS = $oldFlags
+    if (Test-Path $held) {
+        Get-ChildItem $held -File | ForEach-Object { Move-Item $_.FullName $releaseDir -Force }
+        Remove-Item $held -Force -ErrorAction SilentlyContinue
+    }
 }
 $manager = Join-Path $CargoTargetDir "$triple\release\pulsar-seat-manager.exe"
 Copy-Item $manager $payload -Force
