@@ -123,7 +123,7 @@ pub struct WinPlatform {
     data_dir: PathBuf,
     /// `PowerCreateRequest` handle while the keep-awake request is set.
     power: Mutex<Option<PowerRequest>>,
-    /// One job object per seat session (spec 80 §11.2): the seat agent, the seat's startup
+    /// One job object per seat session (spec 80 Â§11.2): the seat agent, the seat's startup
     /// apps and launcher-request apps, with the seat's CPU limits. Dropped on every logoff /
     /// session end (session ids are reused).
     jobs: Mutex<HashMap<u32, SessionJob>>,
@@ -159,11 +159,11 @@ impl Drop for PowerRequest {
 
 /// Reason shown by `powercfg /requests` (localized).
 const POWER_REASON: seat_core::i18n::Text =
-    seat_core::i18n::Text::new("Pulsar Seat: extra seats in use", "Pulsar Seat: ek koltuklar kullanımda");
+    seat_core::i18n::Text::new("Pulsar Seat: extra seats in use", "Pulsar Seat: ek koltuklar kullanÄ±mda");
 /// Message of the restart the manager asks for.
 const REBOOT_MESSAGE: seat_core::i18n::Text = seat_core::i18n::Text::new(
     "Pulsar Seat: restarting to finish the configuration",
-    "Pulsar Seat: yapılandırma için yeniden başlatılıyor",
+    "Pulsar Seat: yapÄ±landÄ±rma iÃ§in yeniden baÅŸlatÄ±lÄ±yor",
 );
 
 fn tweak_outcomes(v: Vec<(seat_compat::tweaks::TweakId, Result<(), String>)>) -> Vec<TweakOutcome> {
@@ -295,12 +295,54 @@ pub fn hyperv_uninstall(data_dir: &Path) -> Vec<String> {
     errors
 }
 
+/// Uninstall: every VM seat object the VM seat code recorded (VMs, disks, base disk,
+/// forwards, NAT, switch, firewall rules, shares, share account, guest link
+/// registration). Returns the errors.
+pub fn hyperv_vm_uninstall(data_dir: &Path) -> Vec<String> {
+    use seat_compat::hyperv_vm as hv;
+    let path = data_dir.join("journal").join(hv::JOURNAL_FILE);
+    let Some(j) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<hv::VmJournal>(&b).ok()) else { return Vec::new() };
+    let storage = if j.storage.is_empty() { data_dir.join("vm").to_string_lossy().into_owned() } else { j.storage.clone() };
+    match run_powershell(&hv::script_uninstall(&storage, &j.shares)) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&path);
+            Vec::new()
+        }
+        Err(e) => vec![format!("vm seats: {e}")],
+    }
+}
+
+/// The guest link hub; its listener starts with the first use.
+fn guest_hub() -> &'static std::sync::Arc<crate::guest_link::GuestHub> {
+    static HUB: std::sync::OnceLock<std::sync::Arc<crate::guest_link::GuestHub>> = std::sync::OnceLock::new();
+    HUB.get_or_init(|| {
+        let h = std::sync::Arc::new(crate::guest_link::GuestHub::default());
+        crate::guest_link::serve(h.clone());
+        h
+    })
+}
+
 /// Runs a PowerShell script non-interactively (Hyper-V helper); stdout on success.
 fn run_powershell(script: &str) -> BackendResult<String> {
+    run_powershell_input(script, &[])
+}
+
+/// Same, with secret lines on stdin (one per line, then EOF); never in the script text.
+pub(crate) fn run_powershell_input(script: &str, input: &[&Secret]) -> BackendResult<String> {
+    use std::io::Write as _;
     let mut cmd = std::process::Command::new("powershell.exe");
     cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
-    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).stdin(std::process::Stdio::null());
-    let child = seat_core::spawn::spawn_locked(&mut cmd).map_err(|e| BackendError::new(ErrorKind::Os, "powershell", e.to_string()))?;
+    let stdin = if input.is_empty() { std::process::Stdio::null() } else { std::process::Stdio::piped() };
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).stdin(stdin);
+    let mut child = seat_core::spawn::spawn_locked(&mut cmd).map_err(|e| BackendError::new(ErrorKind::Os, "powershell", e.to_string()))?;
+    if let Some(mut si) = child.stdin.take() {
+        let mut buf = zeroize::Zeroizing::new(Vec::new());
+        for s in input {
+            buf.extend_from_slice(s.expose().as_bytes());
+            buf.push(b'\n');
+        }
+        let _ = si.write_all(&buf);
+    }
     let out = child.wait_with_output().map_err(|e| BackendError::new(ErrorKind::Os, "powershell", e.to_string()))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
@@ -387,7 +429,7 @@ fn exit_code(h: HANDLE) -> Option<u32> {
 /// Session user's primary token for a child in `session` (agents, seat apps). Seat hosts and
 /// the console listener (`as_system`) get theirs from `win::containment` instead: the host
 /// account at Low integrity, or the SYSTEM fallbacks of `HostTokenCompat`
-/// (docs/troubleshooting.md §5).
+/// (docs/troubleshooting.md Â§5).
 fn child_token(session: u32) -> BackendResult<HANDLE> {
     let src = user_token(session).ok_or_else(|| {
         BackendError::new(ErrorKind::NotReady, "session_not_signed_in", "no user token for the target session")
@@ -527,6 +569,52 @@ impl Platform for WinPlatform {
         let mut st = hv::parse_status(&run_powershell(&hv::script_status())?).map_err(|e| BackendError::new(ErrorKind::Os, "hyperv_status", e))?;
         st.reboot_required |= reboot;
         Ok(st)
+    }
+
+    fn hyperv_vm(
+        &self,
+        op: &seat_compat::hyperv_vm::VmOp,
+        stdin: Option<&Secret>,
+    ) -> BackendResult<seat_compat::hyperv_vm::HostFacts> {
+        use seat_compat::hyperv_vm::{self as hv, VmOp};
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" };
+        let script = hv::script_for(op, arch).map_err(|e| BackendError::new(ErrorKind::Policy, "invalid", e))?;
+        let input: Vec<&Secret> = stdin.into_iter().collect();
+        let out = run_powershell_input(&script, &input)?;
+        let storage = match op {
+            VmOp::Status { .. } => {
+                return hv::parse_status(&out).map_err(|e| BackendError::new(ErrorKind::Os, "hyperv_status", e));
+            }
+            VmOp::PrepareHost { host } | VmOp::BuildBase { host } => host.storage.clone(),
+            VmOp::ResetBase { storage, .. } => storage.clone(),
+            VmOp::Ensure { spec } | VmOp::ResetSandbox { spec } | VmOp::Remove { spec } => spec.storage.clone(),
+            VmOp::Start { .. } | VmOp::Stop { .. } | VmOp::RestartGpus => self.vm_default_storage(),
+        };
+        let status = run_powershell(&hv::script_status(&storage))?;
+        hv::parse_status(&status).map_err(|e| BackendError::new(ErrorKind::Os, "hyperv_status", e))
+    }
+
+    fn vm_default_storage(&self) -> String {
+        self.data_dir.join("vm").to_string_lossy().into_owned()
+    }
+
+    fn vm_payload_dir(&self) -> String {
+        self.install_dir().to_string_lossy().into_owned()
+    }
+
+    fn guest_link_offer(&self, vm_id: &str, config: Option<seat_core::remote::vm::GuestConfig>) {
+        if vm_id.is_empty() {
+            return;
+        }
+        guest_hub().offer(vm_id, config);
+    }
+
+    fn guest_link_send(&self, vm_id: &str, msg: &seat_core::remote::vm::GuestMsg) -> BackendResult<()> {
+        guest_hub().send(vm_id, msg).map_err(|e| BackendError::new(ErrorKind::Os, "guest_link", e))
+    }
+
+    fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
+        guest_hub().phase(vm_id)
     }
 
     fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
@@ -1087,7 +1175,7 @@ impl Platform for WinPlatform {
         unsafe { GetSystemMetrics(SM_CLEANBOOT) != 0 }
     }
 
-    /// The compat package's probe (spec 90 §3): the same check ids the installer's
+    /// The compat package's probe (spec 90 Â§3): the same check ids the installer's
     /// `preflight` sub-command and the manager's texts use.
     fn preflight(&self) -> Vec<Check> {
         seat_compat::preflight::run(&seat_compat::WinOps)
@@ -1250,7 +1338,7 @@ unsafe extern "system" fn notify_cb(param: *const c_void) {
 }
 
 /// Wait until every named service runs, with SCM notifications (`NotifyServiceStatusChangeW`
-/// and alertable waits), never fixed sleeps (spec 20 §13.1). Returns the ones that did not
+/// and alertable waits), never fixed sleeps (spec 20 Â§13.1). Returns the ones that did not
 /// start within `timeout`. Each notification is re-armed after it fires (one-shot API).
 fn wait_running(names: &[&str], timeout: Duration) -> Vec<String> {
     use windows_service::service::{ServiceAccess, ServiceState};

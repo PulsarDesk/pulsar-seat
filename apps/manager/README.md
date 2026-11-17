@@ -40,7 +40,7 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src/lib/locales/en.ts`, `tr.ts` | All UI copy: English (default, the key set: type `Locale`) and Turkish (same keys, `i18n.test.ts`) |
 | `src/lib/i18n.ts`, `warning.ts` | Locale choice (`initLocale`, `applyLocale`, stored per user), label helpers; the experimental-backend warning in both languages |
 | `src/lib/components/` | App shell, tabs (Seats, Basic, Advanced, Network, Status), dialogs, wizard |
-| `src/lib/remote/` | Remote seats tab (from Pulsar Split's manager): `components/RemoteTab.svelte` + seat page, pair dialog (QR), host, logs, DXVK, settings; `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts`, `remote.css` (scoped to `.remote-ui`) |
+| `src/lib/remote/` | Remote seats tab (from Pulsar Split's manager): `components/RemoteTab.svelte` + seat page, pair dialog (QR), host, logs, DXVK, VM seats (`VmPage.svelte`, `vm.ts`: Hyper-V VM seats, hyperv-seats 2026-11-17), settings; `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts`, `remote.css` (scoped to `.remote-ui`) |
 | `src-tauri/src/net.rs` | Static IPv4 list (address dialog) and the LAN address order of the pair dialog (`lan_addresses`) |
 
 ## Tauri surface

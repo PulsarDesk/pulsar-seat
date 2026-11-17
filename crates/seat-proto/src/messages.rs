@@ -167,6 +167,10 @@ pub enum RequestBody {
     /// virtual adapter with a fixed address on an internal switch). Answers
     /// [`ResponseBody::HyperV`]. Added 2026-11-17 (parity review, additive, admin).
     HyperV { action: crate::hyperv::HyperVAction },
+    /// Hyper-V VM seats (spec/remote 10 §8): status, VM network, base disk, reset a seat's
+    /// disk. Answers [`ResponseBody::VmSeats`]. Added 2026-11-17 (hyperv-seats, additive,
+    /// admin).
+    VmSeats { action: crate::hyperv::VmAction },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -411,6 +415,7 @@ impl RequestBody {
             | R::ResetGraphics { .. }
             | R::RemoveKioskUser { .. }
             | R::HyperV { .. }
+            | R::VmSeats { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -583,6 +588,8 @@ pub enum ResponseBody {
     Ack,
     /// Answer of `hyper_v` (added 2026-11-17, additive).
     HyperV(crate::hyperv::HyperVStatus),
+    /// Answer of `vm_seats` (added 2026-11-17, additive).
+    VmSeats(Box<crate::hyperv::VmHostStatus>),
     Status(ServiceStatus),
     Backends(BackendReport),
     Checks(Vec<Check>),

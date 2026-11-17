@@ -73,6 +73,11 @@ pub struct Environment {
     pub windows_safe_mode: bool,
     /// RD Session Host role (Server only; registry heuristic, HYPOTHESIS).
     pub rdsh_role: Option<bool>,
+    /// Hyper-V present (the `vmms` service is registered): VM seats can run. Feature
+    /// presence only; turning it on stays the manager's visible opt-in (hyperv-seats
+    /// 2026-11-17). `None` = not probed.
+    #[serde(default)]
+    pub hyperv: Option<bool>,
     pub coexistence: Coexistence,
 }
 
@@ -91,6 +96,7 @@ impl Default for Environment {
             smart_app_control: Some(SmartAppControl::Off),
             windows_safe_mode: false,
             rdsh_role: None,
+            hyperv: None,
             coexistence: Coexistence {
                 termservice_stock: true,
                 ..Default::default()
@@ -224,6 +230,15 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
     } else {
         chk("windows_safe_mode", Pass, "normal boot")
     });
+    v.push(match env.hyperv {
+        Some(true) => chk("hyperv_vm", Info, "Hyper-V present: VM seats can run"),
+        Some(false) => chk(
+            "hyperv_vm",
+            Info,
+            "Hyper-V not present: VM seats need it (the manager can turn it on; restart needed)",
+        ),
+        None => chk("hyperv_vm", Info, "Hyper-V state unknown"),
+    });
     v.push(chk(
         "driver_signing",
         Info,
@@ -261,6 +276,7 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
     const SMART_APP_CONTROL: Text = Text::new("Smart App Control", "Akıllı Uygulama Denetimi");
     const WINDOWS_SAFE_MODE: Text = Text::new("Safe Mode", "Güvenli Mod");
     const DRIVER_SIGNING: Text = Text::new("Driver signature", "Sürücü imzası");
+    const HYPERV_VM: Text = Text::new("Hyper-V for VM seats", "VM koltukları için Hyper-V");
     const REFERENCE_PRODUCT: Text = Text::new("Another multiseat product", "Başka bir çoklu koltuk yazılımı");
     const TERMSERVICE_STOCK: Text = Text::new("Remote Desktop service is stock", "Uzak Masaüstü hizmeti özgün");
     const FOREIGN_INPUT_FILTERS: Text = Text::new("Other input filter drivers", "Başka giriş süzgeç sürücüleri");
@@ -276,6 +292,7 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
         "smart_app_control" => &SMART_APP_CONTROL,
         "windows_safe_mode" => &WINDOWS_SAFE_MODE,
         "driver_signing" => &DRIVER_SIGNING,
+        "hyperv_vm" => &HYPERV_VM,
         "reference_product" => &REFERENCE_PRODUCT,
         "termservice_stock" => &TERMSERVICE_STOCK,
         "foreign_input_filters" => &FOREIGN_INPUT_FILTERS,
@@ -291,6 +308,8 @@ const HVCI: &str =
     r"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity";
 const CI_POLICY: &str = r"SYSTEM\CurrentControlSet\Control\CI\Policy";
 const TERMINAL_SERVER: &str = r"SYSTEM\CurrentControlSet\Control\Terminal Server";
+/// Hyper-V Virtual Machine Management service (installed with the Hyper-V feature).
+const VMMS: &str = r"SYSTEM\CurrentControlSet\Services\vmms";
 
 fn dword(ops: &dyn SystemOps, key: &str, name: &str) -> Option<u32> {
     ops.reg_read(Hive::Hklm, key, name)
@@ -316,6 +335,7 @@ pub fn probe_registry(ops: &dyn SystemOps, env: &mut Environment) {
     env.is_server = string(ops, CURRENT_VERSION, "InstallationType")
         .is_some_and(|t| t.to_ascii_lowercase().starts_with("server"));
     env.secure_boot = dword(ops, SECURE_BOOT, "UEFISecureBootEnabled").map(|v| v == 1);
+    env.hyperv = Some(dword(ops, VMMS, "Start").is_some());
     env.memory_integrity = Some(dword(ops, HVCI, "Enabled") == Some(1));
     env.smart_app_control =
         dword(ops, CI_POLICY, "VerifiedAndReputablePolicyState").map(|v| match v {
@@ -394,6 +414,24 @@ mod tests {
             fails,
             vec!["admin", "os_build", "arch_native", "reference_product"]
         );
+    }
+
+    #[test]
+    fn hyperv_presence_is_reported_only() {
+        for (h, text) in [(Some(true), "present"), (Some(false), "not present"), (None, "unknown")] {
+            let c = evaluate(&Environment { hyperv: h, ..Default::default() });
+            let x = c.iter().find(|x| x.id == "hyperv_vm").unwrap();
+            assert_eq!(x.outcome, CheckOutcome::Info);
+            assert!(x.detail.contains(text), "{}", x.detail);
+            assert!(!blocks_install(&c));
+        }
+        let ops = MemoryOps::default();
+        let mut env = Environment::default();
+        probe_registry(&ops, &mut env);
+        assert_eq!(env.hyperv, Some(false));
+        ops.reg_write(Hive::Hklm, VMMS, "Start", &RegData::Dword(3)).unwrap();
+        probe_registry(&ops, &mut env);
+        assert_eq!(env.hyperv, Some(true));
     }
 
     #[test]

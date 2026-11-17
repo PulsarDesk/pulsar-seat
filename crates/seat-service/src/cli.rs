@@ -49,6 +49,8 @@ pub enum Command {
     /// Remote-kind setup (from Pulsar Split, merge step 6): `remote-setup install |
     /// reconcile | uninstall | check-coexistence [...]` (`seat_setup::cli`).
     RemoteSetup(seat_setup::cli::SetupCommand),
+    /// Guest mode inside a Hyper-V VM seat (hyperv-seats 2026-11-17; `win::vm_guest`).
+    VmGuest,
     Help,
 }
 
@@ -107,6 +109,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         "preflight" => {
             known(&[])?;
             Command::Preflight
+        }
+        "vm-guest" => {
+            known(&[])?;
+            Command::VmGuest
         }
         "install" => {
             // `--exe PATH` is ours; everything else goes to the compat parser, which
@@ -295,8 +301,8 @@ pub mod copy {
 }
 
 pub const USAGE: Text = Text::new(
-    "Usage: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe NAME] | preflight | install [--exe PATH] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
-    "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
+    "Usage: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe NAME] | preflight | install [--exe PATH] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | vm-guest | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
+    "Kullanım: pulsar-seat-service <--service | --console [--data-dir D] [--allow-current-user] [--debug] [--pipe AD] | preflight | install [--exe YOL] [--msi] [--register-service] [--restore-point=0|1] [--tweak=…] [--drivers=…] | uninstall [--msi] [--unregister-service] [--remove-user-data=0|1] | enable | disable | reset | status | report [--no-mask] | vm-guest | remote-setup <install | reconcile | uninstall | check-coexistence> [...]>",
 );
 
 /// Short text for a service error code (CLI output; English default, Turkish locale).
@@ -484,6 +490,9 @@ mod tests {
     #[test]
     fn installer_lines() {
         assert_eq!(parse(&a(&["preflight"])).unwrap(), Command::Preflight);
+        // The guest boot task of a VM seat's base disk (seat_compat::hyperv_vm::setup_complete_cmd).
+        assert_eq!(parse(&a(&["vm-guest"])).unwrap(), Command::VmGuest);
+        assert!(parse(&a(&["vm-guest", "--x"])).is_err());
         let msi = a(&["install", "--msi", "--restore-point=1", "--tweak=sleep_off", r"--drivers=C:\P\drivers"]);
         assert!(matches!(parse(&msi).unwrap(), Command::Install { exe: None, ref args } if args.len() == 4));
         let nsis = a(&["install", "--register-service", "--restore-point=0", "--tweak=", "--drivers=none"]);

@@ -125,6 +125,8 @@ export function applyRecord(s: SeatConfig, rec: R.SeatConfig): SeatConfig {
     stream_backend: rec.stream_backend ?? 'sunshine'
   };
   if (old.last_mode) out.remote.last_mode = old.last_mode;
+  // The VM part is edited on the VM seats page; a seat page save keeps it.
+  if (old.vm) out.remote.vm = old.vm;
   if (!out.remote.apps?.length) delete out.remote.apps;
   return out;
 }

@@ -1994,6 +1994,104 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
 - **Drivers' INF copy:** English `[Strings]` + Turkish `[Strings.041f]`
   (`installer/scripts/driver-inf-locales.test.ts`).
 
+## Hyper-V VM seats (hyperv-seats, 2026-11-17)
+
+Spec: `spec/remote/10-manager.md` §8 (sandbox seats, shared folders, forwarded ports,
+storage, reset), §3 hidden sandbox values, `20-service.md` (`Sandboxed`, `SandboxMemory`,
+`HideVMSuffix`, `.vmconf`), `90-install.md` §2.4 (optional features). Our design, built and
+unit-tested with fakes; nothing ran on a Hyper-V host (HYPOTHESIS throughout).
+
+- **Config (schema 3).** A VM seat is a remote seat with `remote.vm: VmSeat` (memory,
+  processors, GPU partition `off | auto | adapter`, shared folders, forwarded ports, stop
+  mode `shut_down | save | turn_off`, `hide_vm_suffix`, service-assigned `guest_address`).
+  Machine settings `settings.remote.vm: VmSettings` (storage folder, memory share %,
+  base disk size, image `none | wim | vhdx` + path / index / language CAB, GPU restart on
+  stop, NAT prefix, default `172.31.240.0/24`). `CONFIG_SCHEMA_VERSION` = 3; migration
+  2 -> 3 drops a stray `vm` from schema-2 documents (only pre-release builds wrote one). The
+  bump keeps a schema-2 build from silently running a VM seat as an RDP seat.
+  `seat_core::remote::assign_vm_addresses` (in `commit_config`) gives each VM seat
+  network + 10 + seat number.
+- **Validation** (`seat_core::remote::vm`, hooked into Split's `seat_alone` /
+  `seat_against` / `global`): spec mount point rule (drive letter other than `C:`, or a
+  `C:\` path with a folder and no trailing backslash), absolute local host paths without
+  quotes / `$` / `..`, forwarded host ports outside every remote seat's stream block and
+  unique per protocol, memory 0 or >= 2048 MB, `save` refused with a GPU partition (Hyper-V
+  cannot save such a VM), settings ranges and prefix. Issues reuse `remote_seat_invalid`
+  with `field = remote.vm.*` / `settings.remote.vm.*` and the reason. VM seats need no
+  concurrent host sessions: no `session_unavailable` warning for them.
+- **Service** (`seat-service/src/vm_seats.rs`). The remote seat worker never sees VM seats
+  (`DocStore::load` leaves them out); `glue.rs` routes them: `start_seats`, autostart,
+  resume -> `start_vm_seat`; `stop_seat`, service stop, suspend -> `stop_vm_seat`;
+  `apply_config` delete -> refused while active, else `VmOp::Remove`. Start checks, in this
+  order (first refusal answers): Hyper-V feature + `vmms` (`hyperv_unavailable`), network
+  (`vm_network_missing`), base disk (`vm_base_missing`), id / address (`vm_not_assigned`),
+  chosen GPU partitionable (`vm_gpu_missing`), user + stored password
+  (`missing_credentials`). Then `VmOp::Ensure` (share account password = a fresh random
+  token, on the script's stdin), guest config offered on the guest link, `VmOp::Start`.
+  The tick polls the VM states every 2 s while a VM seat is active (off the tick thread) and
+  maps VM state + guest phase to the seat runtime (`vm_seat_state`: running + `streaming`
+  / `signed_in` = `signed_in{user}`, `streaming` adds `degraded: ["streaming"]`, guest
+  `failed` = `error{internal, detail}`, off / saved = off). `restart_gpus_on_shutdown`
+  restarts the display adapters after a GPU-P VM stopped. Pairing: `submit_pin` /
+  `unpair_all` go to the guest over the link; `cancel_pair` acks; every other remote-kind
+  request on a VM seat answers `unsupported` / reason `vm_seat`.
+- **Request** `vm_seats { action }` (protocol 3, additive, admin): `status`,
+  `prepare_host{confirm}` (internal switch `Pulsar Seat VM`, host address = network + 1,
+  NAT `Pulsar Seat VM`, guest link registration), `build_base{confirm}` (background;
+  `building` in the status), `reset_base{confirm}` (all VM seats off), `reset_sandbox{seat,
+  confirm}` (seat off). Answer `VmHostStatus` (feature, vmms, network, base, building, last
+  error, storage, partitionable GPUs, host memory / CPUs, per seat VM state, guest phase).
+- **Hyper-V side** (`seat_compat::hyperv_vm`, PowerShell cmdlets only). Base disk from a
+  `.wim` / `.esd`: dynamic VHDX of `storage_gb`, GPT with EFI / MSR / Windows partitions,
+  `Expand-WindowsImage`, optional `Add-WindowsPackage` (language CAB), `bcdboot`; from a
+  `.vhdx`: copied. Then the host's install dir is copied to `C:\Program Files\Pulsar Seat`,
+  an unattend file without any account or password skips OOBE, and `SetupComplete.cmd`
+  registers the boot task `PulsarSeatGuest` (`pulsar-seat-service vm-guest`, SYSTEM); the
+  base disk is made read-only. Per seat: `seats\<id>\sandbox.vhdx` differencing over
+  `zygote.vhdx` (host GPU driver packages copied into its `HostDriverStore` when a GPU
+  partition is used), Generation 2 VM `PulsarSeat-<id>` (Secure Boot template
+  MicrosoftWindows, local key protector + vTPM, Guest Service Interface, static memory,
+  checkpoints off, automatic start off), `Add-VMGpuPartitionAdapter` (+ MMIO space),
+  `Add-NetNatStaticMapping` for the stream ports (`p-5`, `p`, `p+9..11`, `p+21`; never the
+  web UI `p+1`) and the seat's forwards, one inbound firewall rule per protocol (group
+  `Pulsar Seat VM`, Private + Domain), SMB shares `PulsarVm<id8>-<n>$` for the host account
+  `PulsarSeatVmShare` with a matching NTFS grant. Journal `journal\hyperv-vm.json`
+  (written before the change); uninstall (`hyperv_vm_uninstall`, before the Hyper-V helper's
+  own) removes VMs, disks, base disk, shares + NTFS grants, firewall group, NAT, switch,
+  share account and the registration. The Hyper-V feature is never turned on here: that
+  stays the Hyper-V helper's visible opt-in (Network tab, reboot notice).
+- **Guest link.** Hyper-V sockets (`seat_compat::hvsock`, `AF_HYPERV`), service id
+  `6c3c2b9e-5f1a-4f7e-9d2b-8a41c0e7b513` registered under
+  `...\Virtualization\GuestCommunicationServices`. Host: `guest_link::GuestHub` + listener
+  thread (`HV_GUID_WILDCARD`); a VM gets a config only when the service offered one for its
+  VM id (the hypervisor supplies the id with `accept`). JSON lines (`GuestMsg`: `hello`,
+  `config`, `state`, `submit_pin`, `unpair_all`, `result`, `shutdown`; 64 KiB per line,
+  protocol 1). Passwords travel only on the link, in memory.
+- **Guest mode** (`win/vm_guest.rs`, `pulsar-seat-service vm-guest`). Connects to
+  `HV_GUID_PARENT`, applies the config (`script_guest_apply`: static address, the host's
+  DNS servers, seat user created / password set / Users member, shares as global SMB
+  mappings with drive letters or symbolic links for `C:\...` mount points; passwords on
+  stdin), turns on automatic sign-in of the seat user inside the VM (`AutoAdminLogon`,
+  `DefaultUserName`, password as the LSA secret `DefaultPassword`, never in the registry;
+  the VM is the seat, so the host rule of never writing Winlogon values for seat users is
+  untouched) and restarts once if nobody is signed in. When the seat user owns the console
+  session it runs the seat's stream server there with the same `seat_stream` backends as
+  host remote seats (`remote::win::wiring::stream_env`), reports `signed_in` / `streaming`,
+  forwards PINs and unpair requests, stops the server on `shutdown`.
+- **Manager.** Remote tab page "VM seats" (`remote/components/VmPage.svelte`,
+  `remote/vm.ts`): host state, network / base disk actions behind confirmations, settings,
+  per remote seat VM mode with memory, processors, GPU, stop mode, suffix, shared folders,
+  forwarded ports, disk reset. A seat page save keeps the VM part (`applyRecord`).
+- **Preflight** `hyperv_vm` (info only): Hyper-V present (`Services\vmms` registered) or
+  not. Feature presence only; nothing is enabled at install (spec 90 §2.4 Pulsar approach).
+- **HYPOTHESIS / unverified:** every script on a real Hyper-V host (client SKUs: Pro /
+  Enterprise / Education; ARM64 Hyper-V for ARM64 guests), GPU-P on client Windows (driver
+  copy into `HostDriverStore`, MMIO sizes), OOBE skip by the unattend file on current
+  builds, SMB global mappings + symbolic links as mount points, NAT forwarding of UDP stream
+  ports and whether the host firewall applies to NAT traffic, Hyper-V sockets from a
+  LocalSystem boot task, automatic sign-in through the LSA `DefaultPassword` secret, the
+  stream server's capture in a VM console session (with and without GPU-P).
+
 ## UI language (i18n, 2026-11-17)
 
 English is the default UI language everywhere; Turkish is the one extra locale, with the

@@ -65,6 +65,10 @@ pub struct RemoteSettings {
     /// attached device may not be usable from a remote session: HYPOTHESIS). Read at
     /// service start. Added 2026-11-17 (additive).
     pub pad_audio: bool,
+    /// Hyper-V VM seats: storage, memory share, base image, NAT network (schema 3,
+    /// hyperv-seats 2026-11-17).
+    /// Boxed: keeps the protocol frames that carry these settings small.
+    pub vm: Box<crate::remote::vm::VmSettings>,
 }
 
 impl Default for RemoteSettings {
@@ -80,6 +84,7 @@ impl Default for RemoteSettings {
             bluetooth_console_only: true,
             display_backend: None,
             pad_audio: false,
+            vm: Box::default(),
         }
     }
 }
@@ -320,6 +325,9 @@ pub struct RemoteSeatRecord {
     /// service starts in the seat). Added 2026-11-17 (additive).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pad_ignore_devices: Vec<String>,
+    /// The seat's VM part (`RemoteSeat::vm`); `None` = not a VM seat. Added 2026-11-17.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm: Option<Box<crate::remote::vm::VmSeat>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

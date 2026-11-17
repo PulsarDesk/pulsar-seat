@@ -10,6 +10,7 @@ import { createDemoRemoteApi } from './remote/demo.ts';
 import {
   type Config,
   type HyperVStatus,
+  type VmHostStatus,
   type ServiceRunState,
   type Device,
   type DeviceView,
@@ -221,6 +222,18 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
   };
 
   const hyperv: HyperVStatus = { feature: 'disabled', switch_present: false, seat_nics: [] };
+  const vmHost: VmHostStatus = {
+    feature: 'enabled',
+    vmms: true,
+    network_ready: false,
+    base_present: false,
+    building: false,
+    storage: 'C:\\ProgramData\\Pulsar Seat\\vm',
+    gpus: ['\\\\?\\PCI#VEN_DEMO&DEV_0001'],
+    host_memory_mb: 32768,
+    logical_processors: 16,
+    seats: []
+  };
   const step = async (name: string) => {
     calls.push(name);
     if (failure) {
@@ -528,6 +541,18 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       }
       if (action.type === 'remove_seat_nic') hyperv.seat_nics = hyperv.seat_nics.filter((n) => n.seat !== action.seat);
       return { ...hyperv, reboot_required: hyperv.feature === 'enable_pending' };
+    },
+    vmSeats: async (action) => {
+      await step('vm_seats');
+      needAdmin();
+      if ('confirm' in action && !action.confirm) throw { code: 'invalid_value', message: 'confirmation needed', field: 'confirm' };
+      if (action.type === 'prepare_host') vmHost.network_ready = true;
+      if (action.type === 'build_base') vmHost.base_present = true;
+      if (action.type === 'reset_base') vmHost.base_present = false;
+      vmHost.seats = state.config.seats
+        .filter((s) => s.remote?.vm)
+        .map((s) => ({ seat: s.number, state: 'missing', guest_address: s.remote?.vm?.guest_address ?? '' }));
+      return structuredClone(vmHost);
     },
     removeKioskUser: async (seat) => {
       await step('remove_kiosk_user');

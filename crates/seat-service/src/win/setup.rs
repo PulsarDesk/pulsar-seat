@@ -325,6 +325,11 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
                 code = code.max(setup::EXIT_PARTIAL);
             }
             // Hyper-V adapters / switch the source-IP helper created (parity review).
+            // Hyper-V VM seats (hyperv-seats): VMs, disks, network, shares.
+            for e in super::platform::hyperv_vm_uninstall(data_dir) {
+                eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
+                code = code.max(setup::EXIT_PARTIAL);
+            }
             for e in super::platform::hyperv_uninstall(data_dir) {
                 eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);

@@ -2190,3 +2190,37 @@ Index: [../../AGENTS.md](../../AGENTS.md). Update after every step.
       changing TermService / LSM, kernel patching / BYOVD / DSE workarounds, signing with
       real certificates.
     - Refused by the model provider's safety system: none recorded in this round.
+- 2026-11-17 (parity round 2, package hyperv-seats, worktree branch). Hyper-V VM seats
+  (spec/remote 10 §8, 90 §2.4), the gap left open by the previous round. Contract:
+  architecture.md "Hyper-V VM seats".
+  - **Built:** config schema 3 (`remote.vm`, `settings.remote.vm`, migration 2 -> 3,
+    guest addresses assigned at save), validation (mount point rule, forwards vs stream
+    blocks, memory, GPU / save), `vm_seats` request, VM seat start / stop / poll / delete /
+    autostart / suspend / service stop in `seat-service/src/vm_seats.rs` (worker never
+    sees VM seats), PowerShell Hyper-V layer `seat_compat::hyperv_vm` (base disk from WIM /
+    ESD / VHDX with payload + unattend + boot task, differencing disk per seat, Gen 2 VM
+    with vTPM, GPU-P + driver store copy, NAT forwards, firewall rule, SMB shares, reset,
+    remove, uninstall journal), Hyper-V sockets (`seat_compat::hvsock`) and the guest link
+    hub, guest mode `pulsar-seat-service vm-guest` (network, user, shares, automatic sign-in
+    via LSA secret, stream server in the VM console, PIN / unpair forwarding), manager
+    "VM seats" page (en + tr), preflight check `hyperv_vm` (presence only), uninstall hook.
+  - Tests: cargo +23 (vm module, hyperv_vm scripts / parsing / journal, hvsock GUIDs, guest
+    hub, preflight, validation, schema migration, CLI, three service flows with the mock
+    platform: start refusals in order, full run through VM + guest link + pairing + stop +
+    disk reset + delete, autostart / suspend / GPU restart / failures), manager +7.
+  - Gates (worktree branch): cargo test --workspace 1800 passed / 6 ignored, clippy
+    -D warnings host aarch64 + x86_64-pc-windows-msvc clean, manager 224 tests / check 0
+    errors / build, bun test installer/scripts 63, shim tests (1 + 8 + 3) + check x86_64 /
+    i686 / aarch64. No driver touched. No test deleted or changed.
+  - Rust layout note: `GlobalSettings.remote`, `RemoteSettings.vm` and `RemoteSeat.vm` /
+    `RemoteSeatRecord.vm` are boxed (clippy `large_enum_variant` on `ServerFrame`); the JSON
+    is unchanged.
+  - Shared target dir hazard seen again: a full `cargo test --workspace` linked other
+    worktrees' `seat_core` test binary / rlib (95 instead of 104 tests, doctest import
+    errors); the counts above come from a coherent run (changed crates re-run right after a
+    touch, per-binary counts compared).
+  - **HYPOTHESIS (nothing ran on Hyper-V):** see the list at the end of the architecture
+    section. Needs a Hyper-V capable PC (x64 and ARM64) with a Windows image.
+  - Open: pairing requests other than PIN / unpair-all (client list, single unpair, apps,
+    Pulsar backend OTP / passwords) answer `vm_seat` for VM seats; the guest has no
+    pad / display backends of its own beyond what the stream server provides in the VM.

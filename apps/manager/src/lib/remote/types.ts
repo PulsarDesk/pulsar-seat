@@ -26,6 +26,60 @@ export interface GlobalSettings {
   /** DualSense speaker / microphone interfaces for remote seats' pads (controller audio
    *  through the pad media section). Absent (older service) = off. Added 2026-11-17. */
   pad_audio?: boolean;
+  /** Hyper-V VM seats (config schema 3, `seat_core::remote::vm::VmSettings`). Added
+   *  2026-11-17 (hyperv-seats). */
+  vm?: VmSettings;
+}
+
+// ---- Hyper-V VM seats (hyperv-seats 2026-11-17; `seat_core::remote::vm`) ----
+
+export type VmStopMode = 'shut_down' | 'save' | 'turn_off';
+export type GpuPartitionMode = 'off' | 'auto' | 'adapter';
+export type PortProtocol = 'tcp' | 'udp';
+export type ImageKind = 'none' | 'wim' | 'vhdx';
+
+export interface SharedFolder {
+  id: string;
+  host_path: string;
+  /** A drive letter other than C:, or a `C:\` path with a folder and no trailing backslash. */
+  guest_path: string;
+  read_only: boolean;
+}
+
+export interface ForwardedPort {
+  id: string;
+  description: string;
+  protocol: PortProtocol;
+  host_port: number;
+  guest_port: number;
+}
+
+/** The VM part of a remote seat (`RemoteSeat.vm`); present = VM seat. */
+export interface VmSeat {
+  /** 0 = the seat's share of `memory_percent`. */
+  memory_mb: number;
+  /** 0 = half of the host's logical processors. */
+  processors: number;
+  gpu: GpuPartitionMode;
+  gpu_adapter?: string | null;
+  shared_folders: SharedFolder[];
+  forwarded_ports: ForwardedPort[];
+  hide_vm_suffix: boolean;
+  stop: VmStopMode;
+  /** Service-owned once assigned. */
+  guest_address: string;
+}
+
+export interface VmSettings {
+  storage_location: string;
+  memory_percent: number;
+  storage_gb: number;
+  image_kind: ImageKind;
+  image_path: string;
+  image_index: number;
+  language_cab: string;
+  restart_gpus_on_shutdown: boolean;
+  nat_prefix: string;
 }
 
 export interface HdrLuminance {

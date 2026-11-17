@@ -452,7 +452,8 @@ fn kind_checks(config: &Config, out: &mut Vec<Issue>) {
         out.push(issue);
     }
     if !config.settings.backends.session.hosts_remote_seats() {
-        for (n, _) in &remote {
+        // VM seats run their session in their own VM: no concurrent host sessions needed.
+        for (n, _) in remote.iter().filter(|(_, r)| r.vm.is_none()) {
             out.push(Issue::new(Severity::Warning, IssueCode::SessionUnavailable).seat(*n).field("settings.backends.session"));
         }
     }
@@ -980,5 +981,51 @@ mod tests {
         let mut c = Config::default();
         c.settings.backends.session = crate::backend::SessionBackendKind::Desktops;
         assert!(!codes(&validate(&c, None)).contains(&IssueCode::SessionUnavailable));
+    }
+}
+
+#[cfg(test)]
+mod vm_seat_tests {
+    use super::*;
+    use crate::config::{SeatAccount, SeatConfig};
+    use crate::remote::vm::{ForwardedPort, VmSeat};
+
+    fn n(x: u8) -> SeatNumber {
+        SeatNumber::new(x).unwrap()
+    }
+
+    fn remote(x: u8, name: &str, port: u16, vm: Option<VmSeat>) -> SeatConfig {
+        let r = crate::remote::RemoteSeat { display_name: name.into(), port, vm: vm.map(Box::new), ..Default::default() };
+        let mut s = SeatConfig::new_remote(n(x), r);
+        s.name = name.into();
+        s.account = SeatAccount::Local { user: name.to_ascii_lowercase() };
+        s
+    }
+
+    #[test]
+    fn vm_seats_need_no_concurrent_sessions_and_are_checked() {
+        let mut c = Config::default();
+        c.settings.backends.session = crate::backend::SessionBackendKind::FastUserSwitch;
+        c.seats.push(remote(2, "Salon", 48100, Some(VmSeat::default())));
+        c.seats.push(remote(3, "Oda", 48200, None));
+        let i = validate(&c, None);
+        let unavailable: Vec<_> = i.iter().filter(|x| x.code == IssueCode::SessionUnavailable).filter_map(|x| x.seat).collect();
+        assert_eq!(unavailable, vec![n(3)], "only the RDP remote seat needs concurrent sessions");
+        // A forwarded host port inside the other seat's stream block.
+        c.seats[1].remote.as_mut().unwrap().vm.as_mut().unwrap().forwarded_ports.push(ForwardedPort {
+            id: "p".into(),
+            host_port: 48205,
+            guest_port: 80,
+            ..Default::default()
+        });
+        let i = validate(&c, None);
+        let bad = i.iter().find(|x| x.code == IssueCode::RemoteSeatInvalid).unwrap();
+        assert_eq!(bad.field.as_deref(), Some("remote.vm.forwarded_ports.host_port"));
+        assert_eq!(bad.reason.as_deref(), Some("port_overlap"));
+        // Global VM settings.
+        c.seats[1].remote.as_mut().unwrap().vm.as_mut().unwrap().forwarded_ports.clear();
+        c.settings.remote.vm.memory_percent = 99;
+        let i = validate(&c, None);
+        assert!(i.iter().any(|x| x.field.as_deref() == Some("settings.remote.vm.memory_percent")), "{i:?}");
     }
 }

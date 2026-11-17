@@ -9,6 +9,8 @@
 //! - [`ports`]: stream-server port blocks; only remote seats reserve ports.
 //! - [`streamconf`]: the per-seat stream-server config file.
 //! - [`watchdog`]: stream-server restart policy.
+//! - [`vm`]: Hyper-V VM seats (`RemoteSeat::vm`, `RemoteSettings::vm`; hyperv-seats
+//!   2026-11-17).
 //! - [`mic`]: microphone frames (pulsar-host mic pipe and the headless hold's stdin).
 //! - [`store`]: Split's record store trait for its controller; the service implements it
 //!   over the config document (`seat-service` `remote::DocStore`, merge step 6).
@@ -19,6 +21,7 @@ pub mod ports;
 pub mod store;
 pub mod streamconf;
 pub mod validate;
+pub mod vm;
 pub mod watchdog;
 
 pub use model::*;
@@ -53,9 +56,18 @@ pub struct RemoteSeat {
     /// Service-owned: last display mode a client asked for and the display applied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_mode: Option<LastMode>,
+    /// Hyper-V VM seat (schema 3, hyperv-seats 2026-11-17): the seat's session runs in a
+    /// VM of its own ([`vm`]). `None` = RDP loopback session on the host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm: Option<Box<vm::VmSeat>>,
 }
 
 impl RemoteSeat {
+    /// Whether this is a VM seat.
+    pub fn is_vm(&self) -> bool {
+        self.vm.is_some()
+    }
+
     /// Split's record of this seat (for the Split controller and validation).
     pub fn to_record(&self, seat: &SeatConfig) -> RemoteSeatRecord {
         let user_name = match &seat.account {
@@ -80,6 +92,7 @@ impl RemoteSeat {
             stream_backend: self.stream_backend,
             last_mode: self.last_mode,
             pad_ignore_devices: seat.pad_ignore_devices.clone(),
+            vm: self.vm.clone(),
         }
     }
 
@@ -97,6 +110,7 @@ impl RemoteSeat {
             stream: r.stream.clone(),
             stream_backend: r.stream_backend,
             last_mode: r.last_mode,
+            vm: r.vm.clone(),
         }
     }
 }
@@ -174,6 +188,21 @@ pub fn assign_resources(
         }
     }
     Ok(())
+}
+
+/// Fill a VM seat's missing guest address (network + 10 + seat number on the NAT prefix).
+/// Runs after [`assign_resources`]; non-VM seats are left alone.
+pub fn assign_vm_addresses(config: &mut crate::config::Config) {
+    let prefix = config.settings.remote.vm.nat_prefix.clone();
+    for s in &mut config.seats {
+        let n = s.number.get();
+        if let Some(v) = s.remote.as_mut().and_then(|r| r.vm.as_mut())
+            && v.guest_address.is_empty()
+            && let Some(a) = vm::guest_address(&prefix, n)
+        {
+            v.guest_address = a.to_string();
+        }
+    }
 }
 
 /// `(number, remote part)` of every remote seat.

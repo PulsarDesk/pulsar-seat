@@ -20,6 +20,8 @@ import type {
   HelloReply,
   HyperVAction,
   HyperVStatus,
+  VmAction,
+  VmHostStatus,
   Issue,
   LocalUser,
   Panel,
@@ -121,6 +123,8 @@ export interface Api extends LocalApi {
   removeKioskUser(seat: SeatNumber): Promise<void>;
   /** Hyper-V helper of the source-IP tools (`hyper_v`). */
   hyperV(action: HyperVAction): Promise<HyperVStatus>;
+  /** Hyper-V VM seats (`vm_seats`): status, VM network, base disk, reset a seat's disk. */
+  vmSeats(action: VmAction): Promise<VmHostStatus>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -188,6 +192,7 @@ export function createRequestApi(
     resetGraphics: (seat) => ack({ type: 'reset_graphics', data: { seat } }),
     removeKioskUser: (seat) => ack({ type: 'remove_kiosk_user', data: { seat } }),
     hyperV: async (action) => expectBody(await call({ type: 'hyper_v', data: { action } }), 'hyper_v').data,
+    vmSeats: async (action) => expectBody(await call({ type: 'vm_seats', data: { action } }), 'vm_seats').data,
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

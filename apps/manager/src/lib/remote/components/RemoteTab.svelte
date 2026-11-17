@@ -44,6 +44,8 @@
   import PairDialog from './PairDialog.svelte';
   import SeatPage from './SeatPage.svelte';
   import SettingsPage from './SettingsPage.svelte';
+  import VmPage from './VmPage.svelte';
+  import { isVmSeat, setSeatVm, setVmSettings, vmOf, vmSettingsOf } from '#lib/remote/vm.ts';
 
   interface Props {
     store: ManagerStore;
@@ -65,7 +67,7 @@
   let isolation = $state<IsolationStatus | null>(null);
   /** Selected remote seat; `null` = one of the pages below. */
   let selected = $state<SeatNumber | null>(null);
-  let page = $state<'settings' | 'host' | 'logs' | 'dxvk'>('host');
+  let page = $state<'settings' | 'host' | 'logs' | 'dxvk' | 'vm'>('host');
   /** Account pictures by user name (loaded once per user and manager run). */
   let pictures = $state<Record<string, UserPicture | null>>({});
   let dialog = $state<'new' | 'delete' | 'pair' | null>(null);
@@ -221,7 +223,7 @@
                 <Avatar name={s.name} picture={rec?.user_name ? pictures[rec.user_name] : null} />
                 <span class="name">
                   {s.number}. {s.name}
-                  {#if noSessions && st.session_id === null}
+                  {#if noSessions && !isVmSeat(s) && st.session_id === null}
                     <small class="sub warn" title={t.nav.sessionUnavailableHint}>{t.nav.sessionUnavailable}</small>
                   {:else if st.session_id !== null || st.streaming}
                     <small class="sub">
@@ -247,6 +249,9 @@
         <button type="button" class="settings-link" class:active={selected === null && page === 'dxvk'} disabled={!reachable} onclick={() => show('dxvk')}>
           ◈ {t.nav.dxvk}
         </button>
+        <button type="button" class="settings-link" class:active={selected === null && page === 'vm'} disabled={!reachable} onclick={() => show('vm')}>
+          ▣ {t.nav.vm}
+        </button>
         <button type="button" class="settings-link" class:active={selected === null && page === 'settings'} onclick={() => show('settings')}>
           ⚙ {t.nav.settings}
         </button>
@@ -254,7 +259,7 @@
 
       <main>
         {#if banner}<p class="error banner" role="alert">{banner}</p>{/if}
-        {#if current && noSessions && currentStatus?.session_id === null}
+        {#if current && noSessions && !isVmSeat(current) && currentStatus?.session_id === null}
           <p class="hint banner" role="status">{t.nav.sessionUnavailableHint}</p>
         {/if}
         {#if current && currentRecord}
@@ -311,6 +316,20 @@
             load={() => remote.dxvkStatus()}
             onSet={(exe, on, dlls) => remote.setDxvk(exe, on, dlls)}
             onPickExe={async () => (await api.pickProgram())?.path ?? null}
+            disabled={!reachable || passive}
+          />
+        {:else if page === 'vm'}
+          <VmPage
+            seats={seats.map((s) => ({ number: s.number, name: s.name, port: s.remote?.port ?? 0, vm: vmOf(s) }))}
+            settings={vmSettingsOf(store.saved)}
+            load={() => api.vmSeats({ type: 'status' })}
+            onAction={(a) => api.vmSeats(a)}
+            onSaveSettings={async (v) => {
+              await store.applyRemote((c) => setVmSettings(c, v));
+            }}
+            onSaveSeat={async (n, vm) => {
+              await store.applyRemote((c) => setSeatVm(c, n, vm));
+            }}
             disabled={!reachable || passive}
           />
         {:else if page === 'logs'}

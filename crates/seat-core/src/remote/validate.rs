@@ -102,6 +102,9 @@ pub fn seat_alone(seat: &RemoteSeatRecord) -> Result<(), ProtoError> {
         return Err(err(ErrorCode::InvalidValue, "stream.min_fps", "minimum fps must be 1-240"));
     }
     rdp_client_name(&seat.rdp_client_name)?;
+    if let Some(vm) = &seat.vm {
+        crate::remote::vm::validate_seat(vm, seat.port)?;
+    }
     for app in &seat.autostart {
         if app.path.trim().is_empty() || app.path.chars().any(char::is_control) {
             return Err(err(ErrorCode::InvalidValue, "autostart.path", "autostart path must not be empty"));
@@ -139,6 +142,13 @@ pub fn seat_against(seat: &RemoteSeatRecord, others: &[RemoteSeatRecord]) -> Res
         if !seat.user_name.is_empty() && o.user_name.eq_ignore_ascii_case(&seat.user_name) {
             return Err(err(ErrorCode::UserInUse, "user_name", format!("user is used by seat '{}'", o.name)));
         }
+        match (&seat.vm, &o.vm) {
+            (Some(a), Some(b)) => crate::remote::vm::validate_against(a, seat.port, b, o.port)?,
+            (Some(a), None) if crate::remote::vm::forward_hits_block(a, o.port) => {
+                return Err(err(ErrorCode::PortOverlap, "vm.forwarded_ports.host_port", format!("host port is inside seat '{}' ports", o.name)));
+            }
+            _ => {}
+        }
         if !seat.rdp_client_name.is_empty() && o.rdp_client_name.eq_ignore_ascii_case(&seat.rdp_client_name) {
             return Err(err(ErrorCode::DuplicateName, "rdp_client_name", format!("client name used by seat '{}'", o.name)));
         }
@@ -165,6 +175,7 @@ pub fn global(g: &RemoteSettings) -> Result<(), ProtoError> {
     if g.steam_isolation && !g.process_patching {
         return Err(err(ErrorCode::InvalidValue, "steam_isolation", "steam isolation needs process patching"));
     }
+    crate::remote::vm::validate_settings(&g.vm)?;
     Ok(())
 }
 

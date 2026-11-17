@@ -155,6 +155,40 @@ pub trait Platform: Send + Sync {
         let _ = action;
         Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no Hyper-V here"))
     }
+    /// Hyper-V VM seats (`seat_compat::hyperv_vm`): run one op (`stdin` = first stdin line
+    /// of the script, the share account password of `ensure`), answer the host facts after
+    /// it.
+    fn hyperv_vm(
+        &self,
+        op: &seat_compat::hyperv_vm::VmOp,
+        stdin: Option<&Secret>,
+    ) -> BackendResult<seat_compat::hyperv_vm::HostFacts> {
+        let _ = (op, stdin);
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no Hyper-V here"))
+    }
+    /// Default folder of the VM seats' disks (`<data dir>\vm`) and the install dir copied
+    /// into the base disk.
+    fn vm_default_storage(&self) -> String {
+        String::new()
+    }
+    fn vm_payload_dir(&self) -> String {
+        String::new()
+    }
+    /// Guest link (Hyper-V socket): the config the guest of VM `vm_id` gets when it
+    /// connects (`None` withdraws it).
+    fn guest_link_offer(&self, vm_id: &str, config: Option<seat_core::remote::vm::GuestConfig>) {
+        let _ = (vm_id, config);
+    }
+    /// Send one message to the connected guest of `vm_id`.
+    fn guest_link_send(&self, vm_id: &str, msg: &seat_core::remote::vm::GuestMsg) -> BackendResult<()> {
+        let _ = (vm_id, msg);
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "no_guest_link", "no guest link"))
+    }
+    /// Last phase the guest of `vm_id` reported, with its detail.
+    fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
+        let _ = vm_id;
+        None
+    }
     /// Publish the camera rules for the module (`seat_shim_core::readers::camera_visible`).
     fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
         let _ = rules;
@@ -369,6 +403,15 @@ pub mod mock {
         pub reader_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
         /// Hyper-V actions run.
         pub hyperv_actions: Mutex<Vec<seat_proto::hyperv::HyperVAction>>,
+        /// Hyper-V VM seat fake: host facts (VMs keyed by seat id) and the ops run.
+        pub vm_facts: Mutex<seat_compat::hyperv_vm::HostFacts>,
+        pub vm_ops: Mutex<Vec<seat_compat::hyperv_vm::VmOp>>,
+        /// Ops of these kinds (`op` tag) fail.
+        pub vm_fail: Mutex<Vec<String>>,
+        /// Guest link fake: offered configs, sent messages, reported phases (by VM id).
+        pub guest_offers: Mutex<BTreeMap<String, seat_core::remote::vm::GuestConfig>>,
+        pub guest_sent: Mutex<Vec<(String, seat_core::remote::vm::GuestMsg)>>,
+        pub guest_phases: Mutex<BTreeMap<String, (seat_core::remote::vm::GuestPhase, Option<String>)>>,
         /// Last published camera rules.
         pub camera_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
         /// `cover_session` calls: (session, cpu sets, seat-wide).
@@ -432,6 +475,22 @@ pub mod mock {
         }
         pub fn launched(&self) -> Vec<LaunchSpec> {
             lock(&self.launched).clone()
+        }
+        /// A Hyper-V host with the feature on, network ready and a base disk.
+        pub fn vm_host_ready(&self) {
+            let mut f = lock(&self.vm_facts);
+            f.feature = "enabled".into();
+            f.vmms = true;
+            f.switch_present = true;
+            f.nat_present = true;
+            f.base_present = true;
+            f.host_memory_mb = 32 * 1024;
+            f.logical_processors = 16;
+            f.gpus = vec![r"\\?\PCI#GPU0".into()];
+        }
+        /// State of the fake VM of `seat_id`.
+        pub fn vm_state(&self, seat_id: &str) -> Option<String> {
+            lock(&self.vm_facts).vms.iter().find(|v| v.seat_id == seat_id).map(|v| v.state.clone())
         }
     }
 
@@ -498,6 +557,73 @@ pub mod mock {
         fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
             *lock(&self.camera_rules) = rules.to_vec();
             Ok(())
+        }
+        fn hyperv_vm(
+            &self,
+            op: &seat_compat::hyperv_vm::VmOp,
+            stdin: Option<&Secret>,
+        ) -> BackendResult<seat_compat::hyperv_vm::HostFacts> {
+            use seat_compat::hyperv_vm::{VmOp as O, VmState};
+            let tag = serde_json::to_value(op).ok().and_then(|v| v["op"].as_str().map(str::to_owned)).unwrap_or_default();
+            if lock(&self.vm_fail).contains(&tag) {
+                return Err(BackendError::new(ErrorKind::Os, "hyperv_failed", format!("mock {tag} failure")));
+            }
+            if !matches!(op, O::Status { .. }) {
+                lock(&self.vm_ops).push(op.clone());
+            }
+            let mut f = lock(&self.vm_facts);
+            let set = |f: &mut seat_compat::hyperv_vm::HostFacts, id: &str, st: &str| {
+                if let Some(v) = f.vms.iter_mut().find(|v| v.seat_id == id) {
+                    v.state = st.into();
+                }
+            };
+            match op {
+                O::Status { .. } | O::RestartGpus => {}
+                O::PrepareHost { .. } => {
+                    f.switch_present = true;
+                    f.nat_present = true;
+                }
+                O::BuildBase { .. } => f.base_present = true,
+                O::ResetBase { seat_ids, .. } => {
+                    f.base_present = false;
+                    f.vms.retain(|v| !seat_ids.contains(&v.seat_id));
+                }
+                O::Ensure { spec } => {
+                    assert!(stdin.is_some_and(|s| !s.expose().is_empty()), "ensure needs the share password on stdin");
+                    if !f.vms.iter().any(|v| v.seat_id == spec.seat_id) {
+                        f.vms.push(VmState { seat_id: spec.seat_id.clone(), vm_id: format!("vm-{}", spec.seat_id), state: "off".into(), uptime_s: 0 });
+                    }
+                }
+                O::Start { seat_id } => set(&mut f, seat_id, "running"),
+                O::Stop { seat_id, mode } => {
+                    set(&mut f, seat_id, if *mode == seat_core::remote::vm::VmStopMode::Save { "saved" } else { "off" })
+                }
+                O::ResetSandbox { .. } => {}
+                O::Remove { spec } => f.vms.retain(|v| v.seat_id != spec.seat_id),
+            }
+            Ok(f.clone())
+        }
+        fn vm_default_storage(&self) -> String {
+            r"C:\ProgramData\Pulsar Seat\vm".into()
+        }
+        fn vm_payload_dir(&self) -> String {
+            r"C:\Program Files\Pulsar Seat".into()
+        }
+        fn guest_link_offer(&self, vm_id: &str, config: Option<seat_core::remote::vm::GuestConfig>) {
+            match config {
+                Some(c) => lock(&self.guest_offers).insert(vm_id.into(), c),
+                None => lock(&self.guest_offers).remove(vm_id),
+            };
+        }
+        fn guest_link_send(&self, vm_id: &str, msg: &seat_core::remote::vm::GuestMsg) -> BackendResult<()> {
+            if !lock(&self.guest_phases).contains_key(vm_id) {
+                return Err(BackendError::new(ErrorKind::Unsupported, "no_guest_link", "guest not connected"));
+            }
+            lock(&self.guest_sent).push((vm_id.into(), msg.clone()));
+            Ok(())
+        }
+        fn guest_link_phase(&self, vm_id: &str) -> Option<(seat_core::remote::vm::GuestPhase, Option<String>)> {
+            lock(&self.guest_phases).get(vm_id).cloned()
         }
         fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
             lock(&self.hyperv_actions).push(action.clone());
