@@ -220,7 +220,7 @@ try {
         # CI ships the stream-server job's Pulsar build; here it is used when a local
         # build-sunshine.ps1 run left one, else this test MSI carries upstream.
         if (-not (Test-Path (Join-Path $repo "target\wf\sunshine-out\$arch\sunshine.exe")) -and -not $Release) {
-            Write-Warning "no Pulsar stream server build in target\wf\sunshine-out\$arch: test MSI with upstream (-UpstreamStreamServer)"
+            Write-Warning "no Pulsar stream server build in target\wf\sunshine-out\${arch}: test MSI with upstream (-UpstreamStreamServer)"
             $extra += "-UpstreamStreamServer"
         }
         Gate "MSI ($arch)" {
