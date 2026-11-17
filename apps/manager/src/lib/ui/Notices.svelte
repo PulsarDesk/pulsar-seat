@@ -22,11 +22,11 @@
   <div class="one">
     {#if n.action}
       {@const a = n.action}
-      <Notice kind={n.kind} icon={n.icon} text={n.text}>
+      <Notice kind={n.kind} icon={n.icon} title={n.title} text={n.text}>
         {#snippet actions()}<Button compact label={a.label} aria-label={a.ariaLabel} onclick={a.onclick} />{/snippet}
       </Notice>
     {:else}
-      <Notice kind={n.kind} icon={n.icon} text={n.text} />
+      <Notice kind={n.kind} icon={n.icon} title={n.title} text={n.text} />
     {/if}
   </div>
 {:else if items.length > 1}
@@ -41,7 +41,7 @@
       {#each items as n, i (i)}
         <li>
           <Icon name={n.icon ?? (n.kind === 'warn' || n.kind === 'danger' ? 'alert' : 'info')} size={16} tone={n.kind === 'warn' ? 'warn' : n.kind === 'danger' ? 'danger' : undefined} />
-          <p role={n.kind === 'danger' ? 'alert' : undefined}>{n.text}</p>
+          <p role={n.kind === 'danger' ? 'alert' : undefined}>{#if n.title}<b>{n.title}</b>{' '}{/if}{n.text}</p>
           {#if n.action}<Button compact label={n.action.label} aria-label={n.action.ariaLabel} onclick={n.action.onclick} />{/if}
         </li>
       {/each}

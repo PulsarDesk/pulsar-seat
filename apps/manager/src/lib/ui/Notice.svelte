@@ -11,11 +11,13 @@
     kind?: NoticeKind;
     icon?: IconName;
     text?: string;
+    /** Bold lead-in before the text ("Find by touch:"). */
+    title?: string;
     children?: Snippet;
     /** Compact secondary Button(s), right-aligned. */
     actions?: Snippet;
   }
-  let { kind = 'info', icon, text, children, actions }: Props = $props();
+  let { kind = 'info', icon, text, title, children, actions }: Props = $props();
   const DEFAULT_ICON: Record<NoticeKind, IconName> = {
     info: 'info',
     warn: 'alert',
@@ -27,7 +29,7 @@
 
 <div class="notice" data-kind={kind} role={kind === 'danger' ? 'alert' : undefined}>
   <Icon name={icon ?? DEFAULT_ICON[kind]} />
-  <p>{#if children}{@render children()}{:else}{text}{/if}</p>
+  <p>{#if title}<b>{title}</b>{' '}{/if}{#if children}{@render children()}{:else}{text}{/if}</p>
   {#if actions}<div class="notice-actions">{@render actions()}</div>{/if}
 </div>
 

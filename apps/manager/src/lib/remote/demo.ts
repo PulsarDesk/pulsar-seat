@@ -10,7 +10,9 @@ import { WARNING_EN, WARNING_VERSION } from '../warning.ts';
 export function createDemoRemoteApi(
   step: (name: string) => Promise<void>,
   needAdmin: () => void,
-  config: () => Config
+  config: () => Config,
+  /** The seat has a session in the demo (started with `startSeats`). */
+  running: (seat: SeatNumber) => boolean = () => false
 ): RemoteApi {
   const apps = new Map<SeatNumber, R.AppEntry[]>();
   const dxvk: R.DxvkStatus = { release: 'v2.7.1', games: [] };
@@ -91,6 +93,21 @@ export function createDemoRemoteApi(
     runtime: async (seat) => {
       await admin('get_remote_runtime');
       const s = remoteSeat(seat);
+      if (running(seat)) {
+        // A started demo seat streams to one client (design 21-remote-seat-running).
+        return {
+          session_id: 10 + seat,
+          client_name: s.remote?.rdp_client_name ?? '',
+          state: 'running',
+          phase: null,
+          failure: null,
+          display: { backend: 'pulsar_idd', state: 'active', hdr: 'ok', host: 'provider', fallback: null },
+          audio: { state: 'capturing', limitations: [] },
+          pads: [],
+          stream: { backend: 'sunshine', running: true, status: { stream_active: true, clients_connected: 1 }, capabilities: [], crash_count: 0 },
+          isolation: []
+        };
+      }
       return {
         session_id: null,
         client_name: s.remote?.rdp_client_name ?? '',
@@ -126,7 +143,16 @@ export function createDemoRemoteApi(
     pairState: async (seat) => {
       await admin('get_pair_state');
       remoteSeat(seat);
-      return { pending: null, last_result: null, available: false };
+      if (!running(seat)) return { pending: null, last_result: null, available: false };
+      // Browser preview only: `globalThis.__demoPairRequest = true` shows a client asking to
+      // pair (design 31); otherwise the dialog waits for one (design 30).
+      const ask = (globalThis as { __demoPairRequest?: boolean }).__demoPairRequest === true;
+      return {
+        pending: ask ? { request_id: 1, device_name: 'Salon TV', received_at: new Date().toISOString(), mode: 'pin' } : null,
+        last_result: null,
+        available: true,
+        backend: 'sunshine'
+      };
     },
     cancelPair: async () => admin('cancel_pair'),
     pairedClients: async (seat) => {

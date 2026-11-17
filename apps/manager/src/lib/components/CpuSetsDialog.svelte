@@ -112,6 +112,42 @@
   .wrap {
     overflow-x: auto;
   }
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    font: inherit;
+  }
+  thead th {
+    font-size: var(--fs-meta);
+    line-height: var(--lh-meta);
+    font-weight: 600;
+    color: var(--text-muted);
+    padding: var(--sp-2) var(--sp-2);
+    border-bottom: var(--bw) solid var(--border);
+    vertical-align: bottom;
+  }
+  thead th:first-child {
+    text-align: left;
+    padding-left: 0;
+  }
+  tbody th,
+  tbody td {
+    padding: var(--sp-2);
+    border-bottom: var(--bw) solid var(--border);
+  }
+  tbody th {
+    padding-left: 0;
+  }
+  tbody tr:last-child th,
+  tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .end {
+    text-align: center;
+  }
+  .end :global(.check) {
+    justify-content: center;
+  }
   th[scope='row'] {
     font-weight: 400;
     white-space: nowrap;

@@ -97,7 +97,7 @@
         {@const r = rows[m.device.key]}
         <div class="row" data-testid="outputs-row">
           <div class="label">
-            <b>{nameOf(m)}</b>
+            <b>{m.info.monitor_name || m.device.name}{#if m.device.label}{' '}<span class="mono id">{m.device.label}</span>{/if}</b>
             <span>{r && r.outputs.length ? t.outputs.status.assigned : t.outputs.status.unassigned}</span>
             {#if r}
               <div class="opts" role="group" aria-label={`${t.outputs.perMonitor}: ${nameOf(m)}`}>
@@ -155,6 +155,10 @@
 </Modal>
 
 <style>
+  .id {
+    color: var(--text-muted);
+    font-weight: 400;
+  }
   .opts,
   .clone {
     display: flex;

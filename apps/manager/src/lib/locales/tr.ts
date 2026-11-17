@@ -85,7 +85,7 @@ const t = {
     localHint: 'Bu bilgisayara takılı ekran, klavye ve fareyle kullanılan koltuk',
     remoteHint: 'Pulsar ya da Moonlight ile ağ üzerinden kullanılan koltuk',
     remoteList: 'Uzak koltuklar',
-    remoteListHint: 'Uzak koltuklara cihaz atanmaz; ayarları Uzak koltuklar sekmesindedir.',
+    remoteListHint: 'Uzak koltuklara cihaz atanmaz; ayarları Uzak koltuklar sayfasındadır.',
     open: 'Düzenle'
   },
 
@@ -584,7 +584,7 @@ const t = {
     addSeat: 'Koltuk ekle',
     seatLimit: 'Koltuk sınırına ulaşıldı (16).',
     pickByTouch: 'Dokunarak bul',
-    pickByTouchHint: 'Bulmak istediğiniz klavyede bir tuşa basın ya da fareyi oynatın.',
+    pickByTouchHint: 'bulmak istediğiniz klavyede bir tuşa basın ya da fareyi oynatın. Bulunan aygıt vurgulanır.',
     pickCancel: 'Aramayı bitir',
     pickFound: (name: string) => `Bulundu: ${name}`,
     identifyMonitors: 'Ekranları numarala',
@@ -830,7 +830,7 @@ const t = {
     intro:
       'Kiosk koltuğu 1. koltukla aynı Windows oturumunda çalışır; “her kiosk koltuğu kendi Windows kullanıcısıyla çalışsın” açıksa (varsayılan) kendi kullanıcı profili, ayarları ve uygulama verileri olur. Koltuğun ekranlarında yalnızca aşağıdaki uygulamalar açılır. Klavyesi ve faresi yalnızca bu uygulamalara gider; ancak bu, 1. koltuk da kiosk koltuğuysa ya da giriş filtresi etkinse tam olarak geçerlidir.',
     limits:
-      'Sınırlar: bütün koltuklar aynı Windows oturumunu ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar ve uygulamalar koltuğun kendi aygıtlarını yalnızca uygulama başına yalıtım (Gelişmiş sekmesi) açıksa alır. Tam ekran oyunlar için uygulamada “Tam ekran” seçin: oyun öne geçer, ama aynı anda bilgisayarda yalnızca bir oyun gerçek tam ekranda olabilir. Mağaza (UWP / MSIX) uygulamaları uygulama kimliğiyle (AUMID) eklenir; her Windows sürümünde açılmayabilirler. Zaten açık bir kopyaya devreden programlar koltuğun kendi kullanıcısıyla çalışıyorsa koltukta kalır. Ses: kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı verirseniz, koltuğun uygulamaları Windows 10 1803 ve sonrasında uygulama başına varsayılan aygıt olarak bunu kullanır (belgelenmemiş bir Windows arabirimi; Windows güncellemeleri bunu bozabilir, o zaman ses 1. koltuğun varsayılan aygıtından çıkar). Kiosk koltuğu tam bir kilit değildir: Ctrl+Alt+Del ve Win+L Windows tarafından kullanıcı kipindeki her programdan önce işlenir; hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir ve buradan oturumu kapatmak bütün koltukları kapatır. Diğer sistem tuşları (Windows tuşu, Win+R, Win+E, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc) kiosk klavyelerinden 1. koltuğun masaüstüne ulaşmaz; giriş filtresi yoksa bu, klavyeleri ayırt eden en iyi çaba yöntemiyle yapılır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
+      'Sınırlar: bütün koltuklar aynı Windows oturumunu ve panoyu paylaşır. Girişi ham giriş, DirectInput veya XInput ile okuyan oyunlar ve uygulamalar koltuğun kendi aygıtlarını yalnızca uygulama başına yalıtım (Gelişmiş ayarlar) açıksa alır. Tam ekran oyunlar için uygulamada “Tam ekran” seçin: oyun öne geçer, ama aynı anda bilgisayarda yalnızca bir oyun gerçek tam ekranda olabilir. Mağaza (UWP / MSIX) uygulamaları uygulama kimliğiyle (AUMID) eklenir; her Windows sürümünde açılmayabilirler. Zaten açık bir kopyaya devreden programlar koltuğun kendi kullanıcısıyla çalışıyorsa koltukta kalır. Ses: kiosk koltuğuna yalnızca ona atanmış bir ses aygıtı verirseniz, koltuğun uygulamaları Windows 10 1803 ve sonrasında uygulama başına varsayılan aygıt olarak bunu kullanır (belgelenmemiş bir Windows arabirimi; Windows güncellemeleri bunu bozabilir, o zaman ses 1. koltuğun varsayılan aygıtından çıkar). Kiosk koltuğu tam bir kilit değildir: Ctrl+Alt+Del ve Win+L Windows tarafından kullanıcı kipindeki her programdan önce işlenir; hangi koltukta basılırsa basılsın bütün koltukları güvenlik ekranına geçirir ve buradan oturumu kapatmak bütün koltukları kapatır. Diğer sistem tuşları (Windows tuşu, Win+R, Win+E, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc) kiosk klavyelerinden 1. koltuğun masaüstüne ulaşmaz; giriş filtresi yoksa bu, klavyeleri ayırt eden en iyi çaba yöntemiyle yapılır. Uygulama listesine dönmek için çubuktaki “Uygulamalar” düğmesini veya Ctrl+Alt+Home tuşlarını kullanın.',
     appId: 'Mağaza uygulaması kimliği (AUMID, isteğe bağlı)',
     appIdHint: 'Örnek: Microsoft.WindowsCalculator_8wekyb3d8bbwe!App. Doluysa program yolu gerekmez.',
     notAppId: 'Geçersiz uygulama kimliği (Paket!Uygulama biçiminde olmalı).',
@@ -893,7 +893,7 @@ const t = {
   } as Record<StartMode, string>,
 
   advanced: {
-    banner: 'Bu sekme deneyimli kullanıcılar içindir. Emin olmadığınız ayarı değiştirmeyin.',
+    banner: 'Bu sayfa deneyimli kullanıcılar içindir. Emin olmadığınız ayarı değiştirmeyin.',
     backends: 'Çalışma yöntemleri',
     session: 'Oturum yöntemi',
     topology: 'Koltuk sunucularının yeri',
@@ -1073,7 +1073,7 @@ const t = {
     memory_integrity: { pass: 'Açık.', info: 'Kapalı ya da bilinmiyor (yalnızca bildirilir; Pulsar Seat bunu asla değiştirmez).' },
     smart_app_control: { info: 'Akıllı Uygulama Denetimi durumu bildirildi; açıksa imzasız derlemeler engellenebilir.' },
     windows_safe_mode: { pass: 'Normal açılış.', warn: 'Windows Güvenli Mod’da: ek koltuklar başlatılmaz.' },
-    hyperv_vm: { info: 'Yalnızca VM koltukları için gerekir; Pulsar Seat kendiliğinden açmaz (Ağ sekmesi; ardından yeniden başlatma).' },
+    hyperv_vm: { info: 'Yalnızca VM koltukları için gerekir; Pulsar Seat kendiliğinden açmaz (Gelişmiş > Ağ adresleri; ardından yeniden başlatma).' },
     driver_signing: { info: 'Pulsar Seat sürücüleri henüz imzalı değil; kullanıcı kipi yöntemleri kullanılır.' },
     reference_product: { pass: 'Kurulu değil.', fail: 'Başka bir çoklu koltuk yazılımı kurulu.' },
     termservice_stock: { pass: 'Uzak Masaüstü hizmeti Windows’un kendi dosyasını kullanıyor.', warn: 'Uzak Masaüstü hizmeti Windows varsayılanını kullanmıyor.' },
@@ -1338,6 +1338,8 @@ const t = {
 
   enable: {
     enableTitle: 'Pulsar Seat açılsın mı?',
+    startModeChange: 'Değiştir',
+    startModeChangeLabel: 'Başlatma biçimini değiştir',
     enableBody: 'Pulsar Seat açıldığında seçilen başlatma biçimine göre ek koltuklar çalışır. Açmadan önce bir tanı raporu kaydedilir.',
     disableTitle: 'Pulsar Seat kapatılsın mı?',
     disableBody: 'Çalışan ek koltuklar kapanır; açık oturumlardaki kaydedilmemiş işler kaybolabilir.',
@@ -1403,7 +1405,7 @@ const t = {
   },
 
   view: {
-    title: 'Koltuklar sekmesinin görünümü',
+    title: 'Koltuklar sayfasının görünümü',
     scaleIcons: 'Aygıt resimlerini ekran boyutuna göre küçült',
     evenRows: 'Koltuk kutularını eşit satırlara diz',
     flashSeconds: 'Yeni takılan aygıtın vurgulanma süresi (sn)',
@@ -1865,7 +1867,7 @@ const failureText: Record<string, string> = {
   console_busy: 'Konsolda şu an başka bir koltuk var; o koltuğu önce kilitleyin',
   session_not_locked: 'Koltuğun oturumu kilitli değil ve parola kayıtlı değil; oturumu kilitleyin ya da parolayı kaydedin',
   nla_required:
-    'Parolasız koltuklar için ayrı bağlantı noktası kapalı; Gelişmiş sekmesinden açın ya da koltuğa parola kaydedin',
+    'Parolasız koltuklar için ayrı bağlantı noktası kapalı; Gelişmiş ayarlardan açın ya da koltuğa parola kaydedin',
   loopback_listener_unavailable: 'Parolasız koltuklar için ayrı bağlantı noktası hazır değil',
   kiosk_app_missing: 'Kiosk koltuğu için bir program seçilmemiş',
   console_not_ready: 'Konsol oturumu henüz hazır değil; Windows açılışı bitince tekrar deneyin',
@@ -1924,7 +1926,7 @@ const issueText: Record<string, string> = {
   loopback_port_invalid: 'Parolasız koltuk bağlantı noktası 1024 ile 65535 arasında olmalı ve 3389 olamaz.',
   hide_fsu_with_fast_user_switch: 'Hızlı kullanıcı değiştirmeyi gizlemek, “aynı anda bir koltuk” oturum yöntemini kapatır.',
   loopback_no_accounts:
-    'Bu koltuk oturum açma ekranında açılıyor, ama parolasız koltuk bağlantı noktasını kullanabilecek hesap yok; koltuk başlayamaz. Gelişmiş sekmesindeki “ek hesaplar” listesine bu koltukta oturum açacak kişileri ekleyin ya da koltuğa bir hesap verin.',
+    'Bu koltuk oturum açma ekranında açılıyor, ama parolasız koltuk bağlantı noktasını kullanabilecek hesap yok; koltuk başlayamaz. Gelişmiş ayarlardaki “ek hesaplar” listesine bu koltukta oturum açacak kişileri ekleyin ya da koltuğa bir hesap verin.',
   logon_screen_needs_listener:
     'Bu koltuk oturum açma ekranında açılıyor; parolasız koltuk bağlantı noktası kapalıyken başlatılamaz. Bağlantı noktasını açın ya da koltuğa parolalı bir hesap verin.',
   loopback_account_invalid: 'Ek hesaplardan biri geçersiz (kullanici ya da ETKİ_ALANI\\kullanici yazın, @ kullanmayın); yok sayılır.',
@@ -2192,7 +2194,7 @@ const rt = {
     refresh: 'Yenile',
     feature: (s: string) => `Hyper-V: ${s}`,
     featureStates: { enabled: 'açık', disabled: 'kapalı', enable_pending: 'yeniden başlatmadan sonra açık', unavailable: 'bu Windows baskısında yok' } as Record<string, string>,
-    enableHint: 'Önce Ağ sekmesinden Hyper-V’yi açın (ardından yeniden başlatma gerekir).',
+    enableHint: 'Önce Gelişmiş > Ağ adresleri bölümünden Hyper-V’yi açın (ardından yeniden başlatma gerekir).',
     hostFacts: (mb: number, cpus: number) => `${Math.round(mb / 1024)} GB bellek, ${cpus} mantıksal işlemci`,
     gpus: (n: number) => (n === 0 ? 'Bölünebilen GPU yok: VM koltukları yazılımla çizer.' : `${n} GPU bölünebilir.`),
     network: 'VM ağı',

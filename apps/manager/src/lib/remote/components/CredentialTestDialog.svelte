@@ -88,7 +88,7 @@
     {:else if !pending}
       <Button kind={result?.ok ? 'secondary' : 'primary'} icon="refresh" label={t.cred.retest} onclick={test} />
       {#if fixable}<Button kind="secondary" label={t.cred.fix} onclick={() => (confirming = true)} />{/if}
-      <Button kind={result?.ok ? 'primary' : 'secondary'} label={t.cred.close} onclick={onClose} />
+      <Button kind="secondary" label={t.cred.close} onclick={onClose} />
     {/if}
   {/snippet}
 </Modal>

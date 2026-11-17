@@ -4,7 +4,7 @@ Tauri 2 + SvelteKit + Svelte 5 (runes), `adapter-static`, English UI with a Turk
 every session. It does no privileged work itself: every change is a request to the
 service over the control pipe (`docs/agents/architecture.md` §5). Behaviour target:
 `spec/local/10-manager.md` (local seats) and `spec/remote/` (remote seats). Since merge step 9
-it is the one manager for both seat kinds (`docs/agents/architecture.md` §10.7). The layout is our own and neutral; the maintainer redesigns it later.
+it is the one manager for both seat kinds (`docs/agents/architecture.md` §10.7). The layout follows the 2026-11-17 redesign (`target/redesign/final/DESIGN.md`, packages P0-P8).
 
 ## Commands
 
@@ -44,7 +44,7 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src/lib/remote/` | Remote seats view (from Pulsar Split's manager, redesigned in P6 on `src/lib/ui`): `components/RemoteTab.svelte` (root list + breadcrumb sub-pages), seat page (with the seat's VM section, `VmSeatEditor.svelte`), pair dialog (QR), host, logs, DXVK, VM seats (`VmPage.svelte`, `vm.ts`: Hyper-V host and shared VM settings), remote seat settings; `StageBar.svelte` + `stage.svelte.ts` (staged save of the remote pages, read by the app's unsaved guard); `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts` |
 | `src-tauri/src/net.rs` | Static IPv4 list (address dialog) and the LAN address order of the pair dialog (`lan_addresses`) |
 | `src/lib/ui/` | Design system of the redesign (2026-11-17, `target/redesign/final/DESIGN.md`): `tokens.css` (colour, type, space, radius, motion tokens; light + dark), `base.css` (base, layout classes, sections / groups / rows), `fonts/` (bundled woff2 + OFL texts), and the component kit (P1) |
-| `src/app.css` | Imports the tokens and base; still holds the TEMP aliases and legacy rules for screens not yet moved to the kit (removed in P8) |
+| `src/app.css` | Imports the tokens and base only (P8 removed the TEMP aliases and the legacy element rules) |
 
 ## Third-party assets
 
@@ -115,8 +115,7 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   devices (outputs, CPU, palm check), network addresses (`NetworkSection.svelte`: per-seat
   address + Edit, the shared program list, source-IP driver state, Hyper-V adapters; the
   per-seat dialog only picks the address and the rule), the passwordless-seat port, system
-  settings and apps on seats (`CompatSettings.svelte`). `NetworkTab.svelte` only wraps the
-  section until the app shell drops the old tab (P2/P8).
+  settings and apps on seats (`CompatSettings.svelte`).
 - Advanced methods: backend picker with availability and notes from `get_backends`;
   the experimental client-SKU session backend only after the warning dialog (stores
   `experimental_ack`); host topology with the `input_not_isolated` note; timings, safety,
@@ -169,8 +168,8 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
 - Nothing of spec 10 is listed as "not built" any more (the old list was stale and is
   gone). Built since the first phases: per-seat IP binding (`IpBindingDialog`),
   video-output assignment (`OutputsDialog`), custom device pictures (`PictureDialog`),
-  webcam preview (`CameraPreview`), log verbosity (`LogLevelDialog`), Hyper-V helper
-  (Network tab); parity review: seat menu "Restart the graphics driver" and "Delete the
+  webcam preview (`CameraPreview`), log verbosity (Advanced > Safety, a Select), Hyper-V helper
+  (Advanced > Network addresses); parity review: seat menu "Restart the graphics driver" and "Delete the
   seat's kiosk user…", CPU dialog column "Whole session", GameInputSvc hint on the shim
   targets list; compat-tweaks (2026-11-17): the Compatibility section, the class-level
   default descriptors switch (was greyed out), the seat environment / deny-logon dialog,
@@ -215,3 +214,13 @@ a key and `i18n.test.ts` fails on a key that only one side has. HYPOTHESIS (not 
 hardware): WebView2 reports the Windows display language in `navigator.languages`, and the
 tray relabels at runtime.
 
+## Visual check (redesign P8)
+
+The browser demo (`bun run dev -- --port <port>`) reaches every screen of
+`target/redesign/final/index.html`. Preview-only hooks in the demo API: seat 1 is signed in
+while Pulsar Seat is on, a started remote seat reports a running stream,
+`globalThis.__demoPairRequest = true` makes the pair dialog show a client request, and
+`globalThis.__demoConflict = true` makes the next save report two assignments the service
+cannot apply (conflict dialog). Remote seats get a stream port on save, like the service.
+Captures of the final pass: `target/redesign/implemented/` (same names as `final/shots/`, `-en`
+for English).

@@ -407,6 +407,13 @@
 {/if}
 
 <style>
+  /* The PIN as the device shows it: four large spaced digits. */
+  .pin {
+    height: calc(var(--h-control) + var(--sp-3));
+    font-size: var(--fs-h2);
+    letter-spacing: 0.4em;
+    text-align: center;
+  }
   .pair {
     display: grid;
     grid-template-columns: 220px minmax(0, 1fr);

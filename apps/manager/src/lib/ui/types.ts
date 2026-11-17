@@ -49,6 +49,8 @@ export interface SegmentOption<V extends string = string> {
 export interface NoticeItem {
   kind: NoticeKind;
   text: string;
+  /** Bold lead-in before the text. */
+  title?: string;
   icon?: IconName;
   /** One next step: a compact secondary button. */
   action?: { label: string; onclick: () => void; ariaLabel?: string };

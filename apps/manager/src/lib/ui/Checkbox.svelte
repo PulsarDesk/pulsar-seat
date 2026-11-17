@@ -64,7 +64,7 @@
     content: '';
     width: 10px;
     height: 6px;
-    border: 2px solid var(--text-on-accent);
+    border: calc(2 * var(--bw)) solid var(--text-on-accent);
     border-top: 0;
     border-right: 0;
     rotate: -45deg;

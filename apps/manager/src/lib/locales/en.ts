@@ -85,7 +85,7 @@ const t = {
     localHint: 'A seat used with a monitor, keyboard and mouse plugged into this PC',
     remoteHint: 'A seat used over the network with Pulsar or Moonlight',
     remoteList: 'Remote seats',
-    remoteListHint: 'Remote seats get no devices; their settings are on the Remote seats tab.',
+    remoteListHint: 'Remote seats get no devices; their settings are on the Remote seats page.',
     open: 'Edit'
   },
 
@@ -585,7 +585,7 @@ const t = {
     addSeat: 'Add seat',
     seatLimit: 'Seat limit reached (16).',
     pickByTouch: 'Find by touch',
-    pickByTouchHint: 'Press a key on the keyboard you want to find, or move the mouse.',
+    pickByTouchHint: 'press a key on the keyboard you want to find, or move the mouse. The device found is highlighted.',
     pickCancel: 'Stop searching',
     pickFound: (name: string) => `Found: ${name}`,
     identifyMonitors: 'Number the monitors',
@@ -831,7 +831,7 @@ const t = {
     intro:
       'A kiosk seat runs in the same Windows session as seat 1; with “each kiosk seat runs as its own Windows user” on (the default) it gets its own user profile, settings and app data. Only the apps below open on the seat’s monitors. Its keyboard and mouse go only to these apps; this fully holds only when seat 1 is a kiosk seat too or the input filter is active.',
     limits:
-      'Limits: all seats share the same Windows session and clipboard. Games and apps that read input with raw input, DirectInput or XInput only get the seat’s own devices when per-app isolation (Advanced tab) is on. For full-screen games choose “Full screen” on the app: the game comes to the front, but only one game on the PC can be in true full screen at a time. Store (UWP / MSIX) apps are added by their app ID (AUMID); they may not open on every Windows version. Programs that hand over to an already open copy stay on the seat when they run as the seat’s own user. Sound: if you give the kiosk seat a sound device assigned only to it, the seat’s apps use it as their per-app default device on Windows 10 1803 and later (an undocumented Windows interface; Windows updates can break it, then sound comes from seat 1’s default device). A kiosk seat is not a full lockdown: Windows handles Ctrl+Alt+Del and Win+L before any user-mode program; whichever seat presses them, all seats switch to the security screen, and signing out there closes all seats. The other system keys (Windows key, Win+R, Win+E, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc) from kiosk keyboards do not reach seat 1’s desktop; without the input filter this is done with a best-effort method that tells keyboards apart. To return to the app list, use the “Apps” button on the bar or Ctrl+Alt+Home.',
+      'Limits: all seats share the same Windows session and clipboard. Games and apps that read input with raw input, DirectInput or XInput only get the seat’s own devices when per-app isolation (Advanced settings) is on. For full-screen games choose “Full screen” on the app: the game comes to the front, but only one game on the PC can be in true full screen at a time. Store (UWP / MSIX) apps are added by their app ID (AUMID); they may not open on every Windows version. Programs that hand over to an already open copy stay on the seat when they run as the seat’s own user. Sound: if you give the kiosk seat a sound device assigned only to it, the seat’s apps use it as their per-app default device on Windows 10 1803 and later (an undocumented Windows interface; Windows updates can break it, then sound comes from seat 1’s default device). A kiosk seat is not a full lockdown: Windows handles Ctrl+Alt+Del and Win+L before any user-mode program; whichever seat presses them, all seats switch to the security screen, and signing out there closes all seats. The other system keys (Windows key, Win+R, Win+E, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc) from kiosk keyboards do not reach seat 1’s desktop; without the input filter this is done with a best-effort method that tells keyboards apart. To return to the app list, use the “Apps” button on the bar or Ctrl+Alt+Home.',
     appId: 'Store app ID (AUMID, optional)',
     appIdHint: 'Example: Microsoft.WindowsCalculator_8wekyb3d8bbwe!App. When set, no program path is needed.',
     notAppId: 'Invalid app ID (must be in Package!App form).',
@@ -894,7 +894,7 @@ const t = {
   } as Record<StartMode, string>,
 
   advanced: {
-    banner: 'This tab is for experienced users. Do not change a setting you are not sure about.',
+    banner: 'This page is for experienced users. Do not change a setting you are not sure about.',
     backends: 'Methods',
     session: 'Session method',
     topology: 'Where seat hosts run',
@@ -1073,7 +1073,7 @@ const t = {
     memory_integrity: { pass: 'On.', info: 'Off or unknown (reported only; Pulsar Seat never changes it).' },
     smart_app_control: { info: 'Smart App Control state reported; when on, unsigned builds may be blocked.' },
     windows_safe_mode: { pass: 'Normal boot.', warn: 'Windows is in Safe Mode: extra seats do not start.' },
-    hyperv_vm: { info: 'Needed only for VM seats; Pulsar Seat never turns it on by itself (Network tab; a restart follows).' },
+    hyperv_vm: { info: 'Needed only for VM seats; Pulsar Seat never turns it on by itself (Advanced > Network addresses; a restart follows).' },
     driver_signing: { info: 'The Pulsar Seat drivers are not signed yet; user-mode methods are used.' },
     reference_product: { pass: 'Not installed.', fail: 'Another multiseat product is installed.' },
     termservice_stock: { pass: 'The Remote Desktop service uses Windows’ own file.', warn: 'The Remote Desktop service does not use the Windows default.' },
@@ -1338,6 +1338,8 @@ const t = {
 
   enable: {
     enableTitle: 'Turn Pulsar Seat on?',
+    startModeChange: 'Change',
+    startModeChangeLabel: 'Change the start mode',
     enableBody: 'When Pulsar Seat is on, extra seats run according to the chosen start mode. A diagnostic report is saved before turning it on.',
     disableTitle: 'Turn Pulsar Seat off?',
     disableBody: 'Running extra seats close; unsaved work in open sessions may be lost.',
@@ -1403,7 +1405,7 @@ const t = {
   },
 
   view: {
-    title: 'View of the Seats tab',
+    title: 'View of the Seats page',
     scaleIcons: 'Shrink device pictures to the screen size',
     evenRows: 'Arrange seat boxes in even rows',
     flashSeconds: 'Highlight time of a just plugged-in device (s)',
@@ -1869,7 +1871,7 @@ const failureText: Record<string, string> = {
   console_busy: 'Another seat is on the console now; lock that seat first',
   session_not_locked: 'The seat’s session is not locked and no password is saved; lock the session or save the password',
   nla_required:
-    'The separate port for seats without a password is off; turn it on in the Advanced tab or save a password for the seat',
+    'The separate port for seats without a password is off; turn it on in Advanced settings or save a password for the seat',
   loopback_listener_unavailable: 'The separate port for seats without a password is not ready',
   kiosk_app_missing: 'No program is chosen for the kiosk seat',
   console_not_ready: 'The console session is not ready yet; try again once Windows has started',
@@ -1928,7 +1930,7 @@ const issueText: Record<string, string> = {
   loopback_port_invalid: 'The port for seats without a password must be from 1024 to 65535 and cannot be 3389.',
   hide_fsu_with_fast_user_switch: 'Hiding fast user switching turns off the “one seat at a time” session method.',
   loopback_no_accounts:
-    'This seat opens at the sign-in screen, but no account can use the port for seats without a password; the seat cannot start. Add the people who will sign in on this seat to the “extra accounts” list in the Advanced tab, or give the seat an account.',
+    'This seat opens at the sign-in screen, but no account can use the port for seats without a password; the seat cannot start. Add the people who will sign in on this seat to the “extra accounts” list in Advanced settings, or give the seat an account.',
   logon_screen_needs_listener:
     'This seat opens at the sign-in screen; it cannot start while the port for seats without a password is off. Turn the port on, or give the seat an account with a password.',
   loopback_account_invalid: 'One of the extra accounts is invalid (write user or DOMAIN\\user, do not use @); it is ignored.',
@@ -2196,7 +2198,7 @@ const rt = {
     refresh: 'Refresh',
     feature: (s: string) => `Hyper-V: ${s}`,
     featureStates: { enabled: 'on', disabled: 'off', enable_pending: 'on after a restart', unavailable: 'not available on this Windows edition' } as Record<string, string>,
-    enableHint: 'Turn Hyper-V on in the Network tab first (a restart follows).',
+    enableHint: 'Turn Hyper-V on in Advanced > Network addresses first (a restart follows).',
     hostFacts: (mb: number, cpus: number) => `${Math.round(mb / 1024)} GB memory, ${cpus} logical processors`,
     gpus: (n: number) => (n === 0 ? 'No GPU can be partitioned: VM seats render in software.' : `${n} GPU(s) can be partitioned.`),
     network: 'VM network',

@@ -136,7 +136,13 @@
     {#snippet status()}
       <p class="intro">
         {t.view.settingsIntro}
-        {#if onOpenSettings}<Button kind="quiet" compact label={t.view.openSettings} onclick={onOpenSettings} />{/if}
+        {#if onOpenSettings}<a
+            href="#settings"
+            onclick={(e) => {
+              e.preventDefault();
+              onOpenSettings?.();
+            }}>{t.view.openSettings}</a
+          >{/if}
       </p>
     {/snippet}
   </PageHead>

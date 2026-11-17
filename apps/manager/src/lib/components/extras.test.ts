@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Tab-leave guard, network tab + IP dialog, log level, outputs, pictures, wizard pages.
+// Tab-leave guard, network addresses + IP dialog, outputs, pictures, wizard pages.
 import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import App from './App.svelte';
-import NetworkTab from './NetworkTab.svelte';
-import LogLevelDialog from './LogLevelDialog.svelte';
+import NetworkSection from './NetworkSection.svelte';
 import OutputsDialog from './OutputsDialog.svelte';
 import PictureDialog from './PictureDialog.svelte';
 import Wizard from './Wizard.svelte';
@@ -26,14 +25,14 @@ async function setup() {
   return { api, store, user };
 }
 
-/** The network addresses page (its content moves into Advanced in P4; NetworkTab until then). */
+/** The network addresses section of the Advanced page, on its own. */
 async function setupNetwork() {
   localStorage.clear();
   const api = createDemoApi();
   const store = new ManagerStore(api);
   await store.init();
   const user = userEvent.setup();
-  const view = render(NetworkTab, { store });
+  const view = render(NetworkSection, { store, readOnly: !store.isAdmin });
   return { api, store, user, view };
 }
 
@@ -116,15 +115,6 @@ describe('network tab', () => {
 });
 
 describe('dialogs', () => {
-  it('log level dialog returns the switches', async () => {
-    const onSave = vi.fn();
-    render(LogLevelDialog, { levels: { info: true, debug: false, trace: false }, onSave, onCancel: vi.fn() });
-    const user = userEvent.setup();
-    await user.click(screen.getByLabelText(t.logLevel.debug));
-    await user.click(screen.getByRole('button', { name: t.save }));
-    expect(onSave).toHaveBeenCalledWith({ info: true, debug: true, trace: false });
-  });
-
   it('outputs dialog: one output per monitor unless cloning is allowed', async () => {
     const onSave = vi.fn();
     const devices = demoInventory();
@@ -236,5 +226,18 @@ describe('wizard (main window)', () => {
     expect(screen.getByText(t.wizard.moreKeys)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: t.wizard.confirmSeat }));
     await vi.waitFor(() => expect(api.calls.filter((c) => c === 'wizard_command').length).toBeGreaterThanOrEqual(3));
+  });
+});
+
+describe('enable dialog (redesign P8)', () => {
+  it('shows the start mode and its Change button opens Settings', async () => {
+    const { store, user } = await setup();
+    await user.click(screen.getByRole('button', { name: t.power.openAndStart }));
+    const dlg = screen.getByRole('alertdialog', { name: t.enable.enableTitle });
+    expect(within(dlg).getByText(t.basic.startMode)).toBeInTheDocument();
+    expect(within(dlg).getByText(t.settingsPage.startModeLabels[store.draft!.settings.start_mode])).toBeInTheDocument();
+    await user.click(within(dlg).getByRole('button', { name: t.enable.startModeChangeLabel }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(store.prefs.tab).toBe('settings');
   });
 });

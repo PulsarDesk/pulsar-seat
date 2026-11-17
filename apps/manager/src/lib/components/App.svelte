@@ -49,7 +49,7 @@
   import type { Tab } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { IpBinding, Issue, SeatNumber, ServiceAction } from '#lib/types.ts';
-  import { Button, ConfirmDialog, EmptyState, Modal, Notices, PageHead, SaveBar, Toasts, type NoticeItem } from '#lib/ui/index.ts';
+  import { Button, ConfirmDialog, EmptyState, Group, LockedValue, Modal, Notices, PageHead, Row, SaveBar, Toasts, type NoticeItem } from '#lib/ui/index.ts';
   import { NoticeHost, provideNoticeHost } from '#lib/ui/notice-host.svelte.ts';
 
   interface Props {
@@ -483,7 +483,26 @@
     busy={store.busy}
     onConfirm={() => setEnabled(on)}
     onCancel={() => (dialog = null)}
-  />
+  >
+    {#if on && store.draft}
+      <Group>
+        <Row label={t.basic.startMode}>
+          {#snippet control()}
+            <LockedValue text={t.settingsPage.startModeLabels[store.draft?.settings.start_mode ?? 'manual'] ?? ''} />
+            <Button
+              compact
+              label={t.enable.startModeChange}
+              aria-label={t.enable.startModeChangeLabel}
+              onclick={() => {
+                dialog = null;
+                navigate('settings');
+              }}
+            />
+          {/snippet}
+        </Row>
+      </Group>
+    {/if}
+  </ConfirmDialog>
 {:else if dialog?.kind === 'reboot'}
   <ConfirmDialog
     title={t.enable.rebootTitle}

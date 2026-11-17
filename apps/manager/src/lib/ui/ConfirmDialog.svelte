@@ -4,6 +4,7 @@
      optional typed confirmation (reset: type the word to enable the confirm button).
      Footer order: confirm, then Cancel. -->
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import { activeLang, t } from '#lib/i18n.ts';
   import Button from './Button.svelte';
   import Checkbox from './Checkbox.svelte';
@@ -26,6 +27,8 @@
     onConfirm: (dontAsk: boolean) => void;
     /** `dontAsk` is passed too, for boxes where "do not show again" applies to both answers. */
     onCancel: (dontAsk: boolean) => void;
+    /** Extra content under the body (a fact the user may want to change first). */
+    children?: Snippet;
   }
   let {
     title,
@@ -38,7 +41,8 @@
     typedConfirm,
     busy = false,
     onConfirm,
-    onCancel
+    onCancel,
+    children
   }: Props = $props();
   let dontAsk = $state(false);
   let typed = $state('');
@@ -49,6 +53,7 @@
 <Modal {title} size="sm" alert initialFocus={danger ? 'cancel' : 'primary'} onClose={() => onCancel(dontAsk)}>
   <p>{body}</p>
   {#if warning}<p class="warning">{warning}</p>{/if}
+  {#if children}{@render children()}{/if}
   {#if typedConfirm}
     <Field label={typedConfirm.label}>
       {#snippet children({ id, describedby })}

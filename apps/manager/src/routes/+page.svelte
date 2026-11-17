@@ -54,5 +54,5 @@
 {:else if store}
   <App {store} />
 {:else}
-  <p class="hint page">{t.loading}</p>
+  <p class="muted page">{t.loading}</p>
 {/if}

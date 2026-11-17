@@ -7,7 +7,7 @@
   import type { AudioCleanup, DisplayBackendInfo, HostInfo, TermwrapStatus } from '#lib/remote/types.ts';
   import { Breadcrumb, Button, ConfirmDialog, Group, Icon, LockedValue, Notice, PageHead, Row, Section, Status, Switch } from '#lib/ui/index.ts';
   import type { StatusKind } from '#lib/ui/index.ts';
-  import ExperimentalDialog from './ExperimentalDialog.svelte';
+  import ExperimentalDialog from '#lib/components/ExperimentalDialog.svelte';
 
   interface Props {
     info: HostInfo | null;
@@ -249,6 +249,7 @@
 
 {#if showExperimental && tw}
   <ExperimentalDialog
+    variant="remote"
     status={tw}
     onEnable={async (path, ack) => {
       await onTermwrap(true, path, ack);

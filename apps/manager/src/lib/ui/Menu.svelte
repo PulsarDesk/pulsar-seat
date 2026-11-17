@@ -87,7 +87,15 @@
     } else {
       left = align === 'end' ? a.right - w : a.left;
       top = a.bottom + 4;
-      if (top + h > vh - 8 && a.top - h - 4 >= 8) top = a.top - h - 4;
+      if (top + h > vh - 8) {
+        if (a.top - h - 4 >= 8) top = a.top - h - 4;
+        else {
+          // Fits neither below nor above: open beside the trigger so it stays visible.
+          const beside = align === 'end' ? a.left - w - 4 : a.right + 4;
+          if (beside >= 8 && beside + w <= vw - 8) left = beside;
+          top = a.top - 6;
+        }
+      }
     }
     pos = { top: Math.max(8, Math.min(top, vh - h - 8)), left: Math.max(8, Math.min(left, vw - w - 8)) };
   }
@@ -108,7 +116,10 @@
       }
     }
     place();
-    const first = startAt === 'last' ? indices[indices.length - 1] : indices[0];
+    // Start on an enabled item; a disabled one stays reachable with the arrow keys.
+    const enabled = indices.filter((i) => !(items[i] as { disabled?: boolean }).disabled);
+    const pool = enabled.length ? enabled : indices;
+    const first = startAt === 'last' ? pool[pool.length - 1] : pool[0];
     if (first !== undefined) focusItem(first);
     const away = (e: PointerEvent) => {
       const target = e.target as Node | null;

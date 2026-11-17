@@ -20,7 +20,7 @@
 
 <p class="slot" class:block data-missing={kind}>
   <Icon name={icon} size={16} />
-  <span>{#if title}<b>{title}</b> {/if}{text}</span>
+  <span>{#if title}<b>{title}</b>{' '}{/if}{text}</span>
 </p>
 
 <style>

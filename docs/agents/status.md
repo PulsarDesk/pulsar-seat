@@ -3006,3 +3006,56 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Gates green: cargo 1912 passed / 6 ignored, clippy -D warnings host aarch64 + x64, shim
     tests + check x64 / i686 / aarch64, manager 340 tests (was 331), check 0 / 0, build OK,
     installer scripts 89. No Rust or driver change. No test deleted.
+
+- 2026-11-17 (redesign P8, manager): cleanup and the full visual pass
+  (`target/redesign/final/IMPLEMENTATION.md` P8).
+  - **Deleted:** `components/Modal.svelte`, `components/Menu.svelte`,
+    `components/LogLevelDialog.svelte`, `components/NetworkTab.svelte`,
+    `components/ConfirmDialog.svelte` (pass-through) and the duplicate
+    `remote/components/ExperimentalDialog.svelte` (the host page uses
+    `components/ExperimentalDialog` with `variant="remote"`). `src/app.css` now only imports
+    `ui/tokens.css` + `ui/base.css` (TEMP aliases and legacy element / class rules gone).
+    `UsbDockWizard.svelte` (the last screen on the old Modal / fieldset) moved to `ui/Modal`,
+    `Field`, `Select`, `Button`. The dev gallery `/ui` stays behind the `dev` guard.
+  - **Fixes from the visual pass** (demo on port 5368, headless Edge over CDP, light + dark,
+    1280x800 + 1024x700, Turkish + English, compared with `final/shots/`): pages inside the
+    shell no longer get a second `.page` inset (`.page .page` in base.css; Settings, Advanced,
+    remote pages sat 32 px off); the move hint draws Enter as a `Kbd`; the missing-device line
+    has its space after the bold title; `Notice` / `NoticeItem` take a bold `title` lead-in
+    (find-by-touch notice, design 06); `Menu` opens on its first enabled item and, when it
+    fits neither below nor above, beside the trigger instead of over it; the session method
+    list shows the short method name with its meaning as help (design 11); the enable dialog
+    shows the start mode with *Change* (design 51, opens Settings); remote seat settings link
+    to Settings inline; the CPU dialog table has its own hairline table styles; the pair PIN
+    field is large and spaced (design 31); credential test: *Close* is secondary and last;
+    remote password row: the "test needs a user and a password" reason is row help, not text
+    between two buttons; outputs dialog rows show the name then the muted mono ID; an empty
+    RDP client name is not shown. Copy: every "tab" left over from the old tab bar now says
+    page / settings / Advanced > Network addresses (both locales).
+  - **Demo (browser preview only):** seat 1 is signed in while Pulsar Seat is on; a started
+    remote seat reports a running stream (design 21); `globalThis.__demoPairRequest = true`
+    shows a pairing request (31); `globalThis.__demoConflict = true` makes the next save
+    report two conflicts (55); remote seats get a stream port on save; `pollEvents` waits
+    like a long poll when nothing is new (the pair dialog loop spun the page before).
+  - **P8 checks:** colour / radius / font-size / shadow / border / retired-markup / 12 px /
+    outline / old-token / `remote.css|orange` greps empty; the glyph grep only finds the
+    resolution sign in `1920×1080` (the design's own notation, not an icon glyph).
+    `contrast.py` exits 0. Detector (`bunx impeccable detect --json --no-config src`): only
+    `overused-font: Space Grotesk` (accepted).
+  - **Captures:** `target/redesign/implemented/` (same names as `final/shots/`, `-en` suffix
+    for English), every screen and dialog of `final/index.html` incl. `-full` for 01, 10, 11,
+    12, 20, 21, 22, 25. Design 72 (log level) is the inline Select row in Advanced > Safety.
+    Remaining known differences (content, not structure): the demo has two local seats and
+    English device names; parity features absent from the prototypes (seat menu entries,
+    outputs per-monitor HDR / VRR / cursor, CPU "whole session", remote display mode, etc.)
+    are placed with the DESIGN.md patterns.
+  - **BEHAVIOUR, needs maintainer test before push** (unchanged from P2 / P6, listed again):
+    no startup "turn on?" modal (status line *Turn on and start*), restart-required on the
+    seat card instead of a toast action, remote staged save. New small behaviour: the enable
+    dialog's *Change* closes it and opens Settings.
+  - Tests: manager 344 (was 340): +2 `UsbDockWizard.test.ts`, +2 `ui.test.ts` (menu first
+    focus, notice title), +1 enable dialog in `extras.test.ts`; remote
+    `ExperimentalDialog.test.ts` rewritten for the shared dialog (2 tests, remote-only cases);
+    deleted on purpose: `extras.test.ts` "log level dialog returns the switches" (component
+    removed; the log detail Select is covered by the Advanced tests). Installer scripts 89.
+    No Rust, Tauri or driver code touched (cargo gates not required).

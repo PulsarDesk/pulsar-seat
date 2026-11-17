@@ -36,7 +36,7 @@
 <style>
   .row {
     margin: 0;
-    border-radius: 0;
+    border-radius: initial;
   }
   .value {
     flex: none;

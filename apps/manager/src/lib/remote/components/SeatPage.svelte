@@ -342,7 +342,7 @@
   });
   const fixedOptions = [
     { value: 'follow', label: t.seat.fixedFollow },
-    ...RES_PRESETS.map(([w, h]) => ({ value: `${w}x${h}`, label: `${w} × ${h}` })),
+    ...RES_PRESETS.map(([w, h]) => ({ value: `${w}x${h}`, label: `${w}×${h}` })),
     { value: 'custom', label: t.seat.fixedCustom }
   ];
   function chooseFixed(v: string) {
@@ -531,7 +531,7 @@
           {/snippet}
         </Row>
         {#if runtime.session_id !== null}
-          <Row label={t.seat.session(runtime.session_id)} help={`${t.seat.clientName}: ${runtime.client_name}`} />
+          <Row label={t.seat.session(runtime.session_id)} help={runtime.client_name ? `${t.seat.clientName}: ${runtime.client_name}` : undefined} />
         {/if}
         {#each runtime.isolation as h, i (i)}
           <Row label={`${t.seat.isolationHealth}: ${h.exe}`} help={h.error ? failureText(h.error) : undefined}>
@@ -617,7 +617,10 @@
             />
           {/snippet}
         </Row>
-        <Row label={t.seat.password} help={password ? t.view.passwordStaged : undefined}>
+        <Row
+          label={t.seat.password}
+          help={password ? t.view.passwordStaged : onTestCredentials && onEnableUnlock && (!draft.user_name || !status?.has_password) ? t.view.testNeeds : undefined}
+        >
           {#snippet control()}
             <LockedValue text={status?.has_password ? t.seatView.passwordSaved : t.view.passwordMissing} />
             {#if onTestCredentials && onEnableUnlock}
@@ -627,7 +630,6 @@
                 label={t.seatView.test}
                 aria-label={t.seatView.testLabel}
                 disabled={!draft.user_name || !status?.has_password}
-                disabledReason={!draft.user_name || !status?.has_password ? t.view.testNeeds : undefined}
                 onclick={() => (credOpen = true)}
               />
             {/if}

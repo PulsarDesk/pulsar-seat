@@ -363,3 +363,32 @@ describe('Icon', () => {
     expect(svg).toHaveClass('sm');
   });
 });
+
+describe('Menu, first focus', () => {
+  it('starts on the first enabled item; a disabled one stays reachable with the arrows', async () => {
+    const user = userEvent.setup();
+    render(MenuHost, { firstDisabled: true });
+    await user.click(screen.getByRole('button', { name: 'Guest: seat actions' }));
+    const items = within(screen.getByRole('menu', { name: 'Guest: seat actions' })).getAllByRole('menuitem');
+    expect(items[1]).toHaveFocus();
+    await user.keyboard('{ArrowUp}');
+    expect(items[0]).toHaveFocus();
+  });
+});
+
+describe('Notice title', () => {
+  it('renders a bold lead-in before the text, in one item and in the region', () => {
+    const one = render(Notices, { items: [{ kind: 'info', title: 'Find by touch:', text: 'press a key.' }] });
+    const b = one.container.querySelector('b');
+    expect(b?.textContent).toBe('Find by touch:');
+    expect(b?.parentElement?.textContent).toBe('Find by touch: press a key.');
+    one.unmount();
+    const two = render(Notices, {
+      items: [
+        { kind: 'info', title: 'A:', text: 'one.' },
+        { kind: 'warn', text: 'two.' }
+      ]
+    });
+    expect(two.container.querySelector('li b')?.parentElement?.textContent).toBe('A: one.');
+  });
+});

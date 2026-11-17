@@ -4,9 +4,10 @@
   import Menu from '../../ui/Menu.svelte';
   import type { MenuEntry } from '../../ui/types.ts';
 
-  let { onPick = (_: string) => {} }: { onPick?: (label: string) => void } = $props();
+  let { onPick = (_: string) => {}, firstDisabled = false }: { onPick?: (label: string) => void; firstDisabled?: boolean } = $props();
+  // svelte-ignore state_referenced_locally
   const items: MenuEntry[] = [
-    { label: 'Start this seat', action: () => onPick('start') },
+    { label: 'Start this seat', disabled: firstDisabled, action: () => onPick('start') },
     { label: 'Sign in again', action: () => onPick('relogon') },
     { separator: true },
     { group: 'Settings' },

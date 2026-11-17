@@ -134,18 +134,28 @@
   }
 
   const session = $derived(draft?.settings.backends.session);
+  /** Split "Name (meaning)" into its two parts; a name without a bracket has no meaning part. */
+  function splitName(full: string): [string, string] {
+    const m = /^(.*?) \((.*)\)$/.exec(full);
+    return m ? [m[1], m[2]] : [full, ''];
+  }
+  const sentence = (s: string) => `${s.charAt(0).toLocaleUpperCase()}${s.slice(1)}.`;
   const sessionOptions = $derived<ChoiceOption[]>(
     options('session').map((b) => {
       // A method that is not available on this PC stays selectable (the service falls back
       // and says so on the Status page; a wrapper or role may be installed later): its
       // reason is the help line.
       const why = unavailable(b);
-      const help = [why ?? '', b.notes.map(noteLabel).join(' · ')].filter(Boolean).join(' ');
+      // "Name (what it means)": the name is the label, the bracket the first help sentence
+      // (design 11: a short option name, the explanation under it).
+      const [name, meaning] = splitName(backendName(b.kind));
+      const experimental = b.experimental || meaning.toLowerCase() === t.advancedPage.experimental;
+      const about = meaning && meaning.toLowerCase() !== t.advancedPage.experimental ? sentence(meaning) : '';
+      const help = [about, why ?? '', b.notes.map(noteLabel).join(' · ')].filter(Boolean).join(' ');
       return {
         value: b.kind,
-        label: backendName(b.kind),
-        // Some method names already say "experimental"; never say it twice.
-        note: b.experimental && !backendName(b.kind).toLowerCase().includes(t.advancedPage.experimental) ? t.advancedPage.experimental : undefined,
+        label: name,
+        note: experimental ? t.advancedPage.experimental : undefined,
         help: help || undefined
       };
     })

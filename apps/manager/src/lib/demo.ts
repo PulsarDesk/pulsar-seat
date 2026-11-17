@@ -16,6 +16,7 @@ import {
   type Device,
   type DeviceView,
   type EventFrame,
+  type Issue,
   type ProductState,
   type SeatRuntime,
   type ServiceEvent,
@@ -208,9 +209,26 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
   const arrived = new Map<string, number>();
   state.inventory.forEach((d, i) => arrived.set(d.key, i));
 
+  // Browser preview only: `globalThis.__demoConflict = true` makes the next save report two
+  // assignments the service cannot apply as they are (design 55-dlg-conflict).
+  const demoConflicts = (): Issue[] => {
+    if ((globalThis as { __demoConflict?: boolean }).__demoConflict !== true) return [];
+    const kbd = state.inventory.find((d) => d.kind === 'keyboard' && d.present);
+    const mon = state.inventory.find((d) => d.kind === 'monitor' && d.present);
+    return [
+      ...(kbd ? [{ severity: 'conflict' as const, code: 'child_of_other_seat_hub', device: kbd.key }] : []),
+      ...(mon ? [{ severity: 'conflict' as const, code: 'monitor_hub_mismatch', device: mon.key }] : [])
+    ];
+  };
+
+  // Seat 1 is the console session: it is signed in whenever Pulsar Seat is on.
   const runtime = (): SeatRuntime[] =>
     state.config.seats.map(
-      (s) => state.seats.find((r) => r.seat === s.number) ?? { seat: s.number, kind: s.kind ?? 'local', state: { state: 'off' }, since_ms: 0 }
+      (s) =>
+        state.seats.find((r) => r.seat === s.number) ??
+        (s.number === 1 && state.product.state === 'enabled'
+          ? { seat: 1, kind: 'local', state: { state: 'signed_in', user: 'Ayşe' }, session_id: 1, since_ms: 0 }
+          : { seat: s.number, kind: s.kind ?? 'local', state: { state: 'off' }, since_ms: 0 })
     );
 
   /** Recent frames for `poll_events` (the demo keeps the last 200). */
@@ -422,16 +440,25 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     },
     validate: async (config) => {
       await step('validate_config');
-      return localIssues(config, state.inventory);
+      return [...localIssues(config, state.inventory), ...demoConflicts()];
     },
     apply: async (config, base, force) => {
       await step('apply_config');
       needAdmin();
       if (base !== state.config.revision) throw { code: 'revision_conflict', message: 'demo' };
-      const issues = localIssues(config, state.inventory);
+      const issues = [...localIssues(config, state.inventory), ...demoConflicts()];
       if (hasErrors(issues)) throw { code: 'invalid_config', message: 'demo' };
       if (conflicts(issues).length && !force) throw { code: 'conflicts_not_confirmed', message: 'demo' };
       state.config = normalize({ ...clone(config), revision: state.config.revision + 1 });
+      // Like the service: a remote seat without a port gets the next free stream port.
+      const used = new Set(state.config.seats.map((s) => s.remote?.port).filter((p): p is number => !!p));
+      let next = 47989;
+      for (const s of state.config.seats) {
+        if (s.kind !== 'remote' || !s.remote || s.remote.port) continue;
+        while (used.has(next)) next += 100;
+        s.remote.port = next;
+        used.add(next);
+      }
       saved = clone(state.config);
       emit({ type: 'config_changed', data: { revision: state.config.revision } });
       return { revision: state.config.revision, issues: issues.filter((i) => i.severity !== 'error'), restart_seats: [], reboot_needed: false };
@@ -619,15 +646,27 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       await step('wizard_stop');
       emit({ type: 'wizard_progress', data: { ...wizProgress(), step: save ? 'done' : 'cancelled', seat: null } });
     },
-    pollEvents: async (after, _waitMs, topics) => {
+    pollEvents: async (after, waitMs, topics) => {
       await step('poll_events');
       if (topics.includes('stream')) needAdmin();
       const topicOf = (t: ServiceEvent['type']) =>
         t === 'stream' ? 'stream' : t.startsWith('device_') ? (t === 'device_activity' ? 'activity' : 'devices') : t === 'wizard_progress' ? 'wizard' : 'status';
-      const events = frames.filter((f) => f.seq > after && (topics.length === 0 || topics.includes(topicOf(f.event.type))));
+      const pick = () => frames.filter((f) => f.seq > after && (topics.length === 0 || topics.includes(topicOf(f.event.type))));
+      let events = pick();
+      // A long poll like the service's: with nothing new, wait once before answering, so a
+      // caller looping on it (the pair dialog) does not spin the page.
+      if (events.length === 0 && waitMs > 0) {
+        await new Promise((r) => setTimeout(r, Math.min(waitMs, 1500)));
+        events = pick();
+      }
       return { events, last_seq: seq };
     },
-    remote: createDemoRemoteApi(step, needAdmin, () => state.config),
+    remote: createDemoRemoteApi(
+      step,
+      needAdmin,
+      () => state.config,
+      (seat) => state.seats.some((r) => r.seat === seat && r.state.state !== 'off')
+    ),
     lanAddresses: async () => {
       calls.push('lan_addresses');
       return ['192.168.1.20', '172.20.0.1'];

@@ -63,6 +63,7 @@
     ConfirmDialog,
     Group,
     Icon,
+    Kbd,
     LinkRow,
     Menu,
     PageHead,
@@ -163,7 +164,7 @@
   const notices = $derived.by(() => {
     const out: NoticeItem[] = [];
     if (store.picking) {
-      out.push({ kind: 'info', icon: 'locate', text: `${t.canvas.pickByTouch}: ${t.canvas.pickByTouchHint}`, action: { label: t.canvas.pickCancel, onclick: () => store.stopPicking() } });
+      out.push({ kind: 'info', icon: 'locate', title: `${t.canvas.pickByTouch}:`, text: t.canvas.pickByTouchHint, action: { label: t.canvas.pickCancel, onclick: () => store.stopPicking() } });
     }
     if (advice) out.push({ kind: 'info', text: t.seatOneAdvice });
     return out;
@@ -547,7 +548,7 @@
       {/if}
     </div>
 
-    <p class="hint-line"><Icon name="info" size={16} /><span>{t.canvas.moveHint}</span></p>
+    <p class="hint-line"><Icon name="info" size={16} /><span>{#each t.canvas.moveHint.split(/(Enter)/) as part, i (i)}{#if part === 'Enter'}<Kbd keys="Enter" />{:else}{part}{/if}{/each}</span></p>
 
     {#if remoteSeats.length}
       <div class="after-seats">
