@@ -3264,3 +3264,164 @@ fn steam_per_local_seat_flag() {
     let map = h.s.local_seat_map(&|_| None);
     assert!(map.iter().all(|e| e.flags.steam), "{map:?}");
 }
+
+// ---- Hyper-V VM seats (hyperv-seats 2026-11-17) ----
+
+const VM_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+/// `remote_ready_config` with seat 3 turned into a VM seat (shared folder, one forward).
+fn vm_seat_config() -> Config {
+    use seat_core::remote::vm::{ForwardedPort, PortProtocol, SharedFolder, VmSeat};
+    let mut c = remote_ready_config();
+    let three = c.seats.iter_mut().find(|x| x.number == s(3)).unwrap();
+    three.autostart = false;
+    three.remote.as_mut().unwrap().vm = Some(Box::new(VmSeat {
+        shared_folders: vec![SharedFolder { id: "f".into(), host_path: r"E:\Games".into(), guest_path: r"C:\HostDrive".into(), read_only: true }],
+        forwarded_ports: vec![ForwardedPort { id: "p".into(), protocol: PortProtocol::Tcp, host_port: 13389, guest_port: 3389, ..Default::default() }],
+        ..Default::default()
+    }));
+    c
+}
+
+fn vm_status(h: &Harness, a: &mut Caller, action: seat_proto::hyperv::VmAction) -> Result<seat_proto::hyperv::VmHostStatus, seat_proto::ProtoError> {
+    match call(h, a, RequestBody::VmSeats { action })? {
+        ResponseBody::VmSeats(s) => Ok(*s),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn vm_seat_start_needs_hyperv_network_base_and_password() {
+    use seat_proto::hyperv::VmAction as A;
+    let h = harness_with(vm_seat_config(), None);
+    h.s.boot();
+    let mut a = admin();
+    // The guest address was not assigned before the first save: assign it now.
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(view.config.clone()), base_revision: view.config.revision, force: true }).unwrap();
+    let addr = h.s.lock().config.seat(s(3)).unwrap().remote.as_ref().unwrap().vm.as_ref().unwrap().guest_address.clone();
+    assert_eq!(addr, "172.31.240.13");
+    let start = |a: &mut Caller| call(&h, a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
+    // No Hyper-V: refused before anything is created (no concurrent sessions needed).
+    assert_eq!(start(&mut a).reason.as_deref(), Some("hyperv_unavailable"));
+    h.p.vm_host_ready();
+    h.p.vm_facts.lock().unwrap().nat_present = false;
+    assert_eq!(start(&mut a).reason.as_deref(), Some("vm_network_missing"));
+    // Preparing the network needs the confirmation.
+    assert_eq!(vm_status(&h, &mut a, A::PrepareHost { confirm: false }).unwrap_err().code, ErrorCode::InvalidValue);
+    let st = vm_status(&h, &mut a, A::PrepareHost { confirm: true }).unwrap();
+    assert!(st.network_ready);
+    h.p.vm_facts.lock().unwrap().base_present = false;
+    assert_eq!(start(&mut a).reason.as_deref(), Some("vm_base_missing"));
+    // Building needs an image.
+    assert_eq!(vm_status(&h, &mut a, A::BuildBase { confirm: true }).unwrap_err().reason.as_deref(), Some("vm_no_image"));
+    {
+        let mut st = h.s.lock();
+        let mut cfg = st.config.clone();
+        cfg.settings.remote.vm.image_kind = seat_core::remote::vm::ImageKind::Wim;
+        cfg.settings.remote.vm.image_path = r"D:\sources\install.wim".into();
+        h.s.commit_config(&mut st, cfg).unwrap();
+    }
+    let st = vm_status(&h, &mut a, A::BuildBase { confirm: true }).unwrap();
+    assert!(st.base_present && !st.building, "inline spawner: the build is done");
+    assert_eq!(st.seats.len(), 1);
+    assert_eq!(st.seats[0].state, "missing");
+    // No password yet.
+    assert_eq!(start(&mut a).code, ErrorCode::MissingCredentials);
+    assert!(!h.p.vm_ops.lock().unwrap().iter().any(|o| matches!(o, seat_compat::hyperv_vm::VmOp::Ensure { .. })), "nothing created");
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::VmSeats { action: A::Status }).unwrap_err().code, ErrorCode::AccessDenied);
+    let journal: seat_compat::hyperv_vm::VmJournal =
+        serde_json::from_slice(&std::fs::read(h.dir.join("journal").join(seat_compat::hyperv_vm::JOURNAL_FILE)).unwrap()).unwrap();
+    assert!(journal.host_prepared && journal.base_built);
+}
+
+#[test]
+fn vm_seat_runs_through_its_vm_and_guest_link() {
+    use seat_compat::hyperv_vm::VmOp;
+    use seat_core::remote::vm::{GuestMsg, GuestPhase};
+    let h = harness_with(vm_seat_config(), None);
+    h.s.boot();
+    h.p.vm_host_ready();
+    let mut a = admin();
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(view.config.clone()), base_revision: view.config.revision, force: true }).unwrap();
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(3), password: Some(Secret::new("pw3")) }).unwrap();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap();
+    let ops = h.p.vm_ops.lock().unwrap().clone();
+    let Some(VmOp::Ensure { spec }) = ops.iter().find(|o| matches!(o, VmOp::Ensure { .. })) else { panic!("{ops:?}") };
+    assert_eq!(spec.seat_id, VM_ID);
+    assert_eq!(spec.memory_mb, 16 * 1024, "50 % of 32 GB for the only VM seat");
+    assert_eq!(spec.processors, 8);
+    assert!(spec.forwards.iter().any(|f| f.host_port == 13389 && f.guest_port == 3389));
+    assert!(spec.forwards.iter().any(|f| f.host_port == 48095));
+    assert_eq!(spec.shares[0].host_path, r"E:\Games");
+    assert!(ops.iter().any(|o| matches!(o, VmOp::Start { seat_id } if seat_id == VM_ID)));
+    // The guest gets its config on the link: seat user, password, network, shares.
+    let vm_id = format!("vm-{VM_ID}");
+    let offer = h.p.guest_offers.lock().unwrap().get(&vm_id).cloned().unwrap();
+    assert_eq!((offer.user_name.as_str(), offer.password.expose(), offer.address.as_str()), ("veli", "pw3", "172.31.240.13"));
+    assert_eq!(offer.advertised_name, "Salon (VM)");
+    assert_eq!(offer.shares[0].unc, r"\\172.31.240.1\PulsarVm0f8fad5b-0$");
+    assert!(!offer.share_password.expose().is_empty());
+    assert!(offer.check().is_ok());
+    // Running VM, guest still configuring: starting. Then streaming: signed in.
+    assert!(matches!(state(&h, s(3)), SeatState::Starting { .. }), "{:?}", state(&h, s(3)));
+    h.p.guest_phases.lock().unwrap().insert(vm_id.clone(), (GuestPhase::Streaming, None));
+    h.clock.advance(crate::vm_seats::VM_POLL_MS);
+    h.s.tick();
+    assert_eq!(state(&h, s(3)), SeatState::SignedIn { user: "veli".into() });
+    // Pairing goes to the guest.
+    call(&h, &mut a, RequestBody::SubmitPin { seat: s(3), pin: Secret::new("1234"), client_name: "tv".into(), request_id: None }).unwrap();
+    assert!(matches!(&h.p.guest_sent.lock().unwrap()[0], (id, GuestMsg::SubmitPin { pin, .. }) if *id == vm_id && pin == "1234"));
+    assert_eq!(call(&h, &mut a, RequestBody::GetApps { seat: s(3) }).unwrap_err().reason.as_deref(), Some("vm_seat"));
+    // A running VM seat cannot be started twice nor deleted.
+    assert_eq!(call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err().code, ErrorCode::SeatRunning);
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let mut cfg = view.config.clone();
+    cfg.seats.retain(|x| x.number != s(3));
+    let del = RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: view.config.revision, force: true };
+    assert_eq!(call(&h, &mut a, del.clone()).unwrap_err().code, ErrorCode::SeatRunning);
+    // Stop: shutdown over the link, then Stop-VM; off after the next poll.
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap();
+    assert!(h.p.guest_sent.lock().unwrap().iter().any(|(_, m)| *m == GuestMsg::Shutdown));
+    assert_eq!(h.p.vm_state(VM_ID).as_deref(), Some("off"));
+    assert_eq!(state(&h, s(3)), SeatState::Off);
+    assert!(h.p.guest_offers.lock().unwrap().is_empty(), "offer withdrawn");
+    assert_eq!(call(&h, &mut a, RequestBody::StopSeat { seat: s(3) }).unwrap_err().code, ErrorCode::SeatNotRunning);
+    // Reset the seat's disk (stopped), then delete the seat: VM, disk, forwards, shares go.
+    use seat_proto::hyperv::VmAction as A;
+    vm_status(&h, &mut a, A::ResetSandbox { seat: 3, confirm: true }).unwrap();
+    assert!(h.p.vm_ops.lock().unwrap().iter().any(|o| matches!(o, VmOp::ResetSandbox { .. })));
+    call(&h, &mut a, del).unwrap();
+    assert!(h.p.vm_ops.lock().unwrap().iter().any(|o| matches!(o, VmOp::Remove { spec } if spec.seat_id == VM_ID)));
+    assert!(h.p.vm_state(VM_ID).is_none());
+}
+
+#[test]
+fn vm_seats_stop_at_service_stop_and_suspend_and_failures_show() {
+    use seat_core::remote::vm::GuestPhase;
+    let mut c = vm_seat_config();
+    c.seats.iter_mut().find(|x| x.number == s(3)).unwrap().autostart = true;
+    c.seats.iter_mut().find(|x| x.number == s(3)).unwrap().remote.as_mut().unwrap().vm.as_mut().unwrap().guest_address = "172.31.240.13".into();
+    c.settings.remote.vm.restart_gpus_on_shutdown = true;
+    let h = harness_with(c, None);
+    h.p.vm_host_ready();
+    h.s.secrets.set(s(3), Some(&Secret::new("pw3"))).unwrap();
+    h.s.boot();
+    h.s.start_remote_autostart();
+    assert_eq!(h.p.vm_state(VM_ID).as_deref(), Some("running"), "autostart VM seat");
+    // A guest failure shows as the seat's error.
+    h.p.guest_phases.lock().unwrap().insert(format!("vm-{VM_ID}"), (GuestPhase::Failed, Some("stream server missing".into())));
+    h.s.vm_poll_now();
+    assert!(matches!(state(&h, s(3)), SeatState::Error { detail, .. } if detail == "stream server missing"));
+    h.s.on_suspend();
+    assert_eq!(h.p.vm_state(VM_ID).as_deref(), Some("off"));
+    assert!(h.p.vm_ops.lock().unwrap().iter().any(|o| matches!(o, seat_compat::hyperv_vm::VmOp::RestartGpus)), "GPU-P VM stopped");
+    // Ensure failing: error state, no VM started.
+    h.p.vm_fail.lock().unwrap().push("ensure".into());
+    let mut a = admin();
+    let e = call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(3)]) }).unwrap_err();
+    assert_eq!(e.reason.as_deref(), Some("hyperv_failed"));
+    assert!(matches!(state(&h, s(3)), SeatState::Error { .. }));
+}

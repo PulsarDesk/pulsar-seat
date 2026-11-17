@@ -397,35 +397,13 @@ pub fn vdd_backend(data_root: &Path, clock: Arc<seat_display::remote::SystemCloc
     )
 }
 
-/// Every dependency on the real machine. `install_dir` = folder of the service exe
-/// (helper, stream-server manifest, shim payload). `pulsar_secrets` = the service's
-/// `SecretStore` (LSA, or memory in `--console` dev mode) behind the stream package's trait
-/// (`crate::remote::StorePulsarSecrets`).
-pub fn build(
+/// The stream servers (Sunshine, `pulsar-host`) over the real machine. Shared by the remote
+/// seat worker and the VM seat guest mode (`win::vm_guest`).
+pub fn stream_env(
     data_root: &Path,
     install_dir: &Path,
-    global: &RemoteSettings,
-    service_version: &str,
     pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore>,
-) -> Result<Deps, String> {
-    use seat_display::remote::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
-    // The headless session hold is `pulsar-seat-host.exe --headless-hold` (merge step 7).
-    let helper = install_dir.join(seat_core::consts::HOST_EXE);
-    let session = seat_session::remote::manager::WindowsSessionManager::new(
-        data_root,
-        &helper,
-        seat_session::remote::manager::SessionTimeouts::default(),
-    )
-    .map_err(|e| format!("session manager ({}): {e}", helper.display()))?;
-
-    let dclock: Arc<seat_display::remote::SystemClock> = Arc::new(seat_display::remote::SystemClock::default());
-    let (build, server) = os::os_version();
-    let displays: Vec<Arc<dyn seat_display::remote::DisplayBackend>> = vec![
-        Arc::new(seat_display::remote::RdpSessionDisplay::new(WinSessionProbe, dclock.clone(), dclock.clone())),
-        Arc::new(vdd_backend(data_root, dclock.clone())),
-        Arc::new(seat_display::remote::PulsarIdd::new(WinDeviceIo, dclock.clone(), dclock, build, server)),
-    ];
-
+) -> Result<StreamEnv, String> {
     let fs: Arc<dyn seat_stream::seatdir::SecureFs> = Arc::new(seat_stream::win::WinSecureFs);
     let journal = seat_stream::journal::JsonlJournal::open(fs.clone(), data_root.join("journal").join("stream.jsonl"), SysClock)
         .map_err(|e| format!("stream journal: {e}"))?;
@@ -474,7 +452,39 @@ pub fn build(
         verify_binary: true,
         ports,
     });
-    let stream = StreamEnv { fs, backends: vec![Arc::new(sunshine), Arc::new(pulsar)] };
+    Ok(StreamEnv { fs, backends: vec![Arc::new(sunshine), Arc::new(pulsar)] })
+}
+
+/// Every dependency on the real machine. `install_dir` = folder of the service exe
+/// (helper, stream-server manifest, shim payload). `pulsar_secrets` = the service's
+/// `SecretStore` (LSA, or memory in `--console` dev mode) behind the stream package's trait
+/// (`crate::remote::StorePulsarSecrets`).
+pub fn build(
+    data_root: &Path,
+    install_dir: &Path,
+    global: &RemoteSettings,
+    service_version: &str,
+    pulsar_secrets: Arc<dyn seat_stream::backend::pulsar::PulsarSecretStore>,
+) -> Result<Deps, String> {
+    use seat_display::remote::win::{deviceio::WinDeviceIo, devices::WinSessionProbe, dxgi::DxgiAdapters, os};
+    // The headless session hold is `pulsar-seat-host.exe --headless-hold` (merge step 7).
+    let helper = install_dir.join(seat_core::consts::HOST_EXE);
+    let session = seat_session::remote::manager::WindowsSessionManager::new(
+        data_root,
+        &helper,
+        seat_session::remote::manager::SessionTimeouts::default(),
+    )
+    .map_err(|e| format!("session manager ({}): {e}", helper.display()))?;
+
+    let dclock: Arc<seat_display::remote::SystemClock> = Arc::new(seat_display::remote::SystemClock::default());
+    let (build, server) = os::os_version();
+    let displays: Vec<Arc<dyn seat_display::remote::DisplayBackend>> = vec![
+        Arc::new(seat_display::remote::RdpSessionDisplay::new(WinSessionProbe, dclock.clone(), dclock.clone())),
+        Arc::new(vdd_backend(data_root, dclock.clone())),
+        Arc::new(seat_display::remote::PulsarIdd::new(WinDeviceIo, dclock.clone(), dclock, build, server)),
+    ];
+
+    let stream = stream_env(data_root, install_dir, pulsar_secrets)?;
 
     let coexist = Arc::new(|| {
         let r = seat_setup::evaluate(&seat_setup::win::probe::WinProbe);

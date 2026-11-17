@@ -18,8 +18,11 @@ use serde::{Deserialize, Serialize};
 /// Current schema. Bump with a migration in [`Config::from_json`].
 ///
 /// History: 1 = first document (2026-11-12). 2 = seat kinds (merge step 4, 2026-11-14):
-/// `seats[].kind` + `local` / `remote` sub-structs, `settings.remote`.
-pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+/// `seats[].kind` + `local` / `remote` sub-structs, `settings.remote`. 3 = Hyper-V VM seats
+/// (hyperv-seats, 2026-11-17): `seats[].remote.vm`, `settings.remote.vm`. The bump keeps an
+/// older build (schema 2) from loading a document with VM seats: it would drop `vm` and run
+/// the seat as an RDP loopback seat on the host.
+pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 
 /// Version of the experimental-backend warning text. The manager shows the warning and
 /// sends this number back; a changed warning needs a fresh acknowledgement.
@@ -70,6 +73,9 @@ impl Config {
         }
         if schema < 2 {
             migrate_1_to_2(&mut v);
+        }
+        if schema < 3 {
+            migrate_2_to_3(&mut v);
         }
         if let Some(obj) = v.as_object_mut() {
             obj.insert("schema_version".into(), CONFIG_SCHEMA_VERSION.into());
@@ -134,6 +140,21 @@ fn migrate_1_to_2(v: &mut serde_json::Value) {
         }
         obj.insert("kind".into(), "local".into());
         obj.insert("local".into(), serde_json::Value::Object(local));
+    }
+}
+
+/// Schema 2 -> 3: VM seats are new, so no seat becomes one. A `vm` member in a schema-2
+/// document can only come from a pre-release build and is dropped (the seat stays an RDP
+/// loopback seat, as that build ran it); `settings.remote.vm` takes its defaults.
+fn migrate_2_to_3(v: &mut serde_json::Value) {
+    let Some(seats) = v.get_mut("seats").and_then(|s| s.as_array_mut()) else { return };
+    for seat in seats {
+        if let Some(r) = seat.get_mut("remote").and_then(|r| r.as_object_mut()) {
+            r.remove("vm");
+        }
+    }
+    if let Some(r) = v.pointer_mut("/settings/remote").and_then(|r| r.as_object_mut()) {
+        r.remove("vm");
     }
 }
 
@@ -1193,8 +1214,9 @@ pub struct GlobalSettings {
     /// 2026-11-17, additive).
     #[serde(skip_serializing_if = "AppCompatSettings::is_default")]
     pub apps: AppCompatSettings,
-    /// Remote seat machine settings (Pulsar Split's old global settings; schema 2).
-    pub remote: crate::remote::RemoteSettings,
+    /// Remote seat machine settings (Pulsar Split's old global settings; schema 2). Boxed
+    /// (schema 3): keeps the protocol's response frame within clippy's enum size limit.
+    pub remote: Box<crate::remote::RemoteSettings>,
 }
 
 /// Log verbosity switches (spec 10 §7.10).
@@ -1259,7 +1281,7 @@ impl Default for GlobalSettings {
             outputs: OutputSettings::default(),
             kiosk: KioskSettings::default(),
             apps: AppCompatSettings::default(),
-            remote: crate::remote::RemoteSettings::default(),
+            remote: Box::default(),
         }
     }
 }
@@ -1319,6 +1341,32 @@ mod tests {
         assert_eq!(m.seats[1].name, "Ç");
         assert_eq!(m.settings.timings.between_seats_ms, 2000);
         assert!(matches!(Config::from_json(r#"{"schema_version":99}"#), Err(ConfigError::TooNew(99))));
+    }
+
+    #[test]
+    fn schema_2_to_3_keeps_seats_and_vm_seats_round_trip() {
+        let v2 = r#"{
+            "schema_version": 2,
+            "seats": [
+                {"number": 1, "name": "1"},
+                {"number": 2, "name": "Salon", "kind": "remote", "account": {"kind": "local", "user": "oyuncu"},
+                 "remote": {"display_name": "Salon", "port": 48100, "vm": {"memory_mb": 4096}}}
+            ],
+            "settings": {"remote": {"vm": {"memory_percent": 70}}}
+        }"#;
+        let c = Config::from_json(v2).unwrap();
+        assert_eq!(c.schema_version, 3);
+        let r = c.seats[1].remote.as_ref().unwrap();
+        assert!(r.vm.is_none(), "a schema-2 seat never becomes a VM seat");
+        assert_eq!(r.port, 48100);
+        assert_eq!(*c.settings.remote.vm, crate::remote::vm::VmSettings::default());
+        // Schema 3 keeps VM seats.
+        let mut c3 = c.clone();
+        c3.seats[1].remote.as_mut().unwrap().vm = Some(Box::new(crate::remote::vm::VmSeat { memory_mb: 4096, ..Default::default() }));
+        c3.settings.remote.vm.memory_percent = 70;
+        let back = Config::from_json(&c3.to_json()).unwrap();
+        assert_eq!(back, c3);
+        assert!(matches!(Config::from_json(r#"{"schema_version":4}"#), Err(ConfigError::TooNew(4))));
     }
 
     #[test]

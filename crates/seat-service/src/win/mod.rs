@@ -15,3 +15,4 @@ pub mod scm;
 pub mod security;
 pub mod setup;
 pub mod update;
+pub mod vm_guest;

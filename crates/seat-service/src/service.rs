@@ -155,6 +155,8 @@ pub struct Service {
     pub(crate) password_known: crate::remote::PasswordCache,
     /// The remote seat worker (`crate::remote::glue`).
     pub(crate) remote: Option<crate::remote::glue::RemoteSlot>,
+    /// Hyper-V VM seats (`crate::vm_seats`).
+    pub(crate) vm: crate::vm_seats::VmSlot,
     /// Longest wait for remote seats to stop (tests set 0).
     pub(crate) remote_stop_wait_ms: std::sync::atomic::AtomicU64,
     weak: Weak<Service>,
@@ -254,6 +256,7 @@ impl Service {
 
             password_known,
             remote,
+            vm: Default::default(),
             remote_stop_wait_ms: std::sync::atomic::AtomicU64::new(crate::remote::glue::REMOTE_STOP_WAIT_MS),
             wizard_jobs: Mutex::new(WizardQueue::default()),
             wizard_op: Mutex::new(()),
@@ -681,6 +684,8 @@ impl Service {
         cfg.normalize();
         cfg.revision = st.config.revision + 1;
         cfg.schema_version = seat_core::config::CONFIG_SCHEMA_VERSION;
+        // VM seats get their guest address once (hyperv-seats).
+        seat_core::remote::assign_vm_addresses(&mut cfg);
         self.store.save(&cfg)?;
         let rev = cfg.revision;
         for s in &cfg.seats {

@@ -169,14 +169,15 @@ impl RecordStore for DocStore {
     fn load(&self) -> Result<rstore::Config, RecordError> {
         let d = lock(&self.doc);
         Ok(rstore::Config {
-            global: d.config.settings.remote.clone(),
-            seats: d.config.seats.iter().filter_map(|s| s.remote_record()).collect(),
+            global: (*d.config.settings.remote).clone(),
+            // VM seats belong to `crate::vm_seats`, never to the worker.
+            seats: d.config.seats.iter().filter_map(|s| s.remote_record()).filter(|r| r.vm.is_none()).collect(),
         })
     }
 
     fn put_global(&mut self, global: &RemoteSettings) -> Result<(), RecordError> {
         let mut d = lock(&self.doc);
-        d.config.settings.remote = global.clone();
+        *d.config.settings.remote = global.clone();
         d.dirty = true;
         Ok(())
     }

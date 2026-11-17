@@ -109,6 +109,14 @@ impl Service {
                         rt.insert(*n, r);
                     }
                 }
+                // VM seats are not the worker's: keep their runtimes.
+                let vm_seats: Vec<SeatNumber> =
+                    st.config.seats.iter().filter(|s| s.remote.as_ref().is_some_and(|r| r.is_vm())).map(|s| s.number).collect();
+                for n in vm_seats {
+                    if let Some(r) = st.remote_rt.get(&n) {
+                        rt.insert(n, r.clone());
+                    }
+                }
                 st.remote_rt = rt;
             }
             names
@@ -158,6 +166,11 @@ impl Service {
         if kind == Some(SeatKind::Local) {
             return self.local_account_request(body, &what);
         }
+        if let Some(n) = seat
+            && self.is_vm_seat(n)
+        {
+            return self.vm_kind_request(n, body, &what);
+        }
         let legacy = to_legacy(body, |s| self.remote_name(s)).ok_or_else(|| match body {
             // `seat:<N>` that is not a configured remote seat.
             RequestBody::GetLogTail { .. } => {
@@ -167,6 +180,21 @@ impl Service {
         })?;
         let r = self.with_remote(|w| w.call(legacy)).ok_or_else(|| unavailable(&what))?;
         from_legacy(r?)
+    }
+
+    /// Remote-kind requests of a VM seat: pairing goes to the guest over the guest link; the
+    /// rest lives in the guest and is refused with `vm_seat`.
+    fn vm_kind_request(&self, n: SeatNumber, body: &RequestBody, what: &str) -> Result<ResponseBody, ProtoError> {
+        use seat_core::remote::vm::GuestMsg;
+        match body {
+            RequestBody::SubmitPin { pin, client_name, .. } => {
+                self.vm_guest_request(n, GuestMsg::SubmitPin { pin: pin.expose().to_string(), client_name: client_name.clone() })
+            }
+            RequestBody::UnpairAll { .. } => self.vm_guest_request(n, GuestMsg::UnpairAll),
+            RequestBody::CancelPair { .. } => Ok(ResponseBody::Ack),
+            _ => Err(ProtoError::new(ErrorCode::Unsupported, format!("{what}: seat {n} runs in a VM; use the guest"))
+                .with_reason("vm_seat")),
+        }
     }
 
     /// `test_seat_credentials` / `enable_unlock_account` for a local seat: the worker's
@@ -209,6 +237,12 @@ impl Service {
                 .collect();
             (r, st.config.settings.backends.session.hosts_remote_seats())
         };
+        // VM seats run their own VM (no concurrent host sessions needed).
+        type Named = Vec<(SeatNumber, String)>;
+        let (vms, remote): (Named, Named) = remote.into_iter().partition(|(n, _)| self.is_vm_seat(*n));
+        for (n, _) in &vms {
+            self.start_vm_seat(*n)?;
+        }
         let Some((first, _)) = remote.first() else { return Ok(()) };
         if !hosts {
             return Err(ProtoError::new(ErrorCode::SessionUnavailable, format!("seat {first}: remote seats need concurrent sessions"))
@@ -245,7 +279,11 @@ impl Service {
         if removed.is_empty() {
             return Ok(());
         }
-        let busy = self.with_remote(|w| removed.iter().find(|(_, r)| w.seat_active(&r.id)).map(|(n, _)| *n)).flatten();
+        let busy = removed
+            .iter()
+            .find(|(n, r)| r.vm.is_some() && self.vm_active(*n))
+            .map(|(n, _)| *n)
+            .or_else(|| self.with_remote(|w| removed.iter().find(|(_, r)| r.vm.is_none() && w.seat_active(&r.id)).map(|(n, _)| *n)).flatten());
         match busy {
             Some(n) => Err(ProtoError::new(ErrorCode::SeatRunning, format!("seat {n}: stop the seat before deleting it"))
                 .with_reason("seat_running")
@@ -258,7 +296,8 @@ impl Service {
     /// secrets (LSA identity, connect password, relay key), seat folder, logs and firewall
     /// rules, and drops their runtime.
     pub(crate) fn forget_remote_seats(&self, removed: &[(SeatNumber, seat_core::remote::RemoteSeatRecord)]) {
-        for (n, record) in removed {
+        self.forget_vm_seats(removed);
+        for (n, record) in removed.iter().filter(|(_, r)| r.vm.is_none()) {
             match self.with_remote(|w| w.forget_seat(record)) {
                 Some(Ok(())) => log::info(&format!("remote seat {n} deleted: files and secrets removed")),
                 Some(Err(e)) => log::error(&format!("remote seat {n} deleted, cleanup failed: {e}")),
@@ -270,6 +309,9 @@ impl Service {
 
     /// `stop_seat` on a remote seat.
     pub(crate) fn stop_remote_seat(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
+        if self.is_vm_seat(seat) {
+            return self.stop_vm_seat(seat);
+        }
         let name = self.remote_name(seat).ok_or_else(|| not_configured(seat))?;
         let active = self.lock().remote_rt.get(&seat).is_some_and(|r| {
             use seat_core::state::SeatState as S;
@@ -285,6 +327,7 @@ impl Service {
     /// Autostart remote seats (boot, resume, `start_seats` without a list). Needs the
     /// product enabled, no safe mode and concurrent sessions; failures are logged.
     pub(crate) fn start_remote_autostart(&self) {
+        self.vm_autostart();
         if !self.has_remote_worker() {
             return;
         }
@@ -294,7 +337,7 @@ impl Service {
                 return;
             }
             if !st.config.settings.backends.session.hosts_remote_seats() {
-                if st.config.seats.iter().any(|s| s.is_remote() && s.autostart) {
+                if st.config.seats.iter().any(|s| s.is_remote() && s.autostart && !s.remote.as_ref().is_some_and(|r| r.is_vm())) {
                     log::info("remote seats not started: the session backend has no concurrent sessions");
                 }
                 return;
@@ -321,6 +364,7 @@ impl Service {
 
     /// Tick: apply the engine's progress reports.
     pub(crate) fn remote_tick(&self) {
+        self.vm_tick();
         self.with_remote(|w| w.drain_reports());
     }
 
@@ -348,6 +392,7 @@ impl Service {
 
     /// Service stop: stop every remote seat, wait, final sweep.
     pub(crate) fn remote_shutdown(&self) {
+        self.vm_stop_all();
         let Some(slot) = &self.remote else { return };
         self.with_remote(|w| w.stop_all());
         self.wait_remote_idle();
@@ -359,6 +404,10 @@ impl Service {
 
     /// Power suspend (Split, spec 20 §7): remote seats stop. Local seats keep their sessions.
     pub fn on_suspend(&self) {
+        let vms = self.vm_stop_all();
+        if !vms.is_empty() {
+            log::info(&format!("suspend: stopping {} VM seat(s)", vms.len()));
+        }
         if let Some(stopped) = self.with_remote(|w| w.on_suspend()) {
             log::info(&format!("suspend: stopping {} remote seat(s)", stopped.len()));
         }
@@ -368,6 +417,7 @@ impl Service {
     /// (off the caller's thread).
     pub(crate) fn remote_resume(&self) {
         if !self.has_remote_worker() {
+            self.spawn(|s| s.vm_autostart());
             return;
         }
         self.spawn(|s| {

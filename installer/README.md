@@ -183,7 +183,8 @@ Full ordered list, including accounts and approvals: [docs/release/checklist.md]
    quoted argument never ends in `\"`). Service part: description, required
    privileges, explicit service SDDL, data dir + ACL, Event Log source `PulsarSeat`.
    Compat part (`seat_compat::setup::install`, `InstallOptions::parse`):
-   - full pre-flight (`seat_compat::preflight::run`) — any `fail` refuses (exit 4);
+   - full pre-flight (`seat_compat::preflight::run`) — any `fail` refuses (exit 4); the `hyperv_vm`
+     line only reports whether Hyper-V is present (VM seats); nothing is enabled at install;
      `warn` results go to `%ProgramData%\Pulsar Seat\logs\setup.log`
      (`setup::write_setup_log`) for the installer and the manager's first start;
      Secure Boot / Memory Integrity / Smart App Control are reported only;

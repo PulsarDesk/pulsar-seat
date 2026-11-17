@@ -111,6 +111,16 @@ describe('ManagerStore', () => {
     expect(api.calls.filter((c) => c === 'steam_proxy_dll').length).toBe(4);
   });
 
+  it('VM seats: network and base disk need the confirmation', async () => {
+    const { api } = await ready();
+    const st = await api.vmSeats({ type: 'status' });
+    expect([st.network_ready, st.base_present]).toEqual([false, false]);
+    await expect(api.vmSeats({ type: 'prepare_host', confirm: false })).rejects.toMatchObject({ code: 'invalid_value' });
+    expect((await api.vmSeats({ type: 'prepare_host', confirm: true })).network_ready).toBe(true);
+    expect((await api.vmSeats({ type: 'build_base', confirm: true })).base_present).toBe(true);
+    expect(api.calls.filter((c) => c === 'vm_seats').length).toBe(4);
+  });
+
   it('enable, start and errors with codes', async () => {
     const { api, store } = await ready();
     expect(await store.startSeats(null)).toBe(false);

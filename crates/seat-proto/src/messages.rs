@@ -171,6 +171,10 @@ pub enum RequestBody {
     /// Answers [`ResponseBody::SteamProxy`]. Added 2026-11-17 (compat-tweaks, additive,
     /// admin).
     SteamProxyDll { action: crate::steam::SteamProxyAction },
+    /// Hyper-V VM seats (spec/remote 10 §8): status, VM network, base disk, reset a seat's
+    /// disk. Answers [`ResponseBody::VmSeats`]. Added 2026-11-17 (hyperv-seats, additive,
+    /// admin).
+    VmSeats { action: crate::hyperv::VmAction },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -416,6 +420,7 @@ impl RequestBody {
             | R::RemoveKioskUser { .. }
             | R::HyperV { .. }
             | R::SteamProxyDll { .. }
+            | R::VmSeats { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -590,6 +595,8 @@ pub enum ResponseBody {
     HyperV(crate::hyperv::HyperVStatus),
     /// Answer of `steam_proxy_dll` (added 2026-11-17, additive).
     SteamProxy(crate::steam::SteamProxyStatus),
+    /// Answer of `vm_seats` (added 2026-11-17, additive).
+    VmSeats(Box<crate::hyperv::VmHostStatus>),
     Status(ServiceStatus),
     Backends(BackendReport),
     Checks(Vec<Check>),

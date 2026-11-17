@@ -250,6 +250,7 @@ impl Service {
             B::RemoveKioskUser { seat } => self.remove_kiosk_user(seat),
             B::HyperV { action } => self.hyperv(action),
             B::SteamProxyDll { action } => self.steam_proxy(action),
+            B::VmSeats { action } => self.vm_seats_request(action),
             B::RequestReboot => {
                 log::info(&format!("reboot requested by pid {}", caller.pid));
                 self.platform.reboot()?;

@@ -275,6 +275,9 @@ export interface RemoteSeat {
   stream_backend?: R.StreamBackendKind;
   /** Service-owned. */
   last_mode?: { width: number; height: number; hz: number };
+  /** Hyper-V VM seat (config schema 3, hyperv-seats 2026-11-17): the seat's session runs in
+   *  a VM of its own. Absent = RDP loopback session on the host. */
+  vm?: R.VmSeat;
 }
 
 /** Direction of the clipboard bridge, seen from the seat session. */
@@ -902,6 +905,7 @@ export type RequestBody =
   | { type: 'remove_kiosk_user'; data: { seat: SeatNumber } }
   | { type: 'hyper_v'; data: { action: HyperVAction } }
   | { type: 'steam_proxy_dll'; data: { action: SteamProxyAction } }
+  | { type: 'vm_seats'; data: { action: VmAction } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }
@@ -969,10 +973,42 @@ export interface HyperVStatus {
   reboot_required?: boolean;
 }
 
+/** Hyper-V VM seats (`vm_seats`, added 2026-11-17, hyperv-seats). */
+export type VmAction =
+  | { type: 'status' }
+  | { type: 'prepare_host'; confirm: boolean }
+  | { type: 'build_base'; confirm: boolean }
+  | { type: 'reset_base'; confirm: boolean }
+  | { type: 'reset_sandbox'; seat: number; confirm: boolean };
+
+export interface VmSeatInfo {
+  seat: number;
+  /** Hyper-V state (`off`, `running`, `saved`, ...) or `missing`. */
+  state: string;
+  guest_address: string;
+  guest_phase?: 'waiting' | 'configuring' | 'signed_in' | 'streaming' | 'failed' | string;
+  guest_detail?: string;
+}
+
+export interface VmHostStatus {
+  feature: 'enabled' | 'disabled' | 'enable_pending' | 'unavailable' | string;
+  vmms: boolean;
+  network_ready: boolean;
+  base_present: boolean;
+  building: boolean;
+  last_error?: string;
+  storage: string;
+  gpus: string[];
+  host_memory_mb: number;
+  logical_processors: number;
+  seats: VmSeatInfo[];
+}
+
 export type ResponseBody =
   | { type: 'ack' }
   | { type: 'hyper_v'; data: HyperVStatus }
   | { type: 'steam_proxy'; data: SteamProxyStatus }
+  | { type: 'vm_seats'; data: VmHostStatus }
   | { type: 'status'; data: ServiceStatus }
   | { type: 'backends'; data: BackendReport }
   | { type: 'checks'; data: Check[] }
