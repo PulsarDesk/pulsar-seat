@@ -80,12 +80,22 @@ pub fn defender_change_script(kind: ExclusionKind, value: &str, add: bool) -> St
     format!(
         "$ErrorActionPreference='Stop'; \
          $r = Invoke-CimMethod -Namespace {ns} -ClassName MSFT_MpPreference -MethodName {m} -Arguments @{{ {prop} = [string[]]@({v}) }}; \
-         if ($r.ReturnValue -ne 0) {{ throw ('MSFT_MpPreference.{m} returned ' + $r.ReturnValue) }}",
+         {check}",
         ns = ps_quote(DEFENDER_NS),
         m = if add { "Add" } else { "Remove" },
         v = ps_quote(value),
+        check = DEFENDER_RESULT_CHECK.replace("{m}", if add { "Add" } else { "Remove" }),
     )
 }
+
+/// Result check of an add / remove (`$r` = the `Invoke-CimMethod` result). Windows 11
+/// 26300 answers a successful `Add` with no `ReturnValue` at all (VM round 2,
+/// 2026-11-17): the old `$r.ReturnValue -ne 0` took `$null` for a failure, so the
+/// exclusions stayed in Defender while the journal said `not_applied` and nothing removed
+/// them at uninstall. A failed call throws (`$ErrorActionPreference = 'Stop'`); only a
+/// non-zero `ReturnValue` that is present is a failure on top of that.
+const DEFENDER_RESULT_CHECK: &str =
+    "if ($null -ne $r -and $null -ne $r.ReturnValue -and $r.ReturnValue -ne 0) { throw ('MSFT_MpPreference.{m} returned ' + $r.ReturnValue) }";
 
 /// Parse the read script's output.
 pub fn parse_defender(out: &str) -> OpsResult<Option<DefenderExclusions>> {
@@ -226,6 +236,23 @@ mod tests {
         let r = defender_change_script(ExclusionKind::Process, r"C:\x.exe", false);
         assert!(r.contains("-MethodName Remove") && r.contains("ExclusionProcess"));
         assert!(defender_read_script().contains("UNAVAILABLE"));
+    }
+
+    /// The result check against the shapes `Invoke-CimMethod` returns (VM round 2:
+    /// success came back without a `ReturnValue`).
+    #[test]
+    fn defender_result_check_accepts_a_missing_return_value() {
+        let run = |r: &str| {
+            let check = DEFENDER_RESULT_CHECK.replace("{m}", "Add");
+            run_ps(&format!("$ErrorActionPreference='Stop'; $r = {r}; {check}"))
+        };
+        assert!(run("[pscustomobject]@{}").is_ok(), "no ReturnValue = success");
+        assert!(run("[pscustomobject]@{ ReturnValue = $null }").is_ok());
+        assert!(run("$null").is_ok());
+        assert!(run("[pscustomobject]@{ ReturnValue = [uint32]0 }").is_ok());
+        let e = run("[pscustomobject]@{ ReturnValue = [uint32]2 }").unwrap_err();
+        assert!(e.to_string().contains("MSFT_MpPreference.Add returned 2"), "{e}");
+        assert!(defender_change_script(ExclusionKind::Path, r"C:\x", true).contains("$null -ne $r.ReturnValue"));
     }
 
     #[test]
