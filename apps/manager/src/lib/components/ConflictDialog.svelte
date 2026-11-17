@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Save-time conflicts (spec 10 §3.4): list them, then save anyway (force) or cancel. -->
+<!-- Save-time conflicts (spec 10 §3.4; redesign 55-dlg-conflict): one row per conflict with a
+     bare alert icon, then "Fix" (closes, back to editing) or "Save anyway" (force). -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import { Button, Group, Icon, Modal, Row } from '#lib/ui/index.ts';
   import { issueLabel, t } from '#lib/i18n.ts';
   import type { Issue } from '#lib/types.ts';
 
@@ -14,13 +15,17 @@
   let { issues, deviceName, onForce, onCancel }: Props = $props();
 </script>
 
-<Modal title={t.conflicts.title} alert onClose={onCancel}>
+<Modal title={t.conflicts.title} size="md" alert initialFocus="primary" onClose={onCancel}>
   <p>{t.conflicts.body}</p>
-  <ul>
-    {#each issues as i, n (n)}<li>{issueLabel(i, deviceName)}</li>{/each}
-  </ul>
-  {#snippet buttons()}
-    <button type="button" class="primary danger-btn" onclick={onForce}>{t.conflicts.saveAnyway}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+  <Group>
+    {#each issues as i, n (n)}
+      <Row label={issueLabel(i, deviceName)}>
+        {#snippet lead()}<Icon name="alert" tone="warn" />{/snippet}
+      </Row>
+    {/each}
+  </Group>
+  {#snippet foot()}
+    <Button kind="primary" label={t.conflicts.fix} onclick={onCancel} />
+    <Button label={t.conflicts.saveAnyway} onclick={onForce} />
   {/snippet}
 </Modal>

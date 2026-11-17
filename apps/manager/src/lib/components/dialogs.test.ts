@@ -10,9 +10,11 @@ import SeatNameDialog from './SeatNameDialog.svelte';
 import StartupAppsDialog from './StartupAppsDialog.svelte';
 import KioskShellDialog from './KioskShellDialog.svelte';
 import { demoConfig, demoInventory } from '#lib/demo.ts';
-import { t } from '#lib/i18n.ts';
+import { rt, t } from '#lib/i18n.ts';
+import ConflictDialog from './ConflictDialog.svelte';
 import { EXPERIMENTAL_WARNING_VERSION, SHARED_MASK } from '#lib/types.ts';
 
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const seats = [...demoConfig().seats, { ...demoConfig().seats[0], number: 3, name: '3' }];
 const inv = demoInventory();
 
@@ -68,7 +70,7 @@ describe('StartupAppsDialog', () => {
     const prog = screen.getByLabelText(t.startupApps.program);
     await user.type(prog, 'oyun.exe');
     expect(screen.getByRole('alert')).toHaveTextContent(t.startupApps.notAbsolute);
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
     await user.clear(prog);
     await user.type(prog, 'C:\\Oyun\\oyun.exe');
     await user.type(screen.getByLabelText(t.startupApps.args), '-lan "a b"');
@@ -82,16 +84,16 @@ describe('KioskShellDialog', () => {
     const onSave = vi.fn();
     render(KioskShellDialog, { seat: 2, shell: null, onSave, onCancel: vi.fn() });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('checkbox', { name: t.kiosk.enable }));
+    await user.click(screen.getByRole('switch', { name: t.kiosk.enable }));
     await user.click(screen.getByRole('button', { name: t.kiosk.add }));
     await user.type(screen.getByLabelText(t.kiosk.appTitle), 'Defter');
     const prog = screen.getByLabelText(t.kiosk.program);
     await user.type(prog, 'notepad.exe');
     expect(screen.getByRole('alert')).toHaveTextContent(t.kiosk.notAbsolute);
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
     await user.clear(prog);
     await user.type(prog, 'C:\\Windows\\notepad.exe');
-    await user.click(screen.getByRole('checkbox', { name: t.kiosk.autostart }));
+    await user.click(screen.getByRole('switch', { name: t.kiosk.autostart }));
     const idle = screen.getByLabelText(t.kiosk.idle);
     await user.clear(idle);
     await user.type(idle, '10');
@@ -111,7 +113,7 @@ describe('KioskShellDialog', () => {
     const id = screen.getByLabelText(t.kiosk.appId);
     await user.type(id, 'yanlis');
     expect(screen.getByRole('alert')).toHaveTextContent(t.kiosk.notAppId);
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
     await user.clear(id);
     await user.type(id, 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App');
     await user.click(screen.getByRole('checkbox', { name: t.kiosk.fullscreen }));
@@ -126,7 +128,7 @@ describe('KioskShellDialog', () => {
     const onSave = vi.fn();
     render(KioskShellDialog, { seat: 3, shell: { apps: [], idle_reset_minutes: 0 }, onSave, onCancel: vi.fn() });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('checkbox', { name: t.kiosk.enable }));
+    await user.click(screen.getByRole('switch', { name: t.kiosk.enable }));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenCalledWith(null);
   });
@@ -139,11 +141,59 @@ describe('ExperimentalDialog', () => {
     expect(screen.getByTestId('warning-text')).toHaveTextContent('Experimental feature');
     expect(screen.getByTestId('warning-text')).toHaveTextContent('licence');
     const accept = screen.getByRole('button', { name: t.experimental.enable });
-    expect(accept).toBeDisabled();
+    expect(accept).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(t.experimental.ackFirst)).toBeInTheDocument();
     const user = userEvent.setup();
     await user.click(screen.getByRole('checkbox', { name: t.experimental.ack }));
     await user.click(accept);
     expect(onAccept).toHaveBeenCalledWith(EXPERIMENTAL_WARNING_VERSION);
+  });
+});
+
+describe('ExperimentalDialog, remote variant (P4, used by the remote host page from P6)', () => {
+  const status = {
+    state: { state: 'off' as const },
+    termsrv_version: null,
+    supported: true,
+    candidates: [{ service_dll: 'C:\\Wrap\\wrap.dll', config_file: null, dll_version: null, signed: 'unsigned' as const }],
+    warning_version: 1
+  };
+
+  it('picks one of the installed wrappers after the acknowledgement', async () => {
+    const onEnable = vi.fn(async () => {});
+    render(ExperimentalDialog, { variant: 'remote', status, onEnable, onCancel: vi.fn() });
+    const enable = screen.getByRole('button', { name: rt.experimental.enable });
+    expect(enable).toHaveAttribute('aria-disabled', 'true');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('checkbox', { name: rt.experimental.ack }));
+    await user.click(enable);
+    expect(onEnable).toHaveBeenCalledWith('C:\\Wrap\\wrap.dll', 1);
+  });
+
+  it('cannot enable without an installed wrapper', async () => {
+    render(ExperimentalDialog, { variant: 'remote', status: { ...status, candidates: [] }, onEnable: vi.fn(), onCancel: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('checkbox', { name: rt.experimental.ack }));
+    expect(screen.getByRole('button', { name: rt.experimental.enable })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getAllByText(rt.host.twNoCandidate).length).toBeGreaterThan(0);
+  });
+});
+
+describe('ConflictDialog', () => {
+  it('lists the conflicts; Fix goes back, Save anyway forces', async () => {
+    const onForce = vi.fn();
+    const onCancel = vi.fn();
+    render(ConflictDialog, {
+      issues: [{ severity: 'error', code: 'seat_without_keyboard', seat: 2 }] as never,
+      deviceName: (k: string) => k,
+      onForce,
+      onCancel
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: t.conflicts.fix }));
+    expect(onCancel).toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: t.conflicts.saveAnyway }));
+    expect(onForce).toHaveBeenCalled();
   });
 });
 
@@ -180,12 +230,13 @@ describe('SeatAccountDialog', () => {
     const onSave = vi.fn();
     render(SeatAccountDialog, { ...base, onSave });
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText(`${t.account.autoLogon} — ${t.account.local}`));
+    await user.click(screen.getByRole('radio', { name: t.account.autoLogon }));
+    expect(screen.getByRole('radio', { name: t.account.localShort })).toHaveAttribute('aria-checked', 'true');
     await user.selectOptions(await screen.findByRole('combobox', { name: t.account.user }), 'misafir');
     await user.type(screen.getByLabelText(t.account.password), 'abc');
     await user.type(screen.getByLabelText(t.account.confirm), 'abd');
     expect(screen.getByText(t.account.mismatch)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
     await user.clear(screen.getByLabelText(t.account.confirm));
     await user.type(screen.getByLabelText(t.account.confirm), 'abc');
     await user.click(screen.getByRole('button', { name: t.save }));
@@ -196,7 +247,7 @@ describe('SeatAccountDialog', () => {
     const onSave = vi.fn();
     render(SeatAccountDialog, { ...base, account: { kind: 'local', user: 'misafir' }, passwordSet: true, onSave });
     const user = userEvent.setup();
-    await user.click(screen.getByLabelText(t.account.logonScreen));
+    await user.click(screen.getByRole('radio', { name: new RegExp(`^${esc(t.account.logonScreen)}`) }));
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave).toHaveBeenCalledWith({ kind: 'logon_screen' }, null);
   });

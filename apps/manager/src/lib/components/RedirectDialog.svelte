@@ -1,20 +1,22 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Redirection of one seat session (spec 70, `SeatConfig.redirect`): clipboard direction
-     and format classes, the seat's own drives (off / read-only / read-write), its smart
-     card readers and printers (off / the seat's own / every queue, round 4 local-gaps). The service narrows it to the devices the seat owns; the seat host
-     applies it (IronRDP backend) and reports every refusal. -->
+<!-- Redirection of one seat session (spec 70, `SeatConfig.redirect`; redesign 66-dlg-redirect):
+     clipboard direction and format classes, the seat's own drives (off / read-only /
+     read-write), its smart card readers and printers (off / the seat's own / every queue).
+     The service narrows it to the devices the seat owns; the seat host applies it (IronRDP
+     backend) and reports every refusal. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import { Button, ChoiceList, Group, Modal, Notice, Row, SubLabel, Switch, Checkbox } from '#lib/ui/index.ts';
   import { t } from '#lib/i18n.ts';
   import type { ClipboardDirection, DriveRedirect, PrinterRedirect, SeatRedirect } from '#lib/types.ts';
 
   interface Props {
     seat: number;
+    seatName?: string;
     redirect: SeatRedirect;
     onSave: (r: SeatRedirect) => void;
     onCancel: () => void;
   }
-  let { seat, redirect, onSave, onCancel }: Props = $props();
+  let { seat, seatName, redirect, onSave, onCancel }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let r = $state<SeatRedirect>({
@@ -29,82 +31,68 @@
   const clipOn = $derived(r.clipboard.direction !== 'off');
   const seatOne = $derived(seat === 1);
 
-  function submit(e: Event) {
-    e.preventDefault();
+  function save() {
+    if (seatOne) return;
     onSave({ clipboard: { ...r.clipboard }, drives: r.drives, smartcards: r.smartcards, printers: r.printers ?? 'off' });
   }
 </script>
 
-<Modal title={t.redirect.title(seat)} onClose={onCancel}>
-  <form id="redirect-form" onsubmit={submit}>
-    {#if seatOne}
-      <p class="hint">{t.redirect.seatOne}</p>
-    {:else}
-      <p class="hint">{t.redirect.hint}</p>
-      <fieldset>
-        <legend>{t.redirect.clipboard}</legend>
-        {#each directions as d (d)}
-          <label class="choice">
-            <input type="radio" name="clip-direction" value={d} bind:group={r.clipboard.direction} />
-            {t.redirect.directions[d]}
-          </label>
-        {/each}
-        <fieldset disabled={!clipOn} class="inner">
-          <legend>{t.redirect.formats}</legend>
-          <label class="choice"><input type="checkbox" bind:checked={r.clipboard.text} /> {t.redirect.text}</label>
-          <label class="choice"><input type="checkbox" bind:checked={r.clipboard.html} /> {t.redirect.html}</label>
-          <label class="choice"><input type="checkbox" bind:checked={r.clipboard.images} /> {t.redirect.images}</label>
-          <label class="choice"><input type="checkbox" bind:checked={r.clipboard.files} /> {t.redirect.files}</label>
-          <label class="choice"><input type="checkbox" bind:checked={r.clipboard.cross_seat} /> {t.redirect.crossSeat}</label>
-        </fieldset>
-        {#if clipOn}<p class="warning" role="note" data-testid="clipboard-shared">{t.redirect.sharedWarning}</p>{/if}
-      </fieldset>
-      <fieldset>
-        <legend>{t.redirect.drives}</legend>
-        {#each driveModes as m (m)}
-          <label class="choice">
-            <input type="radio" name="drive-mode" value={m} bind:group={r.drives} />
-            {t.redirect.driveModes[m]}
-          </label>
-        {/each}
-        <p class="hint">{t.redirect.drivesHint}</p>
-      </fieldset>
-      <fieldset>
-        <legend>{t.redirect.smartcards}</legend>
-        <label class="choice"><input type="checkbox" bind:checked={r.smartcards} /> {t.redirect.smartcardsLabel}</label>
-        <p class="hint">{t.redirect.smartcardsHint}</p>
-      </fieldset>
-      <fieldset>
-        <legend>{t.redirect.printers}</legend>
-        {#each printerModes as m (m)}
-          <label class="choice">
-            <input type="radio" name="printer-mode" value={m} bind:group={r.printers} />
-            {t.redirect.printerModes[m]}
-          </label>
-        {/each}
-        <p class="hint">{t.redirect.printersHint}</p>
-        {#if r.printers === 'all'}<p class="warning" role="note" data-testid="printers-all">{t.redirect.printersAllWarning}</p>{/if}
-      </fieldset>
+<Modal title={t.redirect.title(seat)} sub={seatName && seatName !== t.seatN(seat) ? seatName : undefined} size="md" onClose={onCancel}>
+  {#if seatOne}
+    <p>{t.redirect.seatOne}</p>
+  {:else}
+    <Notice kind="info" text={t.redirect.hint} />
+    <SubLabel text={t.redirect.clipboard} />
+    <ChoiceList
+      name="clip-direction"
+      dense
+      label={t.redirect.clipboard}
+      bind:value={r.clipboard.direction}
+      options={directions.map((d) => ({ value: d, label: t.redirect.directions[d] }))}
+    />
+    {#if clipOn}
+      <Group>
+        <Row label={t.redirect.formats} stack>
+          {#snippet control()}
+            <div class="checks">
+              <Checkbox label={t.redirect.text} bind:checked={r.clipboard.text} />
+              <Checkbox label={t.redirect.html} bind:checked={r.clipboard.html} />
+              <Checkbox label={t.redirect.images} bind:checked={r.clipboard.images} />
+              <Checkbox label={t.redirect.files} bind:checked={r.clipboard.files} />
+              <Checkbox label={t.redirect.crossSeat} bind:checked={r.clipboard.cross_seat} />
+            </div>
+          {/snippet}
+        </Row>
+      </Group>
+      <div data-testid="clipboard-shared"><Notice kind="warn" text={t.redirect.sharedWarning} /></div>
     {/if}
-  </form>
-  {#snippet buttons()}
-    <button type="submit" form="redirect-form" class="primary" disabled={seatOne}>{t.save}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+    <SubLabel text={t.redirect.drives} />
+    <p class="help">{t.redirect.drivesHint}</p>
+    <ChoiceList name="drive-mode" dense label={t.redirect.drives} bind:value={r.drives} options={driveModes.map((m) => ({ value: m, label: t.redirect.driveModes[m] }))} />
+    <Group>
+      <Row label={t.redirect.smartcards} help={t.redirect.smartcardsHint}>
+        {#snippet control()}<Switch bind:checked={r.smartcards} label={t.redirect.smartcardsLabel} />{/snippet}
+      </Row>
+    </Group>
+    <SubLabel text={t.redirect.printers} />
+    <p class="help">{t.redirect.printersHint}</p>
+    <ChoiceList name="printer-mode" dense label={t.redirect.printers} bind:value={r.printers} options={printerModes.map((m) => ({ value: m, label: t.redirect.printerModes[m] }))} />
+    {#if r.printers === 'all'}<div data-testid="printers-all"><Notice kind="warn" text={t.redirect.printersAllWarning} /></div>{/if}
+  {/if}
+  {#snippet foot()}
+    {#if seatOne}
+      <Button label={t.close} onclick={onCancel} />
+    {:else}
+      <Button kind="primary" label={t.save} onclick={save} />
+      <Button label={t.cancel} onclick={onCancel} />
+    {/if}
   {/snippet}
 </Modal>
 
 <style>
-  fieldset {
-    margin: 0 0 0.75rem;
-  }
-  .inner {
-    margin: 0.5rem 0 0;
-  }
-  .choice {
-    display: block;
-    margin: 0.2rem 0;
-  }
-  .warning {
-    color: var(--warning, inherit);
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--sp-5);
   }
 </style>

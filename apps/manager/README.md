@@ -101,10 +101,23 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   unplugged / shared / attention signs, hub depth. "Dokunarak bul" (identify by touch, from
   `device_activity` events) and "Ekranları numarala" (monitor indication via
   `identify_device`).
-- Basic tab: seat table (name, account + password marker, autostart, wallpaper, live
-  state), start mode with hints, behaviour (admin-only, own-seat control, lock-screen
-  image, same-account policy), appearance (theme, tray icon, confirmations).
-- Advanced tab: backend picker with availability and notes from `get_backends`;
+- Settings page (`BasicTab.svelte`, redesign P4 2026-11-17): start mode (ChoiceList), one
+  row per seat (start-automatically switch, seat 1 "Always starts", the Account button and
+  a seat menu with rename, startup programs, kiosk, redirection, IP address, processor
+  cores, graphics card preference, SDL-ignored gamepads (`PadIgnoreDialog.svelte`),
+  environment and sign-in, virtual gamepad and seat wallpaper toggles), kiosk-wide switches,
+  behaviour, appearance (theme, language, lock-screen image, Windows panels), maintenance
+  links (diagnostics, updates, import, Advanced settings) and reset. Fact lines come from
+  `settingsview.ts`.
+- Advanced page (`AdvancedTab.svelte`, a Settings sub-page with a breadcrumb and a contents
+  list): methods, timings, safety (hotkey, log detail as one Select: errors only / info /
+  debug / trace, with a read-only "custom" entry for other mixes of `settings.log`),
+  devices (outputs, CPU, palm check), network addresses (`NetworkSection.svelte`: per-seat
+  address + Edit, the shared program list, source-IP driver state, Hyper-V adapters; the
+  per-seat dialog only picks the address and the rule), the passwordless-seat port, system
+  settings and apps on seats (`CompatSettings.svelte`). `NetworkTab.svelte` only wraps the
+  section until the app shell drops the old tab (P2/P8).
+- Advanced methods: backend picker with availability and notes from `get_backends`;
   the experimental client-SKU session backend only after the warning dialog (stores
   `experimental_ack`); host topology with the `input_not_isolated` note; timings, safety,
   hotkey, devices (class-level default descriptors switch with its classes), reversible

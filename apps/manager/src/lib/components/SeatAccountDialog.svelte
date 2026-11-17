@@ -1,16 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Seat sign-in account (spec 10 §7.11): logon screen (default) or auto-logon with a local
-     or domain account. The password is write-only: it goes straight to the service (LSA),
-     never into the config, and is never shown again. -->
+<!-- Seat sign-in account (spec 10 §7.11; redesign 62-dlg-seat-account): logon screen (default)
+     or auto-logon with a local or domain account. The password is write-only: it goes
+     straight to the service (LSA), never into the config, and is never shown again. -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Modal from './Modal.svelte';
+  import { Button, Checkbox, ChoiceList, Field, Modal, Notice, Segmented, Select } from '#lib/ui/index.ts';
   import { t } from '#lib/i18n.ts';
   import { accountError } from '#lib/model.ts';
   import type { LocalUser, SeatAccount } from '#lib/types.ts';
 
   interface Props {
     seat: number;
+    seatName?: string;
     account: SeatAccount;
     passwordSet: boolean;
     passwordFailing: boolean;
@@ -20,10 +21,12 @@
     onSave: (account: SeatAccount, password: string | null | undefined) => void;
     onCancel: () => void;
   }
-  let { seat, account, passwordSet, passwordFailing, loadUsers, onOpenAccounts, onSave, onCancel }: Props = $props();
+  let { seat, seatName, account, passwordSet, passwordFailing, loadUsers, onOpenAccounts, onSave, onCancel }: Props = $props();
 
   // svelte-ignore state_referenced_locally
-  let mode = $state<'logon_screen' | 'local' | 'domain'>(account.kind);
+  let auto = $state<'logon_screen' | 'auto'>(account.kind === 'logon_screen' ? 'logon_screen' : 'auto');
+  // svelte-ignore state_referenced_locally
+  let scope = $state<'local' | 'domain'>(account.kind === 'domain' ? 'domain' : 'local');
   // svelte-ignore state_referenced_locally
   let user = $state(account.kind === 'logon_screen' ? '' : account.user);
   // svelte-ignore state_referenced_locally
@@ -43,73 +46,112 @@
     }
   });
 
+  const mode = $derived(auto === 'logon_screen' ? 'logon_screen' : scope);
   const draft = $derived<SeatAccount>(
     mode === 'logon_screen' ? { kind: 'logon_screen' } : mode === 'local' ? { kind: 'local', user } : { kind: 'domain', domain, user }
   );
   const accErr = $derived(accountError(draft));
   const mismatch = $derived(mode !== 'logon_screen' && !keep && password !== confirm);
   const valid = $derived(!accErr && !mismatch);
+  const userOptions = $derived([
+    { value: '', label: t.account.pickUser, disabled: true },
+    ...(users ?? []).map((u) => ({
+      value: u.name,
+      disabled: u.disabled,
+      label: `${u.name}${u.full_name ? ` (${u.full_name})` : ''}${u.disabled ? ` · ${t.account.disabledUser}` : ''}${u.is_admin ? ` · ${t.account.adminUser}` : ''}`
+    }))
+  ]);
 
-  function submit(e: Event) {
-    e.preventDefault();
+  function submit() {
     if (!valid) return;
     if (mode === 'logon_screen') onSave(draft, passwordSet ? null : undefined);
     else onSave(draft, keep ? undefined : password);
   }
 </script>
 
-<Modal title={t.account.title(seat)} wide onClose={onCancel}>
-  <form id="seat-account" onsubmit={submit}>
-    <label class="toggle"><input type="radio" bind:group={mode} value="logon_screen" /> {t.account.logonScreen}</label>
-    <label class="toggle"><input type="radio" bind:group={mode} value="local" /> {t.account.autoLogon} — {t.account.local}</label>
-    <label class="toggle"><input type="radio" bind:group={mode} value="domain" /> {t.account.autoLogon} — {t.account.domain}</label>
-    {#if seat === 1 && mode !== 'logon_screen'}<p class="warn-text">{t.account.seatOneWarning}</p>{/if}
+<Modal title={t.account.title(seat)} sub={seatName && seatName !== t.seatN(seat) ? seatName : undefined} size="md" onClose={onCancel}>
+  <ChoiceList
+    name="seat-account"
+    dense
+    label={t.account.signIn}
+    bind:value={auto}
+    options={[
+      { value: 'logon_screen', label: t.account.logonScreen, help: t.account.logonScreenHelp },
+      { value: 'auto', label: t.account.autoLogon }
+    ]}
+  />
+  {#if seat === 1 && mode !== 'logon_screen'}<Notice kind="warn" text={t.account.seatOneWarning} />{/if}
 
-    {#if mode === 'local'}
-      <div class="row">
-        <label class="field">
-          <span>{t.account.user}</span>
-          {#if users && users.length > 0}
-            <select bind:value={user} aria-label={t.account.user}>
-              <option value="" disabled>{t.account.pickUser}</option>
-              {#each users as u (u.sid)}
-                <option value={u.name} disabled={u.disabled}>
-                  {u.name}{u.full_name ? ` (${u.full_name})` : ''}{u.disabled ? ` — ${t.account.disabledUser}` : ''}{u.is_admin ? ` — ${t.account.adminUser}` : ''}
-                </option>
-              {/each}
-            </select>
+  {#if auto === 'auto'}
+    <div class="fields two">
+      <Field label={t.account.accountType} group>
+        {#snippet children({ labelId })}
+          <Segmented
+            labelledby={labelId}
+            bind:value={scope}
+            options={[
+              { value: 'local', label: t.account.localShort },
+              { value: 'domain', label: t.account.domainShort }
+            ]}
+          />
+        {/snippet}
+      </Field>
+      {#if scope === 'domain'}
+        <Field label={t.account.domainName} error={accErr === 'domain' && domain !== '' ? t.account.invalidDomain : undefined}>
+          {#snippet children({ id, describedby, invalid })}
+            <input class="input" {id} aria-describedby={describedby} aria-invalid={invalid} autocomplete="off" bind:value={domain} />
+          {/snippet}
+        </Field>
+      {/if}
+    </div>
+    <div class="fields two">
+      <Field
+        label={scope === 'domain' ? t.account.userName : t.account.user}
+        help={usersFailed && scope === 'local' ? t.account.usersFailed : undefined}
+        error={accErr === 'user' && user !== '' ? t.account.invalidUser : undefined}
+      >
+        {#snippet children({ id, describedby, invalid })}
+          {#if scope === 'local' && users && users.length > 0}
+            <Select {id} {describedby} wide options={userOptions} bind:value={user} />
           {:else}
-            <input bind:value={user} aria-label={t.account.user} autocomplete="off" />
+            <input class="input" {id} aria-describedby={describedby} aria-invalid={invalid} autocomplete="off" bind:value={user} />
           {/if}
-        </label>
-        <button type="button" onclick={onOpenAccounts}>{t.account.openAccounts}</button>
-      </div>
-      {#if usersFailed}<p class="hint">{t.account.usersFailed}</p>{/if}
-    {:else if mode === 'domain'}
-      <label class="field"><span>{t.account.domainName}</span><input bind:value={domain} autocomplete="off" /></label>
-      <label class="field"><span>{t.account.userName}</span><input bind:value={user} autocomplete="off" /></label>
-    {/if}
+        {/snippet}
+      </Field>
+      {#if scope === 'local'}
+        <div class="open"><Button compact kind="quiet" icon="external" label={t.account.openAccounts} onclick={onOpenAccounts} /></div>
+      {/if}
+    </div>
 
-    {#if mode !== 'logon_screen'}
-      {#if passwordSet}
-        <label class="toggle"><input type="checkbox" bind:checked={keep} /> {t.account.keepPassword}</label>
-        {#if passwordFailing}<p class="error">{t.account.passwordFailing}</p>{/if}
-      {/if}
-      {#if !keep}
-        <label class="field"><span>{t.account.password}</span><input type="password" bind:value={password} autocomplete="new-password" /></label>
-        <label class="field">
-          <span>{t.account.confirm}</span>
-          <input type="password" bind:value={confirm} autocomplete="new-password" aria-invalid={mismatch ? 'true' : 'false'} />
-        </label>
-        <p class="hint">{t.account.emptyOk} {t.account.savedHint}</p>
-      {/if}
+    {#if passwordSet}
+      <Checkbox label={t.account.keepPassword} bind:checked={keep} />
+      {#if passwordFailing}<Notice kind="warn" text={t.account.passwordFailing} />{/if}
     {/if}
-    {#if accErr === 'user' && user !== ''}<p class="error" role="alert">{t.account.invalidUser}</p>{/if}
-    {#if accErr === 'domain' && domain !== ''}<p class="error" role="alert">{t.account.invalidDomain}</p>{/if}
-    {#if mismatch}<p class="error" role="alert">{t.account.mismatch}</p>{/if}
-  </form>
-  {#snippet buttons()}
-    <button type="submit" form="seat-account" class="primary" disabled={!valid}>{t.save}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+    {#if !keep}
+      <div class="fields two">
+        <Field label={t.account.password}>
+          {#snippet children({ id, describedby })}
+            <input class="input" type="password" {id} aria-describedby={describedby} autocomplete="new-password" bind:value={password} />
+          {/snippet}
+        </Field>
+        <Field label={t.account.confirm} error={mismatch ? t.account.mismatch : undefined}>
+          {#snippet children({ id, describedby, invalid })}
+            <input class="input" type="password" {id} aria-describedby={describedby} aria-invalid={invalid} autocomplete="new-password" bind:value={confirm} />
+          {/snippet}
+        </Field>
+      </div>
+      <p class="help">{t.account.emptyOk} {t.account.savedHint}</p>
+    {/if}
+  {/if}
+  {#snippet foot()}
+    <Button kind="primary" label={t.save} disabled={!valid} onclick={submit} />
+    <Button label={t.cancel} onclick={onCancel} />
   {/snippet}
 </Modal>
+
+<style>
+  .open {
+    display: flex;
+    align-items: flex-end;
+  }
+</style>

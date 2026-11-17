@@ -94,6 +94,8 @@ describe('RedirectDialog', () => {
   it('seat 1 has nothing to set', () => {
     render(RedirectDialog, { seat: 1, redirect: DEFAULT_SEAT_REDIRECT, onSave: vi.fn(), onCancel: vi.fn() });
     expect(screen.getByText(t.redirect.seatOne)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: t.save })).toBeDisabled();
+    // Nothing to save: the dialog only offers Close.
+    expect(screen.queryByRole('button', { name: t.save })).toBeNull();
+    expect(screen.getAllByRole('button', { name: t.close }).length).toBeGreaterThan(0);
   });
 });

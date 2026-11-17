@@ -154,7 +154,10 @@ const t = {
     tooLong: (max: number) => `The list is too long; only the first ${max} rows are kept when saving.`,
     invalidPath: 'The path cannot be empty.',
     openNetwork: 'Open Network Connections',
-    openDevices: 'Open Device Manager'
+    openDevices: 'Open Device Manager',
+    staticHelp: 'Only static IPv4 addresses are listed. For another address, add a second address to the network adapter.',
+    listNote: (n: string) => `The list is in Advanced › Network addresses, shared by all seats (${n}).`,
+    openList: 'Edit the program list'
   },
 
   picture: {
@@ -195,6 +198,10 @@ const t = {
       off: 'Off (the picture is scaled)'
     } as Record<string, string>,
     cloneNeeded: 'Allow cloning first to use more than one output.',
+    outputFor: (name: string) => `Output: ${name}`,
+    cloneOutputs: 'Outputs (cloning)',
+    perMonitor: 'Options for this monitor',
+    machineWide: 'All monitors',
     forceNote: 'The outputs you choose are already applied every time a seat starts. With this option on, the service re-applies the split of monitors across seats to Windows each time a seat starts (if Windows changed the outputs on its own).',
     none: 'No monitor found.',
     status: {
@@ -382,7 +389,41 @@ const t = {
     clear: 'Clear',
     resetAll: 'Reset all settings',
     resetAllHelp: 'Seats, assignments, saved passwords and system settings return to their defaults. This cannot be undone.',
-    resetButton: 'Reset'
+    resetButton: 'Reset',
+    // P4 (2026-11-17): the rest of the old seat table lives in each seat's menu.
+    startModeLabels: {
+      manual: 'By hand',
+      at_boot: 'When Windows starts',
+      after_seat_one_logon: 'When someone signs in on seat 1'
+    } as Record<string, string>,
+    renameMenu: 'Rename…',
+    gpuMenu: 'Graphics card preference…',
+    padIgnoreMenu: 'Gamepads that SDL games ignore…',
+    wallpaperOn: 'Turn the seat wallpaper on',
+    wallpaperOff: 'Turn the seat wallpaper off',
+    seatGroupSettings: 'Settings',
+    seatGroupSeat: 'Seat',
+    logonScreenFact: 'Sign-in screen',
+    autoLogonFact: (user: string) => `Signs in automatically: ${user}`,
+    passwordFailingFact: 'saved password rejected',
+    remoteFact: 'Remote seat',
+    kioskFact: (n: number) => (n === 1 ? 'Kiosk: 1 app' : `Kiosk: ${n} apps`),
+    gpuFact: 'graphics card preference',
+    padsFact: 'virtual gamepad',
+    redirectFact: 'redirection on',
+    addSeat: 'Add seat',
+    seatLimit: 'A PC can have at most 16 seats.',
+    kioskSeats: 'Kiosk seats',
+    windowsPanels: 'Windows settings',
+    lockScreenImage: 'Seat picture on the lock screen',
+    lockScreenImageHelp: 'While Pulsar Seat is on, the lock screen shows the seat picture.',
+    noShowGoodApply: 'Do not show the success message after saving',
+    updatesCheckOn: 'check on',
+    updatesCheckOff: 'check off',
+    padIgnoreTitle: (seat: string) => `${seat}: gamepads that SDL games ignore`,
+    padIgnoreLabel: 'Gamepad IDs',
+    padIgnoreBad: (list: string) => `Not in 0xVVVV/0xPPPP form, ignored: ${list}`,
+    adminOnlyEdit: 'Only an administrator can change these settings.'
   },
 
   advancedPage: {
@@ -420,7 +461,69 @@ const t = {
     outputsHelp: 'The graphics card output that feeds each monitor, cloning, software cursor',
     cpuHelp: 'Core limit per seat',
     cpuAll: 'Every seat uses all cores',
-    logLevelHelp: 'Errors and warnings are always written. More detail helps when looking for a problem.'
+    logLevelHelp: 'Errors and warnings are always written. More detail helps when looking for a problem.',
+    // P4 (2026-11-17)
+    gates: 'Device access control',
+    gatesHelp: 'Each one limits a kind of device to the seat it is given to.',
+    tocRdp: 'Passwordless seats',
+    tocTweaks: 'System settings',
+    tocApps: 'Apps on seats',
+    loopbackInactive: 'Used only with the “Concurrent full sessions” session method.',
+    loopbackEnabled: 'Use a separate Remote Desktop port for seats without a saved password',
+    loopbackPort: 'Port',
+    loopbackPortHelp: '1024 to 65535, not 3389.',
+    loopbackAccounts: 'Extra accounts that may sign in through this port',
+    loopbackAccountsHelp: 'One per line: user or DOMAIN\\user. Accounts given to seats are always allowed; administrators cannot sign in through this port.',
+    restartTs: 'Restart Remote Desktop Services',
+    experimentalAcked: 'The experimental warning was acknowledged.',
+    experimentalRead: 'Read the warning',
+    startDelay: 'Wait before the first seat starts',
+    betweenSeats: 'Wait between seats',
+    seatTimeout: 'Seat start timeout',
+    seatTimeoutHelp: '30 to 120 seconds.',
+    relogonDelay: 'Delay before signing in again after sign-out',
+    audioWait: 'Time to wait for the audio service',
+    monitorIdle: 'Turn off the screen of an idle extra seat',
+    monitorIdleHelp: '0 = off.',
+    uncleanHelp: 'So the PC does not loop after a crash or a power cut.',
+    crashLimit: 'Stay in safe mode if the service crashes this many times in a row',
+    hotkey: 'Keyboard/mouse switch shortcut',
+    hotkeyHelp: 'The keyboard that presses this shortcut moves to the next seat.',
+    logLevel: 'Log detail',
+    logLevels: {
+      errors: 'Errors and warnings only',
+      info: 'Information',
+      debug: 'Debug',
+      trace: 'Trace (very detailed)',
+      custom: 'Custom'
+    } as Record<string, string>,
+    classDefaults: 'Class-level default access definitions',
+    classDefaultsClasses: 'Device classes covered',
+    outputs: 'Display outputs',
+    cpu: 'Processor cores',
+    cpuLimited: (n: number) => (n === 1 ? '1 seat has a limit' : `${n} seats have a limit`),
+    palmCheck: 'Touchpad palm detection threshold',
+    programAdd: 'Add program',
+    programBrowse: 'Browse',
+    programFolder: 'Add the programs in a folder',
+    programNone: 'No program in the list yet.',
+    programTitle: 'Title',
+    programPath: 'Path',
+    programEnabled: 'Enabled',
+    hyperv: 'Hyper-V virtual adapters',
+    hypervState: 'Hyper-V',
+    hypervSeatNic: 'Seat adapter',
+    wuDetails: 'Windows Update settings',
+    denyClasses: 'Kinds to block',
+    objectRuleFor: (n: number) => `Rule ${n}`,
+    steamProxyResult: 'Result'
+  },
+
+  /** Row actions in tables and lists (P4). */
+  rowAction: {
+    remove: (what: string) => `Remove: ${what}`,
+    enabled: (what: string) => `Enabled: ${what}`,
+    row: (n: number) => `row ${n}`
   },
 
   statusPage: {
@@ -637,7 +740,12 @@ const t = {
     invalidUser: 'The account name cannot be empty and cannot contain the characters \\ / " @.',
     invalidDomain: 'The domain name is not valid.',
     usersFailed: 'The local users could not be loaded; you can type the name by hand.',
-    savedHint: 'The password goes only to the service, right away; it is never written to files and cannot be shown later.'
+    savedHint: 'The password goes only to the service, right away; it is never written to files and cannot be shown later.',
+    accountType: 'Account type',
+    signIn: 'Sign-in',
+    localShort: 'Local',
+    domainShort: 'Domain',
+    logonScreenHelp: 'The user types their own password.'
   },
 
   basic: {
@@ -749,6 +857,14 @@ const t = {
     tooMany: 'At most 16 apps can be added.',
     idle: 'Sign out after no activity (minutes, 0 = off)',
     idleBad: 'Enter a number from 0 to 1440.',
+    idleLabel: 'Sign out after no activity',
+    idleHelp: '0 = off, at most 1440.',
+    limitsTitle: 'Limits',
+    limitsSummary: 'A kiosk seat is not a full lockdown',
+    enableHelp: 'Only the apps below open on the seat’s monitors.',
+    sub: 'A kiosk seat runs in the same Windows session as seat 1.',
+    autostartFor: (name: string) => `Start when the seat opens: ${name}`,
+    more: 'Arguments, store app and full screen',
     notAbsolute: 'A full path is needed (it must start with a drive letter or \\\\server\\share).',
     seatOneDesktop: 'Seat 1 stays a normal desktop',
     seatOneDesktopHint:
@@ -1200,7 +1316,8 @@ const t = {
   conflicts: {
     title: 'Assignments that cannot be applied',
     body: 'The assignment of the devices below cannot be applied as it is. You can still save, or cancel and fix them.',
-    saveAnyway: 'Save anyway'
+    saveAnyway: 'Save anyway',
+    fix: 'Fix'
   },
 
   saved: {
@@ -1270,7 +1387,9 @@ const t = {
     confirm2Title: 'Are you sure?',
     confirm2Body: 'Last confirmation: all Pulsar Seat settings will be deleted.',
     confirm: 'Reset',
-    done: 'Settings reset.'
+    done: 'Settings reset.',
+    typeLabel: (word: string) => `Type ${word} to confirm`,
+    word: 'RESET'
   },
 
   quit: {
@@ -1333,7 +1452,9 @@ const t = {
     press: 'Click the field and press a key',
     invalid: 'This key cannot be used.',
     off: 'Turn the shortcut off',
-    current: 'Chosen'
+    current: 'Chosen',
+    field: 'Shortcut',
+    fieldLabel: 'Shortcut: focus the field and press a key'
   },
 
   diagnostics: {
@@ -1341,6 +1462,7 @@ const t = {
     body: 'The report is saved on this PC; it is sent nowhere. Passwords never go into the report.',
     maskUsers: 'Hide user names (recommended)',
     create: 'Create the report',
+    maskHelp: 'Recommended.',
     done: (path: string) => `Report saved: ${path}`
   },
 
@@ -1349,6 +1471,7 @@ const t = {
     body: 'Paste the content of a device assignment file (JSON) exported by another multiseat product. Nothing is saved by itself; review the result and save.',
     file: 'Choose file',
     run: 'Import',
+    content: 'Content',
     done: 'The imported configuration is loaded. Review it and save.'
   },
 
@@ -1356,7 +1479,9 @@ const t = {
     title: 'Experimental session method',
     ack: 'I have read and understood the risks',
     enable: 'Choose the experimental method',
-    cancel: 'Cancel'
+    cancel: 'Cancel',
+    sub: 'Experimental',
+    ackFirst: 'Tick the box first.'
   },
 
   wizard: {

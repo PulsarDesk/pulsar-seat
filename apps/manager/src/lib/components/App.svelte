@@ -42,14 +42,13 @@
     setCpuSets,
     setDisplayOption,
     setIpBinding,
-    setIpPrograms,
     setMonitorOutputs,
     setOutputSettings,
     setSoftwareCursor
   } from '#lib/model.ts';
   import type { Tab } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { IpBinding, IpProgram, Issue, SeatNumber, ServiceAction } from '#lib/types.ts';
+  import type { IpBinding, Issue, SeatNumber, ServiceAction } from '#lib/types.ts';
   import { Button, ConfirmDialog, EmptyState, Modal, Notices, PageHead, SaveBar, Toasts, type NoticeItem } from '#lib/ui/index.ts';
   import { NoticeHost, provideNoticeHost } from '#lib/ui/notice-host.svelte.ts';
 
@@ -88,6 +87,8 @@
   /** Remote seat the remote seats view opens with (seats board "edit"). */
   let remoteSeat = $state<SeatNumber | null>(null);
   let remoteOpen = $state(0);
+  /** Section the Advanced page scrolls to (Settings seat menu IP dialog → program list). */
+  let advancedSection = $state<string | null>(null);
 
   const seats = $derived(store.saved?.seats ?? []);
   const localCount = $derived(store.saved ? seats.filter((s) => s.kind !== 'remote').length : null);
@@ -273,10 +274,22 @@
     openSettings: () => navigate('settings'),
     restartSeat: (n) => void store.restartSeat(n)
   };
-  const basicProps = $derived({ store, onAdvanced: () => navigate('advanced'), onDialog: pageDialog });
+  const basicProps = $derived({
+    store,
+    onAdvanced: (section?: string) => {
+      // A seat menu can open Advanced at one section (IP dialog -> program list).
+      advancedSection = section ?? null;
+      navigate('advanced');
+    },
+    onDialog: pageDialog
+  });
   const advancedProps = $derived({
     store,
-    onBack: () => navigate('settings'),
+    initialSection: advancedSection,
+    onBack: () => {
+      advancedSection = null;
+      navigate('settings');
+    },
     onHotkey: () => (dialog = { kind: 'hotkey' }),
     onCpu: () => (dialog = { kind: 'cpu' }),
     onOutputs: () => (dialog = { kind: 'outputs' }),
@@ -554,7 +567,19 @@
 {:else if dialog?.kind === 'quit'}
   <ConfirmDialog title={t.quit.title} body={t.quit.body} confirmLabel={t.quit.confirm} onConfirm={() => store.api.quit()} onCancel={() => (dialog = null)} />
 {:else if dialog?.kind === 'reset1'}
-  <ConfirmDialog title={t.reset.title} body={t.reset.body} confirmLabel={t.reset.confirm} danger onConfirm={() => (dialog = { kind: 'reset2' })} onCancel={() => (dialog = null)} />
+  <!-- One dialog with a typed confirmation (redesign 54-dlg-reset) instead of two in a row. -->
+  <ConfirmDialog
+    title={t.reset.title}
+    body={t.reset.body}
+    confirmLabel={t.reset.confirm}
+    danger
+    typedConfirm={{ label: t.reset.typeLabel(t.reset.word), word: t.reset.word }}
+    onConfirm={() => {
+      dialog = null;
+      void store.reset();
+    }}
+    onCancel={() => (dialog = null)}
+  />
 {:else if dialog?.kind === 'reset2'}
   <ConfirmDialog
     title={t.reset.confirm2Title}
@@ -615,15 +640,20 @@
   {@const n = dialog.seat}
   <IpBindingDialog
     seat={n}
+    seatName={store.draft.seats.find((s) => s.number === n)?.name}
     binding={store.draft.seats.find((s) => s.number === n)?.ip_binding}
-    programs={store.draft.settings.ip_programs ?? []}
+    programCount={store.draft.settings.ip_programs?.length ?? 0}
     loadAddresses={() => store.api.listAddresses()}
-    pickProgram={() => store.api.pickProgram()}
-    pickFolder={() => store.api.pickProgramFolder()}
     onOpenNetwork={() => store.api.openPanel('network_connections').catch((e) => store.fail(e))}
     onOpenDevices={() => store.api.openPanel('device_manager').catch((e) => store.fail(e))}
-    onSave={(b: IpBinding | null, list?: IpProgram[]) => {
-      store.edit((c) => (list ? setIpPrograms(setIpBinding(c, n, b), list) : setIpBinding(c, n, b)));
+    onOpenList={() => {
+      // The shared program list lives on Advanced > Network addresses (redesign P4).
+      dialog = null;
+      advancedSection = 'net';
+      navigate('advanced');
+    }}
+    onSave={(b: IpBinding | null) => {
+      store.edit((c) => setIpBinding(c, n, b));
       dialog = null;
     }}
     onCancel={() => (dialog = null)}

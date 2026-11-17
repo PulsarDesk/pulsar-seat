@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Local diagnostic report (spec 10 §7.12, spec 20 §13.6): nothing is uploaded, never secrets. -->
+<!-- Local diagnostic report (spec 10 §7.12, spec 20 §13.6; redesign 73-dlg-diagnostic):
+     nothing is uploaded, never secrets. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import { Button, Checkbox, Modal, Notice } from '#lib/ui/index.ts';
   import { errorLabel, t } from '#lib/i18n.ts';
 
   interface Props {
@@ -27,13 +28,13 @@
   }
 </script>
 
-<Modal title={t.diagnostics.title} onClose={onClose}>
+<Modal title={t.diagnostics.title} size="md" onClose={onClose}>
   <p>{t.diagnostics.body}</p>
-  <label class="toggle"><input type="checkbox" bind:checked={maskUsers} /> {t.diagnostics.maskUsers}</label>
-  {#if path}<p class="ok" role="status">{t.diagnostics.done(path)}</p>{/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#snippet buttons()}
-    <button type="button" class="primary" disabled={busy} onclick={create}>{t.diagnostics.create}</button>
-    <button type="button" onclick={onClose}>{t.close}</button>
+  <Checkbox label={t.diagnostics.maskUsers} bind:checked={maskUsers} />
+  {#if path}<div role="status"><Notice kind="ok" text={t.diagnostics.done(path)} /></div>{/if}
+  {#if error}<Notice kind="danger" text={error} />{/if}
+  {#snippet foot()}
+    <Button kind="primary" label={t.diagnostics.create} {busy} onclick={create} />
+    <Button label={t.close} onclick={onClose} />
   {/snippet}
 </Modal>

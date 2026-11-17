@@ -2948,3 +2948,61 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   remote seat settings, shared VM settings), the remote unsaved guard on navigation / close,
   Sunshine "Send PIN" waiting for a request; running seat page and pair dialog are
   HYPOTHESIS until a real remote seat runs.
+
+- 2026-11-17 (redesign P4, manager): Settings + Advanced (+ Network addresses) and their
+  dialogs on the component kit (`target/redesign/final/IMPLEMENTATION.md` P4).
+  - **Settings** (`BasicTab.svelte`): start mode ChoiceList (manual "recommended for the
+    first setup"), one row per seat (autostart Switch, seat 1 `LockedValue` "Always starts",
+    Account button named "Sign-in account: <seat>", seat menu). The old seat-table columns
+    moved into the seat menu: rename, startup programs, kiosk (desktops method or an existing
+    kiosk shell), redirection, IP address, processor cores, graphics card preference,
+    SDL-ignored gamepads (new `PadIgnoreDialog.svelte`; invalid ids are named and dropped),
+    environment and sign-in, virtual gamepad and wallpaper toggles. Kiosk-wide switches and
+    the per-seat kiosk audio / account facts stay. Behaviour, appearance (theme Segmented,
+    language Select, lock-screen image, Windows panels), maintenance LinkRows, reset
+    (danger-quiet). Non-admins see a notice and inert controls.
+  - **Advanced** (`AdvancedTab.svelte`): breadcrumb + Toc (`aria-current="location"`);
+    methods (session ChoiceList, other methods as Selects, device access control
+    switches), timings with units, safety (hotkey Kbd + Change, log detail Select),
+    devices (class defaults, outputs and CPU LinkRows, palm check), network addresses
+    (`NetworkSection.svelte`: absorbs NetworkTab, program list edited in place, driver state
+    as Notices, Hyper-V helper), passwordless-seat port, system settings + compatibility
+    and apps on seats (`CompatSettings.svelte`). Methods that are not available here stay
+    selectable with the reason as help (the old picker allowed it; the plan's text-only
+    option would have removed a choice).
+  - **Dialogs** on `ui/Modal`: IP (address + rule + link to the list), account (ChoiceList
+    + Local/Domain Segmented), startup apps, kiosk, redirect, CPU, hotkey, outputs (one
+    Select per monitor, checkboxes when cloning is allowed), import, diagnostics, update,
+    conflict (Fix / Save anyway), GPU, seat environment, experimental (local + new `remote`
+    variant for P6). `components/ConfirmDialog.svelte` passes through to `ui/ConfirmDialog`.
+    Reset is one dialog with a typed confirmation (54-dlg-reset).
+  - **Behaviour notes (needs maintainer test before push):** log detail is now one choice
+    (cumulative levels) instead of three independent boxes; a stored non-cumulative mix
+    shows as "Custom" and is kept until changed. Reset asks once with a typed word instead
+    of two dialogs. Clear pictures stages the change (save bar) without a dialog. The IP
+    dialog no longer edits the program list (Advanced > Network addresses does).
+    `LogLevelDialog.svelte` is kept only because SeatsTab (P3) still imports it.
+  - App.svelte (P2's file) got only the page wiring: `BasicTab onAdvanced/onDialog`,
+    `AdvancedTab onBack/initialSection`, the typed reset dialog. The old tab bar stays.
+  - Visual check: demo on port 5364, headless Edge, light + dark, 1280x800 + 1024x700 + full
+    page, Turkish locale; shots in `target/redesign/audit/p4/` compared with shots 10, 11,
+    54, 60, 62-67, 70, 71, 73-75 (structure, hierarchy, copy). Server and Edge stopped.
+    Detector on the changed files: no findings.
+  - Gates: manager 279 tests (was 271; +3 settingsview, +3 App settings/advanced, +3
+    dialogs (remote experimental x2, conflict), -0), check 0 errors, build OK; installer
+    scripts 89. No Rust, Tauri or driver code touched. No test deleted.
+
+- 2026-11-17 (integration redesign-p4): merged the Settings / Advanced pages and their dialogs
+  (d294db4) into main after P2 / P3 / P5 / P6 / P7. Conflicts: `App.svelte` (kept the P2 shell;
+  `basicProps.onAdvanced(section)` now sets the Advanced `initialSection`, `onBack` clears it),
+  the App-level IP dialog moved to P4's props (`seatName`, `programCount`, `onOpenList` closes
+  the dialog and opens Advanced > Network addresses; the dialog no longer edits the program
+  list), App / extras tests (shell rail navigation, `setupNetwork` with P4's on-page program
+  list), status / journal (union). New test: the seat-menu IP dialog's "program list" link
+  lands on Advanced. P4's open issues stand (log detail as one cumulative choice, one typed
+  reset dialog, "Clear all custom pictures" staged without a dialog, IP dialog without the
+  program list: maintainer test before push; `LogLevelDialog.svelte` still imported by
+  SeatsTab, delete in P8; NetworkTab routing removal left to P8).
+  - Gates green: cargo 1912 passed / 6 ignored, clippy -D warnings host aarch64 + x64, shim
+    tests + check x64 / i686 / aarch64, manager 340 tests (was 331), check 0 / 0, build OK,
+    installer scripts 89. No Rust or driver change. No test deleted.

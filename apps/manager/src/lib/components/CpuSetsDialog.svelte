@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- CPU cores per seat (spec 10 §7.3 + ARM64 notes): one row per seat, one box per CPU set,
-     with the core class shown (performance / efficiency). No box ticked = all cores. -->
+<!-- CPU cores per seat (spec 10 §7.3 + ARM64 notes; redesign 63-dlg-cpu): one row per seat,
+     one box per CPU set, with the core class shown (performance / efficiency). No box ticked
+     = all cores. A bare table (its own hairlines), never wrapped in a Group. -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Modal from './Modal.svelte';
+  import { Button, Checkbox, Modal, Notice, Spinner } from '#lib/ui/index.ts';
   import { errorLabel, t } from '#lib/i18n.ts';
+  import { seatDisplayName } from '#lib/settingsview.ts';
   import type { CpuSetInfo, SeatConfig } from '#lib/types.ts';
 
   interface Props {
@@ -50,81 +52,77 @@
   const invalid = $derived(seats.some((s) => hard[s.number] && groupsOf(s.number) > 1));
 
   function save() {
+    if (!sets || invalid) return;
     onSave(seats.map((s) => ({ seat: s.number, ids: chosen[s.number] ?? [], hard: hard[s.number] ?? false, wide: wide[s.number] ?? false })));
   }
 </script>
 
-<Modal title={t.cpu.title} wide onClose={onCancel}>
-  <p class="hint">{t.cpu.hint}</p>
-  {#if error}<p class="error">{t.cpu.failed} {error}</p>{/if}
+<Modal title={t.cpu.title} size="lg" onClose={onCancel}>
+  <p class="help">{t.cpu.hint}</p>
+  {#if error}<Notice kind="danger" text={`${t.cpu.failed} ${error}`} />{/if}
+  {#if !sets && !error}<Spinner label={t.loading} />{/if}
   {#if sets}
-    <div class="grid-wrap">
-      <table>
+    <div class="wrap">
+      <table class="table">
         <thead>
           <tr>
-            <th>{t.seat}</th>
+            <th scope="col">{t.seat}</th>
             {#each sets as c (c.id)}
-              <th title={`${t.cpu.group(c.group)}, ${t.cpu.core(c.core_index)}`}>
-                {c.logical_index}
-                {#if hybrid}<small class:perf={c.efficiency_class === maxClass}>{c.efficiency_class === maxClass ? 'P' : 'E'}</small>{/if}
+              <th scope="col" class="end" title={`${t.cpu.group(c.group)}, ${t.cpu.core(c.core_index)}`}>
+                {c.logical_index}{#if hybrid}<small class:perf={c.efficiency_class === maxClass}>{c.efficiency_class === maxClass ? 'P' : 'E'}</small>{/if}
               </th>
             {/each}
-            <th>{t.cpu.hard}</th>
-            <th title={t.cpu.seatWideHint}>{t.cpu.seatWide}</th>
+            <th scope="col" class="end">{t.cpu.hard}</th>
+            <th scope="col" class="end" title={t.cpu.seatWideHint}>{t.cpu.seatWide}</th>
           </tr>
         </thead>
         <tbody>
           {#each seats as s (s.number)}
+            {@const name = seatDisplayName(s)}
             <tr>
-              <th scope="row">{s.number}. {s.name === String(s.number) ? '' : s.name}</th>
+              <th scope="row">{name}</th>
               {#each sets as c (c.id)}
-                <td>
-                  <input
-                    type="checkbox"
-                    aria-label={`${t.seatN(s.number)}, ${c.logical_index}`}
+                <td class="end">
+                  <Checkbox
+                    tight
+                    ariaLabel={`${t.seatN(s.number)}, ${c.logical_index}`}
                     checked={(chosen[s.number] ?? []).includes(c.id)}
-                    onchange={(e) => toggle(s.number, c.id, e.currentTarget.checked)}
+                    onchange={(on) => toggle(s.number, c.id, on)}
                   />
                 </td>
               {/each}
-              <td><input type="checkbox" aria-label={`${t.seatN(s.number)}, ${t.cpu.hard}`} bind:checked={hard[s.number]} /></td>
-              <td><input type="checkbox" aria-label={`${t.seatN(s.number)}, ${t.cpu.seatWide}`} bind:checked={wide[s.number]} /></td>
+              <td class="end"><Checkbox tight ariaLabel={`${t.seatN(s.number)}, ${t.cpu.hard}`} bind:checked={hard[s.number]} /></td>
+              <td class="end"><Checkbox tight ariaLabel={`${t.seatN(s.number)}, ${t.cpu.seatWide}`} bind:checked={wide[s.number]} /></td>
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
-    {#if hybrid}<p class="hint">P = {t.cpu.performance}, E = {t.cpu.efficiency}</p>{/if}
-    <p class="hint">{t.cpu.seatWideHint}</p>
-    {#if invalid}<p class="error" role="alert">{t.cpu.oneGroup}</p>{/if}
+    {#if hybrid}<p class="help">P = {t.cpu.performance}, E = {t.cpu.efficiency}</p>{/if}
+    <p class="help">{t.cpu.seatWideHint}</p>
+    {#if invalid}<Notice kind="danger" text={t.cpu.oneGroup} />{/if}
   {/if}
-  {#snippet buttons()}
-    <button type="button" class="primary" disabled={!sets || invalid} onclick={save}>{t.save}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+  {#snippet foot()}
+    <Button kind="primary" label={t.save} disabled={!sets || invalid} onclick={save} />
+    <Button label={t.cancel} onclick={onCancel} />
   {/snippet}
 </Modal>
 
 <style>
-  .grid-wrap {
+  .wrap {
     overflow-x: auto;
   }
-  table {
-    border-collapse: collapse;
-  }
-  th,
-  td {
-    padding: 0.15rem 0.3rem;
-    text-align: center;
-  }
   th[scope='row'] {
-    text-align: left;
+    font-weight: 400;
     white-space: nowrap;
+    text-align: left;
   }
   small {
     display: block;
-    color: var(--muted);
+    color: var(--text-muted);
+    font-size: var(--fs-meta);
   }
   small.perf {
-    color: var(--accent);
+    color: var(--accent-fg);
   }
 </style>

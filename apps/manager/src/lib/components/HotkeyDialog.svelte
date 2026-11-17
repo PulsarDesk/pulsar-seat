@@ -1,7 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Keyboard/mouse switch hotkey (spec 10 §7.6): Ctrl + one key; reset turns it off. -->
+<!-- Keyboard/mouse switch hotkey (spec 10 §7.6; redesign 70-dlg-hotkey): Ctrl + one key;
+     "Turn the shortcut off" clears it. -->
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import { Button, Field, Modal, Notice } from '#lib/ui/index.ts';
   import { hotkeyLabel, scanFromCode } from '#lib/hotkey.ts';
   import { t } from '#lib/i18n.ts';
 
@@ -25,17 +26,35 @@
   }
 </script>
 
-<Modal title={t.hotkey.title} onClose={onCancel}>
+<Modal title={t.hotkey.title} size="sm" onClose={onCancel}>
   <p>{t.hotkey.body}</p>
-  <p class="warn-text">{t.hotkey.warning}</p>
-  <label class="field">
-    <span>{t.hotkey.press}</span>
-    <input readonly value={hotkeyLabel(value) ?? t.advanced.hotkeyOff} onkeydown={key} aria-invalid={invalid ? 'true' : 'false'} data-testid="hotkey-field" />
-  </label>
-  {#if invalid}<p class="error" role="alert">{t.hotkey.invalid}</p>{/if}
-  {#snippet buttons()}
-    <button type="button" onclick={() => (value = null)}>{t.hotkey.off}</button>
-    <button type="button" class="primary" onclick={() => onSave(value)}>{t.save}</button>
-    <button type="button" onclick={onCancel}>{t.cancel}</button>
+  <Field label={t.hotkey.field} help={t.hotkey.press} error={invalid ? t.hotkey.invalid : undefined}>
+    {#snippet children({ id, describedby, invalid: inv })}
+      <input
+        class="input mono key"
+        {id}
+        readonly
+        aria-describedby={describedby}
+        aria-invalid={inv}
+        value={hotkeyLabel(value) ?? t.advanced.hotkeyOff}
+        onkeydown={key}
+        data-testid="hotkey-field"
+      />
+    {/snippet}
+  </Field>
+  {#if invalid}<p class="sr-only" role="alert">{t.hotkey.invalid}</p>{/if}
+  <Notice kind="warn" text={t.hotkey.warning} />
+  {#snippet foot()}
+    <Button kind="primary" label={t.save} onclick={() => onSave(value)} />
+    <Button label={t.hotkey.off} onclick={() => (value = null)} />
+    <Button label={t.cancel} onclick={onCancel} />
   {/snippet}
 </Modal>
+
+<style>
+  .key {
+    height: 48px;
+    width: 100%;
+    font-size: var(--fs-body);
+  }
+</style>

@@ -1,11 +1,18 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Advanced settings (spec 10 §5, §7.6–§7.8 as named settings): backend picker with the
-     experimental client-SKU option behind an explicit warning, timings, safety, hotkey,
-     devices and the reversible system tweaks. -->
+<!-- Advanced settings (spec 10 §5, §7.6–§7.8 as named settings; redesign P4 2026-11-17, shot
+     11-settings-advanced): a sub-page of Settings with a contents list. Methods (session
+     method with the experimental client-SKU option behind an explicit warning, the other
+     methods, device access control), timings, safety (hotkey, log detail), devices (outputs,
+     processor cores), network addresses (was its own tab), the separate port for
+     passwordless seats, and the optional, reversible system settings and app compatibility. -->
 <script lang="ts">
+  import { onMount } from 'svelte';
   import CompatSettings from './CompatSettings.svelte';
-  import ConfirmDialog from './ConfirmDialog.svelte';
   import ExperimentalDialog from './ExperimentalDialog.svelte';
+  import NetworkSection from './NetworkSection.svelte';
+  import OutputsDialog from './OutputsDialog.svelte';
+  import { Breadcrumb, Button, Checkbox, ChoiceList, ConfirmDialog, Disclosure, Group, Kbd, LinkRow, LockedValue, Notice, PageHead, Row, Section, Select, SubLabel, Switch, Toc } from '#lib/ui/index.ts';
+  import type { ChoiceOption, SelectOption } from '#lib/ui/index.ts';
   import { availabilityLabel, backendName, noteLabel, t } from '#lib/i18n.ts';
   import { hotkeyLabel } from '#lib/hotkey.ts';
   import {
@@ -15,8 +22,14 @@
     loopbackAllowedAccounts,
     loopbackPortValid,
     parseAccountList,
-    setClassDefaultClasses
+    setClassDefaultClasses,
+    setDisplayOption,
+    setLogLevels,
+    setMonitorOutputs,
+    setOutputSettings,
+    setSoftwareCursor
   } from '#lib/model.ts';
+  import { logLevelOf, logSettingsFor, type LogLevelChoice } from '#lib/settingsview.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import {
     DEFAULT_LOOPBACK_LISTENER_PORT,
@@ -27,24 +40,40 @@
     type DeviceClassTarget,
     type GateBackendKind,
     type HostTopology,
-    type LoopbackListenerSettings
+    type LoopbackListenerSettings,
+    type SeatNumber
   } from '#lib/types.ts';
 
   interface Props {
     store: ManagerStore;
+    /** Back to Settings (the breadcrumb). */
+    onBack?: () => void;
     onHotkey: () => void;
     onCpu: () => void;
+    /** Display outputs dialog; when absent the page opens it itself. */
+    onOutputs?: () => void;
+    /** Seat whose IP dialog opens first (Settings seat menu "IP address…"). */
+    initialSeat?: SeatNumber | null;
+    /** Scroll to this section on open ("net"). */
+    initialSection?: string | null;
   }
-  let { store, onHotkey, onCpu }: Props = $props();
+  let { store, onBack, onHotkey, onCpu, onOutputs, initialSeat = null, initialSection = null }: Props = $props();
 
   let experimentalFor = $state<string | null>(null);
+  let restartAsk = $state(false);
+  let outputsOpen = $state(false);
+  let current = $state('methods');
   // Disks and volumes are refused by the service (system disk); never offered.
   const CLASS_TARGETS: DeviceClassTarget[] = ['cdrom', 'ports', 'modem', 'multiport_serial', 'floppy', 'tape_drive', 'medium_changer'];
-  let restartAsk = $state(false);
   /** The service's choice when none is stored (`DeviceClassTarget::DEFAULT`). */
   const DEFAULT_CLASSES: DeviceClassTarget[] = ['cdrom', 'ports'];
   const draft = $derived(store.draft);
   const readOnly = $derived(!store.isAdmin);
+
+  onMount(() => {
+    if (!store.backends) void store.refreshBackends();
+    if (initialSection) document.getElementById(initialSection)?.scrollIntoView?.({ block: 'start' });
+  });
 
   type Single = 'session' | 'display' | 'input' | 'audio';
   const FALLBACK: Record<Single | 'gates', string[]> = {
@@ -69,6 +98,9 @@
     }));
   }
 
+  /** Availability is only known from the service; the fallback list claims nothing. */
+  const unavailable = (b: BackendInfo) => (store.backends && b.availability.state !== 'available' ? availabilityLabel(b.availability) : null);
+
   function settings(f: (c: Config) => void) {
     store.edit((c) => {
       const n = clone(c);
@@ -77,9 +109,10 @@
     });
   }
 
-  function pick(cat: Single, kind: string, experimental: boolean) {
+  function pick(cat: Single, kind: string) {
     if (!draft) return;
-    if (experimental && draft.settings.backends.experimental_ack !== EXPERIMENTAL_WARNING_VERSION) {
+    const b = options(cat).find((x) => x.kind === kind);
+    if (b?.experimental && draft.settings.backends.experimental_ack !== EXPERIMENTAL_WARNING_VERSION) {
       experimentalFor = kind;
       return;
     }
@@ -100,8 +133,37 @@
     };
   }
 
-  const cats: { cat: Single; label: string }[] = [
-    { cat: 'session', label: t.advanced.session },
+  const session = $derived(draft?.settings.backends.session);
+  const sessionOptions = $derived<ChoiceOption[]>(
+    options('session').map((b) => {
+      // A method that is not available on this PC stays selectable (the service falls back
+      // and says so on the Status page; a wrapper or role may be installed later): its
+      // reason is the help line.
+      const why = unavailable(b);
+      const help = [why ?? '', b.notes.map(noteLabel).join(' · ')].filter(Boolean).join(' ');
+      return {
+        value: b.kind,
+        label: backendName(b.kind),
+        // Some method names already say "experimental"; never say it twice.
+        note: b.experimental && !backendName(b.kind).toLowerCase().includes(t.advancedPage.experimental) ? t.advancedPage.experimental : undefined,
+        help: help || undefined
+      };
+    })
+  );
+
+  function selectOptions(cat: Single): SelectOption[] {
+    return options(cat).map((b) => ({ value: b.kind, label: unavailable(b) ? `${backendName(b.kind)} (${t.advanced.unavailableHere})` : backendName(b.kind) }));
+  }
+
+  function selectedHelp(cat: Single): string | undefined {
+    if (!draft) return undefined;
+    const b = options(cat).find((x) => x.kind === (draft.settings.backends as BackendSelection)[cat]);
+    if (!b) return undefined;
+    const parts = [unavailable(b) ?? '', b.notes.map(noteLabel).join(' · ')].filter(Boolean);
+    return parts.join(' ') || undefined;
+  }
+
+  const others: { cat: Exclude<Single, 'session'>; label: string }[] = [
     { cat: 'display', label: t.advanced.display },
     { cat: 'input', label: t.advanced.input },
     { cat: 'audio', label: t.advanced.audio }
@@ -120,294 +182,296 @@
     });
   }
 
-  const notIsolated = $derived(
-    draft?.settings.backends.input === 'raw_input_host' && draft?.settings.backends.host_topology === 'seat_one_console'
-  );
+  const notIsolated = $derived(draft?.settings.backends.input === 'raw_input_host' && draft?.settings.backends.host_topology === 'seat_one_console');
+  const logChoice = $derived(logLevelOf(draft?.settings.log));
+  const logOptions = $derived<SelectOption<LogLevelChoice>[]>([
+    ...(['errors', 'info', 'debug', 'trace'] as const).map((v) => ({ value: v, label: t.advancedPage.logLevels[v] })),
+    ...(logChoice === 'custom' ? [{ value: 'custom' as const, label: t.advancedPage.logLevels.custom }] : [])
+  ]);
+  const limited = $derived(draft ? draft.seats.filter((s) => (s.cpu_sets?.length ?? 0) > 0).length : 0);
+  const hotkey = $derived(draft ? hotkeyLabel(draft.settings.input.switch_hotkey_scan) : null);
+  const classesChosen = $derived(draft?.settings.devices.class_default_classes?.length ? draft.settings.devices.class_default_classes : DEFAULT_CLASSES);
+
+  const toc = [
+    { id: 'methods', label: t.advancedPage.methods },
+    { id: 'timings', label: t.advancedPage.timings },
+    { id: 'safety', label: t.advancedPage.safety },
+    { id: 'devices', label: t.advancedPage.devices },
+    { id: 'net', label: t.advancedPage.network },
+    { id: 'rdp', label: t.advancedPage.tocRdp },
+    { id: 'tweaks', label: t.advancedPage.tocTweaks },
+    { id: 'apps', label: t.advancedPage.tocApps }
+  ];
+
+  function openOutputs() {
+    if (onOutputs) onOutputs();
+    else outputsOpen = true;
+  }
 </script>
 
-<p class="banner warn">{t.advanced.banner}</p>
+{#snippet number(label: string, help: string | undefined, value: number, min: number, max: number, step: number, unit: string, apply: (c: Config, v: number) => void, invalid = false)}
+  <Row {label} {help}>
+    {#snippet control()}
+      <span class="input-group">
+        <input class="input narrow" type="number" {min} {max} {step} {value} aria-label={label} aria-invalid={invalid ? 'true' : undefined} onchange={num(apply)} />
+        <span class="unit">{unit}</span>
+      </span>
+    {/snippet}
+  </Row>
+{/snippet}
 
-{#if draft}
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.backends}</legend>
-    {#each cats as { cat, label } (cat)}
-      <div class="group" role="radiogroup" aria-label={label}>
-        <h3>{label}</h3>
-        {#each options(cat) as b (b.kind)}
-          {@const selected = (draft.settings.backends as BackendSelection)[cat] === b.kind}
-          <label class="option" class:unavailable={b.availability.state !== 'available'}>
-            <input type="radio" name={`be-${cat}`} checked={selected} onchange={() => pick(cat, b.kind, b.experimental)} />
-            <span>
-              {backendName(b.kind)}
-              {#if b.experimental}<em class="tag danger">{t.advanced.experimental}</em>{/if}
-              {#if b.active}<em class="tag ok">{t.advanced.active}</em>{/if}
-              {#if store.backends && b.availability.state !== 'available'}
-                <small class="hint">{availabilityLabel(b.availability)}</small>
-              {/if}
-              {#if b.notes.length}<small class="hint">{b.notes.map(noteLabel).join(' · ')}</small>{/if}
-            </span>
-          </label>
-        {/each}
-        {#if cat === 'session' && draft.settings.backends.session === 'rds_loopback'}
-          <div class="sub" data-testid="loopback-listener">
-            <h4>{t.advanced.loopbackTitle}</h4>
-            <label class="option">
-              <input
-                type="checkbox"
-                data-testid="loopback-enabled"
-                checked={loopback.enabled}
-                onchange={(e) => editLoopback((l) => (l.enabled = e.currentTarget.checked))}
-              />
-              <span>{t.advanced.loopbackEnabled}</span>
-            </label>
-            <p class="hint">{t.advanced.loopbackHint}</p>
-            <label class="field"
-              ><span>{t.advanced.loopbackPort}</span>
-              <input
-                type="number"
-                data-testid="loopback-port"
-                min="1024"
-                max="65535"
-                disabled={!loopback.enabled}
-                value={loopback.port}
-                aria-invalid={loopbackPortValid(loopback.port) ? 'false' : 'true'}
-                onchange={(e) => {
-                  const v = Number(e.currentTarget.value);
-                  if (Number.isFinite(v)) editLoopback((l) => (l.port = Math.round(v)));
-                }}
-              /></label
-            >
-            <label class="field"
-              ><span>{t.advanced.loopbackAccounts}</span>
-              <textarea
-                rows="3"
-                data-testid="loopback-accounts"
-                disabled={!loopback.enabled}
-                value={(loopback.extra_accounts ?? []).join('\n')}
-                aria-invalid={(loopback.extra_accounts ?? []).every(accountEntryValid) ? 'false' : 'true'}
-                onchange={(e) => {
-                  const list = parseAccountList(e.currentTarget.value);
-                  editLoopback((l) => (l.extra_accounts = list));
-                }}
-              ></textarea></label
-            >
-            <p class="hint">{t.advanced.loopbackAccountsHint}</p>
-            {#if loopback.enabled && draft}
-              {@const allowed = loopbackAllowedAccounts(draft)}
-              {@const waiting = logonScreenRdpSeats(draft)}
-              {#if allowed.length > 0}
-                <p class="hint" data-testid="loopback-allowed">{t.advanced.loopbackAllowed(allowed.join(', '))}</p>
-              {:else if waiting.length > 0}
-                <p class="warn-text" data-testid="loopback-no-accounts">{t.advanced.loopbackNoAccounts(waiting.join(', '))}</p>
-              {/if}
+{#snippet toggle(label: string, help: string | undefined, checked: boolean, apply: (c: Config, on: boolean) => void)}
+  <Row {label} {help}>
+    {#snippet control()}<Switch {checked} {label} onchange={(on) => settings((c) => apply(c, on))} />{/snippet}
+  </Row>
+{/snippet}
+
+<div class="page">
+  <Breadcrumb items={[{ label: t.settingsPage.title, onclick: onBack }, { label: t.advancedPage.title }]} />
+  <PageHead title={t.advancedPage.title} sub={t.advancedPage.intro} />
+
+  {#if draft}
+    <div class="with-toc">
+      <Toc items={toc} label={t.advancedPage.toc} bind:current />
+      <div class="sections">
+        <div inert={readOnly}>
+          <Section id="methods" title={t.advancedPage.methods}>
+            <SubLabel id="session-method" text={t.advancedPage.sessionMethod} />
+            <ChoiceList name="be-session" labelledby="session-method" value={session} options={sessionOptions} onchange={(k) => pick('session', k)} />
+            {#if session === 'termsrv_wrapper' || session === 'rds_loopback'}
+              <div class="after">
+                <Group>
+                  {#if session === 'termsrv_wrapper'}
+                    <Row label={t.advancedPage.experimentalAcked}>
+                      {#snippet control()}<Button compact label={t.advancedPage.experimentalRead} onclick={() => (experimentalFor = 'termsrv_wrapper')} />{/snippet}
+                    </Row>
+                  {/if}
+                  <Row label={t.advancedPage.restartTs} help={`${t.advanced.restartTsHint} ${t.advanced.loopbackBinding}`}>
+                    {#snippet control()}
+                      <Button compact label={t.seatCard.restart} aria-label={t.advancedPage.restartTs} data-testid="restart-termservice" disabled={!store.isAdmin} onclick={() => (restartAsk = true)} />
+                    {/snippet}
+                  </Row>
+                </Group>
+              </div>
             {/if}
-          </div>
-        {/if}
-        {#if cat === 'session' && (draft.settings.backends.session === 'rds_loopback' || draft.settings.backends.session === 'termsrv_wrapper')}
-          <p class="hint" data-testid="loopback-binding">{t.advanced.loopbackBinding}</p>
-          <p class="hint">
-            <button type="button" data-testid="restart-termservice" disabled={!store.isAdmin} onclick={() => (restartAsk = true)}
-              >{t.advanced.restartTs}</button
-            >
-            {t.advanced.restartTsHint}
-          </p>
-        {/if}
-        {#if cat === 'session' && draft.settings.backends.session === 'termsrv_wrapper'}
-          <p class="hint">
-            {t.advanced.experimentalAcked}
-            <button type="button" onclick={() => (experimentalFor = 'termsrv_wrapper')}>{t.advanced.experimentalOpen}</button>
-          </p>
-        {/if}
+
+            <SubLabel text={t.advancedPage.otherMethods} />
+            <Group>
+              <Row label={t.advanced.topology}>
+                {#snippet control()}
+                  <Select
+                    label={t.advanced.topology}
+                    value={draft.settings.backends.host_topology}
+                    options={(['seat_one_console', 'dedicated_host'] as HostTopology[]).map((v) => ({ value: v, label: backendName(v) }))}
+                    onchange={(v) => settings((c) => (c.settings.backends.host_topology = v as HostTopology))}
+                  />
+                {/snippet}
+              </Row>
+              {#each others as { cat, label } (cat)}
+                <Row {label} help={selectedHelp(cat)}>
+                  {#snippet control()}
+                    <Select {label} value={(draft.settings.backends as BackendSelection)[cat]} options={selectOptions(cat)} onchange={(v) => pick(cat, v)} />
+                  {/snippet}
+                </Row>
+              {/each}
+            </Group>
+            {#if notIsolated}
+              <div class="after" data-testid="input-not-isolated"><Notice kind="warn" text={t.advanced.inputNotIsolated} /></div>
+            {/if}
+
+            <SubLabel text={t.advancedPage.gates} />
+            <p class="help sub">{t.advancedPage.gatesHelp}</p>
+            <Group>
+              {#each options('gates') as b (b.kind)}
+                {@const on = draft.settings.backends.gates.includes(b.kind as GateBackendKind)}
+                {@const why = unavailable(b)}
+                <Row label={backendName(b.kind)} help={why ?? undefined}>
+                  {#snippet control()}
+                    <Switch checked={on} label={backendName(b.kind)} onchange={(v) => toggleGate(b.kind as GateBackendKind, v)} />
+                  {/snippet}
+                </Row>
+              {/each}
+            </Group>
+          </Section>
+
+          <Section id="timings" title={t.advancedPage.timings}>
+            <Group>
+              {@render number(t.advancedPage.startDelay, undefined, draft.settings.timings.start_delay_ms, 0, 600000, 500, t.advancedPage.unitMs, (c, v) => (c.settings.timings.start_delay_ms = v))}
+              {@render number(t.advancedPage.betweenSeats, undefined, draft.settings.timings.between_seats_ms, 0, 60000, 500, t.advancedPage.unitMs, (c, v) => (c.settings.timings.between_seats_ms = v))}
+              {@render number(
+                t.advancedPage.seatTimeout,
+                t.advancedPage.seatTimeoutHelp,
+                draft.settings.timings.seat_start_timeout_s,
+                30,
+                120,
+                1,
+                t.advancedPage.unitS,
+                (c, v) => (c.settings.timings.seat_start_timeout_s = v),
+                draft.settings.timings.seat_start_timeout_s < 30 || draft.settings.timings.seat_start_timeout_s > 120
+              )}
+              {@render number(t.advancedPage.relogonDelay, undefined, draft.settings.timings.relogon_delay_ms, 0, 60000, 500, t.advancedPage.unitMs, (c, v) => (c.settings.timings.relogon_delay_ms = v))}
+              {@render number(t.advancedPage.audioWait, undefined, draft.settings.timings.audio_wait_timeout_s, 0, 600, 1, t.advancedPage.unitS, (c, v) => (c.settings.timings.audio_wait_timeout_s = v))}
+              {@render number(
+                t.advancedPage.monitorIdle,
+                t.advancedPage.monitorIdleHelp,
+                draft.settings.timings.monitor_idle_off_s ?? 0,
+                0,
+                86400,
+                60,
+                t.advancedPage.unitS,
+                (c, v) => (c.settings.timings.monitor_idle_off_s = v)
+              )}
+            </Group>
+          </Section>
+
+          <Section id="safety" title={t.advancedPage.safety}>
+            <Group>
+              {@render toggle(t.advanced.uncleanGuard, t.advancedPage.uncleanHelp, draft.settings.safety.unclean_shutdown_guard, (c, on) => (c.settings.safety.unclean_shutdown_guard = on))}
+              {@render number(t.advancedPage.crashLimit, undefined, draft.settings.safety.crash_loop_limit, 1, 20, 1, t.advancedPage.unitTimes, (c, v) => (c.settings.safety.crash_loop_limit = Math.max(1, v)))}
+              {@render toggle(t.advanced.systemButtons, undefined, draft.settings.input.allow_system_buttons, (c, on) => (c.settings.input.allow_system_buttons = on))}
+              {@render toggle(t.advanced.padDeviceScope, t.advanced.padDeviceScopeHint, draft.settings.input.pad_device_scope ?? false, (c, on) => (c.settings.input.pad_device_scope = on))}
+              <Row label={t.advancedPage.hotkey} help={t.advancedPage.hotkeyHelp}>
+                {#snippet control()}
+                  {#if hotkey}<Kbd keys={hotkey.replace(/\s*\+\s*/g, '+')} />{:else}<LockedValue text={t.advanced.hotkeyOff} />{/if}
+                  <Button compact label={t.advancedPage.hotkeyChange} aria-label={t.advancedPage.hotkeyChangeLabel} onclick={onHotkey} />
+                {/snippet}
+              </Row>
+              <Row label={t.advancedPage.logLevel} help={t.advancedPage.logLevelHelp}>
+                {#snippet control()}
+                  <Select
+                    label={t.advancedPage.logLevel}
+                    value={logChoice}
+                    options={logOptions}
+                    onchange={(v) => store.edit((c) => setLogLevels(c, logSettingsFor(v, c.settings.log)))}
+                  />
+                {/snippet}
+              </Row>
+            </Group>
+          </Section>
+
+          <Section id="devices" title={t.advancedPage.devices}>
+            <Group>
+              {@render toggle(t.advanced.adminsBypass, undefined, draft.settings.devices.admins_bypass, (c, on) => (c.settings.devices.admins_bypass = on))}
+              <!-- Class-level default descriptors (spec 70 §5.2(2)): a system change, opt-in and
+                   off by default (compat-tweaks 2026-11-17); the service journals and undoes it. -->
+              <Row label={t.advancedPage.classDefaults} help={t.advanced.classDefaultsSoon}>
+                {#snippet control()}
+                  <span data-testid="class-defaults">
+                    <Switch
+                      checked={draft.settings.devices.class_default_descriptors}
+                      label={t.advancedPage.classDefaults}
+                      onchange={(on) => settings((c) => (c.settings.devices.class_default_descriptors = on))}
+                    />
+                  </span>
+                {/snippet}
+              </Row>
+              <Disclosure title={t.advancedPage.classDefaultsClasses} help={classesChosen.map((c) => t.advanced.classTargets[c]).join(', ')}>
+                <div class="checks" role="group" aria-label={t.advanced.classDefaultClasses}>
+                  {#each CLASS_TARGETS as cls (cls)}
+                    <Checkbox
+                      label={t.advanced.classTargets[cls]}
+                      checked={classesChosen.includes(cls)}
+                      onchange={(on) => store.edit((c) => setClassDefaultClasses(c, on ? [...classesChosen, cls] : classesChosen.filter((x) => x !== cls)))}
+                    />
+                  {/each}
+                </div>
+              </Disclosure>
+              <LinkRow label={t.advancedPage.outputs} help={t.advancedPage.outputsHelp} onclick={openOutputs} />
+              <LinkRow label={t.advancedPage.cpu} help={t.advancedPage.cpuHelp} onclick={onCpu}>
+                {#snippet value()}{limited ? t.advancedPage.cpuLimited(limited) : t.advancedPage.cpuAll}{/snippet}
+              </LinkRow>
+              <Row label={t.advancedPage.palmCheck}>
+                {#snippet control()}
+                  <Select
+                    label={t.advancedPage.palmCheck}
+                    value={draft.settings.tweaks.touchpad_palm_check === null || draft.settings.tweaks.touchpad_palm_check === undefined ? '' : String(draft.settings.tweaks.touchpad_palm_check)}
+                    options={[{ value: '', label: t.advanced.palmCheckOff }, ...[0, 1, 2, 3, 4].map((v) => ({ value: String(v), label: String(v) }))]}
+                    onchange={(v) => settings((c) => (c.settings.tweaks.touchpad_palm_check = v === '' ? null : Number(v)))}
+                  />
+                {/snippet}
+              </Row>
+            </Group>
+          </Section>
+        </div>
+
+        <NetworkSection {store} {initialSeat} {readOnly} />
+
+        <div inert={readOnly}>
+          <Section id="rdp" title={t.advancedPage.loopback}>
+            {#if session === 'rds_loopback'}
+              <div data-testid="loopback-listener">
+                <Group>
+                  <Row label={t.advancedPage.loopbackEnabled} help={t.advanced.loopbackHint}>
+                    {#snippet control()}
+                      <Switch checked={loopback.enabled} label={t.advancedPage.loopbackEnabled} onchange={(on) => editLoopback((l) => (l.enabled = on))} />
+                    {/snippet}
+                  </Row>
+                  {#if loopback.enabled}
+                    <Row label={t.advancedPage.loopbackPort} help={t.advancedPage.loopbackPortHelp}>
+                      {#snippet control()}
+                        <input
+                          class="input port mono"
+                          type="number"
+                          min="1024"
+                          max="65535"
+                          data-testid="loopback-port"
+                          aria-label={t.advancedPage.loopbackPort}
+                          value={loopback.port}
+                          aria-invalid={loopbackPortValid(loopback.port) ? undefined : 'true'}
+                          onchange={(e) => {
+                            const v = Number(e.currentTarget.value);
+                            if (Number.isFinite(v)) editLoopback((l) => (l.port = Math.round(v)));
+                          }}
+                        />
+                      {/snippet}
+                    </Row>
+                    <Row label={t.advancedPage.loopbackAccounts} help={t.advancedPage.loopbackAccountsHelp} stack>
+                      {#snippet control()}
+                        <textarea
+                          class="textarea mono"
+                          rows="3"
+                          data-testid="loopback-accounts"
+                          aria-label={t.advancedPage.loopbackAccounts}
+                          value={(loopback.extra_accounts ?? []).join('\n')}
+                          aria-invalid={(loopback.extra_accounts ?? []).every(accountEntryValid) ? undefined : 'true'}
+                          onchange={(e) => {
+                            const list = parseAccountList(e.currentTarget.value);
+                            editLoopback((l) => (l.extra_accounts = list));
+                          }}
+                        ></textarea>
+                      {/snippet}
+                    </Row>
+                  {/if}
+                </Group>
+                {#if loopback.enabled}
+                  {@const allowed = loopbackAllowedAccounts(draft)}
+                  {@const waiting = logonScreenRdpSeats(draft)}
+                  {#if allowed.length > 0}
+                    <div class="after" data-testid="loopback-allowed"><Notice kind="info" text={t.advanced.loopbackAllowed(allowed.join(', '))} /></div>
+                  {:else if waiting.length > 0}
+                    <div class="after" data-testid="loopback-no-accounts"><Notice kind="warn" text={t.advanced.loopbackNoAccounts(waiting.join(', '))} /></div>
+                  {/if}
+                {/if}
+              </div>
+            {:else}
+              <Group>
+                <Row label={t.advancedPage.loopbackEnabled} help={t.advancedPage.loopbackInactive}>
+                  {#snippet control()}<LockedValue text={t.advancedPage.notYet} />{/snippet}
+                </Row>
+              </Group>
+            {/if}
+          </Section>
+
+          <CompatSettings {store} />
+        </div>
       </div>
-    {/each}
-
-    <div class="group" role="radiogroup" aria-label={t.advanced.topology}>
-      <h3>{t.advanced.topology}</h3>
-      {#each ['seat_one_console', 'dedicated_host'] as topo (topo)}
-        <label class="option">
-          <input
-            type="radio"
-            name="topology"
-            checked={draft.settings.backends.host_topology === topo}
-            onchange={() => settings((c) => (c.settings.backends.host_topology = topo as HostTopology))}
-          />
-          <span>{backendName(topo)}</span>
-        </label>
-      {/each}
-      {#if notIsolated}<p class="warn-text" data-testid="input-not-isolated">{t.advanced.inputNotIsolated}</p>{/if}
     </div>
-
-    <div class="group">
-      <h3>{t.advanced.gates}</h3>
-      {#each options('gates') as b (b.kind)}
-        <label class="option" class:unavailable={b.availability.state !== 'available'}>
-          <input
-            type="checkbox"
-            checked={draft.settings.backends.gates.includes(b.kind as GateBackendKind)}
-            onchange={(e) => toggleGate(b.kind as GateBackendKind, e.currentTarget.checked)}
-          />
-          <span>
-            {backendName(b.kind)}
-            {#if store.backends && b.availability.state !== 'available'}<small class="hint">{availabilityLabel(b.availability)}</small>{/if}
-          </span>
-        </label>
-      {/each}
-    </div>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.timings}</legend>
-    <div class="grid">
-      <label class="field"
-        ><span>{t.advanced.startDelay}</span>
-        <input type="number" min="0" max="600000" step="500" value={draft.settings.timings.start_delay_ms} onchange={num((c, v) => (c.settings.timings.start_delay_ms = v))} /></label
-      >
-      <label class="field"
-        ><span>{t.advanced.betweenSeats}</span>
-        <input type="number" min="0" max="60000" step="500" value={draft.settings.timings.between_seats_ms} onchange={num((c, v) => (c.settings.timings.between_seats_ms = v))} /></label
-      >
-      <label class="field"
-        ><span>{t.advanced.seatTimeout}</span>
-        <input
-          type="number"
-          min="30"
-          max="120"
-          value={draft.settings.timings.seat_start_timeout_s}
-          aria-invalid={draft.settings.timings.seat_start_timeout_s < 30 || draft.settings.timings.seat_start_timeout_s > 120 ? 'true' : 'false'}
-          onchange={num((c, v) => (c.settings.timings.seat_start_timeout_s = v))}
-        /></label
-      >
-      <label class="field"
-        ><span>{t.advanced.relogonDelay}</span>
-        <input type="number" min="0" max="60000" step="500" value={draft.settings.timings.relogon_delay_ms} onchange={num((c, v) => (c.settings.timings.relogon_delay_ms = v))} /></label
-      >
-      <label class="field"
-        ><span>{t.advanced.audioWait}</span>
-        <input type="number" min="0" max="600" value={draft.settings.timings.audio_wait_timeout_s} onchange={num((c, v) => (c.settings.timings.audio_wait_timeout_s = v))} /></label
-      >
-      <label class="field"
-        ><span>{t.advanced.monitorIdle}</span>
-        <input type="number" min="0" max="86400" step="60" value={draft.settings.timings.monitor_idle_off_s ?? 0} onchange={num((c, v) => (c.settings.timings.monitor_idle_off_s = v))} /></label
-      >
-    </div>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.safety}</legend>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.safety.unclean_shutdown_guard}
-        onchange={(e) => settings((c) => (c.settings.safety.unclean_shutdown_guard = e.currentTarget.checked))}
-      />
-      {t.advanced.uncleanGuard}
-    </label>
-    <label class="field">
-      <span>{t.advanced.crashLimit}</span>
-      <input type="number" min="1" max="20" value={draft.settings.safety.crash_loop_limit} onchange={num((c, v) => (c.settings.safety.crash_loop_limit = Math.max(1, v)))} />
-    </label>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.hotkey}</legend>
-    <p>
-      <strong>{hotkeyLabel(draft.settings.input.switch_hotkey_scan) ?? t.advanced.hotkeyOff}</strong>
-      <button type="button" onclick={onHotkey}>{t.advanced.hotkeyChange}</button>
-    </p>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.input.allow_system_buttons}
-        onchange={(e) => settings((c) => (c.settings.input.allow_system_buttons = e.currentTarget.checked))}
-      />
-      {t.advanced.systemButtons}
-    </label>
-    <label class="toggle" title={t.advanced.padDeviceScopeHint}>
-      <input
-        type="checkbox"
-        checked={draft.settings.input.pad_device_scope ?? false}
-        onchange={(e) => settings((c) => (c.settings.input.pad_device_scope = e.currentTarget.checked))}
-      />
-      {t.advanced.padDeviceScope}
-    </label>
-    <p class="hint">{t.advanced.padDeviceScopeHint}</p>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.devices}</legend>
-    <label class="toggle">
-      <input type="checkbox" checked={draft.settings.devices.admins_bypass} onchange={(e) => settings((c) => (c.settings.devices.admins_bypass = e.currentTarget.checked))} />
-      {t.advanced.adminsBypass}
-    </label>
-    <!-- Class-level default descriptors (spec 70 §5.2(2)): a system change, opt-in and off
-         by default (compat-tweaks 2026-11-17); the service journals and undoes it. -->
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.devices.class_default_descriptors}
-        onchange={(e) => settings((c) => (c.settings.devices.class_default_descriptors = e.currentTarget.checked))}
-        data-testid="class-defaults"
-      />
-      {t.advanced.classDefaults}
-    </label>
-    <p class="hint">{t.advanced.classDefaultsSoon}</p>
-    <div class="classes" role="group" aria-label={t.advanced.classDefaultClasses}>
-      <span class="hint">{t.advanced.classDefaultClasses}</span>
-      {#each CLASS_TARGETS as cls (cls)}
-        {@const chosen = draft.settings.devices.class_default_classes?.length ? draft.settings.devices.class_default_classes : DEFAULT_CLASSES}
-        <label class="toggle">
-          <input
-            type="checkbox"
-            checked={chosen.includes(cls)}
-            onchange={(e) => {
-              const on = e.currentTarget.checked;
-              store.edit((c) => setClassDefaultClasses(c, on ? [...chosen, cls] : chosen.filter((x) => x !== cls)));
-            }}
-          />
-          {t.advanced.classTargets[cls]}
-        </label>
-      {/each}
-    </div>
-    <p><button type="button" onclick={onCpu}>{t.advanced.cpuOpen}</button></p>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.advanced.tweaks}</legend>
-    <p class="hint">{t.advanced.tweaksHint}</p>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.tweaks.hide_fast_user_switching}
-        disabled={draft.settings.backends.session === 'fast_user_switch' && !draft.settings.tweaks.hide_fast_user_switching}
-        onchange={(e) => settings((c) => (c.settings.tweaks.hide_fast_user_switching = e.currentTarget.checked))}
-      />
-      {t.advanced.hideFus}
-    </label>
-    {#if draft.settings.backends.session === 'fast_user_switch'}
-      <p class="hint">{t.advanced.hideFusConflict}</p>
-    {/if}
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.tweaks.exclude_driver_updates}
-        onchange={(e) => settings((c) => (c.settings.tweaks.exclude_driver_updates = e.currentTarget.checked))}
-      />
-      {t.advanced.excludeDrivers}
-    </label>
-    <label class="field">
-      <span>{t.advanced.palmCheck}</span>
-      <select
-        value={draft.settings.tweaks.touchpad_palm_check === null ? '' : String(draft.settings.tweaks.touchpad_palm_check)}
-        onchange={(e) => settings((c) => (c.settings.tweaks.touchpad_palm_check = e.currentTarget.value === '' ? null : Number(e.currentTarget.value)))}
-      >
-        <option value="">{t.advanced.palmCheckOff}</option>
-        {#each [0, 1, 2, 3, 4] as v (v)}<option value={String(v)}>{v}</option>{/each}
-      </select>
-    </label>
-  </fieldset>
-
-  <CompatSettings {store} {readOnly} />
-{/if}
+  {:else if store.needsElevation}
+    <p class="help">{t.adminToView}</p>
+  {:else}
+    <p class="help">{t.loading}</p>
+  {/if}
+</div>
 
 {#if experimentalFor}
   {@const kind = experimentalFor}
@@ -437,54 +501,42 @@
   />
 {/if}
 
+{#if outputsOpen && draft}
+  <OutputsDialog
+    config={draft}
+    devices={store.devices.map((v) => v.device)}
+    onSave={(r) => {
+      store.edit((c) => {
+        let n = setOutputSettings(c, r.settings);
+        for (const m of r.monitors) {
+          const mask = store.devices.find((v) => v.device.key === m.device.key)?.effective ?? 1;
+          const o = n.devices.find((a) => a.key === m.device.key)?.options;
+          if (JSON.stringify(o?.outputs ?? []) !== JSON.stringify(m.outputs)) n = setMonitorOutputs(n, m.device, m.outputs, mask);
+          if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
+          if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
+          if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
+        }
+        return n;
+      });
+      outputsOpen = false;
+    }}
+    onCancel={() => (outputsOpen = false)}
+  />
+{/if}
+
 <style>
-  .group {
-    margin-bottom: 0.75rem;
+  .sections {
+    min-width: 0;
   }
-  .group h3 {
-    font-size: 0.95rem;
-    margin: 0.5rem 0 0.25rem;
-  }
-  .option {
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
-    margin: 0.25rem 0;
-  }
-  .option span {
-    display: flex;
-    flex-direction: column;
-  }
-  .option.unavailable span {
-    color: var(--muted);
-  }
-  .tag {
-    font-style: normal;
-    font-size: 0.75em;
-    margin-left: 0.4rem;
-    padding: 0 0.3rem;
-    border-radius: 4px;
-    border: 1px solid currentColor;
-  }
-  .tag.ok {
-    color: var(--ok);
+  .sections > :global(* + *) {
+    margin-top: var(--sp-6);
   }
   .sub {
-    margin: 0.5rem 0 0.5rem 1.5rem;
-    padding-left: 0.75rem;
-    border-left: 2px solid var(--muted);
+    margin-bottom: var(--sp-3);
   }
-  .sub h4 {
-    font-size: 0.9rem;
-    margin: 0.25rem 0;
-  }
-  .sub textarea {
-    width: 100%;
-    font: inherit;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-    gap: 0 1rem;
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--sp-5);
   }
 </style>

@@ -1,41 +1,89 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- Basic settings (spec 10 §4): seat table, start mode, appearance, behaviour. -->
+<!-- Settings page (spec 10 §4; redesign P4 2026-11-17, shot 10-settings): start mode, one row
+     per seat (start automatically, sign-in account, and the seat menu that holds the rest of
+     the old seat table: startup programs, kiosk, redirection, IP address, processor cores,
+     graphics card preference, gamepads, environment, wallpaper), behaviour, appearance,
+     maintenance links and reset. Everything staged goes through the save bar. -->
 <script lang="ts">
+  import CpuSetsDialog from './CpuSetsDialog.svelte';
+  import GpuPreferenceDialog from './GpuPreferenceDialog.svelte';
+  import IpBindingDialog from './IpBindingDialog.svelte';
+  import KioskShellDialog from './KioskShellDialog.svelte';
+  import PadIgnoreDialog from './PadIgnoreDialog.svelte';
+  import RedirectDialog from './RedirectDialog.svelte';
   import SeatAccountDialog from './SeatAccountDialog.svelte';
+  import SeatCompatDialog from './SeatCompatDialog.svelte';
   import SeatNameDialog from './SeatNameDialog.svelte';
   import StartupAppsDialog from './StartupAppsDialog.svelte';
-  import KioskShellDialog from './KioskShellDialog.svelte';
-  import RedirectDialog from './RedirectDialog.svelte';
-  import GpuPreferenceDialog from './GpuPreferenceDialog.svelte';
+  import { Button, ChoiceList, Group, LinkRow, LockedValue, Menu, Notice, PageHead, Row, Section, Segmented, Select, SubLabel, Switch } from '#lib/ui/index.ts';
+  import type { MenuEntry } from '#lib/ui/index.ts';
   import { LANGS, seatLabel, storedLangPref, t, type LangPref } from '#lib/i18n.ts';
-  import { addSeat, clone, kioskAccountOf, kioskAudio, kioskPerSeatAccounts, kioskSeatOneDesktop, localOf, renameSeat, setAutostart, setGpuPreference, setKioskPerSeatAccounts, setKioskSeatOneDesktop, setKioskShell, setRedirect, setStartupApps, setVirtualPads, setWallpaper, setPadIgnoreDevices, parsePadIgnoreList, seatRedirect } from '#lib/model.ts';
+  import { denyLogonAllowed } from '#lib/compat.ts';
+  import {
+    addSeat,
+    clone,
+    kioskAccountOf,
+    kioskAudio,
+    kioskPerSeatAccounts,
+    kioskSeatOneDesktop,
+    localOf,
+    renameSeat,
+    seatRedirect,
+    setAutostart,
+    setCpuSets,
+    setGpuPreference,
+    setIpBinding,
+    setKioskPerSeatAccounts,
+    setKioskSeatOneDesktop,
+    setKioskShell,
+    setPadIgnoreDevices,
+    setRedirect,
+    setSeatCompat,
+    setStartupApps,
+    setVirtualPads,
+    setWallpaper
+  } from '#lib/model.ts';
+  import { seatDisplayName, seatFacts } from '#lib/settingsview.ts';
   import type { Theme } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
-  import type { Config, SameAccountPolicy, SeatNumber, StartMode } from '#lib/types.ts';
+  import type { Config, SameAccountPolicy, SeatConfig, SeatNumber, StartMode } from '#lib/types.ts';
+
+  export type SettingsDialog = 'diagnostics' | 'updates' | 'import' | 'reset1' | 'clearPictures';
 
   interface Props {
     store: ManagerStore;
+    /** Open the Advanced sub-page (optionally at a section id, e.g. "net"). */
+    onAdvanced?: (section?: string) => void;
+    /** App-level dialogs of the Maintenance and Reset sections. */
+    onDialog?: (kind: SettingsDialog) => void;
   }
-  let { store }: Props = $props();
+  let { store, onAdvanced, onDialog }: Props = $props();
 
-  let dialog = $state<{ kind: 'name' | 'account' | 'apps' | 'kiosk' | 'redirect' | 'gpu'; seat: SeatNumber } | null>(null);
+  type SeatDialog = 'name' | 'account' | 'apps' | 'kiosk' | 'redirect' | 'gpu' | 'pads' | 'compat' | 'ip';
+  let dialog = $state<{ kind: SeatDialog; seat: SeatNumber } | { kind: 'cpu' } | null>(null);
+  let updateLine = $state<string | null>(null);
 
-  function redirectSummary(c: Config, n: SeatNumber): string {
-    if (n === 1) return t.none;
-    const r = seatRedirect(c, n);
-    return t.redirect.summary(
-      t.redirect.short[r.clipboard.direction],
-      t.redirect.driveModes[r.drives],
-      r.smartcards,
-      t.redirect.printersShort[r.printers ?? 'off']
-    );
-  }
   const draft = $derived(store.draft);
   const readOnly = $derived(!store.isAdmin);
   // Kiosk seats exist only with the desktops session method (spec 35 §5.1 U3).
   const kioskMode = $derived(draft?.settings.backends.session === 'desktops');
   // `kiosk_audio_per_app` / `kiosk_audio_shared` of the desktops backend (Windows build).
   const desktopsNotes = $derived(store.backends?.session.find((b) => b.kind === 'desktops')?.notes ?? []);
+  const hasPictures = $derived(!!draft?.devices.some((a) => a.options?.picture));
+
+  $effect(() => {
+    if (!store.isAdmin) return;
+    let live = true;
+    store.api
+      .updateStatus()
+      .then((s) => {
+        if (live) updateLine = s.enabled ? t.settingsPage.updatesCheckOn : t.settingsPage.updatesCheckOff;
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  });
 
   function settings(f: (c: Config) => void) {
     store.edit((c) => {
@@ -45,342 +93,420 @@
     });
   }
 
-  const modes: StartMode[] = ['manual', 'at_boot', 'after_seat_one_logon'];
-  const policies: { v: SameAccountPolicy; label: string }[] = [
-    { v: 'allow', label: t.basic.sameAllow },
-    { v: 'warn', label: t.basic.sameWarn },
-    { v: 'deny', label: t.basic.sameDeny }
+  const startModes: StartMode[] = ['manual', 'at_boot', 'after_seat_one_logon'];
+  const policies: { value: SameAccountPolicy; label: string }[] = [
+    { value: 'allow', label: t.basic.sameAllow },
+    { value: 'warn', label: t.basic.sameWarn },
+    { value: 'deny', label: t.basic.sameDeny }
   ];
+  const themes: { value: Theme; label: string }[] = [
+    { value: 'system', label: t.basic.themeSystem },
+    { value: 'light', label: t.basic.themeLight },
+    { value: 'dark', label: t.basic.themeDark }
+  ];
+  const languages: { value: LangPref; label: string }[] = [
+    { value: 'system', label: t.basic.languageSystem },
+    ...LANGS.map((l) => ({ value: l as LangPref, label: t.basic.languageNames[l] }))
+  ];
+
+  function seatMenu(s: SeatConfig): MenuEntry[] {
+    const n = s.number;
+    const remote = (s.kind ?? 'local') === 'remote';
+    const l = localOf(s);
+    const open = (kind: SeatDialog) => () => (dialog = { kind, seat: n });
+    const items: MenuEntry[] = [
+      { label: t.settingsPage.renameMenu, action: open('name') },
+      { label: t.settingsPage.startupAppsMenu, action: open('apps') }
+    ];
+    if (!remote && (kioskMode || l.kiosk_shell)) items.push({ label: t.settingsPage.kioskMenu, action: open('kiosk') });
+    if (!remote && n !== 1) items.push({ label: t.settingsPage.redirectMenu, action: open('redirect') });
+    items.push({ label: t.settingsPage.ipMenu, action: open('ip') });
+    items.push({ label: t.settingsPage.cpuMenu, action: () => (dialog = { kind: 'cpu' }) });
+    if (!remote) items.push({ label: t.settingsPage.gpuMenu, action: open('gpu') });
+    items.push({ label: t.settingsPage.padIgnoreMenu, action: open('pads') });
+    items.push({ label: t.seatCompat.menu, action: open('compat') });
+    items.push({ separator: true });
+    if (!remote) {
+      const pads = l.virtual_pads ?? false;
+      items.push({
+        label: pads ? t.settingsPage.padsOff : t.settingsPage.padsOn,
+        action: () => store.edit((c) => setVirtualPads(c, n, !pads))
+      });
+    }
+    if (n !== 1) {
+      items.push({
+        label: s.wallpaper ? t.settingsPage.wallpaperOff : t.settingsPage.wallpaperOn,
+        action: () => store.edit((c) => setWallpaper(c, n, !s.wallpaper))
+      });
+    }
+    if (items[items.length - 1] && 'separator' in items[items.length - 1]) items.pop();
+    return items;
+  }
+
+  const seatOf = (n: SeatNumber) => draft?.seats.find((s) => s.number === n);
 </script>
 
-{#if draft}
-  <fieldset disabled={readOnly}>
-    <legend>{t.basic.seatTable}</legend>
-    <table class="seats">
-      <thead>
-        <tr>
-          <th>{t.basic.colSeat}</th>
-          <th>{t.basic.colAccount}</th>
-          <th>{t.basic.colStart}</th>
-          <th>{t.basic.colWallpaper}</th>
-          <th>{t.basic.colVirtualPads}</th>
-          <th title={t.basic.padIgnoreHint}>{t.basic.colPadIgnore}</th>
-          <th>{t.basic.colApps}</th>
-          <th>{t.basic.colGpu}</th>
-          <th>{t.redirect.column}</th>
-          {#if kioskMode}<th>{t.kiosk.column}</th>{/if}
-          <th>{t.basic.colState}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each draft.seats as s (s.number)}
-          {@const rt = store.status?.seats.find((r) => r.seat === s.number)}
-          {@const ka = kioskMode ? kioskAudio(draft, s.number, store.devices, desktopsNotes) : null}
-          {@const kacc = kioskMode ? kioskAccountOf(draft, s.number, store.view?.password_set.includes(s.number) ?? false) : null}
-          <tr>
-            <td>
-              <button type="button" class="link" onclick={() => (dialog = { kind: 'name', seat: s.number })}>{s.number}. {s.name === String(s.number) ? '' : s.name}</button>
-            </td>
-            <td>
-              <button type="button" class="link" onclick={() => (dialog = { kind: 'account', seat: s.number })}>
-                {s.account.kind === 'logon_screen' ? t.basic.logonScreen : s.account.kind === 'domain' ? `${s.account.domain}\\${s.account.user}` : s.account.user}
-              </button>
-              {#if store.view?.password_set.includes(s.number)}<span class="hint" title={t.account.passwordSet}> •••</span>{/if}
-              {#if store.view?.password_failing.includes(s.number)}<span class="error" title={t.account.passwordFailing}> !</span>{/if}
-            </td>
-            <td>
-              <input
-                type="checkbox"
-                aria-label={`${s.number}. ${t.basic.colStart}`}
-                checked={s.autostart}
-                disabled={s.number === 1}
-                title={s.number === 1 ? t.basic.seatOneAlways : ''}
-                onchange={(e) => store.edit((c) => setAutostart(c, s.number, e.currentTarget.checked))}
-              />
-            </td>
-            <td>
-              <input
-                type="checkbox"
-                aria-label={`${s.number}. ${t.basic.colWallpaper}`}
-                checked={s.wallpaper}
-                disabled={s.number === 1}
-                onchange={(e) => store.edit((c) => setWallpaper(c, s.number, e.currentTarget.checked))}
-              />
-            </td>
-            <td>
-              <input
-                type="checkbox"
-                aria-label={`${s.number}. ${t.basic.colVirtualPads}`}
-                title={t.basic.virtualPadsHint}
-                checked={localOf(s).virtual_pads ?? false}
-                onchange={(e) => store.edit((c) => setVirtualPads(c, s.number, e.currentTarget.checked))}
-              />
-            </td>
-            <td>
-              <input
-                type="text"
-                size="14"
-                aria-label={`${s.number}. ${t.basic.colPadIgnore}`}
-                title={t.basic.padIgnoreHint}
-                placeholder={t.basic.padIgnorePlaceholder}
-                value={(s.pad_ignore_devices ?? []).join(', ')}
-                onchange={(e) => store.edit((c) => setPadIgnoreDevices(c, s.number, parsePadIgnoreList(e.currentTarget.value)))}
-              />
-            </td>
-            <td>
-              <button type="button" class="link" aria-label={`${s.number}. ${t.basic.colApps}`} onclick={() => (dialog = { kind: 'apps', seat: s.number })}>
-                {s.startup_apps?.length ? t.basic.appsCount(s.startup_apps.length) : t.basic.appsNone}
-              </button>
-            </td>
-            <td>
-              <button type="button" class="link" aria-label={`${s.number}. ${t.basic.colGpu}`} onclick={() => (dialog = { kind: 'gpu', seat: s.number })}>
-                {localOf(s).gpu_preference && localOf(s).gpu_preference!.mode !== 'off'
-                  ? t.gpuPref.count(localOf(s).gpu_preference!.apps?.length ?? 0)
-                  : t.gpuPref.off}
-              </button>
-            </td>
-            <td>
-              <button
-                type="button"
-                class="link"
-                aria-label={`${s.number}. ${t.redirect.column}`}
-                disabled={s.number === 1}
-                onclick={() => (dialog = { kind: 'redirect', seat: s.number })}
-              >
-                {redirectSummary(draft, s.number)}
-              </button>
-            </td>
-            {#if kioskMode}
-              <td>
-                <button type="button" class="link" aria-label={`${s.number}. ${t.kiosk.column}`} onclick={() => (dialog = { kind: 'kiosk', seat: s.number })}>
-                  {localOf(s).kiosk_shell ? t.kiosk.count(localOf(s).kiosk_shell!.apps.length) : t.kiosk.off}
-                </button>
+<div class="page">
+  <PageHead title={t.settingsPage.title} sub={t.settingsPage.intro} />
+
+  {#if readOnly && draft}
+    <div class="lead-notice"><Notice kind="info" text={t.settingsPage.adminOnlyEdit} /></div>
+  {/if}
+
+  {#if draft}
+    <div inert={readOnly}>
+      <Section id="start" title={t.settingsPage.startup} help={t.startup.question}>
+        <ChoiceList
+          name="start-mode"
+          label={t.settingsPage.startup}
+          value={draft.settings.start_mode}
+          options={startModes.map((m) => ({
+            value: m,
+            label: t.settingsPage.startModeLabels[m],
+            note: m === 'manual' ? t.startup.recommended : undefined,
+            help: t.startModeHints[m]
+          }))}
+          onchange={(m) => settings((c) => (c.settings.start_mode = m))}
+        />
+      </Section>
+
+      <Section id="seats" title={t.settingsPage.seats} help={t.settingsPage.seatsHelp}>
+        {#snippet end()}
+          <Button
+            compact
+            icon="plus"
+            label={t.settingsPage.addSeat}
+            disabledReason={draft.seats.length >= 16 ? t.settingsPage.seatLimit : undefined}
+            onclick={() => store.edit((c) => addSeat(c)?.config ?? c)}
+          />
+        {/snippet}
+        <Group>
+          {#each draft.seats as s (s.number)}
+            {@const name = seatDisplayName(s)}
+            {@const rt = store.status?.seats.find((r) => r.seat === s.number)}
+            {@const facts = seatFacts(draft, s, store.view?.password_failing.includes(s.number) ?? false)}
+            {@const ka = kioskMode ? kioskAudio(draft, s.number, store.devices, desktopsNotes) : null}
+            {@const kacc = kioskMode ? kioskAccountOf(draft, s.number, store.view?.password_set.includes(s.number) ?? false) : null}
+            <div class="row" data-testid="settings-seat">
+              <div class="label">
+                <b>{name}</b>
+                <span>{[...facts, ...(rt ? [seatLabel(rt.state)] : [])].join(' · ')}</span>
                 {#if ka}
-                  <br /><small class="hint" data-testid={`kiosk-audio-${s.number}`}>
+                  <span data-testid={`kiosk-audio-${s.number}`}>
                     {ka.state === 'unsupported' ? t.kiosk.audio.unsupported : ka.state === 'no_endpoint' ? t.kiosk.audio.noEndpoint : t.kiosk.audio.routed(ka.render, ka.capture)}
-                  </small>
-                  {#if ka.sharedWith.length}<br /><small class="warn-text">{t.kiosk.audio.sharedApp(ka.sharedWith)}</small>{/if}
+                  </span>
+                  {#if ka.sharedWith.length}<span class="warn">{t.kiosk.audio.sharedApp(ka.sharedWith)}</span>{/if}
                 {/if}
                 {#if kacc}
-                  <br /><small class="hint" data-testid={`kiosk-account-${s.number}`}>
+                  <span data-testid={`kiosk-account-${s.number}`}>
                     {kacc.kind === 'console' ? t.kiosk.account.console : kacc.kind === 'seat' ? t.kiosk.account.seat(kacc.user) : t.kiosk.account.auto(kacc.user)}
-                  </small>
-                  {#if kacc.kind === 'seat'}<br /><small class="warn-text" data-testid={`kiosk-account-warning-${s.number}`}>{t.kiosk.account.personalWarning}</small>{/if}
+                  </span>
+                  {#if kacc.kind === 'seat'}<span class="warn" data-testid={`kiosk-account-warning-${s.number}`}>{t.kiosk.account.personalWarning}</span>{/if}
                 {/if}
-              </td>
-            {/if}
-            <td class="hint">{rt ? seatLabel(rt.state) : t.none}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-    <button type="button" onclick={() => store.edit((c) => addSeat(c)?.config ?? c)} disabled={draft.seats.length >= 16}>{t.canvas.addSeat}</button>
-    <p class="hint">{t.account.seatOneWarning}</p>
-    {#if draft.seats.some((s) => localOf(s).virtual_pads)}<p class="hint">{t.basic.virtualPadsHint}</p>{/if}
-    {#if kioskMode}
-      <label class="toggle">
-        <input
-          type="checkbox"
-          checked={kioskSeatOneDesktop(draft)}
-          onchange={(e) => {
-            const on = e.currentTarget.checked;
-            store.edit((c) => setKioskSeatOneDesktop(c, on));
-          }}
-        />
-        {t.kiosk.seatOneDesktop}
-      </label>
-      <p class="hint">{t.kiosk.seatOneDesktopHint}</p>
-      <p class="hint">{t.kiosk.systemKeys}</p>
-      <label class="toggle">
-        <input
-          type="checkbox"
-          checked={kioskPerSeatAccounts(draft)}
-          onchange={(e) => {
-            const on = e.currentTarget.checked;
-            store.edit((c) => setKioskPerSeatAccounts(c, on));
-          }}
-        />
-        {t.kiosk.perSeatAccounts}
-      </label>
-      <p class="hint">{t.kiosk.perSeatAccountsHint}</p>
-    {:else if draft.seats.some((s) => localOf(s).kiosk_shell)}
-      <p class="hint">{t.kiosk.backendOnly}</p>
-    {/if}
-  </fieldset>
+              </div>
+              <div class="control">
+                {#if s.number === 1}
+                  <LockedValue text={t.settingsPage.alwaysOn} />
+                {:else}
+                  <span class="value" aria-hidden="true">{t.settingsPage.autoStart}</span>
+                  <Switch
+                    checked={s.autostart}
+                    label={t.settingsPage.autoStartFor(name)}
+                    onchange={(on) => store.edit((c) => setAutostart(c, s.number, on))}
+                  />
+                {/if}
+                <Button compact label={t.settingsPage.account} aria-label={t.settingsPage.accountFor(name)} onclick={() => (dialog = { kind: 'account', seat: s.number })} />
+                <Menu items={seatMenu(s)} label={t.settingsPage.seatMore(name)} />
+              </div>
+            </div>
+          {/each}
+        </Group>
+        {#if draft.seats.some((s) => localOf(s).virtual_pads)}
+          <div class="after"><Notice kind="info" text={t.basic.virtualPadsHint} /></div>
+        {/if}
+        {#if kioskMode}
+          <SubLabel text={t.settingsPage.kioskSeats} />
+          <Group>
+            <Row label={t.kiosk.seatOneDesktop} help={t.kiosk.seatOneDesktopHint}>
+              {#snippet control()}
+                <Switch checked={kioskSeatOneDesktop(draft)} label={t.kiosk.seatOneDesktop} onchange={(on) => store.edit((c) => setKioskSeatOneDesktop(c, on))} />
+              {/snippet}
+            </Row>
+            <Row label={t.kiosk.perSeatAccounts} help={t.kiosk.perSeatAccountsHint}>
+              {#snippet control()}
+                <Switch checked={kioskPerSeatAccounts(draft)} label={t.kiosk.perSeatAccounts} onchange={(on) => store.edit((c) => setKioskPerSeatAccounts(c, on))} />
+              {/snippet}
+            </Row>
+          </Group>
+          <div class="after"><Notice kind="info" text={t.kiosk.systemKeys} /></div>
+        {:else if draft.seats.some((s) => localOf(s).kiosk_shell)}
+          <div class="after"><Notice kind="warn" text={t.kiosk.backendOnly} /></div>
+        {/if}
+      </Section>
 
-  <fieldset disabled={readOnly}>
-    <legend>{t.basic.startMode}</legend>
-    {#each modes as m (m)}
-      <label class="toggle">
-        <input
-          type="radio"
-          name="start-mode"
-          value={m}
-          checked={draft.settings.start_mode === m}
-          onchange={() => settings((c) => (c.settings.start_mode = m))}
-        />
-        {t.startModes[m]}
-      </label>
-    {/each}
-    <p class="hint">{t.startModeHints[draft.settings.start_mode]}</p>
-  </fieldset>
-
-  <fieldset disabled={readOnly}>
-    <legend>{t.basic.behaviour}</legend>
-    <label class="toggle">
-      <input type="checkbox" checked={draft.settings.admin_only} onchange={(e) => settings((c) => (c.settings.admin_only = e.currentTarget.checked))} />
-      {t.basic.adminOnly}
-    </label>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.users_may_control_own_seat}
-        onchange={(e) => settings((c) => (c.settings.users_may_control_own_seat = e.currentTarget.checked))}
-      />
-      {t.basic.ownSeat}
-    </label>
-    <label class="toggle">
-      <input
-        type="checkbox"
-        checked={draft.settings.tweaks.lock_screen_image}
-        onchange={(e) => settings((c) => (c.settings.tweaks.lock_screen_image = e.currentTarget.checked))}
-      />
-      {t.basic.lockScreen}
-    </label>
-    <label class="field">
-      <span>{t.basic.sameAccount}</span>
-      <select value={draft.settings.same_account} onchange={(e) => settings((c) => (c.settings.same_account = e.currentTarget.value as SameAccountPolicy))}>
-        {#each policies as p (p.v)}<option value={p.v}>{p.label}</option>{/each}
-      </select>
-    </label>
-    <div class="actions">
-      <button type="button" onclick={() => store.api.openPanel('screen_saver').catch((e) => store.fail(e))}>{t.basic.screensaver}</button>
-      <button type="button" onclick={() => store.api.openPanel('lock_screen').catch((e) => store.fail(e))}>{t.basic.lockScreenSettings}</button>
+      <Section id="behaviour" title={t.settingsPage.behaviour}>
+        <Group>
+          <Row label={t.basic.adminOnly}>
+            {#snippet control()}
+              <Switch checked={draft.settings.admin_only} label={t.basic.adminOnly} onchange={(on) => settings((c) => (c.settings.admin_only = on))} />
+            {/snippet}
+          </Row>
+          <Row label={t.basic.ownSeat}>
+            {#snippet control()}
+              <Switch
+                checked={draft.settings.users_may_control_own_seat}
+                label={t.basic.ownSeat}
+                onchange={(on) => settings((c) => (c.settings.users_may_control_own_seat = on))}
+              />
+            {/snippet}
+          </Row>
+          <Row label={t.basic.askOnStart}>
+            {#snippet control()}
+              <Switch checked={store.prefs.askOnManualStart} label={t.basic.askOnStart} onchange={(on) => store.setPref('askOnManualStart', on)} />
+            {/snippet}
+          </Row>
+          <Row label={t.basic.sameAccount} help={t.settingsPage.sameAccountHelp}>
+            {#snippet control()}
+              <Select
+                label={t.basic.sameAccount}
+                options={policies}
+                value={draft.settings.same_account}
+                onchange={(v) => settings((c) => (c.settings.same_account = v))}
+              />
+            {/snippet}
+          </Row>
+          <Row label={t.basic.hideTray}>
+            {#snippet control()}
+              <Switch checked={store.prefs.hideTray} label={t.basic.hideTray} onchange={(on) => store.setPref('hideTray', on)} />
+            {/snippet}
+          </Row>
+          <Row label={t.settingsPage.noShowGoodApply}>
+            {#snippet control()}
+              <Switch checked={store.prefs.noShowGoodApply} label={t.settingsPage.noShowGoodApply} onchange={(on) => store.setPref('noShowGoodApply', on)} />
+            {/snippet}
+          </Row>
+        </Group>
+      </Section>
     </div>
-  </fieldset>
-{/if}
+  {:else if store.needsElevation}
+    <p class="help">{t.adminToView}</p>
+  {/if}
 
-<fieldset>
-  <legend>{t.basic.theme}</legend>
-  <label class="field">
-    <span>{t.basic.language}</span>
-    <select data-testid="language" value={storedLangPref()} onchange={(e) => store.changeLanguage(e.currentTarget.value as LangPref)}>
-      <option value="system">{t.basic.languageSystem}</option>
-      {#each LANGS as l (l)}<option value={l}>{t.basic.languageNames[l]}</option>{/each}
-    </select>
-  </label>
-  <p class="hint">{t.basic.languageRestart}</p>
-  <div class="row">
-    {#each [['system', t.basic.themeSystem], ['light', t.basic.themeLight], ['dark', t.basic.themeDark]] as [v, label] (v)}
-      <label class="toggle">
-        <input type="radio" name="theme" value={v} checked={store.prefs.theme === v} onchange={() => store.setPref('theme', v as Theme)} />
-        {label}
-      </label>
-    {/each}
-  </div>
-  <label class="toggle"><input type="checkbox" checked={store.prefs.hideTray} onchange={(e) => store.setPref('hideTray', e.currentTarget.checked)} /> {t.basic.hideTray}</label>
-  <label class="toggle">
-    <input type="checkbox" checked={store.prefs.askOnManualStart} onchange={(e) => store.setPref('askOnManualStart', e.currentTarget.checked)} />
-    {t.basic.askOnStart}
-  </label>
-  <label class="toggle">
-    <input type="checkbox" checked={store.prefs.noShowGoodApply} onchange={(e) => store.setPref('noShowGoodApply', e.currentTarget.checked)} />
-    {t.basic.noShowGoodApply}
-  </label>
-</fieldset>
+  <Section id="appearance" title={t.settingsPage.appearance}>
+    <Group>
+      <Row label={t.settingsPage.theme}>
+        {#snippet control()}
+          <Segmented label={t.settingsPage.theme} options={themes} value={store.prefs.theme} onchange={(v) => store.setPref('theme', v)} />
+        {/snippet}
+      </Row>
+      <Row label={t.settingsPage.language} help={t.basic.languageRestart}>
+        {#snippet control()}
+          <span data-testid="language">
+            <Select label={t.settingsPage.language} options={languages} value={storedLangPref()} onchange={(v) => store.changeLanguage(v)} />
+          </span>
+        {/snippet}
+      </Row>
+      {#if draft}
+        <Row label={t.settingsPage.lockScreenImage} help={t.settingsPage.lockScreenImageHelp}>
+          {#snippet control()}
+            {#if readOnly}
+              <LockedValue text={draft.settings.tweaks.lock_screen_image ? t.yes : t.no} />
+            {:else}
+              <Switch
+                checked={draft.settings.tweaks.lock_screen_image}
+                label={t.settingsPage.lockScreenImage}
+                onchange={(on) => settings((c) => (c.settings.tweaks.lock_screen_image = on))}
+              />
+            {/if}
+          {/snippet}
+        </Row>
+      {/if}
+      <LinkRow label={t.basic.screensaver} onclick={() => store.api.openPanel('screen_saver').catch((e) => store.fail(e))} />
+      <LinkRow label={t.basic.lockScreenSettings} onclick={() => store.api.openPanel('lock_screen').catch((e) => store.fail(e))} />
+    </Group>
+  </Section>
 
-{#if dialog?.kind === 'name' && draft}
-  {@const n = dialog.seat}
-  <SeatNameDialog
-    seat={n}
-    name={draft.seats.find((s) => s.number === n)?.name ?? String(n)}
-    onSave={(name) => {
-      store.edit((c) => renameSeat(c, n, name));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'account' && draft}
-  {@const n = dialog.seat}
-  <SeatAccountDialog
-    seat={n}
-    account={draft.seats.find((s) => s.number === n)?.account ?? { kind: 'logon_screen' }}
-    passwordSet={store.view?.password_set.includes(n) ?? false}
-    passwordFailing={store.view?.password_failing.includes(n) ?? false}
-    loadUsers={() => store.api.localUsers()}
-    onOpenAccounts={() => store.api.openPanel('user_accounts').catch((e) => store.fail(e))}
-    onSave={(account, password) => {
-      const seat = n;
-      dialog = null;
-      void store.saveAccount(seat, account, password);
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'apps' && draft}
-  {@const n = dialog.seat}
-  <StartupAppsDialog
-    seat={n}
-    apps={draft.seats.find((s) => s.number === n)?.startup_apps ?? []}
-    onSave={(apps) => {
-      store.edit((c) => setStartupApps(c, n, apps));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'gpu' && draft}
-  {@const n = dialog.seat}
-  <GpuPreferenceDialog
-    seat={n}
-    pref={localOf(draft.seats.find((s) => s.number === n)!).gpu_preference}
-    onSave={(p) => {
-      store.edit((c) => setGpuPreference(c, n, p));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'redirect' && draft}
+  <Section id="maintenance" title={t.settingsPage.maintenance}>
+    <Group>
+      {#if store.isAdmin}
+        <LinkRow label={t.settingsPage.diagnostics} help={t.settingsPage.diagnosticsHelp} onclick={() => onDialog?.('diagnostics')} />
+        <LinkRow
+          label={t.settingsPage.updates}
+          help={[store.info ? t.settingsPage.updatesHelp(store.info.version) : '', updateLine ?? ''].filter(Boolean).join(' · ')}
+          onclick={() => onDialog?.('updates')}
+        />
+        <LinkRow label={t.settingsPage.import} help={t.settingsPage.importHelp} onclick={() => onDialog?.('import')} />
+      {/if}
+      <LinkRow label={t.settingsPage.advanced} help={t.settingsPage.advancedHelp} onclick={() => onAdvanced?.()} />
+    </Group>
+  </Section>
 
-  {@const n = dialog.seat}
-  <RedirectDialog
-    seat={n}
-    redirect={seatRedirect(draft, n)}
-    onSave={(r) => {
-      store.edit((c) => setRedirect(c, n, r));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
-{:else if dialog?.kind === 'kiosk' && draft}
-  {@const n = dialog.seat}
-  <KioskShellDialog
-    seat={n}
-    shell={localOf(draft.seats.find((s) => s.number === n)).kiosk_shell ?? null}
-    onSave={(shell) => {
-      store.edit((c) => setKioskShell(c, n, shell));
-      dialog = null;
-    }}
-    onCancel={() => (dialog = null)}
-  />
+  {#if draft && store.isAdmin}
+    <Section id="reset" title={t.settingsPage.reset}>
+      <Group>
+        <Row label={t.settingsPage.clearPictures} help={t.settingsPage.clearPicturesHelp}>
+          {#snippet control()}
+            {#if hasPictures}
+              <Button compact kind="danger-quiet" label={t.settingsPage.clear} aria-label={t.settingsPage.clearPictures} onclick={() => onDialog?.('clearPictures')} />
+            {:else}
+              <LockedValue text={t.none} />
+            {/if}
+          {/snippet}
+        </Row>
+        <Row label={t.settingsPage.resetAll} help={t.settingsPage.resetAllHelp}>
+          {#snippet control()}
+            <Button compact kind="danger-quiet" label={t.settingsPage.resetButton} aria-label={t.settingsPage.resetAll} onclick={() => onDialog?.('reset1')} />
+          {/snippet}
+        </Row>
+      </Group>
+    </Section>
+  {/if}
+</div>
+
+{#if dialog && draft}
+  {@const d = dialog}
+  {#if d.kind === 'cpu'}
+    <CpuSetsDialog
+      seats={draft.seats}
+      loadCpuSets={() => store.api.cpuSets()}
+      onSave={(rows) => {
+        store.edit((c) => rows.reduce((acc, r) => setCpuSets(acc, r.seat, r.ids, r.hard, r.wide), c));
+        dialog = null;
+      }}
+      onCancel={() => (dialog = null)}
+    />
+  {:else}
+    {@const n = d.seat}
+    {@const s = seatOf(n)}
+    {#if s}
+      {@const name = seatDisplayName(s)}
+      {#if d.kind === 'name'}
+        <SeatNameDialog
+          seat={n}
+          name={s.name}
+          onSave={(v) => {
+            store.edit((c) => renameSeat(c, n, v));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'account'}
+        <SeatAccountDialog
+          seat={n}
+          seatName={name}
+          account={s.account}
+          passwordSet={store.view?.password_set.includes(n) ?? false}
+          passwordFailing={store.view?.password_failing.includes(n) ?? false}
+          loadUsers={() => store.api.localUsers()}
+          onOpenAccounts={() => store.api.openPanel('user_accounts').catch((e) => store.fail(e))}
+          onSave={(account, password) => {
+            dialog = null;
+            void store.saveAccount(n, account, password);
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'apps'}
+        <StartupAppsDialog
+          seat={n}
+          seatName={name}
+          apps={s.startup_apps ?? []}
+          onSave={(apps) => {
+            store.edit((c) => setStartupApps(c, n, apps));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'gpu'}
+        <GpuPreferenceDialog
+          seat={n}
+          seatName={name}
+          pref={localOf(s).gpu_preference}
+          onSave={(p) => {
+            store.edit((c) => setGpuPreference(c, n, p));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'redirect'}
+        <RedirectDialog
+          seat={n}
+          seatName={name}
+          redirect={seatRedirect(draft, n)}
+          onSave={(r) => {
+            store.edit((c) => setRedirect(c, n, r));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'kiosk'}
+        <KioskShellDialog
+          seat={n}
+          seatName={name}
+          shell={localOf(s).kiosk_shell ?? null}
+          onSave={(shell) => {
+            store.edit((c) => setKioskShell(c, n, shell));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'pads'}
+        <PadIgnoreDialog
+          seatName={name}
+          ids={s.pad_ignore_devices ?? []}
+          onSave={(ids) => {
+            store.edit((c) => setPadIgnoreDevices(c, n, ids));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'compat'}
+        <SeatCompatDialog
+          seat={n}
+          seatName={name}
+          environment={s.environment}
+          denyLocalLogon={s.deny_local_logon ?? false}
+          denyAllowed={denyLogonAllowed(draft, n)}
+          onSave={(env, deny) => {
+            store.edit((c) => setSeatCompat(c, n, env, deny));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {:else if d.kind === 'ip'}
+        <IpBindingDialog
+          seat={n}
+          seatName={name}
+          binding={s.ip_binding}
+          programCount={draft.settings.ip_programs?.length ?? 0}
+          loadAddresses={() => store.api.listAddresses()}
+          onOpenNetwork={() => store.api.openPanel('network_connections').catch((e) => store.fail(e))}
+          onOpenDevices={() => store.api.openPanel('device_manager').catch((e) => store.fail(e))}
+          onOpenList={onAdvanced
+            ? () => {
+                dialog = null;
+                onAdvanced?.('net');
+              }
+            : undefined}
+          onSave={(b) => {
+            store.edit((c) => setIpBinding(c, n, b));
+            dialog = null;
+          }}
+          onCancel={() => (dialog = null)}
+        />
+      {/if}
+    {/if}
+  {/if}
 {/if}
 
 <style>
-  .seats {
-    border-collapse: collapse;
-    width: 100%;
-    margin-bottom: 0.5rem;
+  /* Sections sit inside wrappers (read-only inert): keep the 32px rhythm across them. */
+  .page > :global(* + *) {
+    margin-top: var(--sp-6);
   }
-  .seats th,
-  .seats td {
-    text-align: left;
-    padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid var(--border);
+  .lead-notice {
+    margin-bottom: var(--sp-5);
   }
-  button.link {
-    border: none;
-    background: none;
-    padding: 0;
-    color: var(--accent);
-    text-decoration: underline;
-    text-align: left;
+  .warn {
+    color: var(--warn-ink);
   }
 </style>
