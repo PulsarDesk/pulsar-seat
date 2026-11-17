@@ -986,6 +986,7 @@ const t = {
       'Windows can bind a Remote Desktop port only to a network adapter, not to the loopback address, so the firewall rule is what keeps this port inside the PC.',
     restartTs: 'Restart Remote Desktop Services',
     restartTsHint: 'Loads a new or changed port at once. Running seats are stopped first.',
+    restartTsNotActive: 'Available while Pulsar Seat runs on Remote Desktop Services. The chosen method is not in use on this PC.',
     restartTsTitle: 'Restart Remote Desktop Services?',
     restartTsBody:
       'Every running seat (except seat 1) is stopped and signed out first, then Remote Desktop Services restart. Other Remote Desktop connections to this PC are disconnected too. Seats do not start again by themselves.',

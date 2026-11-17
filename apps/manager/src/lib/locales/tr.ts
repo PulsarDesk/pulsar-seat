@@ -985,6 +985,7 @@ const t = {
       'Windows bir Uzak Masaüstü bağlantı noktasını yalnızca bir ağ bağdaştırıcısına bağlayabilir, geri döngü adresine bağlayamaz; bu bağlantı noktasını bilgisayarın içinde tutan güvenlik duvarı kuralıdır.',
     restartTs: 'Uzak Masaüstü Hizmetlerini yeniden başlat',
     restartTsHint: 'Yeni ya da değişen bağlantı noktası hemen yüklenir. Çalışan koltuklar önce durdurulur.',
+    restartTsNotActive: 'Pulsar Seat Uzak Masaüstü Hizmetleri üzerinde çalışırken kullanılabilir. Seçilen yöntem bu bilgisayarda kullanılmıyor.',
     restartTsTitle: 'Uzak Masaüstü Hizmetleri yeniden başlatılsın mı?',
     restartTsBody:
       'Önce çalışan bütün koltuklar (1. koltuk hariç) durdurulur ve oturumları kapatılır, ardından Uzak Masaüstü Hizmetleri yeniden başlar. Bu bilgisayara yapılan diğer Uzak Masaüstü bağlantıları da kesilir. Koltuklar kendiliğinden yeniden başlamaz.',

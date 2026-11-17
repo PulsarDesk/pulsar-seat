@@ -181,6 +181,29 @@ describe('App shell', () => {
     expect(screen.queryByTestId('input-not-isolated')).toBeNull();
   });
 
+  it('advanced view: TermService restart only while Remote Desktop Services is in use', async () => {
+    const { store } = await setup();
+    store.setPref('tab', 'advanced');
+    await tick();
+    expect(store.draft?.settings.backends.session).toBe('rds_loopback');
+    await store.refreshBackends();
+    const mark = (active: boolean) => {
+      store.backends = {
+        ...store.backends!,
+        session: (store.backends?.session ?? []).map((b) => ({ ...b, active: b.kind === 'rds_loopback' ? active : b.kind === 'fast_user_switch' && !active }))
+      };
+    };
+    // VM round 2: on a client edition rds_loopback is chosen but fell back; the service
+    // refuses the restart (`not_rds`), so the button is off with the reason.
+    mark(false);
+    await tick();
+    expect(screen.getByTestId('restart-termservice')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(t.advanced.restartTsNotActive)).toBeInTheDocument();
+    mark(true);
+    await tick();
+    expect(screen.getByTestId('restart-termservice')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
   it('advanced view: passwordless-seat listener settings edit the draft', async () => {
     const { store, user } = await setup();
     store.setPref('tab', 'advanced');

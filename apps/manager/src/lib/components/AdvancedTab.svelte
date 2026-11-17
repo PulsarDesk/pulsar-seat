@@ -134,6 +134,11 @@
   }
 
   const session = $derived(draft?.settings.backends.session);
+  /** The service runs on Remote Desktop Services right now (the restart is refused
+   *  otherwise, e.g. on a client edition where the chosen method fell back; VM round 2). */
+  const rdsActive = $derived(
+    !store.backends || (store.backends.session ?? []).some((b) => (b.kind === 'rds_loopback' || b.kind === 'termsrv_wrapper') && b.active)
+  );
   /** Split "Name (meaning)" into its two parts; a name without a bracket has no meaning part. */
   function splitName(full: string): [string, string] {
     const m = /^(.*?) \((.*)\)$/.exec(full);
@@ -256,9 +261,12 @@
                       {#snippet control()}<Button compact label={t.advancedPage.experimentalRead} onclick={() => (experimentalFor = 'termsrv_wrapper')} />{/snippet}
                     </Row>
                   {/if}
-                  <Row label={t.advancedPage.restartTs} help={`${t.advanced.restartTsHint} ${t.advanced.loopbackBinding}`}>
+                  <Row
+                    label={t.advancedPage.restartTs}
+                    help={rdsActive ? `${t.advanced.restartTsHint} ${t.advanced.loopbackBinding}` : t.advanced.restartTsNotActive}
+                  >
                     {#snippet control()}
-                      <Button compact label={t.seatCard.restart} aria-label={t.advancedPage.restartTs} data-testid="restart-termservice" disabled={!store.isAdmin} onclick={() => (restartAsk = true)} />
+                      <Button compact label={t.seatCard.restart} aria-label={t.advancedPage.restartTs} data-testid="restart-termservice" disabled={!store.isAdmin || !rdsActive} onclick={() => (restartAsk = true)} />
                     {/snippet}
                   </Row>
                 </Group>
