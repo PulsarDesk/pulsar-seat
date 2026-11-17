@@ -320,6 +320,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
     builder.build(app)
 }
 
+/// Whether the event subscription is up right now. The `service-link` event alone was not
+/// enough: the first `true` is often emitted before the page has its listener, and then the
+/// manager showed "link lost, reconnecting" for good while everything worked (VM round 2,
+/// 2026-11-17). The page asks once after it starts listening.
+static LINK_UP: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn service_link() -> bool {
+    LINK_UP.load(Ordering::SeqCst)
+}
+
 fn start_event_thread(app: AppHandle, running: Arc<AtomicBool>) {
     std::thread::Builder::new()
         .name("service-events".into())
@@ -330,6 +341,7 @@ fn start_event_thread(app: AppHandle, running: Arc<AtomicBool>) {
                 topics,
                 || running.load(Ordering::Relaxed),
                 move |up| {
+                    LINK_UP.store(up, Ordering::SeqCst);
                     let _ = link_app.emit("service-link", up);
                 },
                 move |frame| {
@@ -413,6 +425,7 @@ pub fn run() {
             service_hello,
             service_state,
             service_control,
+            service_link,
             app_info,
             open_system_panel,
             open_help_link,

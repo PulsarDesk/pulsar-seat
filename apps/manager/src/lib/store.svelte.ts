@@ -154,6 +154,13 @@ export class ManagerStore {
         if (up && wasDown) void this.refreshAll();
       })
     );
+    // The subscription may have come up before the listener above existed (VM round 2:
+    // "link lost, reconnecting" stayed for good). refreshAll below reads everything anyway.
+    try {
+      if ((await this.api.linkState?.()) === true) this.link = true;
+    } catch {
+      // Older shell without the command: the next link event decides.
+    }
     this.unlisten.push(await this.api.onTray((a) => this.trayHandler?.(a)));
     this.unlisten.push(
       await this.api.onHidden(() => {

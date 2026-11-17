@@ -158,6 +158,9 @@ export interface Api extends LocalApi {
   quit(): Promise<void>;
   onEvent(cb: (f: EventFrame) => void): Promise<Unlisten>;
   onLink(cb: (up: boolean) => void): Promise<Unlisten>;
+  /** Current state of the event subscription (the first `onLink` may fire before the page
+   *  listens). Optional: transports without a subscription leave it out. */
+  linkState?(): Promise<boolean>;
   onTray(cb: (a: TrayAction) => void): Promise<Unlisten>;
   onHidden(cb: () => void): Promise<Unlisten>;
 }
@@ -262,6 +265,7 @@ export async function createTauriApi(): Promise<Api> {
     onWizardPageClose: (cb) => listen('wizard-page-close', () => cb()),
     onEvent: (cb) => listen<EventFrame>('service-event', (e) => cb(e.payload)),
     onLink: (cb) => listen<boolean>('service-link', (e) => cb(e.payload)),
+    linkState: () => invoke<boolean>('service_link'),
     onTray: (cb) => listen<{ action: TrayAction }>('tray-action', (e) => cb(e.payload.action)),
     onHidden: (cb) => listen('hidden-to-tray', () => cb())
   };

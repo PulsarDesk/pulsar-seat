@@ -26,6 +26,27 @@ describe('ManagerStore', () => {
     store.dispose();
   });
 
+  it('takes the link state from the shell when the first link event came before the listener', async () => {
+    // VM round 2: the shell's first `service-link` true was emitted before the page
+    // listened, so "link lost, reconnecting" stayed for good.
+    const api = createDemoApi();
+    api.onLink = async () => () => {};
+    api.linkState = async () => true;
+    const store = new ManagerStore(api);
+    await store.init();
+    expect(store.link).toBe(true);
+    store.dispose();
+    const old = createDemoApi();
+    old.onLink = async () => () => {};
+    old.linkState = async () => {
+      throw new Error('unknown command');
+    };
+    const s2 = new ManagerStore(old);
+    await s2.init();
+    expect(s2.link).toBe(false);
+    s2.dispose();
+  });
+
   it('saves through validate + apply and adopts the new revision', async () => {
     const { api, store } = await ready();
     store.edit((c) => addSeat(c, 'Oyun')!.config);
