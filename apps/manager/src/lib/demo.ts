@@ -10,6 +10,7 @@ import { createDemoRemoteApi } from './remote/demo.ts';
 import {
   type Config,
   type HyperVStatus,
+  type SteamProxyStatus,
   type ServiceRunState,
   type Device,
   type DeviceView,
@@ -221,6 +222,11 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
   };
 
   const hyperv: HyperVStatus = { feature: 'disabled', switch_present: false, seat_nics: [] };
+  const steam: SteamProxyStatus = {
+    steam_dirs: ['C:\\Program Files (x86)\\Steam'],
+    found: ['C:\\Program Files (x86)\\Steam\\version.dll'],
+    quarantined: []
+  };
   const step = async (name: string) => {
     calls.push(name);
     if (failure) {
@@ -517,6 +523,20 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
       if (!state.seats.some((x) => x.seat === seat && x.state.state !== 'off')) {
         throw { code: 'invalid_value', message: 'demo: the seat has no session', reason: 'not_running' };
       }
+    },
+    steamProxy: async (action) => {
+      await step('steam_proxy_dll');
+      needAdmin();
+      if (action.type === 'quarantine') {
+        if (!steam.found.includes(action.path)) throw { code: 'invalid_value', message: 'demo: not a reported DLL' };
+        steam.found = steam.found.filter((p) => p !== action.path);
+        steam.quarantined = [...steam.quarantined, { original: action.path, quarantined: 'C:\\ProgramData\\Pulsar Seat\\quarantine\\1-version.dll' }];
+      }
+      if (action.type === 'restore') {
+        steam.quarantined = steam.quarantined.filter((q) => q.original !== action.path);
+        steam.found = [...steam.found, action.path];
+      }
+      return { ...steam, found: [...steam.found], quarantined: [...steam.quarantined] };
     },
     hyperV: async (action) => {
       await step('hyper_v');

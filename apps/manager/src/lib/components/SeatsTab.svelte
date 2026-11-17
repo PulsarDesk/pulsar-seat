@@ -15,6 +15,9 @@
   import Menu, { type MenuItem } from './Menu.svelte';
   import SeatAccountDialog from './SeatAccountDialog.svelte';
   import SeatNameDialog from './SeatNameDialog.svelte';
+  import SeatCompatDialog from './SeatCompatDialog.svelte';
+  import UsbDockWizard from './UsbDockWizard.svelte';
+  import { denyLogonAllowed } from '#lib/compat.ts';
   import ViewSettingsDialog from './ViewSettingsDialog.svelte';
   import { seatLabel, t } from '#lib/i18n.ts';
   import * as M from '#lib/mask.ts';
@@ -35,6 +38,7 @@
     seatOneFirstMonitorAdvice,
     setDeviceMask,
     setKeyMask,
+    setSeatCompat,
     setDisplayOption,
     setSoftwareCursor,
     type CanvasItem,
@@ -71,6 +75,8 @@
     | { kind: 'account'; seat: SeatNumber }
     | { kind: 'remove'; seat: SeatNumber }
     | { kind: 'removeKioskUser'; seat: SeatNumber }
+    | { kind: 'compat'; seat: SeatNumber }
+    | { kind: 'usbDock' }
     | { kind: 'compare'; diff: ConfigDiff }
     | { kind: 'view' }
     | { kind: 'picture'; item: CanvasItem }
@@ -183,6 +189,7 @@
       { label: t.seatMenu.account, action: () => (dialog = { kind: 'account', seat: n }) },
       { label: t.seatMenu.ip, action: () => commands.ipBinding?.(n), disabled: !commands.ipBinding },
       { label: t.seatMenu.cpu, action: commands.cpu },
+      { label: t.seatMenu.compat, action: () => (dialog = { kind: 'compat', seat: n }), disabled: !store.isAdmin },
       { separator: true, label: '' },
       { label: t.seatMenu.start, action: () => commands.startSeat(n), disabled: n === 1 || !store.enabled || !!running },
       { label: t.seatMenu.relogon, action: () => store.relogon(n), disabled: !running },
@@ -221,6 +228,7 @@
       { label: t.systemMenu.wizard, action: commands.wizard, disabled: !store.isAdmin },
       { label: t.systemMenu.import, action: commands.importConfig, disabled: !store.isAdmin },
       { label: t.systemMenu.outputs, action: () => (dialog = { kind: 'outputs' }) },
+      { label: t.systemMenu.usbDock, action: () => (dialog = { kind: 'usbDock' }), disabled: !store.isAdmin },
       { label: t.systemMenu.logLevel, action: () => (dialog = { kind: 'log' }) },
       {
         label: t.systemMenu.clearPictures,
@@ -471,6 +479,29 @@
     onConfirm={() => {
       dialog = null;
       void store.removeKioskUser(n);
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'compat' && draft}
+  {@const n = dialog.seat}
+  {@const sc = draft.seats.find((s) => s.number === n)}
+  <SeatCompatDialog
+    seat={n}
+    environment={sc?.environment}
+    denyLocalLogon={sc?.deny_local_logon ?? false}
+    denyAllowed={denyLogonAllowed(draft, n)}
+    onSave={(env, deny) => {
+      store.edit((c) => setSeatCompat(c, n, env, deny));
+      dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'usbDock'}
+  <UsbDockWizard
+    {store}
+    onDone={(n) => {
+      dialog = null;
+      store.toast('ok', t.usbDock.done(n));
     }}
     onCancel={() => (dialog = null)}
   />

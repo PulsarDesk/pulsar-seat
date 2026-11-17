@@ -12,12 +12,19 @@
 //! reset ([`Journal::revert_all`]) undo it through `HKEY_USERS\<sid>` (hive loaded from
 //! `NTUSER.DAT` when the user is not logged on) with [`palm_check_revert_in`].
 //!
-//! Never here: DeviceGuard / CI policy values, Windows Update blocking or deferral values,
-//! test-signing, Defender exclusions, firewall rules, `DenyDeviceClasses`.
+//! Since 2026-11-17 (compat-tweaks) also, each only as a visible opt-in the administrator
+//! turns on in the manager: Windows Update deferral and active hours (documented Windows
+//! Update for Business policies, [`TweakId::WindowsUpdate`]), fast startup off from the
+//! config, and the Device Installation Restrictions policy for setup classes no seat
+//! uses ([`TweakId::DeviceInstallDeny`]). Defender exclusions live in
+//! [`crate::defender`].
+//!
+//! Never here: DeviceGuard / CI policy values, blocking Windows Update (the engine, the
+//! service or its downloads), test-signing, firewall rules, anything written silently.
 
 use crate::journal::{Journal, JournalError, set_power, set_registry};
 use crate::ops::{Hive, PowerSetting, RegData, SystemOps};
-use seat_core::config::Tweaks;
+use seat_core::config::{DeviceInstallDeny, Tweaks, WindowsUpdatePolicy};
 use serde::{Deserialize, Serialize};
 
 /// Every tweak Pulsar Seat knows.
@@ -39,10 +46,16 @@ pub enum TweakId {
     SleepOff,
     /// `CrashDumpEnabled` = 3 (small) when a complete / kernel / automatic dump is set.
     SmallCrashDumps,
+    /// Windows Update for Business deferral / active hours / no automatic restart while
+    /// users are signed in (added 2026-11-17).
+    WindowsUpdate,
+    /// Device Installation Restrictions: deny new devices of chosen setup classes (added
+    /// 2026-11-17).
+    DeviceInstallDeny,
 }
 
 impl TweakId {
-    pub const ALL: [TweakId; 7] = [
+    pub const ALL: [TweakId; 9] = [
         Self::LockScreenImage,
         Self::HideFastUserSwitching,
         Self::ExcludeDriverUpdates,
@@ -50,6 +63,8 @@ impl TweakId {
         Self::FastStartupOff,
         Self::SleepOff,
         Self::SmallCrashDumps,
+        Self::WindowsUpdate,
+        Self::DeviceInstallDeny,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -61,6 +76,8 @@ impl TweakId {
             Self::FastStartupOff => "fast_startup_off",
             Self::SleepOff => "sleep_off",
             Self::SmallCrashDumps => "small_crash_dumps",
+            Self::WindowsUpdate => "windows_update",
+            Self::DeviceInstallDeny => "device_install_deny",
         }
     }
 
@@ -126,6 +143,20 @@ impl TweakId {
                 );
                 &T
             }
+            Self::WindowsUpdate => {
+                const T: Text = Text::new(
+                    "Delays Windows feature and quality updates, sets active hours and avoids automatic restarts while seats are signed in. Affects the whole PC; the old policy comes back when turned off.",
+                    "Windows özellik ve kalite güncellemelerini erteler, etkin saatleri ayarlar ve koltuklarda oturum açıkken otomatik yeniden başlatmayı önler. Bilgisayarın tamamını etkiler; kapatınca eski ilke geri yüklenir.",
+                );
+                &T
+            }
+            Self::DeviceInstallDeny => {
+                const T: Text = Text::new(
+                    "Stops Windows from installing new devices of the chosen kinds (for example printers or cameras that no seat uses). Devices already installed keep working.",
+                    "Windows'un seçilen türlerde yeni aygıt kurmasını engeller (ör. hiçbir koltuğun kullanmadığı yazıcı veya kameralar). Kurulu aygıtlar çalışmaya devam eder.",
+                );
+                &T
+            }
         }
     }
 
@@ -142,6 +173,10 @@ pub struct TweakParams {
     pub lock_screen_image: Option<String>,
     /// `AAPThreshold` value for the machine-wide palm check (0 = most permissive).
     pub palm_threshold: Option<u32>,
+    /// Windows Update policy ([`TweakId::WindowsUpdate`]).
+    pub windows_update: Option<WindowsUpdatePolicy>,
+    /// Device-install deny classes ([`TweakId::DeviceInstallDeny`]).
+    pub device_install_deny: Option<DeviceInstallDeny>,
 }
 
 const PERSONALIZATION_CSP: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP";
@@ -150,6 +185,12 @@ const WU_POLICY: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate";
 pub const PRECISION_TOUCHPAD: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\PrecisionTouchPad";
 const SESSION_POWER: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Power";
 const CRASH_CONTROL: &str = r"SYSTEM\CurrentControlSet\Control\CrashControl";
+const WU_AU_POLICY: &str = r"SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
+const DEVICE_INSTALL_RESTRICTIONS: &str = r"SOFTWARE\Policies\Microsoft\Windows\DeviceInstall\Restrictions";
+/// Numbered `{GUID}` values (`"1"`, `"2"`, ...) of the deny-classes list.
+pub const DENY_CLASSES_LIST: &str = r"SOFTWARE\Policies\Microsoft\Windows\DeviceInstall\Restrictions\DenyDeviceClasses";
+/// Most numbered entries we ever look at / write in [`DENY_CLASSES_LIST`].
+const MAX_DENY_ENTRIES: u32 = 999;
 
 /// Power subgroup / setting GUIDs (documented `GUID_*` constants of the power API).
 pub const SUB_SLEEP: &str = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
@@ -164,8 +205,8 @@ pub const USB_SELECTIVE_SUSPEND: &str = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226";
 pub enum Action {
     Reg {
         hive: Hive,
-        key: &'static str,
-        name: &'static str,
+        key: String,
+        name: String,
         data: RegData,
     },
     Power {
@@ -185,10 +226,77 @@ pub enum TweakError {
     Ops(#[from] crate::ops::OpsError),
 }
 
+fn reg(key: &str, name: &str, data: RegData) -> Action {
+    Action::Reg { hive: Hive::Hklm, key: key.to_string(), name: name.to_string(), data }
+}
+
+/// Windows Update for Business values for `w` (empty when off).
+fn windows_update_plan(w: &WindowsUpdatePolicy) -> Vec<Action> {
+    let mut v = Vec::new();
+    if !w.enabled || !w.is_valid() {
+        return v;
+    }
+    if w.feature_defer_days > 0 {
+        v.push(reg(WU_POLICY, "DeferFeatureUpdates", RegData::Dword(1)));
+        v.push(reg(WU_POLICY, "DeferFeatureUpdatesPeriodInDays", RegData::Dword(u32::from(w.feature_defer_days))));
+    }
+    if w.quality_defer_days > 0 {
+        v.push(reg(WU_POLICY, "DeferQualityUpdates", RegData::Dword(1)));
+        v.push(reg(WU_POLICY, "DeferQualityUpdatesPeriodInDays", RegData::Dword(u32::from(w.quality_defer_days))));
+    }
+    if let (Some(s), Some(e)) = (w.active_hours_start, w.active_hours_end) {
+        v.push(reg(WU_POLICY, "SetActiveHours", RegData::Dword(1)));
+        v.push(reg(WU_POLICY, "ActiveHoursStart", RegData::Dword(u32::from(s))));
+        v.push(reg(WU_POLICY, "ActiveHoursEnd", RegData::Dword(u32::from(e))));
+    }
+    if w.no_auto_restart_with_users {
+        v.push(reg(WU_AU_POLICY, "NoAutoRebootWithLoggedOnUsers", RegData::Dword(1)));
+    }
+    v
+}
+
+/// Device Installation Restrictions values for `d`. A class already on the list (ours or
+/// the operator's) keeps its entry; a new one gets the lowest free number.
+fn device_deny_plan(d: &DeviceInstallDeny, ops: &dyn SystemOps) -> Result<Vec<Action>, TweakError> {
+    let mut v = Vec::new();
+    if d.classes.is_empty() {
+        return Ok(v);
+    }
+    v.push(reg(DEVICE_INSTALL_RESTRICTIONS, "DenyDeviceClasses", RegData::Dword(1)));
+    if d.admins_override {
+        v.push(reg(DEVICE_INSTALL_RESTRICTIONS, "AllowAdminInstall", RegData::Dword(1)));
+    }
+    let existing = ops.reg_values(Hive::Hklm, DENY_CLASSES_LIST)?;
+    let mut used: Vec<String> = existing.iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
+    let mut classes = d.classes.clone();
+    classes.sort();
+    classes.dedup();
+    for c in classes {
+        let guid = format!("{{{}}}", c.class_guid().to_ascii_uppercase());
+        if let Some((n, _)) = existing.iter().find(|(_, val)| val.as_str().is_some_and(|s| s.trim().eq_ignore_ascii_case(&guid))) {
+            v.push(reg(DENY_CLASSES_LIST, n, RegData::Sz(guid)));
+            continue;
+        }
+        let Some(n) = (1..=MAX_DENY_ENTRIES).map(|i| i.to_string()).find(|n| !used.contains(n)) else { break };
+        used.push(n.clone());
+        v.push(reg(DENY_CLASSES_LIST, &n, RegData::Sz(guid)));
+    }
+    Ok(v)
+}
+
 /// The writes a tweak makes on this PC right now (some depend on the current state).
 pub fn plan(t: TweakId, p: &TweakParams, ops: &dyn SystemOps) -> Result<Vec<Action>, TweakError> {
+    Ok(match t {
+        TweakId::WindowsUpdate => windows_update_plan(&p.windows_update.clone().unwrap_or_default()),
+        TweakId::DeviceInstallDeny => device_deny_plan(&p.device_install_deny.clone().unwrap_or_default(), ops)?,
+        _ => static_plan(t, p, ops)?,
+    })
+}
+
+fn static_plan(t: TweakId, p: &TweakParams, ops: &dyn SystemOps) -> Result<Vec<Action>, TweakError> {
     use Action::*;
     Ok(match t {
+        TweakId::WindowsUpdate | TweakId::DeviceInstallDeny => Vec::new(),
         TweakId::LockScreenImage => {
             let path = p
                 .lock_screen_image
@@ -199,46 +307,46 @@ pub fn plan(t: TweakId, p: &TweakParams, ops: &dyn SystemOps) -> Result<Vec<Acti
             vec![
                 Reg {
                     hive: Hive::Hklm,
-                    key: PERSONALIZATION_CSP,
-                    name: "LockScreenImagePath",
+                    key: PERSONALIZATION_CSP.into(),
+                    name: "LockScreenImagePath".into(),
                     data: RegData::Sz(path.clone()),
                 },
                 Reg {
                     hive: Hive::Hklm,
-                    key: PERSONALIZATION_CSP,
-                    name: "LockScreenImageUrl",
+                    key: PERSONALIZATION_CSP.into(),
+                    name: "LockScreenImageUrl".into(),
                     data: RegData::Sz(path),
                 },
                 Reg {
                     hive: Hive::Hklm,
-                    key: PERSONALIZATION_CSP,
-                    name: "LockScreenImageStatus",
+                    key: PERSONALIZATION_CSP.into(),
+                    name: "LockScreenImageStatus".into(),
                     data: RegData::Dword(1),
                 },
             ]
         }
         TweakId::HideFastUserSwitching => vec![Reg {
             hive: Hive::Hklm,
-            key: POLICIES_SYSTEM,
-            name: "HideFastUserSwitching",
+            key: POLICIES_SYSTEM.into(),
+            name: "HideFastUserSwitching".into(),
             data: RegData::Dword(1),
         }],
         TweakId::ExcludeDriverUpdates => vec![Reg {
             hive: Hive::Hklm,
-            key: WU_POLICY,
-            name: "ExcludeWUDriversInQualityUpdate",
+            key: WU_POLICY.into(),
+            name: "ExcludeWUDriversInQualityUpdate".into(),
             data: RegData::Dword(1),
         }],
         TweakId::TouchpadPalmCheckMachine => vec![Reg {
             hive: Hive::Hklm,
-            key: PRECISION_TOUCHPAD,
-            name: "AAPThreshold",
+            key: PRECISION_TOUCHPAD.into(),
+            name: "AAPThreshold".into(),
             data: RegData::Dword(p.palm_threshold.unwrap_or(0)),
         }],
         TweakId::FastStartupOff => vec![Reg {
             hive: Hive::Hklm,
-            key: SESSION_POWER,
-            name: "HiberbootEnabled",
+            key: SESSION_POWER.into(),
+            name: "HiberbootEnabled".into(),
             data: RegData::Dword(0),
         }],
         TweakId::SleepOff => vec![
@@ -266,8 +374,8 @@ pub fn plan(t: TweakId, p: &TweakParams, ops: &dyn SystemOps) -> Result<Vec<Acti
             if matches!(cur, Some(1) | Some(2) | Some(7)) {
                 vec![Reg {
                     hive: Hive::Hklm,
-                    key: CRASH_CONTROL,
-                    name: "CrashDumpEnabled",
+                    key: CRASH_CONTROL.into(),
+                    name: "CrashDumpEnabled".into(),
                     data: RegData::Dword(3),
                 }]
             } else {
@@ -316,14 +424,36 @@ pub fn apply(
     let owner = t.owner();
     let mut rep = ApplyReport::default();
     let mut scheme: Option<String> = None;
-    for a in plan(t, p, ops)? {
+    let actions = plan(t, p, ops)?;
+    // Policies whose set of values follows the config: values we wrote earlier that the
+    // config no longer wants (a deferral turned off, a class unticked) are undone.
+    if matches!(t, TweakId::WindowsUpdate | TweakId::DeviceInstallDeny) {
+        let keep: Vec<String> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Reg { hive, key, name, .. } => Some(
+                    crate::journal::Change::Registry {
+                        hive: *hive,
+                        key: key.clone(),
+                        name: name.clone(),
+                        previous: None,
+                        written: None,
+                    }
+                    .target(),
+                ),
+                Action::Power { .. } => None,
+            })
+            .collect();
+        j.revert_owner_except(ops, &owner, &keep)?;
+    }
+    for a in actions {
         let changed = match a {
             Action::Reg {
                 hive,
                 key,
                 name,
                 data,
-            } => set_registry(j, ops, &owner, hive, key, name, Some(&data))?,
+            } => set_registry(j, ops, &owner, hive, &key, &name, Some(&data))?,
             Action::Power {
                 subgroup,
                 setting,
@@ -355,8 +485,19 @@ pub fn apply(
     Ok(rep)
 }
 
-/// Every registry value a tweak can write (the journal restores only these).
-pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 8] = [
+/// Every registry value a tweak can write (the journal restores only these; plus the
+/// numbered entries of [`DENY_CLASSES_LIST`], see [`is_tweak_target`]).
+pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 18] = [
+    (WU_POLICY, "DeferFeatureUpdates"),
+    (WU_POLICY, "DeferFeatureUpdatesPeriodInDays"),
+    (WU_POLICY, "DeferQualityUpdates"),
+    (WU_POLICY, "DeferQualityUpdatesPeriodInDays"),
+    (WU_POLICY, "SetActiveHours"),
+    (WU_POLICY, "ActiveHoursStart"),
+    (WU_POLICY, "ActiveHoursEnd"),
+    (WU_AU_POLICY, "NoAutoRebootWithLoggedOnUsers"),
+    (DEVICE_INSTALL_RESTRICTIONS, "DenyDeviceClasses"),
+    (DEVICE_INSTALL_RESTRICTIONS, "AllowAdminInstall"),
     (PERSONALIZATION_CSP, "LockScreenImagePath"),
     (PERSONALIZATION_CSP, "LockScreenImageUrl"),
     (PERSONALIZATION_CSP, "LockScreenImageStatus"),
@@ -370,10 +511,14 @@ pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 8] = [
 /// Is `hive\key\name` a value some tweak writes? Machine hive only: per-user values go
 /// through [`Change::UserPalmCheck`](crate::journal::Change::UserPalmCheck).
 pub fn is_tweak_target(hive: Hive, key: &str, name: &str) -> bool {
+    let key = key.trim_matches('\\');
     hive == Hive::Hklm
-        && TWEAK_REGISTRY_TARGETS.iter().any(|(k, n)| {
-            k.eq_ignore_ascii_case(key.trim_matches('\\')) && n.eq_ignore_ascii_case(name)
-        })
+        && (TWEAK_REGISTRY_TARGETS.iter().any(|(k, n)| k.eq_ignore_ascii_case(key) && n.eq_ignore_ascii_case(name))
+            || (DENY_CLASSES_LIST.eq_ignore_ascii_case(key)
+                && !name.is_empty()
+                && name.len() <= 3
+                && name.bytes().all(|b| b.is_ascii_digit())
+                && !name.starts_with('0')))
 }
 
 /// Undo one tweak (only what we changed; values changed by someone since are left).
@@ -398,10 +543,15 @@ pub fn sync_config(
         (TweakId::LockScreenImage, tw.lock_screen_image),
         (TweakId::HideFastUserSwitching, tw.hide_fast_user_switching),
         (TweakId::ExcludeDriverUpdates, tw.exclude_driver_updates),
+        (TweakId::FastStartupOff, tw.fast_startup_off),
+        (TweakId::WindowsUpdate, tw.windows_update.enabled),
+        (TweakId::DeviceInstallDeny, !tw.device_install_deny.classes.is_empty()),
     ];
     let params = TweakParams {
         lock_screen_image: lock_image_path.map(str::to_string),
         palm_threshold: None,
+        windows_update: Some(tw.windows_update.clone()),
+        device_install_deny: Some(tw.device_install_deny.clone()),
     };
     wanted
         .into_iter()
@@ -680,6 +830,18 @@ mod tests {
         let p = TweakParams {
             lock_screen_image: Some("x".into()),
             palm_threshold: Some(0),
+            windows_update: Some(WindowsUpdatePolicy {
+                enabled: true,
+                feature_defer_days: 30,
+                quality_defer_days: 7,
+                active_hours_start: Some(8),
+                active_hours_end: Some(23),
+                no_auto_restart_with_users: true,
+            }),
+            device_install_deny: Some(DeviceInstallDeny {
+                classes: seat_core::config::DeviceInstallClass::ALL.to_vec(),
+                admins_override: true,
+            }),
         };
         for t in TweakId::ALL {
             for a in plan(t, &p, &ops).unwrap() {
@@ -687,10 +849,12 @@ mod tests {
                     hive, key, name, ..
                 } = a
                 {
-                    assert!(is_tweak_target(hive, key, name), "{key} {name}");
+                    assert!(is_tweak_target(hive, &key, &name), "{key} {name}");
                 }
             }
         }
+        assert!(!is_tweak_target(Hive::Hklm, DENY_CLASSES_LIST, "Default"));
+        assert!(!is_tweak_target(Hive::Hklm, DENY_CLASSES_LIST, "01"));
         assert!(!is_tweak_target(
             Hive::Hklm,
             r"SYSTEM\CurrentControlSet\Services\X",
@@ -701,6 +865,84 @@ mod tests {
             PRECISION_TOUCHPAD,
             "AAPThreshold"
         ));
+    }
+
+    #[test]
+    fn windows_update_policy_follows_config_and_reverts() {
+        let ops = MemoryOps::new();
+        let j = Journal::memory();
+        ops.set(Hive::Hklm, WU_POLICY, "SetActiveHours", RegData::Dword(0));
+        let mut tw = Tweaks {
+            windows_update: WindowsUpdatePolicy {
+                enabled: true,
+                feature_defer_days: 60,
+                quality_defer_days: 0,
+                active_hours_start: Some(8),
+                active_hours_end: Some(22),
+                no_auto_restart_with_users: true,
+            },
+            ..Default::default()
+        };
+        assert!(sync_config(&j, &ops, &tw, None).iter().all(|(_, r)| r.is_ok()));
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "DeferFeatureUpdatesPeriodInDays"), Some(RegData::Dword(60)));
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "DeferQualityUpdates"), None);
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "ActiveHoursEnd"), Some(RegData::Dword(22)));
+        assert_eq!(ops.get(Hive::Hklm, WU_AU_POLICY, "NoAutoRebootWithLoggedOnUsers"), Some(RegData::Dword(1)));
+        // Feature deferral turned off: only those values go.
+        tw.windows_update.feature_defer_days = 0;
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "DeferFeatureUpdates"), None);
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "ActiveHoursStart"), Some(RegData::Dword(8)));
+        // Whole policy off: the operator's earlier value comes back.
+        tw.windows_update.enabled = false;
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "SetActiveHours"), Some(RegData::Dword(0)));
+        assert_eq!(ops.get(Hive::Hklm, WU_POLICY, "ActiveHoursStart"), None);
+        assert!(j.active().unwrap().is_empty());
+    }
+
+    #[test]
+    fn device_install_deny_keeps_operator_entries() {
+        use seat_core::config::DeviceInstallClass as C;
+        let ops = MemoryOps::new();
+        let j = Journal::memory();
+        // The operator already denies printers as entry 1.
+        let printer = format!("{{{}}}", C::Printer.class_guid().to_ascii_uppercase());
+        ops.set(Hive::Hklm, DENY_CLASSES_LIST, "1", RegData::Sz(printer.clone()));
+        let mut tw = Tweaks::default();
+        tw.device_install_deny.classes = vec![C::Printer, C::Camera, C::Wpd];
+        assert!(sync_config(&j, &ops, &tw, None).iter().all(|(_, r)| r.is_ok()));
+        assert_eq!(ops.get(Hive::Hklm, DEVICE_INSTALL_RESTRICTIONS, "DenyDeviceClasses"), Some(RegData::Dword(1)));
+        assert_eq!(ops.get(Hive::Hklm, DEVICE_INSTALL_RESTRICTIONS, "AllowAdminInstall"), Some(RegData::Dword(1)));
+        let values = ops.reg_values(Hive::Hklm, DENY_CLASSES_LIST).unwrap();
+        assert_eq!(values.len(), 3, "{values:?}");
+        assert_eq!(ops.get(Hive::Hklm, DENY_CLASSES_LIST, "1"), Some(RegData::Sz(printer.clone())));
+        // Unticking the camera removes only its entry; re-sync is stable.
+        tw.device_install_deny.classes = vec![C::Printer, C::Wpd];
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.reg_values(Hive::Hklm, DENY_CLASSES_LIST).unwrap().len(), 2);
+        let before = j.records().unwrap().len();
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(j.records().unwrap().len(), before);
+        // Off: our values go, the operator's printer entry stays.
+        tw.device_install_deny.classes.clear();
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.reg_values(Hive::Hklm, DENY_CLASSES_LIST).unwrap(), vec![("1".to_string(), RegData::Sz(printer))]);
+        assert_eq!(ops.get(Hive::Hklm, DEVICE_INSTALL_RESTRICTIONS, "DenyDeviceClasses"), None);
+        assert!(j.active().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fast_startup_from_config() {
+        let ops = MemoryOps::new();
+        let j = Journal::memory();
+        ops.set(Hive::Hklm, SESSION_POWER, "HiberbootEnabled", RegData::Dword(1));
+        let mut tw = Tweaks { fast_startup_off: true, ..Default::default() };
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, SESSION_POWER, "HiberbootEnabled"), Some(RegData::Dword(0)));
+        tw.fast_startup_off = false;
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, SESSION_POWER, "HiberbootEnabled"), Some(RegData::Dword(1)));
     }
 
     #[test]

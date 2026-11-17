@@ -218,6 +218,11 @@ export interface SeatConfig {
   /** USB ids (`0xVVVV/0xPPPP`) SDL games of this seat ignore (`SDL_GAMECONTROLLER_IGNORE_DEVICES`
    *  for the processes the service starts). Absent = none. Added 2026-11-17, both kinds. */
   pad_ignore_devices?: string[];
+  /** Per-seat environment variables (written into the seat user's environment at logon,
+   *  journaled; set on the processes the service starts). Absent = none. Added 2026-11-17. */
+  environment?: EnvVar[];
+  /** "Deny log on locally" for the seat's account (RDP-signed-in seats only). Added 2026-11-17. */
+  deny_local_logon?: boolean;
   /** Physical-seat part; set exactly when `kind` is `local`. */
   local?: LocalSeat;
   /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. Edited
@@ -496,7 +501,16 @@ export interface InputSettings {
 /** Most entries of `SeatConfig.pad_ignore_devices` (`seat_core::config::MAX_PAD_IGNORE_DEVICES`). */
 export const MAX_PAD_IGNORE_DEVICES = 64;
 
-export type DeviceClassTarget = 'disk_drive' | 'cdrom' | 'volume' | 'ports';
+export type DeviceClassTarget =
+  | 'disk_drive'
+  | 'cdrom'
+  | 'volume'
+  | 'ports'
+  | 'modem'
+  | 'multiport_serial'
+  | 'floppy'
+  | 'tape_drive'
+  | 'medium_changer';
 
 export interface DeviceSettings {
   admins_bypass: boolean;
@@ -510,6 +524,47 @@ export interface Tweaks {
   hide_fast_user_switching: boolean;
   exclude_driver_updates: boolean;
   touchpad_palm_check: number | null;
+  /** Added 2026-11-17 (compat-tweaks); absent = off. */
+  fast_startup_off?: boolean;
+  windows_update?: WindowsUpdatePolicy;
+  device_install_deny?: DeviceInstallDeny;
+  defender_exclusions?: boolean;
+}
+
+/** Windows Update for Business policies (`seat_core::config::WindowsUpdatePolicy`). */
+export interface WindowsUpdatePolicy {
+  enabled: boolean;
+  /** 0..=365 (0 = no deferral). */
+  feature_defer_days: number;
+  /** 0..=30 (0 = no deferral). */
+  quality_defer_days: number;
+  active_hours_start?: number | null;
+  active_hours_end?: number | null;
+  no_auto_restart_with_users: boolean;
+}
+
+export type DeviceInstallClass = 'printer' | 'image' | 'camera' | 'wpd' | 'modem' | 'cdrom' | 'ports' | 'smart_card_reader';
+
+export interface DeviceInstallDeny {
+  classes?: DeviceInstallClass[];
+  admins_override: boolean;
+}
+
+export interface EnvVar {
+  name: string;
+  value: string;
+}
+
+/** Named-object rule for single-instance programs (`settings.apps.object_rules`). */
+export interface ObjectRule {
+  exe: string;
+  names: string[];
+}
+
+/** App compatibility (`settings.apps`, added 2026-11-17). */
+export interface AppCompatSettings {
+  steam_per_seat?: boolean;
+  object_rules?: ObjectRule[];
 }
 
 export interface GlobalSettings {
@@ -532,6 +587,8 @@ export interface GlobalSettings {
   outputs?: OutputSettings;
   /** Added 2026-11-13 (kiosk-shell); older services omit it (default seat1_desktop = true). */
   kiosk?: KioskSettings;
+  /** App compatibility: Steam per local seat, named-object rules (added 2026-11-17). */
+  apps?: AppCompatSettings;
   /** Remote seat machine settings (config schema 2, `seat_core::remote::RemoteSettings`);
    *  edited on the remote seats tab. */
   remote?: R.GlobalSettings;
@@ -844,6 +901,7 @@ export type RequestBody =
   | { type: 'reset_graphics'; data: { seat: SeatNumber } }
   | { type: 'remove_kiosk_user'; data: { seat: SeatNumber } }
   | { type: 'hyper_v'; data: { action: HyperVAction } }
+  | { type: 'steam_proxy_dll'; data: { action: SteamProxyAction } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }
@@ -895,6 +953,15 @@ export type HyperVAction =
   | { type: 'set_seat_nic'; seat: number; address: string; prefix_len: number }
   | { type: 'remove_seat_nic'; seat: number };
 
+/** Steam legacy proxy-DLL report (`steam_proxy_dll`, added 2026-11-17). */
+export type SteamProxyAction = { type: 'status' } | { type: 'quarantine'; path: string } | { type: 'restore'; path: string };
+
+export interface SteamProxyStatus {
+  steam_dirs: string[];
+  found: string[];
+  quarantined: { original: string; quarantined: string }[];
+}
+
 export interface HyperVStatus {
   feature: 'enabled' | 'disabled' | 'enable_pending' | 'unavailable' | string;
   switch_present: boolean;
@@ -905,6 +972,7 @@ export interface HyperVStatus {
 export type ResponseBody =
   | { type: 'ack' }
   | { type: 'hyper_v'; data: HyperVStatus }
+  | { type: 'steam_proxy'; data: SteamProxyStatus }
   | { type: 'status'; data: ServiceStatus }
   | { type: 'backends'; data: BackendReport }
   | { type: 'checks'; data: Check[] }

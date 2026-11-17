@@ -711,7 +711,10 @@ impl Engine {
                 args: split_args(&app.arguments),
                 session_id,
                 token: TokenKind::SeatUser,
-                env_extra: seat_env(&seat.id, global.steam_isolation, &seat.pad_ignore_devices, &self.physical_pad_ids()),
+                env_extra: seat_env(&seat.id, global.steam_isolation, &seat.pad_ignore_devices, &self.physical_pad_ids())
+                    .into_iter()
+                    .chain(seat_compat::user_env::launch_env(&seat.environment))
+                    .collect(),
                 desktop: DEFAULT_DESKTOP.into(),
                 stdout: None,
             };
@@ -723,7 +726,53 @@ impl Engine {
         if cancel.is_cancelled() {
             return Err(Failure::cancelled());
         }
+        // 9. DPI read-back (spec/remote 40 §4.4; compat-tweaks 2026-11-17): only for a
+        // static scale, the case where the seat asks for a number Windows may override.
+        if seat.display.scale_static {
+            self.dpi_readback(seat, session_id);
+        }
         Ok(())
+    }
+
+    /// Starts `pulsar-seat-agent --report-dpi` in the seat session as the seat user with
+    /// its output in the seat folder, reads it back a few seconds later and raises a
+    /// `host_warning` notice (`dpi_mismatch`) when the effective scale differs from the
+    /// seat's static scale. HYPOTHESIS: untested on hardware (needs a remote seat).
+    fn dpi_readback(&self, seat: &RemoteSeatRecord, session_id: u32) {
+        let Ok(dir) = SeatDir::checked(&self.d().data_root, &seat.id) else { return };
+        let Some(exe) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(seat_core::consts::AGENT_EXE))) else {
+            return;
+        };
+        let out = dir.root.join("dpi.log");
+        let _ = std::fs::remove_file(&out);
+        let spec = LaunchSpec {
+            cwd: None,
+            exe,
+            args: vec!["--report-dpi".into()],
+            session_id,
+            token: TokenKind::SeatUser,
+            env_extra: Vec::new(),
+            desktop: DEFAULT_DESKTOP.into(),
+            stdout: Some(out.clone()),
+        };
+        if let Err(e) = self.d().session.launcher().launch(&seat.id, &spec) {
+            log::debug!("seat '{}': DPI read-back not started: {e}", seat.name);
+            return;
+        }
+        let me = self.clone();
+        let (id, name, want) = (seat.id.clone(), seat.name.clone(), u32::from(seat.display.scale_percent));
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(10));
+            let Some(mons) = std::fs::read_to_string(&out).ok().and_then(|t| seat_proto::parse_dpi_report(&t)) else {
+                log::debug!("seat '{name}': no DPI read-back");
+                return;
+            };
+            let bad = crate::compat::dpi_mismatches(Some(want), &mons);
+            if !bad.is_empty() {
+                log::warn!("seat '{name}': effective scale differs from the seat setting: {}", bad.join("; "));
+                me.notice(&id, "host_warning", serde_json::json!({"kind": "dpi_mismatch", "detail": bad.join("; ")}));
+            }
+        });
     }
 
     fn probe_displays(&self) -> Vec<BackendInfo> {
@@ -1100,13 +1149,14 @@ impl Engine {
     /// SYSTEM), like autostart. The "Masaüstü" entry (no command) launches nothing.
     /// `Ok(None)`: the entry has no command (the "Masaüstü" entry), nothing is launched.
     fn launch_seat_app(&self, seat_id: &str, app_id: &str) -> Result<Option<u32>, String> {
-        let (session_id, steam, pad_ignore) = {
+        let (session_id, steam, pad_ignore, seat_vars) = {
             let seats = lock(&self.0.seats);
             let run = seats.get(seat_id).ok_or("seat_not_running")?;
             (
                 run.res.session.as_ref().map(|s| s.session_id).ok_or("seat_not_running")?,
                 run.global.steam_isolation,
                 run.seat.pad_ignore_devices.clone(),
+                run.seat.environment.clone(),
             )
         };
         let dir = SeatDir::checked(&self.d().data_root, seat_id).map_err(|e| e.code().to_string())?;
@@ -1129,7 +1179,10 @@ impl Engine {
             args: argv,
             session_id,
             token: TokenKind::SeatUser,
-            env_extra: seat_env(seat_id, steam, &pad_ignore, &self.physical_pad_ids()),
+            env_extra: seat_env(seat_id, steam, &pad_ignore, &self.physical_pad_ids())
+                .into_iter()
+                .chain(seat_compat::user_env::launch_env(&seat_vars))
+                .collect(),
             desktop: DEFAULT_DESKTOP.into(),
             stdout: None,
         };

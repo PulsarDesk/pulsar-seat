@@ -444,7 +444,8 @@ fn same_account_deny_logs_the_second_seat_off() {
     call(&h, &mut agent, hello_body(ClientKind::Agent)).unwrap();
     let report = seat_proto::AgentReport { session_id: 10, event: seat_proto::AgentEvent::Started };
     let ResponseBody::AgentTasks(t) = call(&h, &mut agent, RequestBody::AgentReport { report }).unwrap() else { panic!() };
-    assert_eq!(t.len(), 2);
+    // The DPI read-back task (compat-tweaks 2026-11-17) is queued at every logon too.
+    assert_eq!(t.iter().filter(|t| t.task != AgentTaskKind::ReportDpi).count(), 2);
     let foreign = seat_proto::AgentReport { session_id: 1, event: seat_proto::AgentEvent::Started };
     assert!(call(&h, &mut agent, RequestBody::AgentReport { report: foreign }).is_err());
     // Whatever the agent does (here: acks the log-off task and stops), the service logs
@@ -3177,4 +3178,89 @@ fn gpu_preference_follows_the_seat_gpu_at_logon_and_reverts_on_disable() {
     // Disabling the product undoes every user's values.
     call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
     assert!(h.p.gpu_pref_reverts.load(Ordering::SeqCst) >= 1);
+}
+
+/// Compat-tweaks (2026-11-17): deny-logon accounts and object rules follow the config
+/// while enabled and are undone when the product is turned off.
+#[test]
+fn compat_options_follow_product_switch() {
+    let mut c = two_seat_config();
+    c.seats[1].deny_local_logon = true;
+    c.settings.apps.object_rules =
+        vec![seat_core::config::ObjectRule { exe: "Launcher.exe".into(), names: vec!["One".into()] }];
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.s.sync_tweaks();
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(vec!["S-1-5-21-9-ali".to_string()]));
+    assert_eq!(h.p.object_rules.lock().unwrap().len(), 1);
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    h.s.sync_tweaks();
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(Vec::new()));
+    assert!(h.p.object_rules.lock().unwrap().is_empty());
+    assert!(h.p.user_env_reverts.load(Ordering::SeqCst) >= 1);
+}
+
+/// A seat that signs in locally never gets the deny right, even if the config says so.
+#[test]
+fn deny_logon_skips_seats_that_sign_in_locally() {
+    let mut c = two_seat_config();
+    c.seats[1].deny_local_logon = true;
+    c.settings.backends.session = seat_core::backend::SessionBackendKind::FastUserSwitch;
+    let h = harness_with(c, None);
+    h.s.sync_tweaks();
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(Vec::new()));
+}
+
+/// Per-seat environment: written for the seat user at logon, announced by the agent, and
+/// set on the startup apps; the agent is also asked for the DPI read-back.
+#[test]
+fn seat_environment_at_logon() {
+    let mut c = two_seat_config();
+    c.seats[1].environment = vec![seat_core::config::EnvVar { name: "GAME_PROFILE".into(), value: "seat2".into() }];
+    c.seats[1].startup_apps = vec![seat_core::config::KioskApp { command: r"C:\Games\x.exe".into(), args: vec![] }];
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let env = h.p.user_env.lock().unwrap().clone();
+    assert!(env.iter().any(|(sid, v)| sid == "S-1-5-21-9-ali" && v.len() == 1), "{env:?}");
+    let app = h.p.launched().into_iter().find(|x| x.exe.ends_with("x.exe")).unwrap();
+    assert!(app.env.iter().any(|(n, v)| n == "GAME_PROFILE" && v == "seat2"));
+    let tasks = h.s.lock().agent_tasks.get(&10).cloned().unwrap_or_default();
+    assert!(tasks.iter().any(|t| t.task == AgentTaskKind::RefreshEnvironment));
+    assert!(tasks.iter().any(|t| t.task == AgentTaskKind::ReportDpi));
+}
+
+/// The Steam proxy-DLL request is admin only and refuses paths that are not DLLs.
+#[test]
+fn steam_proxy_request() {
+    use seat_proto::steam::SteamProxyAction as A;
+    let h = harness();
+    let mut a = admin();
+    let ResponseBody::SteamProxy(st) = call(&h, &mut a, RequestBody::SteamProxyDll { action: A::Status }).unwrap() else { panic!() };
+    assert_eq!(st.steam_dirs.len(), 1);
+    let e = call(&h, &mut a, RequestBody::SteamProxyDll { action: A::Quarantine { path: r"C:\Windows\notepad.exe".into() } }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidValue);
+    call(&h, &mut a, RequestBody::SteamProxyDll { action: A::Quarantine { path: r"C:\Steam\version.dll".into() } }).unwrap();
+    assert_eq!(h.p.steam_actions.lock().unwrap().len(), 2);
+    let mut u = user(5);
+    assert!(call(&h, &mut u, RequestBody::SteamProxyDll { action: A::Status }).is_err());
+}
+
+/// Steam per local seat reaches the module's seat map flags.
+#[test]
+fn steam_per_local_seat_flag() {
+    let mut c = two_seat_config();
+    c.settings.apps.steam_per_seat = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let map = h.s.local_seat_map(&|_| None);
+    assert!(map.iter().all(|e| e.flags.steam), "{map:?}");
 }

@@ -35,7 +35,7 @@
 //! - an entry whose target already holds the previous value counts as reverted;
 //! - a failed revert stays active and is retried on the next `revert_*` call.
 
-use crate::ops::{Hive, OpsError, PowerSetting, RegData, SystemOps};
+use crate::ops::{ExclusionKind, Hive, OpsError, PowerSetting, RegData, SystemOps};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -96,6 +96,24 @@ pub enum Change {
     },
     /// A System Restore checkpoint we created (informational; never reverted).
     RestorePoint { sequence: i64, description: String },
+    /// A Microsoft Defender exclusion we added (it was not on the list before; added
+    /// 2026-11-17, `crate::defender`). Undone with `MSFT_MpPreference.Remove`.
+    DefenderExclusion { list: ExclusionKind, value: String },
+    /// A logon right we added to account `sid` (it did not have it before; added
+    /// 2026-11-17, `crate::rights`). Only `SeDenyInteractiveLogonRight` is ever undone.
+    AccountRight { sid: String, right: String },
+    /// An environment variable we wrote in user `sid`'s `Environment` key (added
+    /// 2026-11-17, `crate::user_env`). Undone through `HKEY_USERS\<sid>`.
+    UserEnvironment {
+        sid: String,
+        name: String,
+        previous: Option<RegData>,
+        written: RegData,
+    },
+    /// A file we moved out of the way on the administrator's request (the legacy Steam
+    /// proxy DLL, added 2026-11-17, `crate::steam`). Undone by moving it back while its
+    /// place is free.
+    QuarantinedFile { original: String, quarantined: String },
 }
 
 impl Change {
@@ -131,6 +149,14 @@ impl Change {
                 format!("usergpu:{}:{}", sid.to_ascii_uppercase(), app.to_ascii_lowercase())
             }
             Self::RestorePoint { sequence, .. } => format!("rp:{sequence}"),
+            Self::DefenderExclusion { list: kind, value } => {
+                format!("defender:{kind:?}:{}", value.trim_end_matches('\\').to_ascii_lowercase())
+            }
+            Self::AccountRight { sid, right } => format!("right:{}:{right}", sid.to_ascii_uppercase()),
+            Self::UserEnvironment { sid, name, .. } => {
+                format!("userenv:{}:{}", sid.to_ascii_uppercase(), name.to_ascii_lowercase())
+            }
+            Self::QuarantinedFile { original, .. } => format!("quarantine:{}", original.to_ascii_lowercase()),
         }
     }
 }
@@ -535,6 +561,24 @@ impl Journal {
         self.revert_entries(ops, &act, force)
     }
 
+    /// Revert the active changes of `owner` whose target is not in `keep` (the targets a
+    /// sync still wants). Added 2026-11-17.
+    pub fn revert_owner_except(
+        &self,
+        ops: &dyn SystemOps,
+        owner: &str,
+        keep: &[String],
+    ) -> Result<RevertReport, JournalError> {
+        self.close_stale()?;
+        let mut act: Vec<Entry> = self
+            .active_for(owner)?
+            .into_iter()
+            .filter(|e| !keep.contains(&e.change.target()))
+            .collect();
+        act.reverse();
+        self.revert_entries(ops, &act, false)
+    }
+
     /// Revert the active changes of one owner.
     pub fn revert_owner(
         &self,
@@ -590,6 +634,10 @@ fn inherit_previous(new: &mut Change, old: &Change) {
         (
             Change::UserGpuPreference { previous, .. },
             Change::UserGpuPreference { previous: p, .. },
+        ) => *previous = p.clone(),
+        (
+            Change::UserEnvironment { previous, .. },
+            Change::UserEnvironment { previous: p, .. },
         ) => *previous = p.clone(),
         _ => {}
     }
@@ -696,6 +744,46 @@ fn revert_one(ops: &dyn SystemOps, c: &Change, force: bool) -> Result<RevertOutc
             written,
         } => crate::gpu_pref::revert_value(ops, sid, app, previous.as_deref(), written, force),
         Change::RestorePoint { .. } => Ok(RevertOutcome::Closed),
+        Change::DefenderExclusion { list: kind, value } => {
+            let Some(list) = ops.defender_exclusions()? else {
+                // Defender is gone (another antivirus took over): nothing to undo.
+                return Ok(RevertOutcome::Closed);
+            };
+            if !list.contains(*kind, value) {
+                return Ok(RevertOutcome::AlreadyRestored);
+            }
+            ops.defender_exclusion(*kind, value, false)?;
+            Ok(RevertOutcome::Restored)
+        }
+        Change::AccountRight { sid, right } => {
+            if !crate::ops::is_sid_string(sid) || right != crate::rights::DENY_INTERACTIVE {
+                return Ok(RevertOutcome::Refused);
+            }
+            if !ops.account_rights(sid)?.iter().any(|r| r == right) {
+                return Ok(RevertOutcome::AlreadyRestored);
+            }
+            ops.account_right(sid, right, false)?;
+            Ok(RevertOutcome::Restored)
+        }
+        Change::UserEnvironment {
+            sid,
+            name,
+            previous,
+            written,
+        } => crate::user_env::revert_value(ops, sid, name, previous.as_ref(), written, force),
+        Change::QuarantinedFile { original, quarantined } => {
+            if !crate::steam::is_quarantine_pair(original, quarantined) {
+                return Ok(RevertOutcome::Refused);
+            }
+            if !ops.file_exists(quarantined)? {
+                return Ok(RevertOutcome::Closed);
+            }
+            if ops.file_exists(original)? {
+                return Ok(RevertOutcome::ChangedSince);
+            }
+            ops.file_move(quarantined, original)?;
+            Ok(RevertOutcome::Restored)
+        }
     }
 
 }

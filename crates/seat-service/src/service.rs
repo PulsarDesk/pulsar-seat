@@ -1265,8 +1265,11 @@ impl Service {
                 .lock_screen_image
                 .then(|| crate::images::ensure_lock_image(&self.data_dir))
                 .and_then(|r| r.map_err(|e| log::warn(&format!("lock-screen image: {e}"))).ok());
-            self.platform.sync_tweaks(&tweaks, lock.as_deref())
+            let out = self.platform.sync_tweaks(&tweaks, lock.as_deref());
+            self.sync_compat(true);
+            out
         } else {
+            self.sync_compat(false);
             // Seat users' GPU preferences (spec 40 §6.4) go with the product too; they are
             // written again at the next seat logon after an enable.
             match self.platform.revert_gpu_preferences() {

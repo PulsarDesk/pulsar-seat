@@ -20,6 +20,8 @@ import type {
   HelloReply,
   HyperVAction,
   HyperVStatus,
+  SteamProxyAction,
+  SteamProxyStatus,
   Issue,
   LocalUser,
   Panel,
@@ -121,6 +123,8 @@ export interface Api extends LocalApi {
   removeKioskUser(seat: SeatNumber): Promise<void>;
   /** Hyper-V helper of the source-IP tools (`hyper_v`). */
   hyperV(action: HyperVAction): Promise<HyperVStatus>;
+  /** Steam legacy proxy-DLL report, quarantine and restore (`steam_proxy_dll`). */
+  steamProxy(action: SteamProxyAction): Promise<SteamProxyStatus>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -188,6 +192,7 @@ export function createRequestApi(
     resetGraphics: (seat) => ack({ type: 'reset_graphics', data: { seat } }),
     removeKioskUser: (seat) => ack({ type: 'remove_kiosk_user', data: { seat } }),
     hyperV: async (action) => expectBody(await call({ type: 'hyper_v', data: { action } }), 'hyper_v').data,
+    steamProxy: async (action) => expectBody(await call({ type: 'steam_proxy_dll', data: { action } }), 'steam_proxy').data,
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

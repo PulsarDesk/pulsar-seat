@@ -167,6 +167,10 @@ pub enum RequestBody {
     /// virtual adapter with a fixed address on an internal switch). Answers
     /// [`ResponseBody::HyperV`]. Added 2026-11-17 (parity review, additive, admin).
     HyperV { action: crate::hyperv::HyperVAction },
+    /// Steam legacy proxy-DLL report, quarantine and restore (spec/remote 50 §6.2).
+    /// Answers [`ResponseBody::SteamProxy`]. Added 2026-11-17 (compat-tweaks, additive,
+    /// admin).
+    SteamProxyDll { action: crate::steam::SteamProxyAction },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -411,6 +415,7 @@ impl RequestBody {
             | R::ResetGraphics { .. }
             | R::RemoveKioskUser { .. }
             | R::HyperV { .. }
+            | R::SteamProxyDll { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -583,6 +588,8 @@ pub enum ResponseBody {
     Ack,
     /// Answer of `hyper_v` (added 2026-11-17, additive).
     HyperV(crate::hyperv::HyperVStatus),
+    /// Answer of `steam_proxy_dll` (added 2026-11-17, additive).
+    SteamProxy(crate::steam::SteamProxyStatus),
     Status(ServiceStatus),
     Backends(BackendReport),
     Checks(Vec<Check>),
@@ -977,6 +984,54 @@ pub enum AgentEvent {
     TaskDone { task_id: u64 },
     TaskFailed { task_id: u64, reason: String, win32: Option<u32> },
     Stopping,
+    /// Effective DPI of the session's monitors, read back by the agent
+    /// (`GetDpiForMonitor`, `MDT_EFFECTIVE_DPI`) after a `report_dpi` task. Added
+    /// 2026-11-17 (compat-tweaks, additive).
+    Dpi { monitors: Vec<MonitorDpi> },
+}
+
+/// One monitor of a session as the agent sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorDpi {
+    /// GDI device name of the monitor (for example `DISPLAY3` with the usual prefix).
+    pub device: String,
+    /// Effective DPI (96 = 100 %).
+    pub dpi: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl MonitorDpi {
+    /// The scale in percent Windows shows for this DPI (96 = 100 %).
+    pub fn percent(&self) -> u32 {
+        (self.dpi * 100 + 48) / 96
+    }
+}
+
+/// Prefix of the one-shot agent's output line (`pulsar-seat-agent --report-dpi`).
+pub const DPI_REPORT_PREFIX: &str = "PULSAR_SEAT_DPI ";
+
+/// The one-shot agent's output line.
+pub fn dpi_report_line(monitors: &[MonitorDpi]) -> String {
+    format!("{DPI_REPORT_PREFIX}{}", serde_json::to_string(monitors).unwrap_or_else(|_| "[]".into()))
+}
+
+/// The monitors of the last report line in `text` (other output is ignored).
+pub fn parse_dpi_report(text: &str) -> Option<Vec<MonitorDpi>> {
+    text.lines().rev().find_map(|l| l.trim().strip_prefix(DPI_REPORT_PREFIX).and_then(|j| serde_json::from_str(j).ok()))
+}
+
+#[cfg(test)]
+mod dpi_tests {
+    use super::*;
+
+    #[test]
+    fn report_line_roundtrip() {
+        let m = vec![MonitorDpi { device: "DISPLAY1".into(), dpi: 144, width: 2560, height: 1440 }];
+        let text = format!("noise\r\n{}\r\n", dpi_report_line(&m));
+        assert_eq!(parse_dpi_report(&text), Some(m));
+        assert_eq!(parse_dpi_report("nothing"), None);
+    }
 }
 
 /// One observation of the console raw-input listener. `interface` is the unit's
@@ -1050,6 +1105,13 @@ pub enum AgentTaskKind {
     /// desktop (`SendInput`). HYPOTHESIS: Windows honours the shortcut from injected input.
     /// Added 2026-11-17, additive.
     ResetGraphics,
+    /// Tell the session's programs that the user environment changed
+    /// (`WM_SETTINGCHANGE` with `Environment`, after the service wrote the seat's
+    /// variables). Added 2026-11-17 (compat-tweaks, additive).
+    RefreshEnvironment,
+    /// Read the effective DPI of the session's monitors and send it back
+    /// ([`AgentEvent::Dpi`]). Added 2026-11-17 (compat-tweaks, additive).
+    ReportDpi,
 }
 
 /// A CCD display target of this boot (adapter LUID + target id).

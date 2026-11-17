@@ -5,6 +5,7 @@
 // `validate_config` / `apply_config`; the checks here only give instant feedback.
 
 import * as M from './mask.ts';
+import { compatIssues } from './compat.ts';
 import {
   DEFAULT_LOOPBACK_LISTENER_PORT,
   EXPERIMENTAL_WARNING_VERSION,
@@ -16,6 +17,7 @@ import {
   type AssignmentOptions,
   type Config,
   type Device,
+  type EnvVar,
   type IpBinding,
   type IpProgram,
   type LogSettings,
@@ -246,6 +248,17 @@ function editSeat(c: Config, n: SeatNumber, f: (s: SeatConfig) => void): Config 
   const s = out.seats.find((x) => x.number === n);
   if (s) f(s);
   return normalize(out);
+}
+
+/** Per-seat environment variables and "Deny log on locally" (compat-tweaks 2026-11-17).
+ *  Empty / false values are removed from the document. */
+export function setSeatCompat(c: Config, n: SeatNumber, environment: EnvVar[], denyLocalLogon: boolean): Config {
+  return editSeat(c, n, (s) => {
+    if (environment.length) s.environment = environment.map((v) => ({ ...v }));
+    else delete s.environment;
+    if (denyLocalLogon) s.deny_local_logon = true;
+    else delete s.deny_local_logon;
+  });
 }
 
 export function renameSeat(c: Config, n: SeatNumber, name: string): Config {
@@ -1015,6 +1028,9 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
       out.push(issue('error', 'invalid_pad_ignore_device', { seat: s.number, field: 'pad_ignore_devices' }));
     }
   }
+
+  // Environment, deny log on locally, Windows Update policy, object rules (2026-11-17).
+  out.push(...compatIssues(c, issue));
 
   // Per-seat source addresses (spec 10 §7.4), same rules as seat-core.
   const ips = new Set<string>();

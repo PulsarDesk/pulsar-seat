@@ -74,6 +74,9 @@ pub struct Environment {
     /// RD Session Host role (Server only; registry heuristic, HYPOTHESIS).
     pub rdsh_role: Option<bool>,
     pub coexistence: Coexistence,
+    /// Legacy Steam proxy DLLs found next to `steam.exe` (`crate::steam::proxy_dlls`;
+    /// compat-tweaks 2026-11-17).
+    pub steam_proxy_dlls: Vec<String>,
 }
 
 impl Default for Environment {
@@ -91,6 +94,7 @@ impl Default for Environment {
             smart_app_control: Some(SmartAppControl::Off),
             windows_safe_mode: false,
             rdsh_role: None,
+            steam_proxy_dlls: Vec::new(),
             coexistence: Coexistence {
                 termservice_stock: true,
                 ..Default::default()
@@ -230,6 +234,10 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
         "Pulsar Seat drivers are not signed yet: user-mode methods are used",
     ));
     v.extend(env.coexistence.checks());
+    // Reported only when found: the administrator decides (quarantine in the manager).
+    if !env.steam_proxy_dlls.is_empty() {
+        v.push(chk("steam_proxy_dll", Warn, env.steam_proxy_dlls.join("; ")));
+    }
     v
 }
 
@@ -264,6 +272,7 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
     const REFERENCE_PRODUCT: Text = Text::new("Another multiseat product", "Başka bir çoklu koltuk yazılımı");
     const TERMSERVICE_STOCK: Text = Text::new("Remote Desktop service is stock", "Uzak Masaüstü hizmeti özgün");
     const FOREIGN_INPUT_FILTERS: Text = Text::new("Other input filter drivers", "Başka giriş süzgeç sürücüleri");
+    const STEAM_PROXY_DLL: Text = Text::new("Old Steam add-on DLL", "Eski Steam eklenti DLL'si");
     const OTHER: Text = Text::new("Check", "Denetim");
     match id {
         "admin" => &ADMIN,
@@ -279,6 +288,7 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
         "reference_product" => &REFERENCE_PRODUCT,
         "termservice_stock" => &TERMSERVICE_STOCK,
         "foreign_input_filters" => &FOREIGN_INPUT_FILTERS,
+        "steam_proxy_dll" => &STEAM_PROXY_DLL,
         _ => &OTHER,
     }
 }
@@ -325,6 +335,7 @@ pub fn probe_registry(ops: &dyn SystemOps, env: &mut Environment) {
         });
     // HYPOTHESIS: `TSAppCompat` = 1 marks an installed RD Session Host role (application
     // mode). The session package owns the authoritative probe (`SessionBackend::probe`).
+    env.steam_proxy_dlls = crate::steam::proxy_dlls(ops);
     env.rdsh_role = if env.is_server {
         dword(ops, TERMINAL_SERVER, "TSAppCompat").map(|v| v == 1)
     } else {
@@ -369,6 +380,22 @@ mod tests {
             assert!(seat_core::i18n::check_table(&[(x.id.as_str(), t)]).is_empty(), "{}", x.id);
             assert_ne!(t.tr, "Denetim", "missing Turkish title for {}", x.id);
         }
+    }
+
+    #[test]
+    fn steam_proxy_dll_is_reported_as_warning() {
+        assert!(!evaluate(&Environment::default()).iter().any(|c| c.id == "steam_proxy_dll"));
+        let ops = MemoryOps::new();
+        ops.set(Hive::Hklm, crate::steam::STEAM_KEYS[0], "InstallPath", RegData::Sz(r"D:\Steam".into()));
+        ops.files.lock().unwrap().insert(r"d:\steam\version.dll".into());
+        let mut e = Environment::default();
+        probe_registry(&ops, &mut e);
+        let c = evaluate(&e);
+        let x = c.iter().find(|c| c.id == "steam_proxy_dll").expect("check");
+        assert_eq!(x.outcome, CheckOutcome::Warn);
+        assert_eq!(x.detail, r"D:\Steam\version.dll");
+        assert!(!blocks_install(&c));
+        assert_ne!(title_text("steam_proxy_dll").tr, "Denetim");
     }
 
     #[test]

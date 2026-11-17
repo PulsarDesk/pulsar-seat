@@ -118,6 +118,40 @@ impl OpsError {
 
 pub type OpsResult<T> = Result<T, OpsError>;
 
+/// Which Microsoft Defender exclusion list (`MSFT_MpPreference.ExclusionPath` /
+/// `ExclusionProcess`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionKind {
+    Path,
+    Process,
+}
+
+/// The two Defender exclusion lists we touch.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefenderExclusions {
+    pub paths: Vec<String>,
+    pub processes: Vec<String>,
+}
+
+impl DefenderExclusions {
+    pub fn list(&self, kind: ExclusionKind) -> &[String] {
+        match kind {
+            ExclusionKind::Path => &self.paths,
+            ExclusionKind::Process => &self.processes,
+        }
+    }
+    /// `value` is on the list (case-insensitive, trailing `\` ignored).
+    pub fn contains(&self, kind: ExclusionKind, value: &str) -> bool {
+        let n = |s: &str| s.trim().trim_end_matches('\\').to_ascii_lowercase();
+        self.list(kind).iter().any(|v| n(v) == n(value))
+    }
+}
+
+fn unsupported(op: &str) -> OpsError {
+    OpsError::new(op, "not supported by this implementation")
+}
+
 /// System operations. Every write is preceded by a journal entry (see [`crate::journal`]).
 pub trait SystemOps: Send + Sync {
     /// `Ok(None)` when the key or the value is absent.
@@ -159,6 +193,46 @@ pub trait SystemOps: Send + Sync {
         sid: &str,
         f: &mut dyn FnMut(&str) -> OpsResult<()>,
     ) -> OpsResult<bool>;
+
+    /// Every value of a key (empty when the key is absent). Added 2026-11-17.
+    fn reg_values(&self, _hive: Hive, _key: &str) -> OpsResult<Vec<(String, RegData)>> {
+        Err(unsupported("reg_values"))
+    }
+
+    /// Microsoft Defender's exclusion lists; `Ok(None)` when Defender is not there (WMI
+    /// class `MSFT_MpPreference` missing, another antivirus product active). Added
+    /// 2026-11-17.
+    fn defender_exclusions(&self) -> OpsResult<Option<DefenderExclusions>> {
+        Ok(None)
+    }
+    /// Add (`add`) or remove one Defender exclusion (`MSFT_MpPreference.Add` / `Remove`).
+    fn defender_exclusion(&self, _kind: ExclusionKind, _value: &str, _add: bool) -> OpsResult<()> {
+        Err(unsupported("defender_exclusion"))
+    }
+
+    /// Logon rights / privileges of account `sid` (`LsaEnumerateAccountRights`; empty
+    /// when the account has none). Added 2026-11-17.
+    fn account_rights(&self, _sid: &str) -> OpsResult<Vec<String>> {
+        Err(unsupported("account_rights"))
+    }
+    /// `LsaAddAccountRights` (`add`) / `LsaRemoveAccountRights` of one right.
+    fn account_right(&self, _sid: &str, _right: &str, _add: bool) -> OpsResult<()> {
+        Err(unsupported("account_right"))
+    }
+
+    /// A regular file exists at `path`. Added 2026-11-17.
+    fn file_exists(&self, path: &str) -> OpsResult<bool> {
+        Ok(std::path::Path::new(path).is_file())
+    }
+    /// Move a file (same volume or copy + delete), creating the target folder.
+    fn file_move(&self, from: &str, to: &str) -> OpsResult<()> {
+        if let Some(p) = std::path::Path::new(to).parent() {
+            std::fs::create_dir_all(p).map_err(|e| OpsError::new("file_move", e.to_string()))?;
+        }
+        std::fs::rename(from, to)
+            .or_else(|_| std::fs::copy(from, to).and_then(|_| std::fs::remove_file(from)))
+            .map_err(|e| OpsError::new("file_move", e.to_string()))
+    }
 }
 
 /// `S-1-5-21-…`-shaped string (digits and dashes only), so it can never name another key.
@@ -183,6 +257,12 @@ pub struct MemoryOps {
     pub driver_store: Mutex<BTreeMap<String, DriverStoreInfo>>,
     /// Fail the next write with this message.
     pub fail_next_write: Mutex<Option<String>>,
+    /// Defender exclusions; `None` = Defender absent.
+    pub defender: Mutex<Option<DefenderExclusions>>,
+    /// Account SID (upper case) -> rights.
+    pub rights: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Files that exist (lower-case paths).
+    pub files: Mutex<std::collections::BTreeSet<String>>,
 }
 
 fn norm(key: &str) -> String {
@@ -361,6 +441,64 @@ impl SystemOps for MemoryOps {
         }
         f(sid)?;
         Ok(true)
+    }
+    fn reg_values(&self, hive: Hive, key: &str) -> OpsResult<Vec<(String, RegData)>> {
+        let n = norm(key);
+        Ok(self
+            .reg
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((h, k, _), _)| *h == hive && *k == n)
+            .map(|((_, _, name), d)| (name.clone(), d.clone()))
+            .collect())
+    }
+    fn defender_exclusions(&self) -> OpsResult<Option<DefenderExclusions>> {
+        Ok(self.defender.lock().unwrap().clone())
+    }
+    fn defender_exclusion(&self, kind: ExclusionKind, value: &str, add: bool) -> OpsResult<()> {
+        self.take_fail("defender_exclusion")?;
+        let mut g = self.defender.lock().unwrap();
+        let d = g.as_mut().ok_or_else(|| OpsError::new("defender_exclusion", "Defender not present"))?;
+        let present = d.contains(kind, value);
+        let list = match kind {
+            ExclusionKind::Path => &mut d.paths,
+            ExclusionKind::Process => &mut d.processes,
+        };
+        if add && !present {
+            list.push(value.to_string());
+        } else if !add {
+            list.retain(|v| !v.eq_ignore_ascii_case(value));
+        }
+        Ok(())
+    }
+    fn account_rights(&self, sid: &str) -> OpsResult<Vec<String>> {
+        Ok(self.rights.lock().unwrap().get(&sid.to_ascii_uppercase()).cloned().unwrap_or_default())
+    }
+    fn account_right(&self, sid: &str, right: &str, add: bool) -> OpsResult<()> {
+        self.take_fail("account_right")?;
+        let mut g = self.rights.lock().unwrap();
+        let v = g.entry(sid.to_ascii_uppercase()).or_default();
+        if add {
+            if !v.iter().any(|r| r == right) {
+                v.push(right.to_string());
+            }
+        } else {
+            v.retain(|r| r != right);
+        }
+        Ok(())
+    }
+    fn file_exists(&self, path: &str) -> OpsResult<bool> {
+        Ok(self.files.lock().unwrap().contains(&path.to_ascii_lowercase()))
+    }
+    fn file_move(&self, from: &str, to: &str) -> OpsResult<()> {
+        self.take_fail("file_move")?;
+        let mut g = self.files.lock().unwrap();
+        if !g.remove(&from.to_ascii_lowercase()) {
+            return Err(OpsError::new("file_move", "source missing"));
+        }
+        g.insert(to.to_ascii_lowercase());
+        Ok(())
     }
 }
 

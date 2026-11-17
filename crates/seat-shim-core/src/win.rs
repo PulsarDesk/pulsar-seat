@@ -269,6 +269,20 @@ pub fn write_camera_rules(rules: &[crate::readers::ReaderRule]) -> Result<(), Sh
     k.set_raw_value(crate::values::CAMERA_RULES, &to_winreg(&RegValue::MultiSz(lines))).map_err(|e| reg_err(crate::values::CAMERA_RULES, e))
 }
 
+/// Publishes the named-object rules (`crate::objects`), `ObjectRules` (empty = removed).
+pub fn write_object_rules(rules: &[crate::objects::ObjectRule]) -> Result<(), ShimError> {
+    let k = hklm_create(crate::REG_SHIM, KEY_WRITE).map_err(|e| reg_err(crate::REG_SHIM, e))?;
+    let lines = crate::objects::encode(rules);
+    if lines.is_empty() {
+        return match k.delete_value(crate::values::OBJECT_RULES) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(reg_err(crate::values::OBJECT_RULES, e)),
+        };
+    }
+    k.set_raw_value(crate::values::OBJECT_RULES, &to_winreg(&RegValue::MultiSz(lines))).map_err(|e| reg_err(crate::values::OBJECT_RULES, e))
+}
+
 /// The camera rules as published.
 pub fn read_camera_rules() -> Vec<crate::readers::ReaderRule> {
     read_value(crate::REG_SHIM, crate::values::CAMERA_RULES).and_then(|v| v.as_multi().map(crate::readers::decode)).unwrap_or_default()
@@ -407,6 +421,9 @@ pub fn read_shim_config() -> crate::decide::ShimConfig {
         gameinput_focus: read_value(crate::REG_SHIM, crate::values::GAME_INPUT_FOCUS).and_then(|v| v.as_dword()) == Some(1),
         reader_rules: read_value(crate::REG_SHIM, crate::values::READER_RULES).and_then(|v| v.as_multi().map(|l| !l.is_empty())).unwrap_or(false),
         camera_rules: read_value(crate::REG_SHIM, crate::values::CAMERA_RULES).and_then(|v| v.as_multi().map(|l| !l.is_empty())).unwrap_or(false),
+        object_rules: read_value(crate::REG_SHIM, crate::values::OBJECT_RULES)
+            .and_then(|v| v.as_multi().map(crate::objects::decode))
+            .unwrap_or_default(),
     }
 }
 

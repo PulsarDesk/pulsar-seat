@@ -158,6 +158,10 @@ fn utf16_strings(b: &[u8]) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn regdata_of(v: &winreg::RegValue) -> Option<RegData> {
+    to_regdata(v)
+}
+
 fn to_regdata(v: &winreg::RegValue) -> Option<RegData> {
     let b = &v.bytes;
     Some(match v.vtype {
@@ -447,6 +451,26 @@ impl SystemOps for WinOps {
             return Err(OpsError::win32("RegUnLoadKeyW", rc));
         }
         Ok(true)
+    }
+
+    fn reg_values(&self, hive: Hive, key: &str) -> OpsResult<Vec<(String, RegData)>> {
+        crate::win_extra::reg_values(root(hive), key)
+    }
+
+    fn defender_exclusions(&self) -> OpsResult<Option<crate::ops::DefenderExclusions>> {
+        crate::win_extra::defender_exclusions()
+    }
+
+    fn defender_exclusion(&self, kind: crate::ops::ExclusionKind, value: &str, add: bool) -> OpsResult<()> {
+        crate::win_extra::defender_exclusion(kind, value, add)
+    }
+
+    fn account_rights(&self, sid: &str) -> OpsResult<Vec<String>> {
+        crate::win_extra::account_rights(sid)
+    }
+
+    fn account_right(&self, sid: &str, right: &str, add: bool) -> OpsResult<()> {
+        crate::win_extra::account_right(sid, right, add)
     }
 }
 

@@ -301,7 +301,8 @@ const t = {
     removeKioskUserTitle: (n: number) => `${n}. koltuğun kiosk kullanıcısı silinsin mi?`,
     removeKioskUserBody:
       'Pulsar Seat bu koltuğun kiosk kabuğu için bir Windows kullanıcısı oluşturdu. Kiosk kabuğu kapatılınca kullanıcı yalnızca devre dışı bırakılır ve dosyaları (kayıtlar, tarayıcı profilleri) korunur. Silmek kullanıcıyı ve bütün dosyalarını kalıcı olarak kaldırır.',
-    removeKioskUserDone: 'Koltuğun kiosk kullanıcısı silindi.'
+    removeKioskUserDone: 'Koltuğun kiosk kullanıcısı silindi.',
+    compat: 'Ortam ve oturum açma…'
   },
 
   systemMenu: {
@@ -320,7 +321,8 @@ const t = {
     panels: 'Windows panelleri',
     clearPictures: 'Bütün özel resimleri temizle',
     logLevel: 'Günlük ayrıntısı…',
-    outputs: 'Görüntü çıkışları…'
+    outputs: 'Görüntü çıkışları…',
+    usbDock: 'USB yuva sihirbazı…'
   },
 
   kinds: {
@@ -563,9 +565,19 @@ const t = {
     devices: 'Aygıtlar',
     adminsBypass: 'Yöneticiler bütün koltukların aygıtlarına erişebilsin',
     classDefaults: 'Sınıf düzeyinde varsayılan erişim tanımları (sistem değişikliği)',
-    classDefaultsSoon: 'Bu ayar Windows’un aygıt sınıfı varsayılan erişim tanımlarını değiştirir. Gerçek donanımda denenene kadar kapalı tutuluyor.',
+    classDefaultsSoon: 'Varsayılan olarak kapalı. Açıkken işaretli sınıfların yeni aygıtları, Pulsar Seat onları koltuğuna açana kadar normal kullanıcılara kapalı başlar (arada boşluk kalmaz). Windows’un aygıt sınıfı varsayılan erişim tanımlarını değiştirir; kapatınca her şey geri alınır. Henüz gerçek donanımda denenmedi.',
     classDefaultClasses: 'Bu ayar açıldığında kapsanacak aygıt sınıfları',
-    classTargets: { disk_drive: 'Diskler', cdrom: 'CD / DVD sürücüleri', volume: 'Birimler', ports: 'Seri ve paralel bağlantı noktaları' } as Record<string, string>,
+    classTargets: {
+      disk_drive: 'Diskler',
+      cdrom: 'CD / DVD sürücüleri',
+      volume: 'Birimler',
+      ports: 'Seri ve paralel bağlantı noktaları',
+      modem: 'Modemler',
+      multiport_serial: 'Çok bağlantılı seri bağdaştırıcılar',
+      floppy: 'Disket sürücüleri',
+      tape_drive: 'Teyp sürücüleri',
+      medium_changer: 'Ortam değiştiriciler'
+    } as Record<string, string>,
     tweaks: 'İsteğe bağlı sistem ayarları',
     tweaksHint: 'Her biri kayda geçirilir ve Pulsar Seat kapatılınca ya da kaldırılınca geri alınır.',
     hideFus: 'Hızlı kullanıcı değiştirmeyi gizle',
@@ -688,7 +700,8 @@ const t = {
     driver_signing: { info: 'Pulsar Seat sürücüleri henüz imzalı değil; kullanıcı kipi yöntemleri kullanılır.' },
     reference_product: { pass: 'Kurulu değil.', fail: 'Başka bir çoklu koltuk yazılımı kurulu.' },
     termservice_stock: { pass: 'Uzak Masaüstü hizmeti Windows’un kendi dosyasını kullanıyor.', warn: 'Uzak Masaüstü hizmeti Windows varsayılanını kullanmıyor.' },
-    foreign_input_filters: { pass: 'Yok.', warn: 'Başka giriş süzgeçleri var (dokunulmadı).' }
+    foreign_input_filters: { pass: 'Yok.', warn: 'Başka giriş süzgeçleri var (dokunulmadı).' },
+    steam_proxy_dll: { warn: 'steam.exe’nin yanında eski bir Steam eklenti DLL’si (version.dll) var. Pulsar Seat onu kaldırmaz; Gelişmiş > Uyumluluk bölümüne bakın.' }
   } as Record<string, Partial<Record<CheckOutcome, string>>>,
   technicalDetail: 'teknik ayrıntı',
 
@@ -886,6 +899,7 @@ const t = {
     termservice_stock: 'Uzak Masaüstü hizmeti özgün',
     reference_product: 'Başka bir çoklu koltuk yazılımı',
     foreign_input_filters: 'Başka giriş süzgeç sürücüleri',
+    steam_proxy_dll: 'Eski Steam eklenti DLL’si',
     arch_native: 'Yerel derleme',
     admin: 'Yönetici hakları',
     smart_app_control: 'Akıllı Uygulama Denetimi',
@@ -1271,7 +1285,102 @@ const t = {
     connecting: 'bağlanıyor',
     waiting_for_session: 'oturum bekleniyor',
     logging_on: 'oturum açılıyor'
-  } as Record<string, string>
+  } as Record<string, string>,
+  compat: {
+    title: 'Uyumluluk',
+    hint: 'Koltuk bilgisayarları için isteğe bağlı, görünür sistem değişiklikleri. Hepsi varsayılan olarak kapalıdır, kaydedilir ve kapattığınızda, Pulsar Seat’i kapattığınızda veya kaldırdığınızda geri alınır.',
+    fastStartup: 'Hızlı başlatmayı kapat (yeniden başlatma gerekir)',
+    fastStartupHint: 'Hızlı başlatmada “Kapat”, Windows çekirdeğini ve sürücüleri bir dosyada saklar; koltuklar sonra yarım başlar. Kapalıyken her açılış temiz bir açılıştır.',
+    wu: 'Koltuk bilgisayarları için Windows Update',
+    wuHint: 'Belgelenmiş İş İçin Windows Update ilkelerini yazar. Güncellemeler engellenmez, ertelenir; güvenlik güncellemeleri erteleme sonunda yine gelir. Windows Home bu ilkeleri yok sayar.',
+    wuEnabled: 'Bu Windows Update ayarlarını kullan',
+    wuFeature: 'Özellik güncellemelerini ertele (gün, 0–365)',
+    wuQuality: 'Kalite güncellemelerini ertele (gün, 0–30)',
+    wuActiveHours: 'Etkin saatler (bu aralıkta otomatik yeniden başlatma yok)',
+    wuActiveFrom: 'Başlangıç',
+    wuActiveTo: 'bitiş',
+    wuActiveNone: 'Windows karar versin',
+    wuNoRestart: 'Biri oturum açıkken asla otomatik yeniden başlatma',
+    wuInvalid: 'Değerleri denetleyin: en çok 365 / 30 gün, etkin saatlerin ikisi de dolu, en çok 18 saat.',
+    deny: 'Kullanılmayan türlerde yeni aygıtları engelle',
+    denyHint: 'Aygıt Yükleme Kısıtlamaları ilkesi: Windows işaretli türlerde yeni aygıt kurmaz. Kurulu aygıtlar çalışmaya devam eder. Bir koltuk kullanıcısının hiçbir koltuğa verilmemesi gereken aygıtlar takmasına karşı işe yarar.',
+    denyUnused: (list: string) => `Hiçbir koltuğun kullanmadığı: ${list}.`,
+    denyPickUnused: 'Kullanılmayan türleri işaretle',
+    denyAdmins: 'Yöneticiler bu aygıtları yine de kurabilsin',
+    installClasses: {
+      printer: 'Yazıcılar',
+      image: 'Tarayıcılar ve görüntüleme aygıtları',
+      camera: 'Kameralar',
+      wpd: 'Telefonlar ve taşınabilir aygıtlar',
+      modem: 'Modemler',
+      cdrom: 'CD / DVD sürücüleri',
+      ports: 'Seri ve paralel bağlantı noktaları',
+      smart_card_reader: 'Akıllı kart okuyucular'
+    } as Record<string, string>,
+    defender: 'Pulsar Seat’i Microsoft Defender taramalarının dışında tut',
+    defenderHint:
+      'Pulsar Seat’in kurulum klasörünü, veri klasörünü ve üç arka plan programını Defender dışlama listelerine ekler; böylece taramalar koltukların açılışını yavaşlatmaz. Sizin eklediğiniz dışlamalara dokunulmaz. Başka bir virüsten koruma etkinse hiçbir şey yapılmaz.',
+    apps: 'Koltuklardaki uygulamalar',
+    steamPerSeat: 'Her koltukta Steam (her yerel koltuğa ayrı Steam istemcisi)',
+    steamPerSeatHint:
+      'Bir koltuğun kendi oturumunda başlayan Steam o koltuğa ait IPC adını alır; böylece her koltuk kendi Steam istemcisini çalıştırır. İşlem başına yamanın açık ve steam.exe’nin hedef listesinde olması gerekir. Her koltuk kendi Steam hesabını kullanmalıdır (Steam kuralları). Oyun kitaplığı klasörü ortak kalır: iki koltuk aynı oyunu aynı anda kurar veya güncellerse çakışabilir; ayrı kitaplık için koltuğa ayrı bir Steam kurulum klasörü verin.',
+    objectRules: 'Tek kopyalı programlar (koltuk başına bir kopya)',
+    objectRulesHint:
+      'Bilgisayarda ikinci kopyayı reddeden programlar için: burada listelenen adlandırılmış nesneler program içinde koltuğa özel bir ad alır. Yalnızca işlem başına yama hedef listesindeki programlar kapsanır; hile koruması olan oyunları asla eklemeyin. Nesne adlarında büyük/küçük harf fark eder; ön ek için adı * ile bitirin.',
+    objectExe: 'Program (dosya adı, ör. launcher.exe)',
+    objectNames: 'Nesne adları (her satıra bir tane, Global\\ olmadan)',
+    objectAdd: 'Program ekle',
+    objectRemove: 'Kaldır',
+    objectInvalid: 'Bir kural eksik: bir .exe dosya adı ve en az bir ad gerekir.',
+    steamProxy: 'Eski Steam eklenti DLL’si',
+    steamProxyHint:
+      'Eski “multibox” eklentileri steam.exe’nin yanına bir version.dll koyar, Steam de onu yükler. Pulsar Seat onu asla silmez; Pulsar Seat’in karantina klasörüne taşıyıp geri koyabilirsiniz.',
+    steamProxyCheck: 'Ara',
+    steamProxyNone: 'Steam klasörlerinde eklenti DLL’si bulunamadı.',
+    steamProxyNoSteam: 'Steam kurulu değil.',
+    steamProxyQuarantine: 'Karantinaya taşı',
+    steamProxyRestore: 'Geri koy',
+    steamProxyQuarantined: (orig: string) => `Karantinada (önceki yeri ${orig})`,
+    usbWizard: 'USB yuva sihirbazı…'
+  },
+
+  seatCompat: {
+    menu: 'Ortam ve oturum açma…',
+    title: (n: number) => `Koltuk ${n}: ortam ve oturum açma`,
+    env: 'Ortam değişkenleri',
+    envHint:
+      'Bu koltuğun kullanıcısı için her oturum açışta ayarlanır (Pulsar Seat’in koltukta başlattığı programlara da verilir). Pulsar Seat kapatılınca geri alınır. Windows’un kendi değişkenleri (Path, TEMP, …) buradan değiştirilemez.',
+    envName: 'Ad',
+    envValue: 'Değer',
+    envAdd: 'Değişken ekle',
+    envRemove: 'Kaldır',
+    envInvalid: 'Adları denetleyin: yalnızca harf, rakam ve _ - . ( ), Windows değişkeni olmasın, her ad bir kez, en çok 32.',
+    deny: 'Bu koltuğun hesabı için yerel oturum açmayı reddet',
+    denyHint:
+      'Koltuk Uzak Masaüstü ile oturum açarken koltuğun kullanıcısı bilgisayarın kendisinde (konsol veya fiziksel bir koltuk) oturum açamaz. Pulsar Seat hesaba Windows’un “Yerel oturum açmayı reddet” hakkını ekler ve kapatılınca yeniden kaldırır.',
+    denyUnavailable: 'Yalnızca hesabı olan ve Uzak Masaüstü ile oturum açan koltuklar için (uzak koltuklar veya Uzak Masaüstü oturum yöntemiyle 2. ve sonraki koltuklar).'
+  },
+
+  usbDock: {
+    title: 'USB yuva sihirbazı',
+    intro:
+      'Çok koltuklu USB yuvaları tek kutuda bir monitör, ses ve klavye ile fare için USB bağlantı noktaları sunar. Tüm yuvaları takın, Ekran ayarlarında masaüstünü monitörlerine genişletin, sonra burada her yuva için bir koltuk seçin.',
+    scanning: 'Yuvalar aranıyor…',
+    found: (n: number) => `${n} yuva bulundu.`,
+    stable: 'Sayı sabit.',
+    unstable: 'Sayı hâlâ değişiyor; tüm yuvalar hazır olana kadar bekleyin.',
+    rescan: 'Yeniden ara',
+    display: 'Ekran ayarları',
+    none: 'Monitörü ve klavyesi, faresi veya sesi olan bir yuva bulunamadı.',
+    dock: (label: string) => `Yuva ${label}`,
+    contents: (m: number, i: number, a: number) => `${m} monitör, ${i} giriş aygıtı, ${a} ses aygıtı`,
+    seat: 'Koltuk',
+    newSeat: 'Yeni koltuk',
+    skip: 'Olduğu gibi bırak',
+    hasDisplay: 'zaten monitörü var',
+    apply: 'Ata',
+    done: (n: number) => `${n} yuva atandı. Uygulamak için kaydedin.`
+  }
 };
 
 const productText = {
@@ -1387,6 +1496,10 @@ const issueText: Record<string, string> = {
   cpu_only_efficiency_cores: 'Koltuğa yalnızca verimlilik çekirdekleri verilmiş; yavaş çalışabilir.',
   invalid_ip_address: 'IP adresi geçersiz.',
   invalid_pad_ignore_device: 'Yok sayılacak kol listesinde 0xVVVV/0xPPPP biçiminde olmayan bir girdi var (ya da liste çok uzun).',
+  invalid_seat_environment: 'Bir koltuk ortam değişkeni geçersiz (ad, değer, yineleme ya da 32’den fazla).',
+  deny_local_logon_unsupported: '“Yerel oturum açmayı reddet” yalnızca hesabı olan ve Uzak Masaüstü ile oturum açan koltuklarda çalışır; koltuk kendi kullanıcısını dışarıda bırakırdı.',
+  invalid_windows_update_policy: 'Windows Update ayarları aralık dışında.',
+  invalid_object_rule: 'Bir tek kopyalı program kuralı eksik ya da geçersiz.',
   duplicate_ip_address: 'Aynı IP adresi birden fazla koltuğa verilmiş.',
   too_many_ip_programs: 'Program listesi çok uzun; fazlası kaydedilmez.',
   invalid_ip_program: 'Program listesinde yolu boş bir satır var.',
@@ -1426,7 +1539,8 @@ const noticeText: Record<string, string> = {
   input_move_pending: 'Kısayolla taşınan klavye ve fareler onay bekliyor.',
   credprov_failed: 'Koltuk oturum açma bileşeni kaydedilemedi ya da kaldırılamadı; ayrıntı hizmet günlüğünde.',
   credprov_logon_failed: 'Bir koltuğun kendiliğinden oturum açması kayıtlı parolayla başarısız oldu; parolayı yeniden girin.',
-  switch_refused: 'Koltuğa geçilemedi; ayrıntı hizmet günlüğünde.'
+  switch_refused: 'Koltuğa geçilemedi; ayrıntı hizmet günlüğünde.',
+  dpi_mismatch: 'Koltuğun ekran ölçeği ayarından farklı (Windows başka bir ölçek seçti).'
 };
 
 /** Text per state / reason of the passwordless-seat listener (`loopback_listener:<state>[:<x>]`). */
@@ -1788,7 +1902,8 @@ const rt = {
     adapter_fallback: 'Seçilen ekran kartı bulunamadı; varsayılan kullanılıyor.',
     firewall: 'Güvenlik duvarı kuralları eklenemedi; yerel ağdaki cihazlar koltuğa bağlanamayabilir.',
     control_unavailable: 'Akış sunucusunun denetim kanalı açılamadı; eşleştirme bu koltukta kullanılamıyor.',
-    capture_error: 'Akış sunucusu görüntü yakalayamadı.'
+    capture_error: 'Akış sunucusu görüntü yakalayamadı.',
+    dpi_mismatch: 'Koltuğun ekran ölçeği sabit ölçek ayarından farklı (Windows başka bir ölçek seçti).'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Başka bir çoklu koltuk ürünü kurulu.',

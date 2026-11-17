@@ -320,6 +320,10 @@ pub struct RemoteSeatRecord {
     /// service starts in the seat). Added 2026-11-17 (additive).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pad_ignore_devices: Vec<String>,
+    /// The seat's `SeatConfig::environment` (per-seat variables of the processes the
+    /// service starts in the seat). Added 2026-11-17 (compat-tweaks, additive).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub environment: Vec<crate::config::EnvVar>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

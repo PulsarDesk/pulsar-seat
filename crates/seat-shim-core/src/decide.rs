@@ -413,6 +413,15 @@ pub struct ShimConfig {
     /// The service published camera rules (`crate::readers::camera_visible`); the HID open
     /// / enumeration groups then also run in console processes.
     pub camera_rules: bool,
+    /// Named-object rules (`crate::objects`, `Shim\ObjectRules`; compat-tweaks 2026-11-17).
+    pub object_rules: Vec<crate::objects::ObjectRule>,
+}
+
+impl ShimConfig {
+    /// This program has named-object rules.
+    pub fn has_object_rules(&self, exe: &str) -> bool {
+        !crate::objects::rules_for(exe, &self.object_rules).is_empty()
+    }
 }
 
 /// The shared game-input service (spec/remote 50 §2.3, §5.1). It runs in session 0, so it
@@ -462,6 +471,9 @@ pub struct HookPlan {
     /// WinSCard filter (`crate::readers`): readers of other seats are hidden (every role,
     /// while reader rules are published; parity review 2026-11-17).
     pub scard_filter: bool,
+    /// Named-object rewrite (`crate::objects`): seat and kiosk roles of programs with rules
+    /// (compat-tweaks 2026-11-17).
+    pub object_names: bool,
 }
 
 impl HookPlan {
@@ -475,6 +487,7 @@ impl HookPlan {
             || self.raw_input_data
             || self.cursor_pos
             || self.scard_filter
+            || self.object_names
     }
 }
 
@@ -526,6 +539,7 @@ pub fn hook_plan_full(
                 raw_input_data: e.flags.raw_input,
                 cursor_pos: e.flags.cursor,
                 scard_filter: cfg.reader_rules,
+                object_names: cfg.has_object_rules(exe),
                 ..HookPlan::default()
             }
         }
@@ -546,8 +560,19 @@ pub fn hook_plan_full(
                 raw_input_data: false,
                 cursor_pos: false,
                 scard_filter: cfg.reader_rules,
+                object_names: cfg.has_object_rules(exe),
             }
         }
+    }
+}
+
+/// The rewrite scope of a role (`None` = names stay as they are: console, none).
+pub fn object_scope(role: &Role) -> Option<crate::objects::Scope> {
+    use crate::objects::{Scope, tag};
+    match role {
+        Role::Seat { seat_id, .. } => Some(Scope::OwnSession { tag: tag(seat_id) }),
+        Role::Kiosk { seat, .. } => Some(Scope::SharedSession { tag: format!("kiosk{seat}") }),
+        Role::None | Role::Console => None,
     }
 }
 
@@ -577,6 +602,23 @@ mod tests {
 
     fn seat_a() -> Role {
         Role::Seat { seat_id: SEAT_A.into(), session_id: 3 }
+    }
+
+    #[test]
+    fn object_names_only_for_seats_with_rules() {
+        let map = vec![entry(SEAT_A, 3, 1)];
+        let cfg = ShimConfig {
+            object_rules: vec![crate::objects::ObjectRule { exe: "launcher.exe".into(), names: vec!["One".into()] }],
+            ..Default::default()
+        };
+        let seat = hook_plan(&seat_a(), &facts(3, 1, r"c:\l\launcher.exe"), &map, &cfg, 26100);
+        assert!(seat.object_names && seat.any());
+        let other = hook_plan(&seat_a(), &facts(3, 1, r"c:\l\other.exe"), &map, &cfg, 26100);
+        assert!(!other.object_names);
+        let console = hook_plan(&Role::Console, &facts(1, 1, r"c:\l\launcher.exe"), &map, &cfg, 26100);
+        assert!(!console.object_names);
+        assert!(object_scope(&Role::Console).is_none());
+        assert_eq!(object_scope(&Role::Kiosk { seat: 2, session_id: 1 }), Some(crate::objects::Scope::SharedSession { tag: "kiosk2".into() }));
     }
 
     #[test]

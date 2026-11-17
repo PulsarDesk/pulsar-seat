@@ -301,7 +301,8 @@ const t = {
     removeKioskUserTitle: (n: number) => `Delete the kiosk user of seat ${n}?`,
     removeKioskUserBody:
       'Pulsar Seat made a Windows user for this seat’s kiosk shell. When the kiosk shell is turned off the user is only disabled and its files (saves, browser profiles) are kept. Deleting it removes the user and all its files for good.',
-    removeKioskUserDone: 'The seat’s kiosk user was deleted.'
+    removeKioskUserDone: 'The seat’s kiosk user was deleted.',
+    compat: 'Environment and sign-in…'
   },
 
   systemMenu: {
@@ -320,7 +321,8 @@ const t = {
     panels: 'Windows panels',
     clearPictures: 'Clear all custom pictures',
     logLevel: 'Log detail…',
-    outputs: 'Display outputs…'
+    outputs: 'Display outputs…',
+    usbDock: 'USB dock wizard…'
   },
 
   kinds: {
@@ -563,9 +565,19 @@ const t = {
     devices: 'Devices',
     adminsBypass: 'Administrators can access the devices of all seats',
     classDefaults: 'Class-level default access definitions (system change)',
-    classDefaultsSoon: 'This setting changes Windows’ device class default access definitions. It stays off until tested on real hardware.',
+    classDefaultsSoon: 'Off by default. When on, new devices of the ticked classes start closed to normal users until Pulsar Seat opens them to their seat (no window in between). It changes Windows’ device class default access definitions; everything is undone when turned off. Not tested on real hardware yet.',
     classDefaultClasses: 'Device classes covered when this setting is on',
-    classTargets: { disk_drive: 'Disks', cdrom: 'CD / DVD drives', volume: 'Volumes', ports: 'Serial and parallel ports' } as Record<string, string>,
+    classTargets: {
+      disk_drive: 'Disks',
+      cdrom: 'CD / DVD drives',
+      volume: 'Volumes',
+      ports: 'Serial and parallel ports',
+      modem: 'Modems',
+      multiport_serial: 'Multi-port serial adapters',
+      floppy: 'Floppy drives',
+      tape_drive: 'Tape drives',
+      medium_changer: 'Medium changers'
+    } as Record<string, string>,
     tweaks: 'Optional system settings',
     tweaksHint: 'Each one is recorded and undone when Pulsar Seat is turned off or uninstalled.',
     hideFus: 'Hide fast user switching',
@@ -688,7 +700,8 @@ const t = {
     driver_signing: { info: 'The Pulsar Seat drivers are not signed yet; user-mode methods are used.' },
     reference_product: { pass: 'Not installed.', fail: 'Another multiseat product is installed.' },
     termservice_stock: { pass: 'The Remote Desktop service uses Windows’ own file.', warn: 'The Remote Desktop service does not use the Windows default.' },
-    foreign_input_filters: { pass: 'None.', warn: 'Other input filters are present (left untouched).' }
+    foreign_input_filters: { pass: 'None.', warn: 'Other input filters are present (left untouched).' },
+    steam_proxy_dll: { warn: 'An old Steam add-on DLL (version.dll) is next to steam.exe. Pulsar Seat does not remove it; see Advanced > Compatibility.' }
   } as Record<string, Partial<Record<CheckOutcome, string>>>,
   technicalDetail: 'technical detail',
 
@@ -886,6 +899,7 @@ const t = {
     termservice_stock: 'Remote Desktop service is stock',
     reference_product: 'Another multiseat product',
     foreign_input_filters: 'Other input filter drivers',
+    steam_proxy_dll: 'Old Steam add-on DLL',
     arch_native: 'Native build',
     admin: 'Administrator rights',
     smart_app_control: 'Smart App Control',
@@ -1271,7 +1285,102 @@ const t = {
     connecting: 'connecting',
     waiting_for_session: 'waiting for the session',
     logging_on: 'signing in'
-  } as Record<string, string>
+  } as Record<string, string>,
+  compat: {
+    title: 'Compatibility',
+    hint: 'Optional, visible system changes for seat PCs. Each one is off by default, recorded and undone when you turn it off, turn Pulsar Seat off or uninstall it.',
+    fastStartup: 'Turn off fast startup (restart needed)',
+    fastStartupHint: 'With fast startup, “Shut down” keeps the Windows kernel and drivers in a file; seats then come back half-initialised. Off means every start is a clean start.',
+    wu: 'Windows Update for seat PCs',
+    wuHint: 'Writes the documented Windows Update for Business policies. Updates are delayed, not blocked; security updates still arrive after the delay. Windows Home ignores these policies.',
+    wuEnabled: 'Use these Windows Update settings',
+    wuFeature: 'Delay feature updates by (days, 0–365)',
+    wuQuality: 'Delay quality updates by (days, 0–30)',
+    wuActiveHours: 'Active hours (no automatic restart in this window)',
+    wuActiveFrom: 'From',
+    wuActiveTo: 'to',
+    wuActiveNone: 'Windows decides',
+    wuNoRestart: 'Never restart automatically while someone is signed in',
+    wuInvalid: 'Check the values: up to 365 / 30 days, active hours both set, at most 18 hours.',
+    deny: 'Block new devices of unused kinds',
+    denyHint: 'Device Installation Restrictions policy: Windows does not install new devices of the ticked kinds. Devices already installed keep working. Useful against a seat user plugging in devices no seat should get.',
+    denyUnused: (list: string) => `No seat uses: ${list}.`,
+    denyPickUnused: 'Tick the unused kinds',
+    denyAdmins: 'Administrators may still install these devices',
+    installClasses: {
+      printer: 'Printers',
+      image: 'Scanners and imaging devices',
+      camera: 'Cameras',
+      wpd: 'Phones and portable devices',
+      modem: 'Modems',
+      cdrom: 'CD / DVD drives',
+      ports: 'Serial and parallel ports',
+      smart_card_reader: 'Smart-card readers'
+    } as Record<string, string>,
+    defender: 'Exclude Pulsar Seat from Microsoft Defender scans',
+    defenderHint:
+      'Adds Pulsar Seat’s install folder, its data folder and its three background programs to the Defender exclusion lists, so scans do not slow seat start-up. Exclusions you made yourself are left alone. Nothing happens when another antivirus is active.',
+    apps: 'Apps on seats',
+    steamPerSeat: 'Steam on every seat (own Steam client per local seat)',
+    steamPerSeatHint:
+      'Steam started in a seat’s own session gets that seat’s own IPC name, so each seat runs its own Steam client. Needs per-process patching with steam.exe on the target list. Each seat should use its own Steam account (Steam’s rules). The game library folder stays shared: two seats installing or updating the same game at once can collide; give a seat its own Steam install folder for a separate library.',
+    objectRules: 'Single-instance programs (one copy per seat)',
+    objectRulesHint:
+      'For programs that refuse a second copy on the PC: the named objects listed here get a per-seat name inside the program. Only programs on the per-process patching target list are covered; never add games with anti-cheat. Object names are case-sensitive; end a name with * to match a prefix.',
+    objectExe: 'Program (file name, e.g. launcher.exe)',
+    objectNames: 'Object names (one per line, without Global\\)',
+    objectAdd: 'Add program',
+    objectRemove: 'Remove',
+    objectInvalid: 'A rule is incomplete: a .exe file name and at least one name are needed.',
+    steamProxy: 'Old Steam add-on DLL',
+    steamProxyHint:
+      'Old “multibox” add-ons put a version.dll next to steam.exe, which Steam then loads. Pulsar Seat never deletes it; you can move it into Pulsar Seat’s quarantine folder and back.',
+    steamProxyCheck: 'Look for it',
+    steamProxyNone: 'No add-on DLL found in the Steam folders.',
+    steamProxyNoSteam: 'Steam is not installed.',
+    steamProxyQuarantine: 'Move to quarantine',
+    steamProxyRestore: 'Put back',
+    steamProxyQuarantined: (orig: string) => `In quarantine (was ${orig})`,
+    usbWizard: 'USB dock wizard…'
+  },
+
+  seatCompat: {
+    menu: 'Environment and sign-in…',
+    title: (n: number) => `Seat ${n}: environment and sign-in`,
+    env: 'Environment variables',
+    envHint:
+      'Set for this seat’s user at every sign-in (and on programs Pulsar Seat starts in the seat). Undone when Pulsar Seat is turned off. Windows’ own variables (Path, TEMP, …) cannot be changed here.',
+    envName: 'Name',
+    envValue: 'Value',
+    envAdd: 'Add variable',
+    envRemove: 'Remove',
+    envInvalid: 'Check the names: letters, digits and _ - . ( ) only, not a Windows variable, each name once, at most 32.',
+    deny: 'Deny log on locally for this seat’s account',
+    denyHint:
+      'The seat’s user cannot sign in at the PC itself (console or a physical seat) while the seat signs in through Remote Desktop. Pulsar Seat adds the Windows right “Deny log on locally” to the account and removes it again when turned off.',
+    denyUnavailable: 'Only for seats with an account that sign in through Remote Desktop (remote seats, or seats 2 and up with the Remote Desktop session method).'
+  },
+
+  usbDock: {
+    title: 'USB dock wizard',
+    intro:
+      'Multi-seat USB docks bring a monitor, sound and USB ports for keyboard and mouse in one box. Plug in every dock, extend the desktop onto their monitors in Display settings, then pick a seat for each dock here.',
+    scanning: 'Looking for docks…',
+    found: (n: number) => `${n} dock(s) found.`,
+    stable: 'The count is stable.',
+    unstable: 'The count is still changing; wait until every dock is ready.',
+    rescan: 'Look again',
+    display: 'Display settings',
+    none: 'No dock with a monitor and keyboard, mouse or sound was found.',
+    dock: (label: string) => `Dock ${label}`,
+    contents: (m: number, i: number, a: number) => `${m} monitor(s), ${i} input device(s), ${a} sound device(s)`,
+    seat: 'Seat',
+    newSeat: 'New seat',
+    skip: 'Leave as it is',
+    hasDisplay: 'already has a monitor',
+    apply: 'Assign',
+    done: (n: number) => `${n} dock(s) assigned. Save to apply.`
+  }
 };
 
 const productText = {
@@ -1387,6 +1496,10 @@ const issueText: Record<string, string> = {
   cpu_only_efficiency_cores: 'The seat got only efficiency cores; it may run slowly.',
   invalid_ip_address: 'Invalid IP address.',
   invalid_pad_ignore_device: 'The list of pads to ignore has an entry not in 0xVVVV/0xPPPP form (or the list is too long).',
+  invalid_seat_environment: 'A seat environment variable is invalid (name, value, a duplicate, or more than 32).',
+  deny_local_logon_unsupported: '“Deny log on locally” works only for seats with an account that sign in through Remote Desktop; the seat would lock its own user out.',
+  invalid_windows_update_policy: 'The Windows Update settings are out of range.',
+  invalid_object_rule: 'A single-instance program rule is incomplete or invalid.',
   duplicate_ip_address: 'The same IP address is given to several seats.',
   too_many_ip_programs: 'The program list is too long; the rest is not saved.',
   invalid_ip_program: 'The program list has a row with an empty path.',
@@ -1426,7 +1539,8 @@ const noticeText: Record<string, string> = {
   input_move_pending: 'Keyboards and mice moved with the shortcut are waiting for confirmation.',
   credprov_failed: 'The seat sign-in component could not be registered or removed; details in the service log.',
   credprov_logon_failed: 'A seat’s automatic sign-in failed with the saved password; enter the password again.',
-  switch_refused: 'Could not switch to the seat; details in the service log.'
+  switch_refused: 'Could not switch to the seat; details in the service log.',
+  dpi_mismatch: 'The seat’s display scale differs from its setting (Windows chose another scale).'
 };
 
 /** Text per state / reason of the passwordless-seat listener (`loopback_listener:<state>[:<x>]`). */
@@ -1788,7 +1902,8 @@ const rt = {
     adapter_fallback: 'The chosen graphics card was not found; the default is used.',
     firewall: 'The firewall rules could not be added; devices on the LAN may not reach the seat.',
     control_unavailable: 'The stream server’s control channel could not open; pairing is not available on this seat.',
-    capture_error: 'The stream server could not capture the screen.'
+    capture_error: 'The stream server could not capture the screen.',
+    dpi_mismatch: 'The seat’s display scale differs from its static scale setting (Windows chose another scale).'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Another multiseat product is installed.',

@@ -25,6 +25,7 @@ pub mod framing;
 pub mod hyperv;
 pub mod messages;
 pub mod remote;
+pub mod steam;
 
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +108,9 @@ impl Response {
 }
 
 /// Everything the service sends.
+// The config view inside a response grew with the compat-tweaks settings (2026-11-17);
+// frames are short-lived and boxing would only churn every call site.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerFrame {

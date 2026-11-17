@@ -27,6 +27,7 @@ mod hid;
 mod hook;
 mod log;
 mod mask;
+mod objects;
 mod raw;
 mod reg;
 mod scard;
@@ -86,6 +87,7 @@ fn mask(plan: HookPlan, installed: HookPlan) -> HookPlan {
         raw_input_data: plan.raw_input_data && installed.raw_input_data,
         cursor_pos: plan.cursor_pos && installed.cursor_pos,
         scard_filter: plan.scard_filter && installed.scard_filter,
+        object_names: plan.object_names && installed.object_names,
     }
 }
 
@@ -162,7 +164,15 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
     if matches!(now.role, Role::Kiosk { .. }) || (matches!(now.role, Role::Console) && facts.kiosk_seat.is_some()) {
         // Started by a kiosk shell (round 4): the HID groups and the raw-input data filter,
         // also when the kiosk map entry is not published yet (the live plan decides).
-        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, cursor_pos: true, scard_filter: cfg.reader_rules, ..Default::default() };
+        return HookPlan {
+            hid_open: true,
+            hid_enumeration: true,
+            raw_input_data: true,
+            cursor_pos: true,
+            scard_filter: cfg.reader_rules,
+            object_names: cfg.has_object_rules(exe),
+            ..Default::default()
+        };
     }
     if matches!(now.role, Role::Console) {
         // The console only needs the HID rule, and only while a seat asks for it; and the
@@ -191,6 +201,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         raw_input_data: false,
         cursor_pos: false,
         scard_filter: cfg.reader_rules,
+        object_names: cfg.has_object_rules(exe),
     }
 }
 
@@ -313,7 +324,8 @@ fn init_once() {
             || (want.hkcu_redirect && !got.hkcu_redirect)
             || (want.raw_input_data && !got.raw_input_data)
             || (want.cursor_pos && !got.cursor_pos)
-            || (want.scard_filter && !got.scard_filter);
+            || (want.scard_filter && !got.scard_filter)
+            || (want.object_names && !got.object_names);
         health::send(&facts, role_label, got.any(), failed.then_some("hook_failed"));
     }
 }
@@ -333,6 +345,7 @@ unsafe fn install_hooks(want: HookPlan) -> HookPlan {
             // Seat cursor, key state and clipboard (kiosk seat features).
             cursor_pos: want.cursor_pos && cursor::install() && clip::install(),
             scard_filter: want.scard_filter && scard::install(),
+            object_names: want.object_names && objects::install(),
         }
     }
 }
