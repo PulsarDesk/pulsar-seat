@@ -426,7 +426,26 @@ const t = {
     restrictionsHelp: 'Limits of the chosen methods on this PC.',
     fallbackTo: (method: string) => `Fallback: ${method}`,
     ok: 'OK',
-    remoteSeat: (name: string) => `${name} (remote)`
+    remoteSeat: (name: string) => `${name} (remote)`,
+    serviceRow: 'Pulsar Seat service',
+    versions: (service: string, manager: string, arch: string) => `Version ${service} · manager ${manager} · ${arch}`,
+    productRow: 'Pulsar Seat',
+    noStatus: 'The service has not reported its state.',
+    windowsSession: (id: number) => `Windows session ${id}`,
+    categories: {
+      session: 'Session',
+      display: 'Display',
+      input: 'Input',
+      audio: 'Sound',
+      gates: 'Device access'
+    } as Record<string, string>,
+    notUsed: (wanted: string, why: string) => `${wanted} cannot be used: ${why}`,
+    noRestrictions: 'The chosen methods have no known limit on this PC.',
+    allMethods: 'Every method on this PC',
+    allMethodsHelp: 'What this PC can use, and why the other methods are not available.',
+    inUse: 'In use',
+    selectedNotInUse: 'Selected, not in use',
+    driversHelp: 'Pulsar Seat drivers are not signed yet; user-mode methods are used.'
   },
 
   /** `DisplayInfo.output_technology` (seat_display::model::output_technology_name). */

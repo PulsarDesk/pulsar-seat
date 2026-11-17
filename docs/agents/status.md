@@ -2648,3 +2648,41 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Next: P2 (app shell) in order, then P3-P7, P8 cleanup. The three behaviour changes
     (startup modal removal, restart-required on the seat card, remote staged save) are not in
     these packages; they stay "needs maintainer test before push" when P2 / P6 land.
+- 2026-11-17 (redesign P5, Durum / status page): `apps/manager/src/lib/components/StatusTab.svelte`
+  rebuilt on the `src/lib/ui` kit per IMPLEMENTATION.md P5 (shots 12-status, 52-dlg-service-stop).
+  - Page head: "Restart service" / "Stop service" (both secondary; Start service while stopped).
+    Unelevated / pending / not-installed reason shown once under the intro and linked by
+    `aria-describedby`; progress text as `role=status`. The stop question has the only red
+    button; the restart question is not red (it was `danger` in ServiceControl).
+  - New optional props for the P2 contract: `onServiceAction(kind)` (the app owns the
+    question; without it the page asks itself with `ui/ConfirmDialog`) and `onDiagnostics`
+    (offered in a warn Notice while the service reports no status).
+  - Sections: Service (service state, product, this window + seat, config revision; versions
+    and the arch as words in the help line), Seats (name from the config, "(remote)" suffix,
+    Windows session, degradation / audio / redirection notes, refused redirections with the
+    old `redirect-refusals` test id), Methods (one row per category; a `fallback_notes` entry
+    shows as warn "Fallback: <used>" with "<wanted> cannot be used: <reason>" as help; every
+    candidate method with its availability stays reachable under the "Every method on this PC"
+    disclosure), Limitations (notes of active methods + plain fallback notes, bare warn / info
+    lead icon), Pulsar drivers (`driverStatusLabel`, loaded version as mono help; unsigned
+    help line while any driver is not loaded), Pre-flight checks (outcome word, `checkText`
+    help, technical detail, "Run the checks" as section-end action).
+  - All values use `Status plainOk`; a test asserts dots == non-OK values and that no
+    `snake_case` code or `aarch64` / `x86_64` leaks into the page text.
+  - New keys `statusPage.{serviceRow, versions, productRow, noStatus, windowsSession,
+    categories, notUsed, noRestrictions, allMethods, allMethodsHelp, inUse, selectedNotInUse,
+    driversHelp}` in en.ts + tr.ts.
+  - Not changed (P2's files): `App.svelte` still renders the old header `ServiceControl`, so
+    until P2 lands the status page shows the service buttons twice (header + page head). P2
+    should pass `onServiceAction` / `onDiagnostics` or leave the page's own dialogs in place,
+    and drop `ServiceControl` from the header. No `ServiceActions.svelte` was created here to
+    avoid an add/add conflict with P2.
+  - Visual check: demo on port 5365, headless Edge, tr + en, light + dark, 1280x800 + 1024x700
+    + full page, and the stop dialog; same structure, hierarchy and copy as shots 12 and 52
+    (old app shell around it until P2). Shots in `target/redesign/audit/p5-*.png`. Server and
+    Edge stopped. Detector (`bunx impeccable detect --json --no-config`) on StatusTab: no
+    findings.
+  - Gates: manager 284 tests (was 271; +13 StatusTab.test.ts), check 0 errors / 0 warnings,
+    build OK. No Rust, Tauri, installer or driver code touched. No test deleted.
+  - Behaviour: none of the three planned behaviour changes is in P5. Small behaviour note for
+    the maintainer test: the restart-service question no longer uses a red button.
