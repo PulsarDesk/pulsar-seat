@@ -1111,6 +1111,8 @@ impl Shell {
             }
         }
         let mut running = Vec::new();
+        // New windows of apps waiting for the focus: (launch order, window).
+        let mut arrived: Vec<(usize, u64)> = Vec::new();
         for h in wins {
             // A frame window stands for the packaged app it hosts.
             let pid = self.extra_wins.get(&(h as u64)).copied().unwrap_or_else(|| pid_of(h).0);
@@ -1139,10 +1141,21 @@ impl Shell {
                 set_pos_foreign(h, std::ptr::null_mut(), t, SWP_NOZORDER);
             }
             if let Some(i) = self.pending_focus.iter().position(|p| *p == pid) {
-                self.pending_focus.remove(i);
-                self.focus_app(h as u64);
+                arrived.push((i, h as u64));
             }
             running.push((h as u64, title_of(h)));
+        }
+        // Several apps can show their first window in the same pass (autostart): the one
+        // launched last gets the focus, never whichever the z-order walk met last (VM
+        // 2026-11-17: charmap + cmd, cmd on top but the keys went to charmap behind it).
+        if let Some(&(_, top)) = super::latest_arrival(&arrived) {
+            let mut done: Vec<usize> = arrived.iter().map(|(i, _)| *i).collect();
+            done.sort_unstable();
+            done.dedup();
+            for i in done.into_iter().rev() {
+                self.pending_focus.remove(i);
+            }
+            self.focus_app(top);
         }
         if running != self.running {
             self.running = running;

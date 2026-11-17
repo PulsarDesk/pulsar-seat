@@ -182,6 +182,12 @@ pub fn shim_launcher_rel() -> std::path::PathBuf {
     seat_shim_core::launch::native_launcher(seat_shim_core::launch::Arch::current())
 }
 
+/// Of the first windows of apps waiting for the focus (`(launch order, window)`), the one
+/// to focus: the app launched last; for one app with several windows, the first window met.
+pub fn latest_arrival(arrived: &[(usize, u64)]) -> Option<&(usize, u64)> {
+    arrived.iter().rev().max_by_key(|(i, _)| *i)
+}
+
 /// What the shell does with a suspended app after `pulsar-split-launch --attach <pid>`
 /// (round 4, kiosk-isolation; HYPOTHESIS: never run on hardware).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,6 +538,18 @@ mod tests {
     fn copy_table_is_complete() {
         let p = seat_core::i18n::check_table(copy::ALL);
         assert!(p.is_empty(), "{p:?}");
+    }
+
+    /// VM 2026-11-17: charmap and cmd showed their windows in one pass; the walk met cmd
+    /// (on top) first and charmap last, and charmap got the focus.
+    #[test]
+    fn last_launched_app_gets_the_focus() {
+        assert_eq!(latest_arrival(&[]), None);
+        // z-order walk: cmd (launched second) first, charmap (launched first) last.
+        assert_eq!(latest_arrival(&[(1, 0xC3D), (0, 0xC4A)]), Some(&(1, 0xC3D)));
+        assert_eq!(latest_arrival(&[(0, 0xC4A), (1, 0xC3D)]), Some(&(1, 0xC3D)));
+        // One app, two windows: the first one met (topmost).
+        assert_eq!(latest_arrival(&[(2, 0xA), (2, 0xB)]), Some(&(2, 0xA)));
     }
 
     #[test]
