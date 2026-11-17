@@ -12,7 +12,15 @@ export default defineConfig({
     svelteTesting()
   ],
   clearScreen: false,
-  server: { port: 5175, strictPort: true },
+  server: {
+    port: 5175,
+    strictPort: true,
+    // Never watch build outputs. `build/` (adapter-static output) is deleted and recreated
+    // during builds; on Windows the watcher of the deleted directory then fires ~1700
+    // `rename` events per second forever (~1.3 cores idle). Cargo also writes thousands of
+    // files under src-tauri/target. The UI imports from neither.
+    watch: { ignored: ['**/build/**', '**/src-tauri/**', '**/target/**'] }
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
