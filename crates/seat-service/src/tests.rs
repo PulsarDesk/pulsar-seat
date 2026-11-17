@@ -2009,10 +2009,16 @@ fn seat_one_does_not_claim_a_handover_session() {
     let h = fus_harness();
     h.p.users.lock().unwrap().remove(&1);
     h.s.refresh_console_seat();
+    // The console-connect of the fresh session comes before the seat knows it (the mock
+    // backend hands out session 10 next): seat 1 follows the console there first.
+    *h.p.console.lock().unwrap() = Some(10);
+    h.s.refresh_console_seat();
     let mut a = admin();
     call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
     let sess = seat_session_id(&h, s(2));
-    *h.p.console.lock().unwrap() = Some(sess);
+    assert_eq!(sess, 10);
+    let row = h.s.status().seats.into_iter().find(|r| r.seat == s(1)).unwrap();
+    assert_ne!(row.session_id, Some(sess), "seat 1 gave the session back: {row:?}");
     h.s.refresh_console_seat();
     let row = h.s.status().seats.into_iter().find(|r| r.seat == s(1)).unwrap();
     assert_ne!(row.session_id, Some(sess), "{row:?}");

@@ -711,6 +711,15 @@ impl Service {
             self.events.publish(Event::HostCommand { seat, command: HostCommand::RebindAudio { route: r } });
         }
         log::info(&format!("seat {seat}: session {} ready", info.session_id));
+        // fast_user_switch: the console-connect notification of this session may have bound
+        // seat 1 to it before the session was known as this seat's (seat 1 had no session
+        // of its own); give it back now (VM 2026-11-17: seat 1 kept showing seat 3's session).
+        if b.session.kind() == seat_core::backend::SessionBackendKind::FastUserSwitch
+            && !seat.is_console()
+            && self.lock().seats.get(&SeatNumber::CONSOLE).is_some_and(|s| s.rt.session_id == Some(info.session_id))
+        {
+            self.refresh_console_seat();
+        }
         let at_logon = user.is_none() && info.state == SessionState::AtLogon;
         // fast_user_switch: the console notification of a fresh logon session usually
         // arrives before the session is bound to this seat, so its topology is queued here.
