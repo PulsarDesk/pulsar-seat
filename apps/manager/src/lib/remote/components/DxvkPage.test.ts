@@ -17,7 +17,7 @@ describe('DxvkPage', () => {
     render(DxvkPage, { load: vi.fn(async () => status('2.7.1')), onSet });
     expect(await screen.findByText(t.dxvk.release('2.7.1'))).toBeInTheDocument();
     expect(screen.getByText(t.dxvk.deployed('2.7.1', 'd3d9'))).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: t.dxvk.disable }));
+    await userEvent.click(screen.getByRole('button', { name: t.view.dxvkDisableLabel('eski.exe') }));
     expect(onSet).toHaveBeenCalledWith(String.raw`C:\Oyunlar\eski.exe`, false, []);
   });
 

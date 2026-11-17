@@ -64,7 +64,7 @@ describe('PairDialog', () => {
       pending: { request_id: 5, device_name: 'TV', received_at: 't' }
     };
     const { props, user } = setup(pending, 'sunshine');
-    expect(await screen.findByText(t.pair.pending('TV'))).toBeInTheDocument();
+    expect(await screen.findByText(t.pair.request('TV'))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: t.pair.allow })).toBeNull();
     await user.type(screen.getByRole('textbox', { name: t.pair.pin }), '1234');
     await user.click(screen.getByRole('button', { name: t.pair.submit }));
@@ -105,7 +105,7 @@ describe('PairDialog', () => {
     expect(await screen.findByText(t.pair.connectPasswordSaved)).toBeInTheDocument();
     expect(field).toHaveValue('');
     // An empty field cannot save (and so never clears silently).
-    expect(screen.getByRole('button', { name: t.pair.connectPasswordSave })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t.pair.connectPasswordSave })).toHaveAttribute('aria-disabled', 'true');
     expect(props.onSetConnectPassword).toHaveBeenCalledTimes(1);
     // Removing needs its own confirmed action; "Vazgeç" sends nothing.
     await user.click(screen.getByRole('button', { name: t.pair.connectPasswordRemove }));

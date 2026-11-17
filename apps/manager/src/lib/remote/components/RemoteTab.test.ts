@@ -25,7 +25,7 @@ describe('remote seats tab', () => {
     const { api, user } = await setup();
     await user.click(screen.getByRole('tab', { name: t.tabs.remote }));
     expect(await screen.findByText(rt.nav.noSeats)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: `+ ${rt.nav.newSeat}` }));
+    await user.click(screen.getByRole('button', { name: rt.nav.newSeat }));
     await user.type(screen.getByRole('textbox'), 'Salon');
     await user.click(screen.getByRole('button', { name: rt.newSeat.create }));
     const seat = api.state.config.seats.find((s) => s.name === 'Salon');

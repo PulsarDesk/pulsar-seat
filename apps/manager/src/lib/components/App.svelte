@@ -17,6 +17,7 @@
   import Modal from './Modal.svelte';
   import NetworkTab from './NetworkTab.svelte';
   import RemoteTab from '#lib/remote/components/RemoteTab.svelte';
+  import { discardRemoteStage, remoteDirty, saveRemoteStage } from '#lib/remote/stage.svelte.ts';
   import SeatsTab from './SeatsTab.svelte';
   import ServiceControl from './ServiceControl.svelte';
   import StatusTab from './StatusTab.svelte';
@@ -104,7 +105,8 @@
 
   // The shell asks before closing the window while something is unsaved.
   $effect(() => {
-    const d = store.dirty;
+    // Staged remote page edits count too (redesign P6).
+    const d = store.dirty || remoteDirty();
     store.api.setUiDirty(d).catch(() => {});
   });
 
@@ -150,7 +152,7 @@
 
   /** Ask save / discard / cancel when there are unsaved changes (spec 10 §2.3). */
   function guard(then: () => void) {
-    if (store.dirty) dialog = { kind: 'unsaved', then };
+    if (store.dirty || remoteDirty()) dialog = { kind: 'unsaved', then };
     else then();
   }
 
@@ -289,7 +291,7 @@
       {/key}
     {:else if tab === 'remote'}
       {#key remoteOpen}
-        <RemoteTab {store} initialSeat={remoteSeat} />
+        <RemoteTab {store} initialSeat={remoteSeat} onOpenSettings={() => selectTab('basic')} />
       {/key}
     {:else}
       <StatusTab {store} />
@@ -408,13 +410,14 @@
         onclick={async () => {
           const next = then;
           dialog = null;
-          if (await save()) next();
+          if ((await saveRemoteStage()) && (!store.dirty || (await save()))) next();
         }}>{t.unsaved.save}</button
       >
       <button
         type="button"
         onclick={() => {
           const next = then;
+          discardRemoteStage();
           store.discard();
           dialog = null;
           next();

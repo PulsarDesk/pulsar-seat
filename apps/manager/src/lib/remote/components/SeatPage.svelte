@@ -1,6 +1,14 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!-- Remote seat page (redesign P6; prototypes 20 and 21). Breadcrumb, title, status line and
+     the state-dependent head actions; while running, the runtime state and the live display
+     mode control. Settings are staged (BEHAVIOUR change, needs maintainer testing on a real
+     remote seat): edits change the draft only, the docked save bar commits the seat record
+     (with its VM part), then a new password, then the client app list, in that order.
+     Undo goes back to the stored values. -->
 <script lang="ts">
-  import { remoteErrorMessage as errorMessage, remoteFailureText as failureText, remoteFieldErrorText as fieldErrorText, rt as t } from '#lib/i18n.ts';
+  import { onMount, untrack, type Snippet } from 'svelte';
+  import { remoteErrorMessage as errorMessage, remoteFailureText as failureText, remoteFieldErrorText as fieldErrorText, rt as t, t as seatT } from '#lib/i18n.ts';
+  import type { VmHostStatus, VmSeatInfo } from '#lib/types.ts';
   import type {
     AppEntry,
     CredentialTest,
@@ -10,16 +18,40 @@
     SeatConfig,
     SeatRuntime,
     SeatStatus,
-    StreamBackendInfo,
     StreamBackendKind,
-    UserPicture
+    StreamBackendInfo,
+    VmSeat
   } from '#lib/remote/types.ts';
-  import AppsEditor from './AppsEditor.svelte';
-  import Avatar from './Avatar.svelte';
   import { gpuWarnings } from '#lib/remote/gpu.ts';
+  import { defaultDisplay, defaultPulsar, relayValid } from '#lib/remote/model.ts';
+  import { countChanges, type RemoteStage } from '#lib/remote/stage.svelte.ts';
+  import { displayNameError, portError, portOverlapError } from '#lib/remote/validation.ts';
+  import { vmSeatProblem } from '#lib/remote/vm.ts';
+  import {
+    Breadcrumb,
+    Button,
+    Checkbox,
+    ConfirmDialog,
+    Disclosure,
+    Group,
+    IconButton,
+    ListTable,
+    LockedValue,
+    Notice,
+    PageHead,
+    Row,
+    Section,
+    Segmented,
+    Select,
+    Status,
+    StatusLine,
+    Switch
+  } from '#lib/ui/index.ts';
+  import type { StatusKind } from '#lib/ui/index.ts';
+  import AppsEditor from './AppsEditor.svelte';
   import CredentialTestDialog from './CredentialTestDialog.svelte';
-  import { displayNameError, portError, portOverlapError, type FieldError } from '#lib/remote/validation.ts';
-  import { defaultPulsar, relayValid } from '#lib/remote/model.ts';
+  import StageBar from './StageBar.svelte';
+  import VmSeatEditor from './VmSeatEditor.svelte';
 
   interface Props {
     seat: SeatConfig;
@@ -30,7 +62,8 @@
     /** Display names of the other seats (uniqueness check). */
     otherDisplayNames?: string[];
     serviceReachable: boolean;
-    onSave: (name: string, seat: SeatConfig) => Promise<SeatConfig>;
+    /** Store the record; `vm` is the seat's VM part when it changed (undefined = unchanged). */
+    onSave: (name: string, seat: SeatConfig, vm?: VmSeat | null) => Promise<SeatConfig>;
     onSetPassword: (name: string, password: string) => Promise<void>;
     onStart: () => Promise<void>;
     onStop: () => Promise<void>;
@@ -45,12 +78,23 @@
     onEnableUnlock?: (enable: boolean, unlock: boolean) => Promise<void>;
     /** Availability of each stream backend (`get_stream_backends`); empty = unknown. */
     backends?: StreamBackendInfo[];
-    /** Seat user's account picture (null = initial). */
-    picture?: UserPicture | null;
     /** Native file dialog for an .exe; null = cancelled. */
     onPickExe?: (title: string) => Promise<string | null>;
     /** Running seat: apply a display mode now (`set_seat_display_mode`). */
     onSetMode?: (width: number, height: number, hz: number, hdr: boolean) => Promise<ModeResult>;
+    /** Seat number (status line). */
+    number?: number;
+    /** First LAN address of this PC (the seat's address row). */
+    address?: string | null;
+    /** Back to the remote seat list (breadcrumb). */
+    onBack?: () => void;
+    /** VM seats: the stored VM part, the Hyper-V host state; `vmHost === undefined` hides the section. */
+    vm?: VmSeat | null;
+    vmHost?: VmHostStatus | null;
+    vmInfo?: VmSeatInfo;
+    onResetVmDisk?: () => Promise<void>;
+    /** Extra notice from the list (session method cannot start remote seats). */
+    extraNotice?: Snippet;
   }
   let {
     seat,
@@ -73,68 +117,127 @@
     onTestCredentials,
     onEnableUnlock,
     backends = [],
-    picture = null,
     onPickExe,
-    onSetMode
+    onSetMode,
+    number,
+    address = null,
+    onBack,
+    vm = null,
+    vmHost,
+    vmInfo,
+    onResetVmDisk,
+    extraNotice
   }: Props = $props();
-  let credOpen = $state(false);
 
-  // Editable copy. Polling hands us a fresh (but usually equal) seat object every few
-  // seconds; reset the draft only when the stored seat really changed, so text that is
-  // being typed is not wiped.
-  const emptySeat = (): SeatConfig => ({
-    id: '',
-    name: '',
-    display_name: '',
-    user_name: '',
-    port: 0,
-    start_with_service: false,
-    stop_action: 'log_off',
-    display: {
-      render_adapter: null,
-      scale_static: false,
-      scale_percent: 100,
-      super_sampling_percent: 100,
-      sdr_white_level_nits: 400,
-      force_sdr: false,
-      render_adapter_id: null,
-      refresh_hz: 60,
-      luminance: { min_nits_x10000: 10, max_nits: 1000, max_full_frame_nits: 600 },
-      fixed_width: 0,
-      fixed_height: 0,
-      lock_refresh: false
-    },
-    autostart: [],
-    rdp_client_name: '',
-    audio: { stream_audio: true, microphone: false },
-    stream: { gamepad: 'auto', capture: 'default', min_fps: 1, firewall_domain: false, keep_pairing_on_delete: false },
-    pulsar: defaultPulsar()
+  /** A stored record with the defaults of fields added later. */
+  function normal(s: SeatConfig): SeatConfig {
+    const c = JSON.parse(JSON.stringify(s)) as SeatConfig;
+    c.display = { ...defaultDisplay(), ...c.display };
+    c.display.fixed_width ??= 0;
+    c.display.fixed_height ??= 0;
+    c.display.lock_refresh ??= false;
+    c.stream_backend ??= 'sunshine';
+    c.pulsar = { ...defaultPulsar(), ...(c.pulsar ?? {}) };
+    return c;
+  }
+
+  // ---------------------------------------------------------------- staged draft
+  // The stored record (`base`) follows the 3 s poll; the draft is reset from it only while
+  // nothing is staged, so values being typed are never wiped.
+  // svelte-ignore state_referenced_locally
+  let base = $state<SeatConfig>(normal(seat));
+  // svelte-ignore state_referenced_locally
+  let draft = $state<SeatConfig>(normal(seat));
+  // svelte-ignore state_referenced_locally
+  let portText = $state(String(seat.port));
+  let portTouched = $state(false);
+  let password = $state('');
+  let changingPassword = $state(false);
+  let showPassword = $state(false);
+  let apps = $state<AppEntry[]>([]);
+  let appsBase = $state('[]');
+  // svelte-ignore state_referenced_locally
+  let vmBase = $state<VmSeat | null>(vm ? structuredClone(vm) : null);
+  // svelte-ignore state_referenced_locally
+  let vmDraft = $state<VmSeat | null>(vm ? structuredClone(vm) : null);
+
+  /** The draft as it would be stored. */
+  const current = $derived.by(() => {
+    const c = $state.snapshot(draft) as SeatConfig;
+    c.port = Number(portText);
+    if (c.pulsar) c.pulsar.relay = c.pulsar.relay.trim();
+    return c;
   });
-  let draft = $state<SeatConfig>(emptySeat());
-  let portText = $state('');
-  let applied = '';
+  const recordChanges = $derived(countChanges(current, base));
+  const vmChanges = $derived(countChanges($state.snapshot(vmDraft), vmBase));
+  const appsChanged = $derived(JSON.stringify(cleanApps(apps)) !== appsBase);
+  const changeCount = $derived(recordChanges + vmChanges + (password ? 1 : 0) + (appsChanged ? 1 : 0));
+
+  let applied = untrack(() => JSON.stringify(seat));
   $effect(() => {
     const json = JSON.stringify(seat);
-    if (json === applied) return;
-    applied = json;
-    draft = JSON.parse(json) as SeatConfig;
-    // Seats saved before the Pulsar options existed get the defaults.
-    draft.pulsar = { ...defaultPulsar(), ...(draft.pulsar ?? {}) };
-    portText = String(draft.port);
+    untrack(() => {
+      if (json === applied) return;
+      applied = json;
+      const dirty = recordChanges > 0;
+      base = normal(seat);
+      if (!dirty) resetRecord();
+    });
+  });
+  let vmApplied = untrack(() => JSON.stringify(vm));
+  $effect(() => {
+    const json = JSON.stringify(vm);
+    untrack(() => {
+      if (json === vmApplied) return;
+      vmApplied = json;
+      const dirty = vmChanges > 0;
+      vmBase = vm ? structuredClone($state.snapshot(vm)) : null;
+      if (!dirty) vmDraft = vmBase ? structuredClone($state.snapshot(vmBase)) : null;
+    });
   });
 
-  let password = $state('');
-  let showPassword = $state(false);
+  function resetRecord() {
+    draft = normal(base);
+    portText = String(base.port);
+    portTouched = false;
+  }
+
+  function cleanApps(list: AppEntry[]): AppEntry[] {
+    return ($state.snapshot(list) as AppEntry[])
+      .filter((a) => a.name.trim() !== '')
+      .map((a) => {
+        const c = { ...a, name: a.name.trim() };
+        if (!c.cmd || c.cmd.trim() === '') delete c.cmd;
+        return c;
+      });
+  }
+
+  onMount(async () => {
+    if (!onLoadApps) return;
+    try {
+      const list = await onLoadApps();
+      apps = list;
+      appsBase = JSON.stringify(cleanApps(list));
+    } catch (e) {
+      error = errorMessage(e);
+    }
+  });
+
+  // ---------------------------------------------------------------- state
   let error = $state<string | null>(null);
-  let notice = $state<string | null>(null);
   let busy = $state(false);
+  let credOpen = $state(false);
+  let confirmRegen = $state(false);
+  let confirmVmReset = $state(false);
+  let info = $state<string | null>(null);
 
   const seatState = $derived(status?.state ?? 'stopped');
   const running = $derived(seatState === 'booting' || seatState === 'running' || seatState === 'stopping');
   const locked = $derived(running || !serviceReachable);
   const displayErr = $derived(displayNameError(draft.display_name, otherDisplayNames));
-  const portErr = $derived<FieldError | null>(
-    portError(portText) ?? portOverlapError(Number(portText), otherPorts)
+  // Port 0 = not assigned yet (the service picks the block); valid until the user edits it.
+  const portErr = $derived(
+    !portTouched && base.port === 0 && portText === '0' ? null : (portError(portText) ?? portOverlapError(Number(portText), otherPorts))
   );
   const enabledUsers = $derived(users.filter((u) => u.enabled || u.name === draft.user_name));
   const backend = $derived<StreamBackendKind>(draft.stream_backend ?? 'sunshine');
@@ -142,35 +245,49 @@
   const pulsar = $derived(draft.pulsar ?? defaultPulsar());
   const relayErr = $derived(!relayValid(pulsar.relay.trim()));
   const nodePortErr = $derived(
-    pulsar.node_port_mode === 'fixed' && !(Number.isInteger(pulsar.node_port) && pulsar.node_port >= 1024 && pulsar.node_port <= 65535)
+    pulsar.node_port_mode === 'fixed' && !(Number.isInteger(Number(pulsar.node_port)) && pulsar.node_port >= 1024 && pulsar.node_port <= 65535)
+  );
+  const vmProblem = $derived(vmDraft ? vmSeatProblem(vmDraft, Number(portText)) : null);
+  const invalid = $derived(
+    !!displayErr || !!portErr || (backend === 'pulsar' && (relayErr || nodePortErr)) || !!vmProblem
   );
   /** Known to be missing (no answer from the service = not marked). */
   const missing = (k: StreamBackendKind) => backends.find((b) => b.backend === k)?.installed === false;
+  const backendOptions = $derived(
+    (['sunshine', 'pulsar'] as const).map((k) => ({
+      value: k,
+      label: `${backendLabel(k)}${missing(k) ? ` (${t.seat.backendMissing})` : ''}`,
+      disabled: missing(k) && backend !== k
+    }))
+  );
 
-  async function chooseBackend(el: HTMLSelectElement) {
-    const k = el.value;
-    if (k !== 'sunshine' && k !== 'pulsar') return;
-    const previous = draft.stream_backend;
-    draft.stream_backend = k;
-    // Not saved (invalid field or refused by the service): show the stored backend again.
-    // The select is one-way bound, so its DOM value is reset as well.
-    if (!(await save())) {
-      draft.stream_backend = previous;
-      el.value = previous ?? 'sunshine';
-    }
-  }
-
-  /** `true` when the service stored the seat. */
   async function save(): Promise<boolean> {
-    if (displayErr || portErr) return false;
-    if (backend === 'pulsar' && (relayErr || nodePortErr)) return false;
-    draft.port = Number(portText);
-    if (draft.pulsar) draft.pulsar.relay = draft.pulsar.relay.trim();
+    if (invalid) return false;
     error = null;
-    notice = null;
+    info = null;
+    const rec = current;
     try {
-      await onSave(seat.name, $state.snapshot(draft) as SeatConfig);
-      notice = t.seat.saved;
+      if (recordChanges > 0 || vmChanges > 0) {
+        const vmPart = vmChanges > 0 ? ($state.snapshot(vmDraft) as VmSeat | null) : undefined;
+        const stored = await onSave(seat.name, rec, vmPart);
+        base = normal(stored ?? rec);
+        resetRecord();
+        if (vmPart !== undefined) {
+          vmBase = vmPart ? structuredClone(vmPart) : null;
+          vmDraft = vmPart ? structuredClone(vmPart) : null;
+        }
+      }
+      if (password) {
+        await onSetPassword(seat.name, password);
+        password = '';
+        changingPassword = false;
+        showPassword = false;
+      }
+      if (appsChanged && onSaveApps) {
+        const storedApps = await onSaveApps(cleanApps(apps));
+        apps = storedApps;
+        appsBase = JSON.stringify(cleanApps(storedApps));
+      }
       return true;
     } catch (e) {
       error = errorMessage(e);
@@ -178,10 +295,28 @@
     }
   }
 
+  function discard() {
+    resetRecord();
+    password = '';
+    changingPassword = false;
+    showPassword = false;
+    apps = JSON.parse(appsBase) as AppEntry[];
+    vmDraft = vmBase ? structuredClone($state.snapshot(vmBase)) : null;
+    error = null;
+  }
+
+  const stage = $derived<RemoteStage>({
+    count: changeCount,
+    detail: t.view.stageSeat,
+    invalid: invalid ? t.view.invalid : undefined,
+    save,
+    discard
+  });
+
   async function run(action: () => Promise<void>) {
     busy = true;
     error = null;
-    notice = null;
+    info = null;
     try {
       await action();
     } catch (e) {
@@ -191,16 +326,7 @@
     }
   }
 
-  async function savePassword() {
-    if (!password) return;
-    await run(async () => {
-      await onSetPassword(seat.name, password);
-      password = '';
-      notice = t.seat.passwordSaved;
-    });
-  }
-
-  // Fixed stream resolution: presets or custom; 0 x 0 = follow the client.
+  // ---------------------------------------------------------------- display
   const RES_PRESETS: [number, number][] = [
     [1280, 720],
     [1920, 1080],
@@ -214,6 +340,11 @@
     if (w === 0 && h === 0) return 'follow';
     return RES_PRESETS.some(([pw, ph]) => pw === w && ph === h) ? `${w}x${h}` : 'custom';
   });
+  const fixedOptions = [
+    { value: 'follow', label: t.seat.fixedFollow },
+    ...RES_PRESETS.map(([w, h]) => ({ value: `${w}x${h}`, label: `${w} × ${h}` })),
+    { value: 'custom', label: t.seat.fixedCustom }
+  ];
   function chooseFixed(v: string) {
     if (v === 'follow') {
       draft.display.fixed_width = 0;
@@ -226,10 +357,33 @@
       draft.display.fixed_width = w;
       draft.display.fixed_height = h;
     }
-    void save();
   }
 
-  // Operator mode control of a running seat.
+  const adapterOptions = $derived([
+    { value: '', label: t.seat.adapterAuto },
+    ...adapters.map((a) => ({ value: a.pnp_instance_id, label: a.description })),
+    ...(draft.display.render_adapter_id && !adapters.some((a) => a.pnp_instance_id === draft.display.render_adapter_id)
+      ? [{ value: draft.display.render_adapter_id, label: draft.display.render_adapter ?? draft.display.render_adapter_id }]
+      : [])
+  ]);
+  function chooseAdapter(id: string) {
+    const a = adapters.find((x) => x.pnp_instance_id === id);
+    if (a) {
+      draft.display.render_adapter_id = a.pnp_instance_id;
+      draft.display.render_adapter = a.description;
+    } else if (id === '') {
+      draft.display.render_adapter_id = null;
+      draft.display.render_adapter = null;
+    }
+  }
+  const gpuWarn = $derived(gpuWarnings(adapters, draft.display.render_adapter_id));
+  function gpuText(w: ReturnType<typeof gpuWarnings>[number]): string {
+    if (w.kind === 'no_hardware') return t.seat.gpuNoHardware;
+    if (w.kind === 'hybrid') return t.seat.gpuHybrid;
+    return t.seat.gpuNoEncoder(w.name);
+  }
+
+  // Operator mode control of a running seat (applies at once; not staged).
   let modeW = $state(1920);
   let modeH = $state(1080);
   let modeHz = $state(60);
@@ -254,501 +408,622 @@
       ? `${t.seat.modeApplied(r.width, r.height, r.hz, r.render_width, r.render_height)} · ${t.modeStatus[r.status] ?? r.status}`
       : (t.modeStatus[r.status] ?? r.status);
 
-  function chooseAdapter(id: string) {
-    const a = adapters.find((x) => x.pnp_instance_id === id);
-    draft.display.render_adapter_id = a ? a.pnp_instance_id : null;
-    draft.display.render_adapter = a ? a.description : null;
-    save();
-  }
-
-  let confirmRegen = $state(false);
-
-  async function regenerate() {
-    if (!onRegenerate) return;
-    if (!confirmRegen) {
-      confirmRegen = true;
-      return;
-    }
-    confirmRegen = false;
-    await run(async () => {
-      await onRegenerate();
-      notice = t.seat.identityDone;
-    });
-  }
-
-  const gpuWarn = $derived(gpuWarnings(adapters, draft.display.render_adapter_id));
-
-  function gpuText(w: ReturnType<typeof gpuWarnings>[number]): string {
-    if (w.kind === 'no_hardware') return t.seat.gpuNoHardware;
-    if (w.kind === 'hybrid') return t.seat.gpuHybrid;
-    return t.seat.gpuNoEncoder(w.name);
-  }
-
+  // ---------------------------------------------------------------- apps
   async function browseApp(i: number) {
     if (!onPickExe) return;
     const p = await onPickExe(t.seat.pickAutostart).catch(() => null);
-    if (!p) return;
-    draft.autostart[i].path = p;
-    save();
+    if (p) draft.autostart[i].path = p;
   }
 
-  function addApp() {
-    draft.autostart.push({ id: '', path: '', arguments: '', run_as_system: false });
-  }
+  // ---------------------------------------------------------------- head
+  const stateKind = $derived<StatusKind>(
+    seatState === 'running' ? 'ok' : seatState === 'failed' ? 'danger' : seatState === 'stopped' ? 'off' : 'warn'
+  );
+  const summary = $derived(
+    t.view.stateSummary([
+      number !== undefined ? t.home.seatNumber(number) : '',
+      seatState === 'booting' && status?.phase ? (t.phase[status.phase] ?? status.phase) : '',
+      status?.streaming ? (status.stream_client ? t.nav.streamingTo(status.stream_client) : t.nav.streaming) : '',
+      !running ? t.home.streamWith(backend === 'pulsar' ? 'Pulsar' : 'Sunshine') : '',
+      status?.session_id !== null && status?.session_id !== undefined ? t.seat.session(status.session_id) : '',
+      status && status.crash_count > 0 ? t.seat.crashes(status.crash_count) : ''
+    ])
+  );
+  const fullAddress = $derived(address && (Number(portText) || base.port) ? `${address}:${Number(portText) || base.port}` : null);
 
-  function removeApp(i: number) {
-    draft.autostart.splice(i, 1);
-    save();
+  async function copyAddress() {
+    if (!fullAddress) return;
+    try {
+      await navigator.clipboard.writeText(fullAddress);
+      info = t.view.copied;
+    } catch {
+      /* clipboard refused: the address stays visible */
+    }
   }
 </script>
 
-<section class="page">
-  <h1 class="title"><Avatar name={seat.name} {picture} size={40} /> {seat.name}</h1>
-  <p class="state state-{seatState}">
-    {t.seatState[seatState]}
-    {#if status && status.crash_count > 0}· {t.seat.crashes(status.crash_count)}{/if}
-  </p>
-  {#if seatState === 'booting' && status?.phase}
-    <p class="hint">{t.seat.phase}: {t.phase[status.phase] ?? status.phase}</p>
-  {/if}
-  {#if status?.failure}
-    <p class="error">{t.seat.failure}: {failureText(status.failure)}</p>
-  {/if}
-  {#if status?.last_error}
-    <p class="hint">{t.seat.lastError}: <code>{status.last_error}</code></p>
-  {/if}
+<div class="page">
+  {#if onBack}<Breadcrumb items={[{ label: seatT.nav.remote, onclick: onBack }, { label: seat.name }]} />{/if}
+  <PageHead title={seat.name}>
+    {#snippet status()}<StatusLine kind={stateKind} status={t.seatState[seatState]} {summary} />{/snippet}
+    {#snippet actions()}
+      {#if seatState === 'running'}
+        <Button kind="secondary" icon="stop" label={t.seat.stop} disabled={!serviceReachable || busy} onclick={() => run(onStop)} />
+        <Button kind="primary" icon="link" label={t.seat.pair} disabled={!serviceReachable} onclick={onPair} />
+      {:else if seatState === 'booting'}
+        <Button kind="secondary" icon="stop" label={t.seat.stop} disabled={!serviceReachable || busy} onclick={() => run(onStop)} />
+      {:else if seatState !== 'stopping'}
+        <Button kind="primary" icon="play" label={t.seat.start} disabled={!serviceReachable || busy} {busy} onclick={() => run(onStart)} />
+      {/if}
+    {/snippet}
+  </PageHead>
 
-  {#if runtime && running}
-    <h2>{t.seat.runtime}</h2>
-    <ul class="runtime">
-      {#if runtime.session_id !== null}<li>{t.seat.session(runtime.session_id)}</li>{/if}
-      <li>{t.seat.clientName}: <code>{runtime.client_name}</code></li>
-      {#if runtime.display}
-        <li>
-          {t.seat.displayBackend}: {t.displayBackend[runtime.display.backend] ?? runtime.display.backend} ·
-          {t.seat.hdr}: {runtime.display.hdr === 'ok' ? t.seat.hdrOk : (t.hdrReason[runtime.display.hdr] ?? runtime.display.hdr)}
-        </li>
-        {#if runtime.display.host}
-          <li data-testid="display-host">
-            {t.seat.displayHost}: {runtime.display.host === 'provider' ? t.seat.hostProvider : t.seat.hostLoopback}
-          </li>
-        {/if}
-        {#if runtime.display.fallback}
-          <li class="hint warn" data-testid="display-fallback">
-            {t.seat.fallback}: {t.wrdsReason[runtime.display.fallback] ?? runtime.display.fallback}
-          </li>
-        {/if}
-      {/if}
-      {#if runtime.audio}
-        <li>
-          {t.seat.audio}: {t.audioState[runtime.audio.state] ?? runtime.audio.state}
-          {#if runtime.audio.limitations.length > 0}
-            <ul>
-              {#each runtime.audio.limitations as l (l)}<li class="hint">{t.audioLimitation[l] ?? l}</li>{/each}
-            </ul>
-          {/if}
-        </li>
-      {/if}
-      <li>
-        {t.seat.pads}:
-        {#if runtime.pads.length === 0}{t.seat.noPads}{:else}
-          {runtime.pads.map((p) => `${p.slot + 1}: ${p.kind} (${t.padBackend[p.backend] ?? p.backend})`).join(', ')}
-        {/if}
-        <span class="hint">({t.audioLimitation.no_controller_audio})</span>
-      </li>
-      {#if runtime.stream}
-        <li>
-          {t.seat.stream} ({backendLabel(runtime.stream.backend ?? 'sunshine')}):
-          {runtime.stream.running ? t.seat.streamRunning : t.seatState.stopped}
-          {#if runtime.stream.status?.stream_active}· {t.seat.streamActive}{/if}
-        </li>
-        {#if runtime.stream.backend === 'pulsar'}
-          <li>
-            {t.seat.relayId}: <code>{runtime.stream.relay_id ?? '—'}</code>
-            {#if runtime.stream.relay_state}· {t.seat.relayState(runtime.stream.relay_state)}{/if}
-          </li>
-          {#if runtime.stream.mic && runtime.stream.mic !== 'off'}
-            <li data-testid="mic-state">{t.seat.mic}: {t.seat.micState[runtime.stream.mic] ?? runtime.stream.mic}</li>
-          {/if}
-        {/if}
-      {/if}
-      {#each runtime.isolation as h, i (i)}
-        <li class="hint">{t.seat.isolationHealth}: {h.exe} {h.hooks_on ? '✓' : '✕'} {#if h.error}({failureText(h.error)}){/if}</li>
-      {/each}
-    </ul>
-    {#if onSetMode && runtime.display}
-      <fieldset class="mode-control" data-testid="mode-control">
-        <legend>{t.seat.modeControl}</legend>
-        <div class="row">
-          <label class="field"><span>{t.seat.modeWidth}</span><input type="number" min="640" max="8192" bind:value={modeW} /></label>
-          <label class="field"><span>{t.seat.modeHeight}</span><input type="number" min="640" max="8192" bind:value={modeH} /></label>
-          <label class="field"><span>{t.seat.modeHz}</span><input type="number" min="15" max="500" bind:value={modeHz} /></label>
-          <label class="toggle"><input type="checkbox" bind:checked={modeHdr} /> {t.seat.modeHdr}</label>
-          <button type="button" disabled={modeBusy} onclick={applyMode}>{t.seat.modeApply}</button>
-        </div>
-        <p class="hint">{t.seat.modeHint}</p>
-        {#if modeResult}<p class="hint" data-testid="mode-result">{modeText(modeResult)}</p>{/if}
-      </fieldset>
-    {/if}
-  {/if}
-
-  <h2>{t.seat.actions}</h2>
-  <div class="actions">
-    <button type="button" disabled={!serviceReachable || running || busy} onclick={() => run(onStart)}>
-      ▶ {t.seat.start}
-    </button>
-    <button type="button" disabled={!serviceReachable || !running || busy} onclick={() => run(onStop)}>
-      ■ {t.seat.stop}
-    </button>
-    <button type="button" disabled={locked} onclick={onDelete}>✕ {t.seat.delete}</button>
-    <button type="button" disabled={!serviceReachable} onclick={onPair}>⇄ {t.seat.pair}</button>
+  <div class="notes">
+    {#if extraNotice}{@render extraNotice()}{/if}
+    {#if running}<Notice kind="neutral" icon="lock" text={t.seatView.locked} />{/if}
+    {#if status?.failure}<Notice kind="danger" text={`${t.seat.failure}: ${failureText(status.failure)}`} />{/if}
+    {#if status?.last_error}<Notice kind="warn"><span>{t.seat.lastError}: <span class="mono">{status.last_error}</span></span></Notice>{/if}
+    {#if error}<Notice kind="danger" text={error} />{/if}
+    {#if info}<div role="status" class="help">{info}</div>{/if}
   </div>
 
-  {#if running}<p class="hint">{t.seat.lockedHint}</p>{/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if notice}<p class="ok" role="status">{notice}</p>{/if}
-
-  <fieldset disabled={locked}>
-    <legend>{t.seat.general}</legend>
-    <label class="field">
-      <span>{t.seat.displayName}</span>
-      <input bind:value={draft.display_name} onchange={save} maxlength="128" />
-    </label>
-    {#if displayErr}<p class="error">{fieldErrorText[displayErr]}</p>{/if}
-
-    <label class="field">
-      <span>{t.seat.port}</span>
-      <input bind:value={portText} onchange={save} inputmode="numeric" maxlength="5" />
-    </label>
-    {#if portErr}
-      <p class="error">{fieldErrorText[portErr]}</p>
-    {:else}
-      <p class="hint">{t.seat.portHint(Number(portText))}</p>
-    {/if}
-
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.start_with_service} onchange={save} />
-      {t.seat.startWithService}
-    </label>
-
-    <label class="field">
-      <span>{t.seat.stopAction}</span>
-      <select bind:value={draft.stop_action} onchange={save}>
-        <option value="log_off">{t.seat.stopLogOff}</option>
-        <option value="disconnect">{t.seat.stopDisconnect}</option>
-      </select>
-    </label>
-  </fieldset>
-
-  <fieldset disabled={locked}>
-    <legend>{t.seat.user}</legend>
-    <label class="field">
-      <span>{t.seat.userName}</span>
-      <select bind:value={draft.user_name} onchange={save}>
-        <option value="">{t.seat.chooseUser}</option>
-        {#each enabledUsers as u (u.name)}
-          <option value={u.name}>{u.name}</option>
-        {/each}
-      </select>
-    </label>
-    <p class="hint">{status?.has_password ? t.seat.passwordSet : t.seat.passwordMissing}</p>
-    <div class="row">
-      <label class="field">
-        <span>{t.seat.password}</span>
-        <input type={showPassword ? 'text' : 'password'} bind:value={password} autocomplete="new-password" />
-      </label>
-      <button type="button" onclick={() => (showPassword = !showPassword)}>
-        {showPassword ? t.seat.hide : t.seat.show}
-      </button>
-      <button type="button" disabled={!password || !draft.user_name} onclick={savePassword}>
-        {t.seat.savePassword}
-      </button>
-    </div>
-    {#if onTestCredentials && onEnableUnlock}
-      <button type="button" disabled={!draft.user_name || !status?.has_password} onclick={() => (credOpen = true)}>
-        {t.seat.testCredentials}
-      </button>
-    {/if}
-  </fieldset>
-  {#if credOpen && onTestCredentials && onEnableUnlock}
-    <CredentialTestDialog onTest={onTestCredentials} {onEnableUnlock} onClose={() => (credOpen = false)} />
-  {/if}
-
-  <fieldset disabled={locked}>
-    <legend>{t.seat.display}</legend>
-    <label class="field">
-      <span>{t.seat.renderAdapter}</span>
-      <select value={draft.display.render_adapter_id ?? ''} onchange={(e) => chooseAdapter(e.currentTarget.value)}>
-        <option value="">{t.seat.adapterAuto}</option>
-        {#each adapters as a (a.pnp_instance_id)}
-          <option value={a.pnp_instance_id}>{a.description}</option>
-        {/each}
-        {#if draft.display.render_adapter_id && !adapters.some((a) => a.pnp_instance_id === draft.display.render_adapter_id)}
-          <option value={draft.display.render_adapter_id}>{draft.display.render_adapter ?? draft.display.render_adapter_id}</option>
+  {#if runtime && running}
+    <div class="runtime">
+    <Section title={t.seatView.runtime}>
+      <Group>
+        {#if runtime.stream}
+          {@const sb = runtime.stream.backend ?? 'sunshine'}
+          <Row label={t.seat.stream} help={t.view.stateSummary([backendLabel(sb), status?.stream_client ? t.nav.streamingTo(status.stream_client) : ''])}>
+            {#snippet control()}
+              {#if runtime.stream?.running}
+                <span class="value">{runtime.stream.status?.stream_active ? t.seat.streamActive : t.seat.streamRunning}</span>
+              {:else}
+                <Status kind="warn" text={t.seatState.stopped} />
+              {/if}
+            {/snippet}
+          </Row>
+          {#if sb === 'pulsar'}
+            <Row label={t.seat.relayId} help={runtime.stream.relay_state ? t.seat.relayState(runtime.stream.relay_state) : undefined}>
+              {#snippet control()}<span class="mono">{runtime.stream?.relay_id ?? '—'}</span>{/snippet}
+            </Row>
+            {#if runtime.stream.mic && runtime.stream.mic !== 'off'}
+              <Row label={t.seat.mic}>
+                {#snippet control()}<span class="value" data-testid="mic-state">{t.seat.mic}: {t.seat.micState[runtime.stream?.mic ?? ''] ?? runtime.stream?.mic}</span>{/snippet}
+              </Row>
+            {/if}
+          {/if}
         {/if}
-      </select>
-    </label>
-    {#each gpuWarn as w (w.kind)}<p class="hint warn">{gpuText(w)}</p>{/each}
-    <label class="field">
-      <span>{t.seat.refresh}</span>
-      <input type="number" min="15" max="500" bind:value={draft.display.refresh_hz} onchange={save} />
-    </label>
-    <label class="toggle">
-      <input type="checkbox" checked={draft.display.lock_refresh ?? false} onchange={(e) => {
-        draft.display.lock_refresh = e.currentTarget.checked;
-        void save();
-      }} />
-      {t.seat.lockRefresh}
-    </label>
-    <label class="field">
-      <span>{t.seat.fixedResolution}</span>
-      <select value={fixedKey} onchange={(e) => chooseFixed(e.currentTarget.value)} data-testid="fixed-resolution">
-        <option value="follow">{t.seat.fixedFollow}</option>
-        {#each RES_PRESETS as [w, h] (`${w}x${h}`)}
-          <option value={`${w}x${h}`}>{w} × {h}</option>
+        {#if runtime.display}
+          {@const d = runtime.display}
+          <Row label={t.seat.displayBackend}>
+            {#snippet control()}<span class="value">{t.displayBackend[d.backend] ?? d.backend}</span>{/snippet}
+          </Row>
+          {#if d.host}
+            <Row label={t.seat.displayHost}>
+              {#snippet control()}<span class="value" data-testid="display-host">{d.host === 'provider' ? t.seat.hostProvider : t.seat.hostLoopback}</span>{/snippet}
+            </Row>
+          {/if}
+          {#if d.fallback}
+            <Row label={t.seat.fallback}>
+              {#snippet control()}<span data-testid="display-fallback"><Status kind="warn" text={t.wrdsReason[d.fallback ?? ''] ?? d.fallback ?? ''} /></span>{/snippet}
+            </Row>
+          {/if}
+          <Row label={t.seat.hdr}>
+            {#snippet control()}
+              {#if d.hdr === 'ok'}<span class="value">{t.seat.hdrOk}</span>{:else}<Status kind="off" text={t.hdrReason[d.hdr] ?? d.hdr} />{/if}
+            {/snippet}
+          </Row>
+        {/if}
+        {#if runtime.audio}
+          {@const a = runtime.audio}
+          <Row label={t.seat.audio}>
+            {#snippet control()}<span class="value">{t.audioState[a.state] ?? a.state}</span>{/snippet}
+            {#each a.limitations as l (l)}<span class="help">{t.audioLimitation[l] ?? l}</span>{/each}
+          </Row>
+        {/if}
+        <Row label={t.seat.pads} help={t.audioLimitation.no_controller_audio}>
+          {#snippet control()}
+            {#if runtime.pads.length === 0}
+              <Status kind="off" text={t.seat.noPads} />
+            {:else}
+              <span class="value">{runtime.pads.map((p) => `${p.slot + 1}: ${p.kind} (${t.padBackend[p.backend] ?? p.backend})`).join(', ')}</span>
+            {/if}
+          {/snippet}
+        </Row>
+        {#if runtime.session_id !== null}
+          <Row label={t.seat.session(runtime.session_id)} help={`${t.seat.clientName}: ${runtime.client_name}`} />
+        {/if}
+        {#each runtime.isolation as h, i (i)}
+          <Row label={`${t.seat.isolationHealth}: ${h.exe}`} help={h.error ? failureText(h.error) : undefined}>
+            {#snippet control()}
+              {#if h.hooks_on}<span class="value">{t.view.ready}</span>{:else}<Status kind="warn" text={t.host.notReady} />{/if}
+            {/snippet}
+          </Row>
         {/each}
-        <option value="custom">{t.seat.fixedCustom}</option>
-      </select>
-    </label>
-    {#if fixedKey === 'custom'}
-      <div class="row">
-        <label class="field">
-          <span>{t.seat.fixedWidth}</span>
-          <input type="number" min="640" max="8192" bind:value={draft.display.fixed_width} onchange={save} />
-        </label>
-        <label class="field">
-          <span>{t.seat.fixedHeight}</span>
-          <input type="number" min="640" max="8192" bind:value={draft.display.fixed_height} onchange={save} />
-        </label>
-      </div>
-    {/if}
-    <label class="field">
-      <span>{t.seat.scale}</span>
-      <select
-        value={draft.display.scale_static ? 'static' : 'dynamic'}
-        onchange={(e) => {
-          draft.display.scale_static = e.currentTarget.value === 'static';
-          save();
-        }}
-      >
-        <option value="dynamic">{t.seat.scaleDynamic}</option>
-        <option value="static">{t.seat.scaleStatic}</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>{t.seat.scale}: %{draft.display.scale_percent}</span>
-      <input
-        type="range"
-        min="100"
-        max="500"
-        step="25"
-        disabled={!draft.display.scale_static}
-        bind:value={draft.display.scale_percent}
-        onchange={save}
-      />
-    </label>
-    <label class="field">
-      <span>{t.seat.superSampling}: %{draft.display.super_sampling_percent}</span>
-      <input type="range" min="100" max="500" step="25" bind:value={draft.display.super_sampling_percent} onchange={save} />
-    </label>
-    <label class="field">
-      <span>{t.seat.sdrWhite}: {draft.display.sdr_white_level_nits} nit</span>
-      <input type="range" min="80" max="480" step="10" bind:value={draft.display.sdr_white_level_nits} onchange={save} />
-    </label>
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.display.force_sdr} onchange={save} />
-      {t.seat.forceSdr}
-    </label>
-    <details>
-      <summary>{t.seat.luminance}</summary>
-      <div class="row">
-        <label class="field">
-          <span>{t.seat.maxNits}</span>
-          <input type="number" min="1" max="10000" bind:value={draft.display.luminance.max_nits} onchange={save} />
-        </label>
-        <label class="field">
-          <span>{t.seat.maxFullFrame}</span>
-          <input type="number" min="0" max="10000" bind:value={draft.display.luminance.max_full_frame_nits} onchange={save} />
-        </label>
-      </div>
-    </details>
-  </fieldset>
-
-  <fieldset disabled={locked}>
-    <legend>{t.seat.audioSection}</legend>
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.audio.stream_audio} onchange={save} />
-      {t.seat.streamAudio}
-    </label>
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.audio.microphone} onchange={save} />
-      {t.seat.microphone}
-    </label>
-    <p class="hint">{t.seat.microphoneHint}</p>
-  </fieldset>
-
-  <fieldset disabled={locked}>
-    <legend>{t.seat.streamSection}</legend>
-    <label class="field">
-      <span>{t.seat.streamBackend}</span>
-      <select value={backend} onchange={(e) => chooseBackend(e.currentTarget)}>
-        {#each ['sunshine', 'pulsar'] as const as k (k)}
-          <option value={k} disabled={missing(k) && backend !== k}>
-            {backendLabel(k)}{missing(k) ? ` (${t.seat.backendMissing})` : ''}
-          </option>
-        {/each}
-      </select>
-    </label>
-    {#if running}<p class="hint">{t.seat.backendStopFirst}</p>{/if}
-    {#if missing(backend)}<p class="error" role="alert">{t.seat.backendMissingHint(backendLabel(backend))}</p>{/if}
-    {#if backend === 'sunshine'}
-    <label class="field">
-      <span>{t.seat.gamepad}</span>
-      <select bind:value={draft.stream.gamepad} onchange={save}>
-        <option value="auto">{t.seat.gamepadAuto}</option>
-        <option value="x360">Xbox 360</option>
-        <option value="ds4">DualShock 4</option>
-        <option value="pulsar_ds4">{t.seat.gamepadPulsar('DualShock 4')}</option>
-        <option value="pulsar_ds5">{t.seat.gamepadPulsar('DualSense')}</option>
-        <option value="pulsar_ds5e">{t.seat.gamepadPulsar('DualSense Edge')}</option>
-        <option value="pulsar_xone">{t.seat.gamepadPulsar('Xbox One')}</option>
-      </select>
-      {#if draft.stream.gamepad.startsWith('pulsar_')}<small class="hint">{t.seat.pulsarBuildOnly}</small>{/if}
-    </label>
-    {/if}
-    <!-- Both backends read the capture choice (Pulsar: auto / dxgi / wgc). -->
-    <label class="field">
-      <span>{t.seat.capture}</span>
-      <select bind:value={draft.stream.capture} onchange={save}>
-        <option value="default">{t.seat.captureDefault}</option>
-        <option value="ddx">DDX</option>
-        <option value="wgc">WGC</option>
-        <option value="pulsar_idd">{t.seat.capturePulsarIdd}</option>
-      </select>
-      {#if draft.stream.capture === 'pulsar_idd'}<small class="hint">{t.seat.pulsarBuildOnly}</small>{/if}
-    </label>
-    {#if backend === 'sunshine'}
-    <label class="field">
-      <span>{t.seat.minFps}</span>
-      <input type="number" min="1" max="240" bind:value={draft.stream.min_fps} onchange={save} />
-    </label>
-    {/if}
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.stream.firewall_domain} onchange={save} />
-      {t.seat.firewallDomain}
-    </label>
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.stream.keep_pairing_on_delete} onchange={save} />
-      {t.seat.keepPairing}
-    </label>
-  </fieldset>
-
-  {#if backend === 'pulsar' && draft.pulsar}
-  <fieldset disabled={locked} data-testid="pulsar-options">
-    <legend>{t.seat.pulsarOptions}</legend>
-    <label class="field">
-      <span>{t.seat.pulsarRelay}</span>
-      <input
-        bind:value={draft.pulsar.relay}
-        placeholder="relay.example.net:21116"
-        aria-invalid={relayErr}
-        onchange={save}
-      />
-    </label>
-    {#if relayErr}<small class="error" role="alert">{t.seat.pulsarRelayInvalid}</small>{:else}<small class="hint">{t.seat.pulsarRelayHint}</small>{/if}
-    <label class="field">
-      <span>{t.seat.pulsarNetworkMode}</span>
-      <select bind:value={draft.pulsar.network_mode} onchange={save}>
-        <option value="auto">{t.seat.pulsarNetworkAuto}</option>
-        <option value="p2p-only">{t.seat.pulsarNetworkP2p}</option>
-        <option value="relay-only">{t.seat.pulsarNetworkRelay}</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>{t.seat.pulsarNodePort}</span>
-      <select bind:value={draft.pulsar.node_port_mode} onchange={save}>
-        <option value="base">{t.seat.pulsarNodePortBase(draft.port)}</option>
-        <option value="ephemeral">{t.seat.pulsarNodePortEphemeral}</option>
-        <option value="fixed">{t.seat.pulsarNodePortFixed}</option>
-      </select>
-    </label>
-    {#if draft.pulsar.node_port_mode === 'fixed'}
-    <label class="field">
-      <span>{t.seat.pulsarNodePortFixed}</span>
-      <input type="number" min="1024" max="65535" bind:value={draft.pulsar.node_port} aria-invalid={nodePortErr} onchange={save} />
-    </label>
-    {#if nodePortErr}<small class="error" role="alert">{t.seat.pulsarNodePortInvalid}</small>{/if}
-    {/if}
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.pulsar.port_mapping} onchange={save} />
-      {t.seat.pulsarPortMapping}
-    </label>
-    <label class="toggle">
-      <input type="checkbox" bind:checked={draft.pulsar.lan_discovery} onchange={save} />
-      {t.seat.pulsarDiscovery}
-    </label>
-    {#if draft.pulsar.lan_discovery}<small class="hint">{t.seat.pulsarDiscoveryHint}</small>{/if}
-    <label class="field">
-      <span>{t.seat.pulsarAccess}</span>
-      <select bind:value={draft.pulsar.access} onchange={save}>
-        <option value="approve">{t.seat.pulsarAccessApprove}</option>
-        <option value="approve_or_password">{t.seat.pulsarAccessPassword}</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>{t.seat.pulsarMaxClients}</span>
-      <input type="number" min="1" max="4" bind:value={draft.pulsar.max_clients} onchange={save} />
-    </label>
-  </fieldset>
+        {#if onSetMode && runtime.display}
+          <div class="row stack" data-testid="mode-control">
+            <div class="label"><b>{t.seat.modeControl}</b><span>{t.seat.modeHint}</span></div>
+            <div class="btnrow">
+              <input class="input narrow" type="number" min="640" max="8192" aria-label={t.seat.modeWidth} bind:value={modeW} />
+              <span class="unit">x</span>
+              <input class="input narrow" type="number" min="640" max="8192" aria-label={t.seat.modeHeight} bind:value={modeH} />
+              <input class="input narrow" type="number" min="15" max="500" aria-label={t.seat.modeHz} bind:value={modeHz} />
+              <span class="unit">Hz</span>
+              <Checkbox tight label={t.seat.modeHdr} bind:checked={modeHdr} />
+              <Button kind="secondary" compact label={t.seat.modeApply} busy={modeBusy} onclick={applyMode} />
+            </div>
+            {#if modeResult}<p class="help" role="status" data-testid="mode-result">{modeText(modeResult)}</p>{/if}
+          </div>
+        {/if}
+      </Group>
+    </Section>
+    </div>
   {/if}
 
-  <fieldset disabled={locked}>
-    <legend>{t.seat.autostart}</legend>
-    {#each draft.autostart as app, i (app.id || i)}
-      <div class="app">
-        <label class="field">
-          <span>{t.seat.autostartPath}</span>
-          <input bind:value={app.path} onchange={() => app.path.trim() && save()} />
-        </label>
-        {#if onPickExe}<button type="button" onclick={() => browseApp(i)}>{t.seat.browse}</button>{/if}
-        <label class="field">
-          <span>{t.seat.autostartArgs}</span>
-          <input bind:value={app.arguments} onchange={() => app.path.trim() && save()} />
-        </label>
-        <label class="toggle">
-          <input type="checkbox" bind:checked={app.run_as_system} onchange={() => app.path.trim() && save()} />
-          {t.seat.autostartAsSystem}
-        </label>
-        <button type="button" onclick={() => removeApp(i)}>{t.seat.remove}</button>
+  <div class="settings" inert={locked}>
+    <Section title={t.view.connection}>
+      <Group>
+        <Row label={t.view.address} help={fullAddress ? t.view.addressHelp : t.view.noAddress}>
+          {#snippet control()}
+            {#if fullAddress}
+              <span class="mono">{fullAddress}</span>
+              <IconButton icon="copy" label={t.seatView.copyAddress} onclick={copyAddress} />
+            {/if}
+          {/snippet}
+        </Row>
+        <Row label={t.seat.displayName}>
+          {#snippet control()}
+            <input class="input" aria-label={t.seat.displayName} aria-invalid={displayErr ? 'true' : undefined} maxlength="128" bind:value={draft.display_name} />
+          {/snippet}
+          {#if displayErr}<span class="err" role="alert">{fieldErrorText[displayErr]}</span>{/if}
+        </Row>
+        <Row label={t.seat.port} help={Number(portText) > 0 ? t.seatView.portRange(Number(portText) - 5, Number(portText) + 21) : undefined}>
+          {#snippet control()}
+            <input
+              class="input port mono"
+              aria-label={t.seat.port}
+              inputmode="numeric"
+              maxlength="5"
+              aria-invalid={portTouched && portErr ? 'true' : undefined}
+              bind:value={portText}
+              oninput={() => (portTouched = true)}
+            />
+          {/snippet}
+          {#if portTouched && portErr}<span class="err" role="alert">{fieldErrorText[portErr]}</span>{/if}
+        </Row>
+        <Row label={t.view.streamServer} help={running ? t.seat.backendStopFirst : undefined}>
+          {#snippet control()}
+            <Select
+              label={t.seat.streamBackend}
+              options={backendOptions}
+              value={backend}
+              disabled={locked}
+              onchange={(v) => (draft.stream_backend = v)}
+            />
+          {/snippet}
+          {#if missing(backend)}<span class="err" role="alert">{t.seat.backendMissingHint(backendLabel(backend))}</span>{/if}
+        </Row>
+      </Group>
+    </Section>
+
+    <Section title={t.view.session}>
+      <Group>
+        <Row label={t.seat.userName} help={t.view.userHelp}>
+          {#snippet control()}
+            <Select
+              label={t.seat.userName}
+              options={[{ value: '', label: t.seat.chooseUser }, ...enabledUsers.map((u) => ({ value: u.name, label: u.name }))]}
+              bind:value={draft.user_name}
+            />
+          {/snippet}
+        </Row>
+        <Row label={t.seat.password} help={password ? t.view.passwordStaged : undefined}>
+          {#snippet control()}
+            <LockedValue text={status?.has_password ? t.seatView.passwordSaved : t.view.passwordMissing} />
+            {#if onTestCredentials && onEnableUnlock}
+              <Button
+                kind="secondary"
+                compact
+                label={t.seatView.test}
+                aria-label={t.seatView.testLabel}
+                disabled={!draft.user_name || !status?.has_password}
+                disabledReason={!draft.user_name || !status?.has_password ? t.view.testNeeds : undefined}
+                onclick={() => (credOpen = true)}
+              />
+            {/if}
+            <Button
+              kind="secondary"
+              compact
+              label={t.seatView.change}
+              aria-label={t.seatView.changeLabel}
+              aria-expanded={changingPassword}
+              onclick={() => (changingPassword = !changingPassword)}
+            />
+          {/snippet}
+        </Row>
+        {#if changingPassword}
+          <Row label={t.view.newPassword}>
+            {#snippet control()}
+              <input
+                class="input"
+                type={showPassword ? 'text' : 'password'}
+                aria-label={t.view.newPassword}
+                autocomplete="new-password"
+                bind:value={password}
+              />
+              <Button kind="quiet" compact label={showPassword ? t.seat.hide : t.seat.show} onclick={() => (showPassword = !showPassword)} />
+            {/snippet}
+          </Row>
+        {/if}
+        <Row label={t.view.startWithService} help={t.view.startWithServiceHelp}>
+          {#snippet control()}<Switch label={t.view.startWithService} bind:checked={draft.start_with_service} />{/snippet}
+        </Row>
+        <Row label={t.view.stopAction} help={t.view.stopHelp}>
+          {#snippet control()}
+            <Segmented
+              label={t.view.stopAction}
+              options={[
+                { value: 'log_off', label: t.view.stopLogOff },
+                { value: 'disconnect', label: t.view.stopDisconnect }
+              ]}
+              bind:value={draft.stop_action}
+            />
+          {/snippet}
+        </Row>
+      </Group>
+    </Section>
+
+    <Section title={t.view.streamServer} help={backendLabel(backend)}>
+      <Group>
+        {#if backend === 'sunshine'}
+          <Row label={t.seat.gamepad} help={draft.stream.gamepad.startsWith('pulsar_') ? t.seat.pulsarBuildOnly : undefined}>
+            {#snippet control()}
+              <Select
+                label={t.seat.gamepad}
+                options={[
+                  { value: 'auto', label: t.seat.gamepadAuto },
+                  { value: 'x360', label: 'Xbox 360' },
+                  { value: 'ds4', label: 'DualShock 4' },
+                  { value: 'pulsar_ds4', label: t.seat.gamepadPulsar('DualShock 4') },
+                  { value: 'pulsar_ds5', label: t.seat.gamepadPulsar('DualSense') },
+                  { value: 'pulsar_ds5e', label: t.seat.gamepadPulsar('DualSense Edge') },
+                  { value: 'pulsar_xone', label: t.seat.gamepadPulsar('Xbox One') }
+                ]}
+                bind:value={draft.stream.gamepad}
+              />
+            {/snippet}
+          </Row>
+        {/if}
+        <!-- Both backends read the capture choice (Pulsar: auto / dxgi / wgc). -->
+        <Row label={t.seat.capture} help={draft.stream.capture === 'pulsar_idd' ? t.seat.pulsarBuildOnly : undefined}>
+          {#snippet control()}
+            <Select
+              label={t.seat.capture}
+              options={[
+                { value: 'default', label: t.seat.captureDefault },
+                { value: 'ddx', label: 'DDX' },
+                { value: 'wgc', label: 'WGC' },
+                { value: 'pulsar_idd', label: t.seat.capturePulsarIdd }
+              ]}
+              bind:value={draft.stream.capture}
+            />
+          {/snippet}
+        </Row>
+        {#if backend === 'pulsar' && draft.pulsar}
+          <div class="pulsar-options" data-testid="pulsar-options">
+            <Row label={t.seat.pulsarRelay} help={relayErr ? undefined : t.seat.pulsarRelayHint}>
+              {#snippet control()}
+                <input class="input mono" aria-label={t.seat.pulsarRelay} placeholder="relay.example.net:21116" aria-invalid={relayErr ? 'true' : undefined} bind:value={draft.pulsar!.relay} />
+              {/snippet}
+              {#if relayErr}<span class="err" role="alert">{t.seat.pulsarRelayInvalid}</span>{/if}
+            </Row>
+            <Row label={t.seat.pulsarNetworkMode}>
+              {#snippet control()}
+                <Select
+                  label={t.seat.pulsarNetworkMode}
+                  options={[
+                    { value: 'auto', label: t.seat.pulsarNetworkAuto },
+                    { value: 'p2p-only', label: t.seat.pulsarNetworkP2p },
+                    { value: 'relay-only', label: t.seat.pulsarNetworkRelay }
+                  ]}
+                  bind:value={draft.pulsar!.network_mode}
+                />
+              {/snippet}
+            </Row>
+            <Row label={t.seat.pulsarAccess}>
+              {#snippet control()}
+                <Select
+                  label={t.seat.pulsarAccess}
+                  options={[
+                    { value: 'approve', label: t.seat.pulsarAccessApprove },
+                    { value: 'approve_or_password', label: t.seat.pulsarAccessPassword }
+                  ]}
+                  bind:value={draft.pulsar!.access}
+                />
+              {/snippet}
+            </Row>
+            <Row label={t.seat.pulsarDiscovery} help={draft.pulsar.lan_discovery ? t.seat.pulsarDiscoveryHint : undefined}>
+              {#snippet control()}<Switch label={t.seat.pulsarDiscovery} bind:checked={draft.pulsar!.lan_discovery} />{/snippet}
+            </Row>
+          </div>
+        {/if}
+      </Group>
+      <div class="after">
+        <Disclosure title={t.view.streamMore}>
+          <Group>
+            {#if backend === 'sunshine'}
+              <Row label={t.seat.minFps}>
+                {#snippet control()}<input class="input narrow" type="number" min="1" max="240" aria-label={t.seat.minFps} bind:value={draft.stream.min_fps} />{/snippet}
+              </Row>
+            {/if}
+            {#if backend === 'pulsar' && draft.pulsar}
+              <Row label={t.seat.pulsarNodePort}>
+                {#snippet control()}
+                  <Select
+                    label={t.seat.pulsarNodePort}
+                    options={[
+                      { value: 'base', label: t.seat.pulsarNodePortBase(Number(portText)) },
+                      { value: 'ephemeral', label: t.seat.pulsarNodePortEphemeral },
+                      { value: 'fixed', label: t.seat.pulsarNodePortFixed }
+                    ]}
+                    bind:value={draft.pulsar!.node_port_mode}
+                  />
+                  {#if draft.pulsar!.node_port_mode === 'fixed'}
+                    <input class="input port" type="number" min="1024" max="65535" aria-label={t.seat.pulsarNodePortFixed} aria-invalid={nodePortErr ? 'true' : undefined} bind:value={draft.pulsar!.node_port} />
+                  {/if}
+                {/snippet}
+                {#if nodePortErr}<span class="err" role="alert">{t.seat.pulsarNodePortInvalid}</span>{/if}
+              </Row>
+              <Row label={t.seat.pulsarPortMapping}>
+                {#snippet control()}<Switch label={t.seat.pulsarPortMapping} bind:checked={draft.pulsar!.port_mapping} />{/snippet}
+              </Row>
+              <Row label={t.seat.pulsarMaxClients}>
+                {#snippet control()}<input class="input narrow" type="number" min="1" max="4" aria-label={t.seat.pulsarMaxClients} bind:value={draft.pulsar!.max_clients} />{/snippet}
+              </Row>
+            {/if}
+            <Row label={t.seat.firewallDomain}>
+              {#snippet control()}<Switch label={t.seat.firewallDomain} bind:checked={draft.stream.firewall_domain} />{/snippet}
+            </Row>
+            <Row label={t.seat.keepPairing}>
+              {#snippet control()}<Switch label={t.seat.keepPairing} bind:checked={draft.stream.keep_pairing_on_delete} />{/snippet}
+            </Row>
+          </Group>
+        </Disclosure>
       </div>
-    {/each}
-    <button type="button" onclick={addApp}>{t.seat.addApp}</button>
-  </fieldset>
+    </Section>
 
-  {#if onLoadApps && onSaveApps}
-    <AppsEditor load={onLoadApps} save={onSaveApps} disabled={!serviceReachable} />
-  {/if}
+    <Section title={t.view.display}>
+      <Group>
+        <Row label={t.seat.renderAdapter}>
+          {#snippet control()}
+            <Select label={t.seat.renderAdapter} wide options={adapterOptions} value={draft.display.render_adapter_id ?? ''} onchange={chooseAdapter} />
+          {/snippet}
+          {#each gpuWarn as w (w.kind)}<span class="warn-line">{gpuText(w)}</span>{/each}
+        </Row>
+        <Row label={t.seat.fixedResolution}>
+          {#snippet control()}
+            <Select label={t.seat.fixedResolution} options={fixedOptions} value={fixedKey} onchange={chooseFixed} />
+            {#if fixedKey === 'custom'}
+              <input class="input narrow" type="number" min="640" max="8192" aria-label={t.seat.fixedWidth} bind:value={draft.display.fixed_width} />
+              <span class="unit">x</span>
+              <input class="input narrow" type="number" min="640" max="8192" aria-label={t.seat.fixedHeight} bind:value={draft.display.fixed_height} />
+            {/if}
+          {/snippet}
+        </Row>
+        <Row label={t.seat.refresh}>
+          {#snippet control()}
+            <input class="input narrow" type="number" min="15" max="500" aria-label={t.seat.refresh} bind:value={draft.display.refresh_hz} />
+            <span class="unit">Hz</span>
+          {/snippet}
+        </Row>
+        <Row label={t.seat.lockRefresh}>
+          {#snippet control()}<Switch label={t.seat.lockRefresh} bind:checked={draft.display.lock_refresh} />{/snippet}
+        </Row>
+        <Row label={t.seat.scale} help={t.view.scaleHelp}>
+          {#snippet control()}
+            <Segmented
+              label={t.seat.scale}
+              options={[
+                { value: 'dynamic', label: t.view.scaleDynamic },
+                { value: 'static', label: t.view.scaleStatic }
+              ]}
+              value={draft.display.scale_static ? 'static' : 'dynamic'}
+              onchange={(v) => (draft.display.scale_static = v === 'static')}
+            />
+          {/snippet}
+        </Row>
+        {#if draft.display.scale_static}
+          <Row label={t.view.scalePercent(draft.display.scale_percent)}>
+            {#snippet control()}
+              <input class="range" type="range" min="100" max="500" step="25" aria-label={t.seat.scale} bind:value={draft.display.scale_percent} />
+            {/snippet}
+          </Row>
+        {/if}
+        <Row label={t.seat.forceSdr} help={t.view.forceSdrHelp}>
+          {#snippet control()}<Switch label={t.seat.forceSdr} bind:checked={draft.display.force_sdr} />{/snippet}
+        </Row>
+      </Group>
+      <div class="after">
+        <Disclosure title={t.view.moreDisplay}>
+          <Group>
+            <Row label={t.seat.superSampling} help={t.view.percent(draft.display.super_sampling_percent)}>
+              {#snippet control()}
+                <input class="range" type="range" min="100" max="500" step="25" aria-label={t.seat.superSampling} bind:value={draft.display.super_sampling_percent} />
+              {/snippet}
+            </Row>
+            <Row label={t.seat.sdrWhite} help={t.view.nits(draft.display.sdr_white_level_nits)}>
+              {#snippet control()}
+                <input class="range" type="range" min="80" max="480" step="10" aria-label={t.seat.sdrWhite} bind:value={draft.display.sdr_white_level_nits} />
+              {/snippet}
+            </Row>
+            <Row label={t.seat.maxNits}>
+              {#snippet control()}<input class="input narrow" type="number" min="1" max="10000" aria-label={t.seat.maxNits} bind:value={draft.display.luminance.max_nits} />{/snippet}
+            </Row>
+            <Row label={t.seat.maxFullFrame}>
+              {#snippet control()}<input class="input narrow" type="number" min="0" max="10000" aria-label={t.seat.maxFullFrame} bind:value={draft.display.luminance.max_full_frame_nits} />{/snippet}
+            </Row>
+          </Group>
+        </Disclosure>
+      </div>
+    </Section>
 
-  {#if onRegenerate}
-    <fieldset disabled={locked}>
-      <legend>{t.seat.identity}</legend>
-      {#if confirmRegen}
-        <p class="danger">{backend === 'pulsar' ? t.seat.regenerateConfirmPulsar : t.seat.regenerateConfirm}</p>
-      {/if}
-      <button type="button" class="danger-btn" onclick={regenerate}>{t.seat.regenerate}</button>
-      {#if confirmRegen}<button type="button" onclick={() => (confirmRegen = false)}>{t.newSeat.cancel}</button>{/if}
-    </fieldset>
-  {/if}
-</section>
+    <Section title={t.view.sound}>
+      <Group>
+        <Row label={t.seat.streamAudio}>
+          {#snippet control()}<Switch label={t.seat.streamAudio} bind:checked={draft.audio.stream_audio} />{/snippet}
+        </Row>
+        <Row label={t.seat.microphone} help={t.seat.microphoneHint}>
+          {#snippet control()}<Switch label={t.seat.microphone} bind:checked={draft.audio.microphone} />{/snippet}
+        </Row>
+      </Group>
+    </Section>
+
+    <Section title={t.view.apps}>
+      <Group>
+        <div class="row stack">
+          <div class="label"><b>{t.view.autostartTitle}</b></div>
+          {#if draft.autostart.length > 0}
+            <ListTable
+              caption={t.view.autostartTitle}
+              columns={[
+                { key: 'p', label: t.seat.autostartPath },
+                { key: 'a', label: t.seat.autostartArgs },
+                { key: 's', label: t.view.asSystem },
+                { key: 'x', label: t.seat.remove, end: true, srOnly: true }
+              ]}
+            >
+              {#each draft.autostart as app, i (app.id || i)}
+                <tr>
+                  <td>
+                    <div class="input-group">
+                      <input class="input mono" aria-label={t.seat.autostartPath} bind:value={app.path} />
+                      {#if onPickExe}<Button kind="secondary" compact label={t.seat.browse} aria-label={t.view.browseFor(String(i + 1))} onclick={() => browseApp(i)} />{/if}
+                    </div>
+                  </td>
+                  <td><input class="input mono" aria-label={t.seat.autostartArgs} bind:value={app.arguments} /></td>
+                  <td><Checkbox tight ariaLabel={t.seat.autostartAsSystem} bind:checked={app.run_as_system} /></td>
+                  <td class="end">
+                    <IconButton icon="trash" label={t.view.removeItem(app.path.split('\\').pop() || String(i + 1))} onclick={() => draft.autostart.splice(i, 1)} />
+                  </td>
+                </tr>
+              {/each}
+            </ListTable>
+          {:else}
+            <p class="help">{t.view.noApps}</p>
+          {/if}
+          <div>
+            <Button
+              kind="secondary"
+              compact
+              icon="plus"
+              label={t.seat.addApp}
+              onclick={() => draft.autostart.push({ id: '', path: '', arguments: '', run_as_system: false })}
+            />
+          </div>
+        </div>
+        {#if onLoadApps && onSaveApps}<AppsEditor bind:apps />{/if}
+      </Group>
+    </Section>
+
+    {#if vmHost !== undefined}
+      <VmSeatEditor bind:vm={vmDraft} host={vmHost} info={vmInfo} problem={vmProblem} />
+    {/if}
+
+    <Section title={t.seatView.removal}>
+      <Group>
+        {#if onRegenerate}
+          <Row label={t.seatView.regenerateRow} help={backend === 'pulsar' ? t.seat.regenerateConfirmPulsar : t.seat.regenerateConfirm}>
+            {#snippet control()}<Button kind="danger-quiet" label={t.seatView.regenerate} onclick={() => (confirmRegen = true)} />{/snippet}
+          </Row>
+        {/if}
+        {#if onResetVmDisk && vmBase}
+          <Row label={t.vm.resetSandbox} help={t.vm.confirmResetSandbox}>
+            {#snippet control()}<Button kind="danger-quiet" label={t.vm.resetSandbox} onclick={() => (confirmVmReset = true)} />{/snippet}
+          </Row>
+        {/if}
+        <Row label={t.seat.delete} help={t.view.deleteHelp}>
+          {#snippet control()}<Button kind="danger-quiet" label={t.seat.delete} onclick={onDelete} />{/snippet}
+        </Row>
+      </Group>
+    </Section>
+  </div>
+</div>
+
+<StageBar {stage} />
+
+{#if credOpen && onTestCredentials && onEnableUnlock}
+  <CredentialTestDialog onTest={onTestCredentials} {onEnableUnlock} onClose={() => (credOpen = false)} />
+{/if}
+{#if confirmRegen && onRegenerate}
+  <ConfirmDialog
+    title={t.view.regenerateTitle}
+    body={backend === 'pulsar' ? t.seat.regenerateConfirmPulsar : t.seat.regenerateConfirm}
+    confirmLabel={t.seatView.regenerate}
+    cancelLabel={t.newSeat.cancel}
+    danger
+    onConfirm={() => {
+      confirmRegen = false;
+      void run(async () => {
+        await onRegenerate();
+        info = t.seat.identityDone;
+      });
+    }}
+    onCancel={() => (confirmRegen = false)}
+  />
+{/if}
+{#if confirmVmReset && onResetVmDisk}
+  <ConfirmDialog
+    title={t.vm.resetSandbox}
+    body={t.vm.confirmResetSandbox}
+    confirmLabel={t.vm.resetSandbox}
+    cancelLabel={t.newSeat.cancel}
+    danger
+    onConfirm={() => {
+      confirmVmReset = false;
+      void run(onResetVmDisk);
+    }}
+    onCancel={() => (confirmVmReset = false)}
+  />
+{/if}
 
 <style>
-  .title {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
+  .notes {
+    display: grid;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-6);
   }
-
-  .warn {
-    color: orange;
+  .notes:empty {
+    display: none;
+  }
+  .runtime {
+    margin-bottom: var(--sp-6);
+  }
+  .settings {
+    display: grid;
+    gap: var(--sp-6);
+  }
+  .settings > :global(.section + .section) {
+    margin-top: 0;
+  }
+  .pulsar-options {
+    display: contents;
+  }
+  .pulsar-options > :global(.row) {
+    border-top: var(--bw) solid var(--border);
+  }
+  .err {
+    color: var(--danger-ink);
+    font-size: var(--fs-help);
+    line-height: var(--lh-help);
+  }
+  .warn-line {
+    color: var(--warn-ink);
+    font-size: var(--fs-help);
+    line-height: var(--lh-help);
+    max-width: var(--measure);
+  }
+  .range {
+    width: 220px;
+    accent-color: var(--accent);
   }
 </style>

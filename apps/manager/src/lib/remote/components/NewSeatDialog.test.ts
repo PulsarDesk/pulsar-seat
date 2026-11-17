@@ -16,26 +16,26 @@ function setup(existing: string[] = [], onCreate = vi.fn(async () => {})) {
 describe('NewSeatDialog', () => {
   it('starts with Create disabled and no error shown', () => {
     const { create } = setup();
-    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute('aria-disabled', 'true');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('enables Create for a valid name and submits it', async () => {
     const { input, create, onCreate, user } = setup();
     await user.type(input, 'Salon2');
-    expect(create).toBeEnabled();
+    expect(create).not.toHaveAttribute('aria-disabled');
     await user.click(create);
-    expect(onCreate).toHaveBeenCalledWith('Salon2');
+    expect(onCreate).toHaveBeenCalledWith('Salon2', 'sunshine');
   });
 
   it('rejects spaces and symbols with a message', async () => {
     const { input, create, onCreate, user } = setup();
     await user.type(input, 'salon 1');
-    expect(create).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent(fieldErrorText.name_chars);
+    expect(create).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(fieldErrorText.name_chars)).toBeInTheDocument();
     await user.clear(input);
     await user.type(input, 'koltuk-1');
-    expect(create).toBeDisabled();
+    expect(create).toHaveAttribute('aria-disabled', 'true');
     await user.type(input, '{Enter}');
     expect(onCreate).not.toHaveBeenCalled();
   });
@@ -43,16 +43,16 @@ describe('NewSeatDialog', () => {
   it('rejects a duplicate name regardless of case', async () => {
     const { input, create, user } = setup(['Salon']);
     await user.type(input, 'SALON');
-    expect(create).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent(fieldErrorText.name_duplicate);
+    expect(create).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(fieldErrorText.name_duplicate)).toBeInTheDocument();
   });
 
   it('shows an empty-name error after clearing', async () => {
     const { input, create, user } = setup();
     await user.type(input, 'a');
     await user.clear(input);
-    expect(create).toBeDisabled();
-    expect(screen.getByRole('alert')).toHaveTextContent(fieldErrorText.name_empty);
+    expect(create).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(fieldErrorText.name_empty)).toBeInTheDocument();
   });
 
   it('shows the service error when creation fails', async () => {

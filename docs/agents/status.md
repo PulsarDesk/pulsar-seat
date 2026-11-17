@@ -2648,3 +2648,51 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - Next: P2 (app shell) in order, then P3-P7, P8 cleanup. The three behaviour changes
     (startup modal removal, restart-required on the seat card, remote staged save) are not in
     these packages; they stay "needs maintainer test before push" when P2 / P6 land.
+- 2026-11-17 (redesign P6, remote seats): the remote pages of the manager on the
+  `src/lib/ui` kit, following `target/redesign/final/IMPLEMENTATION.md` P6.
+  - `RemoteTab`: no sidebar, no nested `<main>`; root list (seat link rows with Status, then
+    "This PC": host, remote seat settings, DXVK, VM seats, logs), sub-pages with a
+    breadcrumb; progress is a Notice with a Spinner. `SeatPage`: title + StatusLine; stopped =
+    *Start seat* only, running = *Pair a device* + *Stop seat* + locked Notice (settings
+    `inert`); sections Connection, Session (password = LockedValue + Test + Change), Stream
+    server (backend-specific options, rare ones in a Disclosure), Display (HDR / quality in a
+    Disclosure), Sound, Apps (autostart + client app list as ListTables), Virtual machine
+    (Hyper-V options moved here from the VM page, `VmSeatEditor.svelte`), Removal
+    (danger-quiet, confirms through `ui/ConfirmDialog`). Runtime section and the live
+    display-mode control stay (applied at once). Port error only after an edit; port 0 (not
+    assigned yet) is valid until edited.
+  - Host: one state per row, facts in help, single Experimental button, empty driver
+    sections hidden, `client` class translated. Logs: source Select + Refresh in the head,
+    warn / error lines inked. DXVK: Disable is secondary. Remote seat settings: isolation /
+    pads / virtual display / remote logs; anti-cheat warning is a warn Notice.
+  - Dialogs on `ui/Modal`: NewSeatDialog (name + stream server, `onCreate(name, backend)`),
+    PairDialog (lg, QR on `--qr-paper`, addresses with copy, numbered steps, waiting /
+    request states, Pulsar approve / OTP / connect password / relay sign-in, paired devices,
+    remove-all confirm), CredentialTestDialog, ExperimentalDialog (remote copy kept, restyled;
+    the plan's merge with `components/ExperimentalDialog` waits for P4), PatchingFlow.
+  - Deleted: `remote/remote.css`, `remote/components/ConfirmDialog.svelte`, `Avatar.svelte`,
+    `avatar.ts`, `avatar.test.ts` (2 avatar tests deleted on purpose with the avatar; its 3
+    GPU tests moved to `gpu.test.ts`), the `.remote-ui .app` rule in `app.css`.
+  - Maintainer decisions applied: remote "Detail level" is NOT the local log level
+    (`settings.remote.verbosity` feeds the stream server's `min_log_level` and the VM guest;
+    the service log is `settings.log`), so the row stays as "Remote seat logs".
+    `settings.remote.start_with_windows` is read by nothing in the service, so its toggle is
+    gone; the page links to Settings (`onOpenSettings`).
+  - **BEHAVIOUR, needs maintainer test before push:** remote staged save. Seat page, remote
+    seat settings and shared VM settings keep a draft; the docked save bar (`StageBar.svelte`
+    over `ui/SaveBar`, sticky at the end of the remote view until P2's dock takes it) commits
+    record + VM part, then a new password, then the client app list; Undo restores. Leaving a
+    staged page (inside the view or to another tab / closing the window) asks Save /
+    Continue without saving / Cancel (`remote/stage.svelte.ts`; `App.svelte` guard,
+    `setUiDirty` and the unsaved dialog read it; small edit, merge point with P2). Also a
+    behaviour change in the Sunshine pair dialog: *Send PIN* waits for a pending request
+    (design 30/31); before, a PIN could be sent with no request id. Process patching, DXVK,
+    module app lists, host actions and the live display mode still apply at once.
+  - Visual check: demo on port 5366, headless Edge (own CDP port 9366), light + dark,
+    1280x800 + 1024x700, shots in `target/redesign/audit/p6/`, compared with shots 19, 20,
+    22-25, 75-77 (structure, hierarchy, copy). The running seat (21) and the pair dialog
+    (30 / 31) cannot be reached in the demo (it reports no concurrent sessions); they are
+    covered by unit tests only. Server and Edge stopped. Detector (`bunx impeccable detect
+    --json --no-config` on `src/lib/remote/components/*.svelte`): no findings.
+  - Gates: manager 278 tests, check 0 / 0, build OK; installer scripts 89. No Rust, Tauri
+    or driver code touched.

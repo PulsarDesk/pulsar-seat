@@ -1,14 +1,17 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
-<!-- In-app pairing: the service forwards the operator's answer to the seat's stream server;
-     the manager never talks to the stream server and never opens a browser.
-     Sunshine seats: PIN mode (type the client's PIN). Pulsar seats: approve mode (allow /
-     view only / deny a pending request), one-time password on demand, write-only
-     permanent connect password, relay sign-in when the relay asks
+<!-- In-app pairing (prototypes 30 and 31): the service forwards the operator's answer to the
+     seat's stream server; the manager never talks to the stream server and never opens a
+     browser. An lg Modal in two columns: the QR on a white quiet zone and the addresses on the
+     left; the numbered steps, the request and the fields on the right.
+     Sunshine seats: PIN mode (type the client's PIN once its request arrived). Pulsar seats:
+     approve mode (allow / view only / deny a pending request), one-time password on demand,
+     write-only permanent connect password, relay sign-in when the relay asks
      (docs/split/agents/pulsar-host-backend.md §3.7). -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import { remoteErrorMessage as errorMessage, remoteFailureText as failureText, rt as t } from '#lib/i18n.ts';
   import type { Events, PairState, PairedClient, StreamBackendKind } from '#lib/remote/types.ts';
+  import { Button, ConfirmDialog, Field, IconButton, Modal, Notice, Spinner } from '#lib/ui/index.ts';
   import QrCode from './QrCode.svelte';
 
   interface Props {
@@ -64,11 +67,14 @@
   let otp = $state<string | null>(null);
   let connectPassword = $state('');
   let confirmRemove = $state(false);
+  let confirmUnpairAll = $state(false);
   let relayPassword = $state('');
   let relayTotp = $state('');
+  let copied = $state<string | null>(null);
   const pinValid = $derived(/^\d{4}$/.test(pin));
   const mode = $derived<StreamBackendKind>(pair?.backend ?? backend);
   const pending = $derived(pair?.pending ?? null);
+  const full = $derived(addresses.map((a) => `${a}:${port}`));
 
   function resultText(r: string): string {
     if (mode === 'pulsar') return t.pair.results[r] ?? failureText(r);
@@ -133,13 +139,12 @@
     }
   }
 
-  async function submit(e: SubmitEvent) {
-    e.preventDefault();
+  async function submit() {
     if (!pinValid) {
       message = { ok: false, text: t.pair.pinInvalid };
       return;
     }
-    const name = clientName.trim() || pair?.pending?.device_name || 'Cihaz';
+    const name = clientName.trim() || pair?.pending?.device_name || 'Device';
     await act(async () => {
       await onSubmit(pin, name, pair?.pending?.request_id ?? null);
       pin = '';
@@ -188,183 +193,297 @@
       relayTotp = '';
     }, t.pair.relayAuthSent);
   }
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = text;
+    } catch {
+      /* clipboard refused: the address stays visible */
+    }
+  }
+
+  /** Sunshine steps: 0 = open the app, 1 = add the PC, 2 = type the PIN. */
+  const sunStep = $derived(pending ? 2 : 1);
+  const pulsarStep = $derived(pending ? 2 : 1);
+  const steps = $derived(
+    mode === 'pulsar' ? [t.pair.pulsarStep1, t.pair.pulsarStep2, t.pair.pulsarStep3] : [t.pair.step1, t.pair.step2, t.view.stepPin]
+  );
+  const stepNow = $derived(mode === 'pulsar' ? pulsarStep : sunStep);
+  const blocked = $derived(!running ? t.pair.notRunning : pair && !pair.available ? t.pair.unavailable : null);
 </script>
 
-<div class="backdrop">
-  <div class="dialog wide" role="dialog" aria-modal="true" aria-labelledby="pair-title">
-    {#if mode === 'pulsar'}
-      <div class="pulsar">
-        <h2 id="pair-title">{t.pair.title(seatName)}</h2>
-        <ol>
-          <li>{t.pair.pulsarStep1}</li>
-          <li>{t.pair.pulsarStep2}</li>
-          <li>{t.pair.pulsarStep3}</li>
-        </ol>
+<Modal title={t.pair.title(seatName)} sub={t.view.pairSub} size="lg" {onClose}>
+  <div class="pair">
+    <div class="left">
+      {#if mode === 'pulsar'}
         {#if relayId}
-          <p>{t.seat.relayId}: <code>{relayId}</code></p>
-          <QrCode text={relayId} label={t.pair.qr(relayId)} />
+          <div class="qr"><QrCode text={relayId} label={t.pair.qr(relayId)} /></div>
+          <h3 class="sub">{t.view.pulsarCode}</h3>
+          <p class="addr"><span class="mono code">{relayId}</span><IconButton icon="copy" label={t.view.copy(relayId)} onclick={() => copy(relayId ?? '')} /></p>
         {/if}
-
-        {#if !running}
-          <p class="error">{t.pair.notRunning}</p>
-        {:else if pair && !pair.available}
-          <p class="error">{t.pair.unavailable}</p>
-        {:else if pending}
-          <h3>{t.pair.requestTitle}</h3>
-          <p class="ok" role="status">{t.pair.requestFrom(pending.device_name, pending.kind ?? 'connect')}</p>
-          {#if pending.key_fp}<p class="hint">{t.pair.keyFp}: <code>{pending.key_fp}</code></p>{/if}
-          {#if pending.password_state === 'wrong'}<p class="error">{t.pair.passwordWrong}</p>{/if}
-          <div class="buttons">
-            <button type="button" class="primary" disabled={busy} onclick={() => answer(true, false)}>{t.pair.allow}</button>
-            <button type="button" disabled={busy} onclick={() => answer(true, true)}>{t.pair.viewOnly}</button>
-            <button type="button" class="danger-btn" disabled={busy} onclick={() => answer(false, false)}>{t.pair.deny}</button>
-          </div>
-        {:else}
-          <p class="hint" role="status">{t.pair.pulsarWaiting}</p>
-        {/if}
-
-        {#if running && pair?.available}
-          <h3>{t.pair.otp}</h3>
-          <div class="row">
-            {#if otp !== null}<code class="otp" aria-label={t.pair.otp}>{otp}</code>{/if}
-            <button type="button" disabled={busy} onclick={() => loadOtp(false)}>{t.pair.showOtp}</button>
-            <button type="button" disabled={busy} onclick={() => loadOtp(true)}>{t.pair.refreshOtp}</button>
-          </div>
-        {/if}
-
-        {#if pair?.relay_auth_required}
-          <h3>{t.pair.relayAuth}</h3>
-          <div class="row">
-            <label class="field">
-              <span>{t.pair.relayPassword}</span>
-              <input type="password" bind:value={relayPassword} autocomplete="off" maxlength="128" />
-            </label>
-            <label class="field">
-              <span>{t.pair.relayTotp}</span>
-              <input bind:value={relayTotp} inputmode="numeric" maxlength="6" autocomplete="off" />
-            </label>
-          </div>
-          <button type="button" disabled={busy || !relayPassword} onclick={sendRelayAuth}>{t.pair.relayAuthSend}</button>
-        {/if}
-
-        <h3>{t.pair.connectPassword}</h3>
-        <p class="hint">{t.pair.connectPasswordHint}</p>
-        <div class="row">
-          <label class="field">
-            <span>{t.pair.connectPassword}</span>
-            <input type="password" bind:value={connectPassword} autocomplete="new-password" maxlength="128" />
-          </label>
-          <button type="button" disabled={busy || !connectPassword} onclick={savePassword}>{t.pair.connectPasswordSave}</button>
-        </div>
-        {#if confirmRemove}
-          <div class="row" role="group" aria-label={t.pair.connectPasswordRemoveConfirm}>
-            <p class="error">{t.pair.connectPasswordRemoveConfirm}</p>
-            <button type="button" disabled={busy} onclick={removePassword}>{t.pair.connectPasswordRemoveYes}</button>
-            <button type="button" onclick={() => (confirmRemove = false)}>{t.pair.connectPasswordRemoveNo}</button>
-          </div>
-        {:else}
-          <button type="button" disabled={busy} onclick={() => (confirmRemove = true)}>{t.pair.connectPasswordRemove}</button>
-        {/if}
-
-        {#if message}
-          <p class={message.ok ? 'ok' : 'error'} role="alert">{message.text}</p>
-        {/if}
-        <div class="buttons">
-          <button type="button" onclick={onClose}>{t.pair.close}</button>
-        </div>
-      </div>
-    {:else}
-      <form onsubmit={submit}>
-        <h2 id="pair-title">{t.pair.title(seatName)}</h2>
-        <ol>
-          <li>{t.pair.step1}</li>
-          <li>{t.pair.step2}</li>
-          <li>{t.pair.step3}</li>
-          <li>{t.pair.step4}</li>
-        </ol>
-        <h3>{t.pair.addresses}</h3>
-        {#if addresses.length === 0}
-          <p class="hint">{t.pair.noAddress}</p>
-        {:else}
-          <div class="qr-row">
-            <ul class="addresses">
-              {#each addresses as a, i (a)}
-                <li><code>{a}:{port}</code>{#if i === 0 && addresses.length > 1} <strong>({t.pair.recommended})</strong>{/if}</li>
-              {/each}
-            </ul>
-            <figure>
-              <QrCode text={`${addresses[0]}:${port}`} label={t.pair.qr(`${addresses[0]}:${port}`)} />
-              <figcaption class="hint">{t.pair.qrHint}</figcaption>
-            </figure>
-          </div>
-        {/if}
-
-        {#if !running}
-          <p class="error">{t.pair.notRunning}</p>
-        {:else if pair && !pair.available}
-          <p class="error">{t.pair.unavailable}</p>
-        {:else if pair?.pending}
-          <p class="ok" role="status">{t.pair.pending(pair.pending.device_name)}</p>
-        {:else}
-          <p class="hint" role="status">{t.pair.waiting}</p>
-        {/if}
-
-        <div class="row">
-          <label class="field">
-            <span>{t.pair.pin}</span>
-            <input bind:value={pin} inputmode="numeric" maxlength="4" autocomplete="off" />
-          </label>
-          <label class="field">
-            <span>{t.pair.clientName}</span>
-            <input bind:value={clientName} maxlength="64" autocomplete="off" />
-          </label>
-        </div>
-        {#if message}
-          <p class={message.ok ? 'ok' : 'error'} role="alert">{message.text}</p>
-        {/if}
-        <div class="buttons">
-          <button type="submit" class="primary" disabled={busy || !running}>{t.pair.submit}</button>
-          {#if pair?.pending}
-            <button type="button" disabled={busy} onclick={() => act(onCancelRequest)}>{t.pair.cancelRequest}</button>
-          {/if}
-          <button type="button" onclick={onClose}>{t.pair.close}</button>
-        </div>
-      </form>
-    {/if}
-
-    {#if pair?.available}
-      <h3>{t.pair.clients}</h3>
-      {#if clients.length === 0}
-        <p class="hint">{t.pair.noClients}</p>
+      {:else if full.length === 0}
+        <p class="help">{t.pair.noAddress}</p>
       {:else}
-        <ul class="clients">
-          {#each clients as c (c.uuid)}
-            <li>
-              {c.name}
-              <button type="button" disabled={busy} onclick={() => act(() => onUnpair(c.uuid))}>{t.pair.unpair}</button>
+        <div class="qr"><QrCode text={full[0]} label={t.pair.qr(full[0])} /></div>
+        <h3 class="sub" id="pair-addr-h">{t.pair.addresses}</h3>
+        <ul class="addrs" aria-labelledby="pair-addr-h">
+          {#each full as a, i (a)}
+            <li class="addr">
+              <span class="mono">{a}</span>
+              {#if i === 0 && full.length > 1}<span class="note">{t.pair.recommended}</span>{/if}
+              <IconButton icon="copy" label={t.view.copy(a)} onclick={() => copy(a)} />
             </li>
           {/each}
         </ul>
-        <button type="button" class="danger-btn" disabled={busy} onclick={() => act(onUnpairAll)}>{t.pair.unpairAll}</button>
+        <p class="help">{t.view.pairScan}</p>
       {/if}
-    {/if}
+      {#if copied}<p class="help" role="status">{t.view.copied}</p>{/if}
+    </div>
+
+    <div class="right">
+      <ol class="steps">
+        {#each steps as s, i (i)}
+          <li class:done={i < stepNow} class:now={i === stepNow} aria-current={i === stepNow ? 'step' : undefined}>{s}</li>
+        {/each}
+      </ol>
+
+      {#if blocked}
+        <Notice kind="warn" text={blocked} />
+      {:else if mode === 'pulsar'}
+        {#if pending}
+          <div class="request" role="status">
+            <h3 class="sub">{t.pair.requestTitle}</h3>
+            <p>{t.pair.requestFrom(pending.device_name, pending.kind ?? 'connect')}</p>
+            {#if pending.key_fp}<p class="help">{t.pair.keyFp}: <span class="mono">{pending.key_fp}</span></p>{/if}
+          </div>
+          {#if pending.password_state === 'wrong'}<Notice kind="warn" text={t.pair.passwordWrong} />{/if}
+          <div class="btnrow">
+            <Button kind="primary" label={t.pair.allow} disabled={busy} onclick={() => answer(true, false)} />
+            <Button kind="secondary" label={t.pair.viewOnly} disabled={busy} onclick={() => answer(true, true)} />
+            <Button kind="secondary" label={t.pair.deny} disabled={busy} onclick={() => answer(false, false)} />
+          </div>
+        {:else}
+          <p class="wait" role="status"><Spinner />{t.pair.pulsarWaiting}</p>
+        {/if}
+      {:else if pending}
+        <div class="request" role="status">
+          <h3 class="sub">{t.pair.request(pending.device_name)}</h3>
+          <p class="help">{t.view.pairFrom}</p>
+        </div>
+        <div class="fields two">
+          <Field label={t.pair.pin}>
+            {#snippet children({ id })}
+              <input
+                class="input pin mono"
+                {id}
+                bind:value={pin}
+                inputmode="numeric"
+                maxlength="4"
+                autocomplete="one-time-code"
+                onkeydown={(e) => e.key === 'Enter' && void submit()}
+              />
+            {/snippet}
+          </Field>
+          <Field label={t.pair.clientName}>
+            {#snippet children({ id })}<input class="input" {id} bind:value={clientName} maxlength="64" autocomplete="off" />{/snippet}
+          </Field>
+        </div>
+      {:else}
+        <p class="wait" role="status"><Spinner />{t.pair.waiting}</p>
+      {/if}
+
+      {#if message}<Notice kind={message.ok ? 'ok' : 'danger'} text={message.text} />{/if}
+
+      {#if mode === 'pulsar' && running && pair?.available}
+        <div class="block">
+          <h3 class="sub">{t.pair.otp}</h3>
+          <div class="btnrow">
+            {#if otp !== null}<span class="mono code" aria-label={t.pair.otp}>{otp}</span>{/if}
+            <Button kind="secondary" compact label={t.pair.showOtp} disabled={busy} onclick={() => loadOtp(false)} />
+            <Button kind="secondary" compact label={t.pair.refreshOtp} disabled={busy} onclick={() => loadOtp(true)} />
+          </div>
+          <p class="help">{t.view.otpHelp}</p>
+        </div>
+      {/if}
+
+      {#if mode === 'pulsar' && pair?.relay_auth_required}
+        <div class="block">
+          <h3 class="sub">{t.pair.relayAuth}</h3>
+          <div class="fields two">
+            <Field label={t.pair.relayPassword}>
+              {#snippet children({ id })}<input class="input" {id} type="password" bind:value={relayPassword} autocomplete="off" maxlength="128" />{/snippet}
+            </Field>
+            <Field label={t.pair.relayTotp}>
+              {#snippet children({ id })}<input class="input mono" {id} bind:value={relayTotp} inputmode="numeric" maxlength="6" autocomplete="off" />{/snippet}
+            </Field>
+          </div>
+          <div class="btnrow top">
+            <Button kind="secondary" compact label={t.pair.relayAuthSend} disabled={busy || !relayPassword} onclick={sendRelayAuth} />
+          </div>
+        </div>
+      {/if}
+
+      {#if mode === 'pulsar'}
+        <div class="block">
+          <h3 class="sub">{t.pair.connectPassword}</h3>
+          <Field label={t.pair.connectPassword} help={t.pair.connectPasswordHint}>
+            {#snippet children({ id, describedby })}
+              <div class="input-group">
+                <input class="input" {id} aria-describedby={describedby} type="password" bind:value={connectPassword} autocomplete="new-password" maxlength="128" />
+                <Button kind="secondary" label={t.pair.connectPasswordSave} disabled={busy || !connectPassword} onclick={savePassword} />
+              </div>
+            {/snippet}
+          </Field>
+          {#if confirmRemove}
+            <div class="confirm" role="group" aria-label={t.pair.connectPasswordRemoveConfirm}>
+              <Notice kind="warn" text={t.pair.connectPasswordRemoveConfirm}>
+                {#snippet actions()}
+                  <Button kind="secondary" compact label={t.pair.connectPasswordRemoveYes} disabled={busy} onclick={removePassword} />
+                  <Button kind="secondary" compact label={t.pair.connectPasswordRemoveNo} onclick={() => (confirmRemove = false)} />
+                {/snippet}
+              </Notice>
+            </div>
+          {:else}
+            <div class="btnrow top">
+              <Button kind="quiet" compact label={t.pair.connectPasswordRemove} disabled={busy} onclick={() => (confirmRemove = true)} />
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      {#if pair?.available}
+        <div class="block">
+          <h3 class="sub">{t.pair.clients}</h3>
+          {#if clients.length === 0}
+            <p class="help">{t.pair.noClients}</p>
+          {:else}
+            <ul class="clients">
+              {#each clients as c (c.uuid)}
+                <li>
+                  <span>{c.name}</span>
+                  <Button kind="quiet" compact label={t.pair.unpair} aria-label={t.view.unpairLabel(c.name)} disabled={busy} onclick={() => act(() => onUnpair(c.uuid))} />
+                </li>
+              {/each}
+            </ul>
+            <div class="btnrow top">
+              <Button kind="danger-quiet" compact label={t.pair.unpairAll} disabled={busy} onclick={() => (confirmUnpairAll = true)} />
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
-</div>
+
+  {#snippet footStart()}{#if mode !== 'pulsar' && !pending && !blocked}{t.pair.pinWhy}{/if}{/snippet}
+  {#snippet foot({ reasonId })}
+    {#if mode !== 'pulsar'}
+      <Button
+        kind="primary"
+        label={t.pair.submit}
+        disabled={busy || !running || !pending}
+        reasonId={!pending ? reasonId : undefined}
+        onclick={submit}
+      />
+      {#if pending}<Button kind="secondary" label={t.pair.cancelRequest} disabled={busy} onclick={() => act(onCancelRequest)} />{/if}
+    {/if}
+    <Button kind="secondary" label={t.pair.close} onclick={onClose} />
+  {/snippet}
+</Modal>
+
+{#if confirmUnpairAll}
+  <ConfirmDialog
+    title={t.view.unpairAllTitle}
+    body={t.view.unpairAllBody}
+    confirmLabel={t.pair.unpairAll}
+    cancelLabel={t.newSeat.cancel}
+    danger
+    onConfirm={() => {
+      confirmUnpairAll = false;
+      void act(onUnpairAll);
+    }}
+    onCancel={() => (confirmUnpairAll = false)}
+  />
+{/if}
 
 <style>
-  .qr-row {
+  .pair {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: var(--sp-6);
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  .qr {
+    display: inline-block;
+    padding: var(--sp-3);
+    background: var(--qr-paper);
+    border-radius: var(--r-sm);
+    margin-bottom: var(--sp-4);
+  }
+  .addrs {
+    list-style: none;
+    display: grid;
+    gap: var(--sp-1);
+    margin-bottom: var(--sp-2);
+  }
+  .addr {
     display: flex;
-    gap: 1rem;
-    align-items: flex-start;
+    align-items: center;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
-
-  .qr-row figure {
-    margin: 0;
+  .code {
+    font-size: var(--fs-body);
   }
-
-  .qr-row figcaption {
-    max-width: 168px;
-    margin-top: 0.25rem;
+  .right {
+    display: grid;
+    gap: var(--sp-4);
+    min-width: 0;
+  }
+  .steps {
+    padding-left: var(--sp-5);
+    display: grid;
+    gap: var(--sp-2);
+  }
+  .steps li.done {
+    color: var(--text-muted);
+  }
+  .steps li.now {
+    font-weight: 600;
+  }
+  .wait {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    color: var(--text-muted);
+  }
+  .request .sub {
+    margin-bottom: 2px;
+  }
+  .pin {
+    font-size: var(--fs-h2);
+    letter-spacing: 0.2em;
+  }
+  .block .sub {
+    margin-bottom: var(--sp-2);
+  }
+  .top {
+    margin-top: var(--sp-2);
+  }
+  .clients {
+    list-style: none;
+    display: grid;
+    gap: var(--sp-1);
+  }
+  .clients li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
   }
 </style>

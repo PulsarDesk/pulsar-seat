@@ -191,9 +191,3 @@
 :where(table) {
   font: inherit;
 }
-
-/* The remote pages use `.app` for an app-list row; the shell's `.app` grid must not reach it. */
-.remote-ui .app {
-  display: block;
-  height: auto;
-}
