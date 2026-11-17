@@ -4566,6 +4566,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "seat-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "seat-core",
+ "sha2 0.11.0",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "seat-compat"
 version = "0.1.0"
 dependencies = [

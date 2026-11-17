@@ -1,20 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Writes SHA256SUMS.txt for every PulsarSeat_*.msi in a folder, after signing (signing
-# changes the file, so checksums from the unsigned build are wrong). The update check
-# (crates/seat-service/src/update.rs) reads this file from the GitHub release only with a
-# valid SHA256SUMS.txt.minisig from a release key (sign-release.ps1), and also refuses any
-# installer without a valid Authenticode signature.
+# Writes SHA256SUMS.txt for every PulsarSeat_*.msi and PulsarSeat_*_setup.exe in a folder,
+# after signing (signing changes the file, so checksums from the unsigned build are wrong).
+# The update check (crates/seat-service/src/update.rs) reads this file from the GitHub
+# release only with a valid SHA256SUMS.txt.minisig from a release key (sign-release.ps1),
+# and also refuses any installer without a valid Authenticode signature. It looks up only
+# the MSI names; the setup programs are listed for people who download them by hand.
 #
 #   powershell -ExecutionPolicy Bypass -File installer\scripts\write-sums.ps1 target\installer\dist
 param([Parameter(Mandatory = $true)] [string] $Dir)
 
 $ErrorActionPreference = "Stop"
-$msis = Get-ChildItem $Dir -Filter "PulsarSeat_*_*.msi" | Sort-Object Name
+$msis = @(Get-ChildItem $Dir -Filter "PulsarSeat_*_*.msi" | Sort-Object Name)
 if (-not $msis) { throw "no PulsarSeat_<version>_<arch>.msi in $Dir" }
-$lines = foreach ($m in $msis) {
+$setups = @(Get-ChildItem $Dir -Filter "PulsarSeat_*_setup.exe" | Sort-Object Name)
+$lines = foreach ($m in @($msis + $setups)) {
     $sig = Get-AuthenticodeSignature $m.FullName
-    if ($sig.Status -ne "Valid") { Write-Warning "$($m.Name) is not validly signed ($($sig.Status)): the update check will refuse it" }
+    if ($sig.Status -ne "Valid") { Write-Warning "$($m.Name) is not validly signed ($($sig.Status)): the update check / sign-release.ps1 will refuse it" }
     if (-not (Test-Path "$($m.FullName).build.txt")) { Write-Warning "$($m.Name) has no build record ($($m.Name).build.txt): sign-release.ps1 will refuse it" }
     "$((Get-FileHash $m.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($m.Name)"
 }

@@ -5,7 +5,9 @@
 // Bun's YAML parser plus the rules below, which catch the mistakes a workflow that has
 // never run is most likely to carry.
 //
-//   bun installer/scripts/lint-ci.ts [.github/workflows/ci.yml]
+//   bun installer/scripts/lint-ci.ts [.github/workflows/ci.yml] [--local installer/scripts/ci-local.ps1]
+//
+// With --local: also the dry-run coverage of ci-local.ps1 (`lintLocalCoverage`).
 //
 // Rules:
 //   - top level: `name`, `on`, `jobs`; only known top-level keys; `permissions` present
@@ -163,9 +165,51 @@ export function lintWorkflow(text: string): Finding[] {
   return f;
 }
 
+/**
+ * Local dry-run coverage (`--local installer/scripts/ci-local.ps1`): every job of the
+ * workflow has a `# ---- <job> job` section in ci-local.ps1, and every installer script the
+ * workflow runs (`installer/scripts/<name>.ts|.ps1`) is run by ci-local.ps1 too, unless a
+ * `# ci-local skips: <name> (<reason>)` line names it. A job or script added to the
+ * workflow without its local counterpart fails here, so "green locally" keeps meaning
+ * "every CI step that can run on this machine ran".
+ */
+export function lintLocalCoverage(workflow: string, local: string): Finding[] {
+  const f: Finding[] = [];
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(workflow);
+  } catch {
+    return f; // lintWorkflow reports it
+  }
+  const jobs = isObj(doc) && isObj(doc.jobs) ? Object.keys(doc.jobs) : [];
+  const sections = new Set([...local.matchAll(/^\s*# ---- ([\w-]+) job\b/gm)].map((m) => m[1]));
+  for (const j of jobs) if (!sections.has(j)) f.push({ where: `jobs.${j}`, msg: `no "# ---- ${j} job" section in ci-local.ps1` });
+  for (const s of sections) if (!jobs.includes(s)) f.push({ where: "ci-local.ps1", msg: `section "${s} job" names no workflow job` });
+  const skipped = new Set(
+    [...local.matchAll(/^\s*# ci-local skips: (.+)$/gm)].flatMap((m) => [...m[1].matchAll(/([\w.-]+\.(?:ts|ps1))\b/g)].map((x) => x[1])),
+  );
+  const scriptRe = /installer\/scripts\/([\w.-]+\.(?:ts|ps1))\b/g;
+  // Only what steps run (comments in the workflow may name scripts that run elsewhere).
+  const runs = (isObj(doc) && isObj(doc.jobs) ? Object.values(doc.jobs) : [])
+    .flatMap((j) => (isObj(j) && Array.isArray(j.steps) ? j.steps : []))
+    .map((s) => (isObj(s) && typeof s.run === "string" ? s.run.replace(/^\s*#.*$/gm, "") : ""))
+    .join("\n");
+  const used = new Set([...runs.matchAll(scriptRe)].map((m) => m[1]));
+  const localUses = new Set([...local.replaceAll("\\", "/").matchAll(scriptRe)].map((m) => m[1]));
+  for (const s of used) {
+    if (!localUses.has(s) && !skipped.has(s)) f.push({ where: "ci-local.ps1", msg: `the workflow runs installer/scripts/${s}; ci-local.ps1 neither runs it nor lists it in "# ci-local skips:"` });
+  }
+  return f;
+}
+
 if (import.meta.main) {
-  const file = process.argv[2] ?? ".github/workflows/ci.yml";
-  const findings = lintWorkflow(await Bun.file(file).text());
+  const args = process.argv.slice(2);
+  const li = args.indexOf("--local");
+  const localFile = li >= 0 ? args[li + 1] : undefined;
+  const file = args.find((a, i) => !a.startsWith("--") && (li < 0 || i !== li + 1)) ?? ".github/workflows/ci.yml";
+  const text = await Bun.file(file).text();
+  const findings = lintWorkflow(text);
+  if (localFile) findings.push(...lintLocalCoverage(text, await Bun.file(localFile).text()));
   for (const x of findings) console.error(`${file}: ${x.where}: ${x.msg}`);
   if (findings.length) {
     console.error(`${findings.length} problem(s)`);

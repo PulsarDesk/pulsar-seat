@@ -15,6 +15,9 @@
 #      and the payload gate again on every file inside it
 #   8. dist\PulsarSeat_<version>_<arch>.msi + dist\SHA256SUMS.txt (the names the update
 #      check expects, crates/seat-service/src/update.rs)
+#   9. dist\PulsarSeat_<version>_<arch>[_<culture>]_setup.exe: the native setup program
+#      with this MSI embedded (build-setup.ps1, crates/seat-bootstrap; test build, -NoSetup
+#      skips it). A release setup is built again from the signed MSI (checklist §4).
 #
 # Never signs anything, never installs the MSI. Sign the MSI and every exe / dll with the
 # maintainer's certificate outside this script (installer/README.md "Signing").
@@ -46,7 +49,9 @@ param(
     [string] $CargoTargetDir = "",
     # MSI culture (installer/wix/locales/<culture>.wxl). en-US is the release default; tr-TR
     # builds the Turkish MSI (dist name gets a _tr-TR suffix).
-    [ValidateSet("en-US", "tr-TR")] [string] $Language = "en-US"
+    [ValidateSet("en-US", "tr-TR")] [string] $Language = "en-US",
+    # Skip step 9 (the setup.exe bootstrapper).
+    [switch] $NoSetup
 )
 
 $ErrorActionPreference = "Stop"
@@ -390,5 +395,18 @@ $lines += "$hash  $name"
 [System.IO.File]::WriteAllText($sums, (($lines | Sort-Object { $_.Substring(66) }) -join "`n") + "`n")
 Write-Host "MSI:  $out"
 Write-Host "SHA-256: $hash"
+
+# ---------------------------------------------------------------- 9: setup.exe (test build)
+# Always a non-release setup here: the MSI is unsigned and a release setup refuses an
+# unsigned MSI. Its build record names this MSI's hash, so sign-release.ps1 refuses it once
+# the MSI is signed (rebuild it with build-setup.ps1 -Release from the signed MSI).
+if (-not $NoSetup) {
+    Invoke-Checked "setup.exe ($Arch)" { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-setup.ps1") -Arch $Arch -Msi $out -OutDir $dist -CargoTargetDir $CargoTargetDir }
+    $setupName = [IO.Path]::GetFileNameWithoutExtension($name) + "_setup.exe"
+    $setupHash = (Get-FileHash (Join-Path $dist $setupName) -Algorithm SHA256).Hash.ToLowerInvariant()
+    $lines = @(Get-Content $sums | Where-Object { $_ -and -not $_.EndsWith("  $setupName") }) + "$setupHash  $setupName"
+    [System.IO.File]::WriteAllText($sums, (($lines | Sort-Object { $_.Substring(66) }) -join "`n") + "`n")
+    Write-Host "setup: $(Join-Path $dist $setupName)"
+}
 Write-Host "(unsigned: Authenticode-sign the MSI, rerun write-sums.ps1, then sign-release.ps1 for SHA256SUMS.txt.minisig;"
 Write-Host " the update check refuses unsigned installers and unsigned checksum files - docs/release/checklist.md)"

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Intentional hits of installer/scripts/repo-scan.ts: <path>  <rule>  # why
+# Keep every entry justified; a path ending in / covers the folder.
+
+apps/manager/src/lib/i18n.test.ts                 email       # sample address in a test (.local, not routable)
+crates/seat-service/src/loopback_plan.rs          email       # sample address in a test (.local)
+crates/seat-service/src/update.rs                 email       # git (ssh) URL form in a URL-allowlist test
+installer/licenses/usbip-win2-BSD-2-Clause.txt    email       # upstream copyright line, must stay verbatim
+spec/remote/10-manager.md                         private_ip  # example LAN address of the pairing screen (spec sample)
+docs/agents/architecture.md                       private_ip  # default Hyper-V NAT prefix of VM seats (product default, not a local fact)
+third_party/ironrdp-rdpdr/Cargo.toml              email       # upstream authors line of the vendored crate, kept verbatim

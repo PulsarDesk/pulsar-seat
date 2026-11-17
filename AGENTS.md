@@ -39,6 +39,8 @@ when you add a doc.
 | Dated log | [docs/journal.md](docs/journal.md) |
 | Installer (one MSI per arch), signing, updates, remote payload | [installer/README.md](installer/README.md) |
 | Release checklist (maintainer) | [docs/release/checklist.md](docs/release/checklist.md) |
+| Driver submission (attestation / WHQL CABs), signing dry run, public-repo readiness | [docs/release/driver-submission.md](docs/release/driver-submission.md), [signing-dry-run.md](docs/release/signing-dry-run.md), [public-repo.md](docs/release/public-repo.md) |
+| Contributing / security policy (public) | [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) |
 | User troubleshooting (English; Turkish copy `docs/troubleshooting.tr.md`) | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Behaviour spec (analyst-written): `spec/local/`, `spec/remote/` | [spec/README.md](spec/README.md) |
 | `pulsar-host` pipe contract (remote seats on the Pulsar backend; still binding) | [docs/split/agents/pulsar-host-backend.md](docs/split/agents/pulsar-host-backend.md) |

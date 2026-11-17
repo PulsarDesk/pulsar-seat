@@ -7,21 +7,30 @@
 #
 #   powershell -ExecutionPolicy Bypass -File installer\scripts\sign-release.ps1 -Dist C:\release\v0.2.0
 #   ... -Key E:\offline\pulsar-seat-key\minisign.key
+#   ... -CheckOnly      every check below, no key opened, no signature written (dry runs:
+#                       docs/release/signing-dry-run.md)
+#
+# Setup programs (PulsarSeat_<v>_<arch>[_<culture>]_setup.exe, build-setup.ps1) listed in
+# SHA256SUMS.txt must be validly signed, built with -Release from the same commit, and embed
+# exactly the MSI that SHA256SUMS.txt lists (their .build.txt record).
 #
 # Never prints the secret key. Publish SHA256SUMS.txt.minisig as a release asset beside
 # SHA256SUMS.txt; without it no client offers the release.
 param(
     [Parameter(Mandatory = $true)] [string] $Dist,
     [string] $Key = "",
-    [string] $CargoTargetDir = ""
+    [string] $CargoTargetDir = "",
+    [switch] $CheckOnly
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-if (-not $Key) { $Key = Join-Path $env:USERPROFILE ".pulsar-seat\release-key\minisign.key" }
-if (-not (Test-Path $Key)) { throw "release key $Key not found (installer/scripts/release-keygen.ps1 creates it)" }
+if (-not $CheckOnly) {
+    if (-not $Key) { $Key = Join-Path $env:USERPROFILE ".pulsar-seat\release-key\minisign.key" }
+    if (-not (Test-Path $Key)) { throw "release key $Key not found (installer/scripts/release-keygen.ps1 creates it)" }
+}
 $sums = Join-Path $Dist "SHA256SUMS.txt"
 if (-not (Test-Path $sums)) { throw "$sums not found (installer/scripts/write-sums.ps1 writes it)" }
 $signers = Join-Path $repo "installer\release-signers.txt"
@@ -31,9 +40,11 @@ if ($CargoTargetDir) { $env:CARGO_TARGET_DIR = $CargoTargetDir }
 # Every PulsarSeat_*.msi in the folder must be listed too (nothing unchecked is published).
 $releaseCommit = $null
 $listed = @(Get-Content $sums | Where-Object { $_.Trim() } | ForEach-Object { ($_ -split '\s+[ *]?', 2)[1].TrimStart('*') })
-foreach ($m in Get-ChildItem $Dist -Filter "PulsarSeat_*.msi") {
+foreach ($m in @(Get-ChildItem $Dist -Filter "PulsarSeat_*.msi") + @(Get-ChildItem $Dist -Filter "PulsarSeat_*_setup.exe")) {
     if ($listed -notcontains $m.Name) { throw "$($m.Name) is in $Dist but not in SHA256SUMS.txt (remove it or rerun write-sums.ps1)" }
 }
+$listedHash = @{}
+$setupNames = New-Object System.Collections.Generic.List[string]
 foreach ($line in Get-Content $sums) {
     if (-not $line.Trim()) { continue }
     if ($line -notmatch '^([0-9a-f]{64}) [ *](.+)$') { throw "SHA256SUMS.txt: unexpected line '$line'" }
@@ -42,8 +53,11 @@ foreach ($line in Get-Content $sums) {
     $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($h -ne $Matches[1]) { throw "$($Matches[2]): SHA-256 $h, SHA256SUMS.txt says $($Matches[1])" }
     $name = $Matches[2]
+    $listedHash[$name] = $h
     $sig = Get-AuthenticodeSignature $f
-    if ($sig.Status -ne "Valid") { throw "${name}: Authenticode $($sig.Status); sign the MSI first (the update check refuses it)" }
+    if ($sig.Status -ne "Valid") { throw "${name}: Authenticode $($sig.Status); sign it first (the update check refuses it)" }
+    if ($name -match '_setup\.exe$') { $setupNames.Add($name); continue }
+    if ($name -notmatch '\.msi$') { throw "SHA256SUMS.txt lists $name, which is neither an MSI nor a setup program" }
     # Inside the MSI: the credential provider DLL that LogonUI loads as SYSTEM must be validly
     # signed too (administrative extraction only: nothing is installed or registered).
     $extract = Join-Path ([IO.Path]::GetTempPath()) ("pulsar-seat-sign-" + [Guid]::NewGuid().ToString("N"))
@@ -91,6 +105,30 @@ foreach ($line in Get-Content $sums) {
     } finally {
         Remove-Item -Recurse -Force $extract -ErrorAction SilentlyContinue
     }
+}
+
+# Setup programs: the build record (build-setup.ps1) ties each one to a listed MSI.
+foreach ($name in $setupNames) {
+    $recFile = Join-Path $Dist "$name.build.txt"
+    if (-not (Test-Path $recFile)) { throw "${name}: no $name.build.txt next to it (build it with build-setup.ps1)" }
+    $rec = @{}
+    foreach ($l in Get-Content $recFile) { if ($l -match '^([a-z_0-9]+): (.*)$') { $rec[$Matches[1]] = $Matches[2].Trim() } }
+    foreach ($k in "version", "arch", "commit", "dirty", "release", "msi", "msi_sha256", "setup_sha256") {
+        if (-not $rec.ContainsKey($k)) { throw "${name}: build record has no '$k'" }
+    }
+    if ($rec.release -ne "true") { throw "${name}: not a -Release setup (it would run an unsigned MSI); build-setup.ps1 -Release from the signed MSI" }
+    if ($rec.dirty -ne "false") { throw "${name}: built from a working tree with uncommitted changes" }
+    if ($null -ne $releaseCommit -and $rec.commit -ne $releaseCommit) { throw "${name}: built from $($rec.commit), the MSIs from $releaseCommit" }
+    if (-not $listedHash.ContainsKey($rec.msi)) { throw "${name}: embeds $($rec.msi), which SHA256SUMS.txt does not list" }
+    if ($listedHash[$rec.msi] -ne $rec.msi_sha256) { throw "${name}: embeds $($rec.msi) $($rec.msi_sha256), but the listed (signed) MSI is $($listedHash[$rec.msi]); rebuild the setup from the signed MSI" }
+    if ($name -ne ([IO.Path]::GetFileNameWithoutExtension($rec.msi) + "_setup.exe")) { throw "${name}: name does not match its MSI $($rec.msi)" }
+    # The record's hash is of the unsigned exe; signing changes it, so only the MSI link and
+    # the Authenticode signature (checked above) bind the signed file.
+}
+
+if ($CheckOnly) {
+    Write-Host "All checks passed for $Dist (-CheckOnly: no key opened, no signature written)."
+    exit 0
 }
 
 cargo build --locked --release -p seat-release --bin pulsar-seat-release --manifest-path (Join-Path $repo "Cargo.toml")

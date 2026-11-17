@@ -5,7 +5,8 @@ Pulsar Seat is licensed under the GNU General Public License version 3 only
 package is published at:
 
   https://github.com/PulsarDesk/pulsar-seat
-  (the tag matching the version shown in the manager's "Hakkında" page)
+  (tag v<version>: the version is in the installer's file name, in Windows
+  "Installed apps" and in the manager's update page)
 
 The stream server shipped in the "remote\stream-server" folder is Sunshine (upstream
 repository SunshineStream/Sunshine, formerly LizardByte/Sunshine), also licensed under

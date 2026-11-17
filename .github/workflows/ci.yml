@@ -186,8 +186,14 @@ jobs:
           bun run build
       - name: Installer scripts
         run: bun test installer/scripts
+      # Structure, plus: every job and every installer script used here has its local
+      # counterpart in ci-local.ps1 (or is listed there as skipped, with the reason).
       - name: Workflow lint (this file)
-        run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml
+        run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml --local installer/scripts/ci-local.ps1
+      # Nothing that must not be public: local paths, keys, tokens, binaries, missing
+      # licence / contributing files (docs/release/public-repo.md).
+      - name: Public-repository scan
+        run: bun installer/scripts/repo-scan.ts
 
   # Pulsar build of the stream server (stream-server/README.md): upstream Sunshine fetched by
   # the commit SHA pinned in stream-server/sunshine.json, the patch set applied with
@@ -350,6 +356,21 @@ jobs:
         run: |
           $arch = if ("${{ matrix.platform }}" -eq "ARM64") { "arm64" } else { "x64" }
           bun installer/scripts/check-payload.ts --arch $arch --machine-only "target/drivers/${{ matrix.platform }}/Release"
+      # Partner Center submission CABs (INF + binaries + PDBs per driver, this platform's
+      # folder), unsigned: the maintainer EV-signs and uploads them
+      # (docs/release/driver-submission.md). The storage minifilter still has the
+      # UNALLOCATED altitude placeholder; its CAB is for inspection until Microsoft
+      # assigns one (manifest.json says so).
+      - name: Submission CABs (unsigned)
+        run: bun installer/scripts/driver-cab.ts --platforms ${{ matrix.platform }} --out target/driver-submission --allow-unallocated-altitude
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-submission-${{ matrix.platform }}
+          path: |
+            target/driver-submission/*.cab
+            target/driver-submission/*.ddf
+            target/driver-submission/manifest.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: drivers-unsigned-${{ matrix.platform }}
@@ -555,10 +576,13 @@ jobs:
           $xml = Get-ChildItem target/blocklist -Recurse -Filter *.xml | Where-Object { $_.Name -match "Enforced|Driver" } | Select-Object -First 1
           if (-not $xml) { Write-Error "no SiPolicy XML in the blocklist zip"; exit 1 }
           bun installer/scripts/check-payload.ts --arch ${{ matrix.arch }} --allow-drivers --blocklist $xml.FullName "target/payload/${{ matrix.arch }}"
-      # MSI only: msiexec runs natively on both architectures. Tauri's NSIS stub is a
-      # 32-bit x86 program (emulated on ARM64), which the "native everywhere" rule
-      # (docs/agents/rules.md) does not allow. The script also extracts the MSI and runs
-      # the payload gate on every file inside it, and writes dist/SHA256SUMS.txt.
+      # MSI plus the native setup program (crates/seat-bootstrap, built for this job's arch
+      # with the MSI embedded; build-setup.ps1). Tauri's NSIS stub is a 32-bit x86 program
+      # (emulated on ARM64), which the "native everywhere" rule (docs/agents/rules.md) does
+      # not allow, so it is not used. The script also extracts the MSI and runs the payload
+      # gate on every file inside it, and writes dist/SHA256SUMS.txt. The setup built here
+      # embeds the unsigned MSI (test build); the release setup is rebuilt from the signed
+      # MSI (docs/release/checklist.md §4).
       # Release gates (tags): a release key in installer/release-signers.txt (the rust
       # job's release build already refuses to compile without one; this says why), and
       # -Release checks that the source-offer tag exists on the public repository.
