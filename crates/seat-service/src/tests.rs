@@ -3201,6 +3201,33 @@ fn compat_options_follow_product_switch() {
     assert!(h.p.user_env_reverts.load(Ordering::SeqCst) >= 1);
 }
 
+/// VM round 2 (2026-11-17): a config change of only `deny_local_logon` or only the object
+/// rules is applied right away (before, only a `settings.tweaks` change ran the sync).
+#[test]
+fn compat_options_follow_an_apply_without_tweak_changes() {
+    let h = harness_with(two_seat_config(), None);
+    h.s.boot();
+    h.s.sync_tweaks();
+    let mut a = admin();
+    let apply = |a: &mut _, f: &dyn Fn(&mut seat_core::config::Config)| {
+        let base = h.s.status().config_revision;
+        let ResponseBody::Config(view) = call(&h, a, RequestBody::GetConfig).unwrap() else { panic!() };
+        let mut cfg = view.config.clone();
+        f(&mut cfg);
+        call(&h, a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: base, force: false }).unwrap();
+    };
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(Vec::new()));
+    apply(&mut a, &|c| c.seats[1].deny_local_logon = true);
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(vec!["S-1-5-21-9-ali".to_string()]));
+    assert!(h.p.object_rules.lock().unwrap().is_empty());
+    apply(&mut a, &|c| {
+        c.settings.apps.object_rules = vec![seat_core::config::ObjectRule { exe: "x.exe".into(), names: vec!["One".into()] }]
+    });
+    assert_eq!(h.p.object_rules.lock().unwrap().len(), 1);
+    apply(&mut a, &|c| c.seats[1].deny_local_logon = false);
+    assert_eq!(h.p.deny_logon.lock().unwrap().last().cloned(), Some(Vec::new()));
+}
+
 /// A seat that signs in locally never gets the deny right, even if the config says so.
 #[test]
 fn deny_logon_skips_seats_that_sign_in_locally() {

@@ -14,6 +14,21 @@ use seat_proto::{AgentTaskKind, ErrorCode, MonitorDpi, ProtoError, ResponseBody}
 /// steps (100, 125, 150, ...), so a requested 110 % may read back as 100 % or 125 %.
 pub(crate) const DPI_TOLERANCE: u32 = 12;
 
+/// A config change that `Service::sync_tweaks` (machine tweaks + [`Service::sync_compat`])
+/// must follow: the tweaks, the app options (named-object rules, Steam per seat) or a
+/// seat's "Deny log on locally" / account. VM round 2 (2026-11-17): only a `tweaks` change
+/// ran the sync, so turning on `deny_local_logon` or adding an object rule on its own
+/// changed nothing until the next tweak change or service start.
+pub(crate) fn compat_changed(old: &Config, new: &Config) -> bool {
+    let deny = |c: &Config| -> Vec<(SeatNumber, bool, seat_core::config::SeatAccount, SeatKind)> {
+        c.seats.iter().map(|s| (s.number, s.deny_local_logon, s.account.clone(), s.kind)).collect()
+    };
+    old.settings.tweaks != new.settings.tweaks
+        || old.settings.apps != new.settings.apps
+        || old.settings.backends.session != new.settings.backends.session
+        || deny(old) != deny(new)
+}
+
 /// The module's rules from the config (exe names lower-cased).
 pub(crate) fn object_rules(c: &Config) -> Vec<seat_shim_core::objects::ObjectRule> {
     c.settings

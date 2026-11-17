@@ -629,7 +629,7 @@ impl Service {
         self.forget_remote_seats(&removed_remote);
         // A session-backend change prepares the new backend itself (restore + prepare).
         let prepared = old.settings.backends != cfg.settings.backends && self.reselect_backends();
-        if old.settings.tweaks != cfg.settings.tweaks {
+        if crate::compat::compat_changed(&old, &cfg) {
             self.spawn(|s| s.sync_tweaks());
         }
         if old.seats.len() != cfg.seats.len() {
