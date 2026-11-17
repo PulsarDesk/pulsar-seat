@@ -1,0 +1,207 @@
+/* SPDX-License-Identifier: GPL-3.0-only
+   Pulsar Seat manager: design tokens (final redesign). Copied from target/redesign/final/tokens.css,
+   which src/build.py generates from src/tokens_src.py; only the font URLs differ (./fonts/).
+   Do not edit by hand: change tokens_src.py, rebuild, copy again (keep both dark blocks identical).
+   Source of truth: design/project/assets/tokens.css (light) + pulsar-desktop/src/app.css (dark).
+   Deviations from the DS, all for WCAG 2.2 AA (see src/contrast.py):
+   - --text-faint lifted (DS 0.635 = 3.35:1 fails as text).
+   - --border-input added: 3:1 boundary for inputs, switches, checkboxes (1.4.11).
+   - *-ink roles: status colour used as text/icon. Raw --ok/--warn/--danger are dots and fills only.
+   - --danger-fill: red fill behind white text (DS --danger 0.575 is 4.3:1 with white).
+   - dark --accent-fg/--accent-ink: indigo used as text on dark surfaces.
+   Fonts are bundled (SIL OFL 1.1, fonts/OFL-*.txt). No network fonts. */
+
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal; font-display: swap; font-weight: 300 700;
+  src: url(./fonts/space-grotesk-latin-wght-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal; font-display: swap; font-weight: 300 700;
+  src: url(./fonts/space-grotesk-latin-ext-wght-normal.woff2) format('woff2');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(./fonts/hanken-grotesk-latin-wght-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(./fonts/hanken-grotesk-latin-ext-wght-normal.woff2) format('woff2');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal; font-display: swap; font-weight: 100 800;
+  src: url(./fonts/jetbrains-mono-latin-wght-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal; font-display: swap; font-weight: 100 800;
+  src: url(./fonts/jetbrains-mono-latin-ext-wght-normal.woff2) format('woff2');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+
+:root {
+  color-scheme: light;
+  --bg: oklch(0.992 0.003 255);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.978 0.005 258);
+  --surface-3: oklch(0.962 0.007 260);
+  --border: oklch(0.918 0.006 262);
+  --border-strong: oklch(0.862 0.009 262);
+  --border-input: oklch(0.65 0.012 262);
+  --scrim: oklch(0.2 0.02 268 / 0.45);
+  --text: oklch(0.235 0.018 268);
+  --text-muted: oklch(0.505 0.014 266);
+  --text-faint: oklch(0.54 0.011 264);
+  --text-on-accent: oklch(0.99 0.01 272);
+  --accent: oklch(0.555 0.205 272);
+  --accent-hover: oklch(0.505 0.215 272);
+  --accent-press: oklch(0.455 0.205 272);
+  --accent-soft: oklch(0.955 0.035 272);
+  --accent-soft-2: oklch(0.915 0.06 272);
+  --accent-fg: oklch(0.555 0.205 272);
+  --accent-ink: oklch(0.455 0.205 272);
+  --mark: oklch(0.555 0.205 272);
+  --focus: oklch(0.555 0.205 272);
+  --ok: oklch(0.63 0.15 158);
+  --ok-soft: oklch(0.95 0.04 158);
+  --ok-ink: oklch(0.50 0.12 158);
+  --warn: oklch(0.72 0.15 75);
+  --warn-soft: oklch(0.96 0.05 75);
+  --warn-ink: oklch(0.50 0.13 70);
+  --danger: oklch(0.575 0.205 25);
+  --danger-soft: oklch(0.955 0.035 25);
+  --danger-ink: oklch(0.50 0.19 25);
+  --danger-fill: oklch(0.53 0.2 25);
+  --danger-fill-hover: oklch(0.48 0.19 25);
+  --text-on-danger: oklch(0.99 0.01 25);
+  --selection-bg: oklch(0.915 0.06 272);
+  --selection-text: oklch(0.455 0.205 272);
+  --scrollbar: oklch(0.862 0.009 262);
+  --qr-paper: oklch(1 0 0);
+  --qr-ink: oklch(0.2 0.02 268);
+  --knob: oklch(1 0 0);
+  --media-bg: oklch(0.2 0.01 265);
+  --media-ink: oklch(0.85 0.01 265);
+  --shadow-xs: 0 1px 2px oklch(0.3 0.04 268 / 0.05);
+  --shadow-lg: 0 4px 8px oklch(0.3 0.04 268 / 0.05), 0 24px 60px -12px oklch(0.28 0.06 268 / 0.20);
+
+  /* Type: Space Grotesk for titles only, Hanken Grotesk for UI, JetBrains Mono for IDs/addresses */
+  --font-display: 'Space Grotesk', 'Segoe UI Variable Display', system-ui, sans-serif;
+  --font-sans:    'Hanken Grotesk', 'Segoe UI Variable Text', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Cascadia Mono', ui-monospace, monospace;
+  --fs-display: 30px; --lh-display: 36px;  /* wizard page only (read across a room) */
+  --fs-title:   24px; --lh-title: 30px;    /* one per page: h1 */
+  --fs-h2:      18px; --lh-h2: 24px;       /* section headings, dialog titles */
+  --fs-h3:      15px; --lh-h3: 20px;       /* seat card titles, row labels */
+  --fs-body:    14px; --lh-body: 20px;
+  --fs-help:    13px; --lh-help: 18px;     /* help under a label, captions */
+  --fs-meta:    12px; --lh-meta: 16px;     /* pills, IDs, counts. Floor: nothing smaller */
+  --measure: 64ch;                         /* help text and notices */
+
+  /* Space: 4px grid */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+
+  /* Radius (DS). Every corner in the app is one of these; no literal radii. */
+  --r-xs: 6px; --r-sm: 9px; --r: 13px; --r-lg: 18px; --r-pill: 999px;
+
+  /* Borders: 1px everywhere; 1.5px only on input boundaries (input, select, checkbox, radio). */
+  --bw: 1px; --bw-input: 1.5px;
+
+  /* Sizes */
+  --h-control: 36px;        /* buttons, inputs, selects */
+  --h-compact: 32px;        /* icon buttons, segmented items, toolbar buttons */
+  --h-row: 56px;            /* settings row minimum */
+  --h-device: 44px;         /* device row */
+  --nav-w: 232px;
+  --nav-w-mid: 188px;       /* 900-1100px: still labelled */
+  --nav-w-collapsed: 64px;  /* below 900px: icons + tooltips + count badges */
+  --savebar-h: 60px;       /* docked under the scroll area, never over content */
+  --dialog-sm: 440px; --dialog-md: 560px; --dialog-lg: 760px;
+
+  /* Layers */
+  --z-sticky: 10; --z-menu: 40; --z-dialog: 50; --z-toast: 60;
+
+  /* Motion: state changes only; exponential ease-out; reduced-motion = instant */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 140ms;  /* hover, press, focus */
+  --dur: 220ms;       /* switch, disclosure, save bar, menu */
+  --dur-slow: 320ms;  /* dialog enter */
+}
+
+/* Dark follows the OS unless the user picked Açık; [data-theme='dark'] forces it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: oklch(0.17 0.012 265);
+    --surface: oklch(0.215 0.013 265);
+    --surface-2: oklch(0.195 0.012 265);
+    --surface-3: oklch(0.29 0.015 265);
+    --border: oklch(0.32 0.014 265);
+    --border-strong: oklch(0.42 0.016 265);
+    --border-input: oklch(0.55 0.016 265);
+    --scrim: oklch(0 0 0 / 0.6);
+    --text: oklch(0.95 0.008 265);
+    --text-muted: oklch(0.72 0.012 265);
+    --text-faint: oklch(0.66 0.012 265);
+    --accent-soft: oklch(0.32 0.07 272);
+    --accent-soft-2: oklch(0.4 0.1 272);
+    --accent-fg: oklch(0.76 0.14 272);
+    --accent-ink: oklch(0.84 0.1 272);
+    --mark: oklch(0.74 0.15 272);
+    --focus: oklch(0.76 0.14 272);
+    --ok-soft: oklch(0.3 0.06 158);
+    --ok-ink: oklch(0.80 0.13 158);
+    --warn-soft: oklch(0.32 0.06 75);
+    --warn-ink: oklch(0.84 0.12 75);
+    --danger-soft: oklch(0.3 0.07 25);
+    --danger-ink: oklch(0.78 0.14 25);
+    --selection-bg: oklch(0.55 0.17 272 / 0.5);
+    --selection-text: oklch(0.95 0.008 265);
+    --scrollbar: oklch(0.42 0.016 265);
+    --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.3);
+    --shadow-lg: 0 4px 8px oklch(0 0 0 / 0.3), 0 24px 60px -12px oklch(0 0 0 / 0.6);
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: oklch(0.17 0.012 265);
+  --surface: oklch(0.215 0.013 265);
+  --surface-2: oklch(0.195 0.012 265);
+  --surface-3: oklch(0.29 0.015 265);
+  --border: oklch(0.32 0.014 265);
+  --border-strong: oklch(0.42 0.016 265);
+  --border-input: oklch(0.55 0.016 265);
+  --scrim: oklch(0 0 0 / 0.6);
+  --text: oklch(0.95 0.008 265);
+  --text-muted: oklch(0.72 0.012 265);
+  --text-faint: oklch(0.66 0.012 265);
+  --accent-soft: oklch(0.32 0.07 272);
+  --accent-soft-2: oklch(0.4 0.1 272);
+  --accent-fg: oklch(0.76 0.14 272);
+  --accent-ink: oklch(0.84 0.1 272);
+  --mark: oklch(0.74 0.15 272);
+  --focus: oklch(0.76 0.14 272);
+  --ok-soft: oklch(0.3 0.06 158);
+  --ok-ink: oklch(0.80 0.13 158);
+  --warn-soft: oklch(0.32 0.06 75);
+  --warn-ink: oklch(0.84 0.12 75);
+  --danger-soft: oklch(0.3 0.07 25);
+  --danger-ink: oklch(0.78 0.14 25);
+  --selection-bg: oklch(0.55 0.17 272 / 0.5);
+  --selection-text: oklch(0.95 0.008 265);
+  --scrollbar: oklch(0.42 0.016 265);
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-lg: 0 4px 8px oklch(0 0 0 / 0.3), 0 24px 60px -12px oklch(0 0 0 / 0.6);
+}

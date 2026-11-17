@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collect, render } from "./js-notices.ts";
+import { BUNDLED_ASSETS, collect, collectAssets, render } from "./js-notices.ts";
 
 function pkg(root: string, name: string, json: object, license?: string) {
   const d = join(root, "node_modules", name);
@@ -31,5 +31,29 @@ describe("js-notices", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("adds the bundled fonts and icons with their licence texts", () => {
+    const root = mkdtempSync(join(tmpdir(), "pseat-assets-"));
+    try {
+      const asset = { name: "Font X (font)", version: "1.0", license: "OFL-1.1", source: "https://example.invalid/x", licenseFile: "fonts/OFL-x.txt" };
+      expect(() => collectAssets(root, [asset])).toThrow("licence text of Font X");
+      mkdirSync(join(root, "fonts"));
+      writeFileSync(join(root, "fonts", "OFL-x.txt"), "SIL Open Font License text");
+      const md = render([], collectAssets(root, [asset]));
+      expect(md).toContain("# Bundled assets");
+      expect(md).toContain("## Font X (font) (OFL-1.1)");
+      expect(md).toContain("SIL Open Font License text");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the manager's real asset list resolves from apps/manager", () => {
+    const app = join(import.meta.dir, "..", "..", "apps", "manager");
+    const assets = collectAssets(app);
+    expect(assets.length).toBe(BUNDLED_ASSETS.length);
+    for (const a of assets) expect(a.text.length).toBeGreaterThan(100);
+    expect(assets.filter((a) => a.license === "OFL-1.1").length).toBe(3);
   });
 });

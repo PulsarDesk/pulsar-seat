@@ -43,6 +43,18 @@ cargo check  -p pulsar-seat-manager --target x86_64-pc-windows-msvc
 | `src/lib/components/` | App shell, tabs (Seats, Basic, Advanced, Network, Status), dialogs, wizard |
 | `src/lib/remote/` | Remote seats tab (from Pulsar Split's manager): `components/RemoteTab.svelte` + seat page, pair dialog (QR), host, logs, DXVK, VM seats (`VmPage.svelte`, `vm.ts`: Hyper-V VM seats, hyperv-seats 2026-11-17), settings; `api.ts` (protocol 3 remote requests), `model.ts` (record / status / event mapping), `types.ts` (remote payloads), `demo.ts`, `remote.css` (scoped to `.remote-ui`) |
 | `src-tauri/src/net.rs` | Static IPv4 list (address dialog) and the LAN address order of the pair dialog (`lan_addresses`) |
+| `src/lib/ui/` | Design system of the redesign (2026-11-17, `target/redesign/final/DESIGN.md`): `tokens.css` (colour, type, space, radius, motion tokens; light + dark), `base.css` (base, layout classes, sections / groups / rows), `fonts/` (bundled woff2 + OFL texts), and the component kit (P1) |
+| `src/app.css` | Imports the tokens and base; still holds the TEMP aliases and legacy rules for screens not yet moved to the kit (removed in P8) |
+
+## Third-party assets
+
+The frontend bundles three fonts and Lucide icon geometry as files; nothing is fetched from
+the network (CSP `default-src 'self'` covers them). Licences travel with them and are copied
+into the installer's `THIRD-PARTY-NOTICES-JS.md` by `installer/scripts/js-notices.ts`
+(`BUNDLED_ASSETS`); the table is in `installer/licenses/NOTICES.md`.
+
+- Space Grotesk, Hanken Grotesk, JetBrains Mono: SIL OFL 1.1, woff2 latin + latin-ext subsets
+  from @fontsource-variable 5.2.5, `src/lib/ui/fonts/OFL-*.txt`.
 
 ## Tauri surface
 

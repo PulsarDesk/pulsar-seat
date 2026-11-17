@@ -4,8 +4,11 @@
 // frontend: the app's `dependencies` plus the runtime parts of its build tooling that end
 // up in the bundle (svelte, @sveltejs/kit client runtime), with everything they depend on.
 // Listing a little more than the bundle holds is harmless; missing one is not.
+// It also lists the third-party assets the frontend bundles as files rather than packages
+// (fonts, icon geometry), with the licence texts kept next to them in the app's sources.
 //
-// Fails (exit 1) when a package in the closure cannot be found or has no licence field.
+// Fails (exit 1) when a package in the closure cannot be found or has no licence field, or
+// when the licence text of a bundled asset is missing.
 //
 // Usage: bun installer/scripts/js-notices.ts <app dir> <out.md>
 
@@ -14,6 +17,53 @@ import { dirname, join, resolve } from "node:path";
 
 /** Build-time packages whose runtime is bundled into the frontend output. */
 export const BUNDLED_RUNTIME = ["svelte", "@sveltejs/kit"];
+
+/** A third-party asset bundled as files (not an npm package). `licenseFile` is relative to the app dir. */
+export interface BundledAsset {
+  name: string;
+  version: string;
+  license: string;
+  source: string;
+  licenseFile: string;
+}
+
+/** Fonts and icons of the manager's design system (apps/manager/src/lib/ui/). */
+export const BUNDLED_ASSETS: BundledAsset[] = [
+  {
+    name: "Space Grotesk (font)",
+    version: "@fontsource-variable/space-grotesk 5.2.5, woff2 latin + latin-ext",
+    license: "OFL-1.1",
+    source: "https://fontsource.org/fonts/space-grotesk",
+    licenseFile: "src/lib/ui/fonts/OFL-space-grotesk.txt",
+  },
+  {
+    name: "Hanken Grotesk (font)",
+    version: "@fontsource-variable/hanken-grotesk 5.2.5, woff2 latin + latin-ext",
+    license: "OFL-1.1",
+    source: "https://fontsource.org/fonts/hanken-grotesk",
+    licenseFile: "src/lib/ui/fonts/OFL-hanken-grotesk.txt",
+  },
+  {
+    name: "JetBrains Mono (font)",
+    version: "@fontsource-variable/jetbrains-mono 5.2.5, woff2 latin + latin-ext",
+    license: "OFL-1.1",
+    source: "https://fontsource.org/fonts/jetbrains-mono",
+    licenseFile: "src/lib/ui/fonts/OFL-jetbrains-mono.txt",
+  },
+];
+
+export interface AssetNotice extends BundledAsset {
+  text: string;
+}
+
+/** Licence texts of `assets` read from `appDir`. Throws when a licence file is missing. */
+export function collectAssets(appDir: string, assets: BundledAsset[] = BUNDLED_ASSETS): AssetNotice[] {
+  return assets.map((a) => {
+    const p = join(appDir, a.licenseFile);
+    if (!existsSync(p)) throw new Error(`licence text of ${a.name} missing: ${a.licenseFile}`);
+    return { ...a, text: readFileSync(p, "utf8") };
+  });
+}
 
 export interface PackageNotice {
   name: string;
@@ -66,12 +116,19 @@ export function collect(appDir: string, roots: string[]): PackageNotice[] {
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 }
 
-export function render(notices: PackageNotice[]): string {
+export function render(notices: PackageNotice[], assets: AssetNotice[] = []): string {
   const out = ["# Third-party notices (JavaScript packages in the manager frontend)", ""];
   for (const n of notices) {
     out.push(`## ${n.name} ${n.version} (${n.license})`, "");
     out.push(n.text ? ["```text", n.text.trimEnd(), "```"].join("\n") : `Licence: ${n.license} (no licence file in the package).`);
     out.push("");
+  }
+  if (assets.length > 0) {
+    out.push("# Bundled assets (fonts and icons in the manager frontend)", "");
+    for (const a of assets) {
+      out.push(`## ${a.name} (${a.license})`, "", `${a.version}. Source: ${a.source}`, "");
+      out.push(["```text", a.text.trimEnd(), "```"].join("\n"), "");
+    }
   }
   return `${out.join("\n")}\n`;
 }
@@ -86,8 +143,9 @@ if (import.meta.main) {
     const pj = JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")) as PackageJson;
     const roots = [...Object.keys(pj.dependencies ?? {}), ...BUNDLED_RUNTIME];
     const notices = collect(appDir, roots);
-    writeFileSync(out, render(notices));
-    console.log(`wrote ${out} (${notices.length} packages)`);
+    const assets = collectAssets(appDir);
+    writeFileSync(out, render(notices, assets));
+    console.log(`wrote ${out} (${notices.length} packages, ${assets.length} bundled assets)`);
   } catch (e) {
     console.error(String(e));
     process.exit(1);

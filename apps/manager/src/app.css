@@ -1,106 +1,78 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Deliberately plain placeholder styling; the maintainer will redesign the UI. */
+/* Global styles: the design tokens and the base layer of the component kit (src/lib/ui/).
+   Component styles live in each .svelte file. */
 
+@import './lib/ui/tokens.css';
+@import './lib/ui/base.css';
+
+/* TEMP aliases: removed in P8. Old token names used by screens that have not moved to the
+   component kit yet. `--warn` keeps the new meaning (the status dot colour). */
 :root {
-  --bg: #f6f6f7;
-  --panel: #ffffff;
-  --text: #1c1c1e;
-  --muted: #6b6b70;
-  --border: #d9d9de;
-  --accent: #3a5bd9;
-  --danger: #c62828;
-  --ok: #2e7d32;
-  color-scheme: light dark;
-  font-family: system-ui, 'Segoe UI', sans-serif;
-  font-size: 14px;
+  --panel: var(--surface);
+  --muted: var(--text-muted);
+  --line: var(--border);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1b1b1d;
-    --panel: #242427;
-    --text: #ececef;
-    --muted: #a0a0a8;
-    --border: #3a3a40;
-    --accent: #7d97ff;
-    --danger: #ff6b6b;
-    --ok: #6fcf73;
-  }
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-}
-
-h1 {
-  font-size: 1.5rem;
-  margin: 0 0 0.25rem;
-}
-
-h2 {
-  font-size: 1rem;
-  margin: 1.25rem 0 0.5rem;
-}
-
-button {
-  font: inherit;
+/* TEMP legacy rules: removed in P8. The old screens (dialogs, tabs, remote pages) still use
+   these element and class rules until their package lands (P2-P7). Every selector is wrapped
+   in :where() so it never outweighs a component's own style. */
+:where(button) {
   padding: 0.35rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  border: var(--bw) solid var(--border-strong);
+  border-radius: var(--r-xs);
+  background: var(--surface);
   color: var(--text);
   cursor: pointer;
 }
 
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+:where(button:disabled) {
+  background: var(--surface-3);
+  color: var(--text-faint);
+  border-color: transparent;
+  cursor: not-allowed;
 }
 
-button.primary {
+:where(button.primary) {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--text-on-accent);
 }
 
-button.danger-btn {
-  background: var(--danger);
-  border-color: var(--danger);
+:where(button.danger-btn) {
+  background: var(--danger-fill);
+  border-color: var(--danger-fill);
+  color: var(--text-on-danger);
 }
 
-input,
-select {
-  font: inherit;
+:where(input:not([type='checkbox'], [type='radio']), select, textarea) {
   padding: 0.3rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
+  border: var(--bw-input) solid var(--border-input);
+  border-radius: var(--r-xs);
+  background: var(--surface);
   color: var(--text);
 }
 
-input[aria-invalid='true'] {
-  border-color: var(--danger);
+:where(input[aria-invalid='true']) {
+  border-color: var(--danger-ink);
 }
 
-fieldset {
-  border: 1px solid var(--border);
-  border-radius: 8px;
+:where(fieldset) {
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-sm);
   margin: 1rem 0;
   padding: 0.75rem 1rem;
 }
 
-legend {
+:where(fieldset:disabled) {
+  opacity: 0.75;
+}
+
+:where(legend) {
   font-weight: 600;
   padding: 0 0.25rem;
 }
 
-.field {
+:where(.field) {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -108,175 +80,120 @@ legend {
   max-width: 28rem;
 }
 
-.toggle {
+:where(.toggle) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0.4rem 0;
 }
 
-.row {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.hint {
-  color: var(--muted);
+:where(.hint) {
+  color: var(--text-muted);
   margin: 0.25rem 0;
 }
 
-.error {
-  color: var(--danger);
+:where(.error) {
+  color: var(--danger-ink);
   margin: 0.25rem 0;
 }
 
-.danger {
-  color: var(--danger);
+:where(.danger) {
+  color: var(--danger-ink);
 }
 
-.ok {
-  color: var(--ok);
+:where(.ok) {
+  color: var(--ok-ink);
   margin: 0.25rem 0;
 }
 
-.actions,
-.buttons {
+:where(.warn-text) {
+  color: var(--warn-ink);
+}
+
+:where(.actions, .buttons) {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
 
-.buttons {
+:where(.buttons) {
   justify-content: flex-end;
   margin-top: 1rem;
 }
 
-.page {
-  padding: 1.25rem 1.5rem;
-  max-width: 48rem;
-}
-
-.app {
-  border-top: 1px solid var(--border);
-  padding: 0.5rem 0;
-}
-
-.backdrop {
+:where(.backdrop) {
   position: fixed;
   inset: 0;
-  background: rgb(0 0 0 / 0.4);
+  background: var(--scrim);
   display: grid;
   place-items: center;
-  z-index: 10;
+  z-index: var(--z-dialog);
 }
 
-.dialog {
-  background: var(--panel);
-  border-radius: 10px;
+:where(.dialog) {
+  background: var(--surface);
+  border: var(--bw) solid var(--border);
+  border-radius: var(--r-lg);
   padding: 1.25rem 1.5rem;
   min-width: 22rem;
   max-width: 90vw;
-  box-shadow: 0 8px 30px rgb(0 0 0 / 0.25);
+  box-shadow: var(--shadow-lg);
 }
 
-.dialog.wide {
+:where(.dialog.wide) {
   min-width: 30rem;
 }
 
-.dialog h2 {
-  margin-top: 0;
-  font-size: 1.15rem;
+:where(.dialog h2) {
+  margin-bottom: 0.75rem;
 }
 
-.addresses {
+:where(.addresses) {
   list-style: none;
   padding: 0;
 }
 
-.state-running {
-  color: var(--ok);
+:where(.state-running) {
+  color: var(--ok-ink);
 }
 
-.state-failed {
-  color: var(--danger);
+:where(.state-failed) {
+  color: var(--danger-ink);
 }
 
-/* ---- manager additions ---- */
-:root {
-  --warn: #b26a00;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --warn: #ffb74d;
-  }
-}
-
-:root[data-theme='light'] {
-  --bg: #f6f6f7;
-  --panel: #ffffff;
-  --text: #1c1c1e;
-  --muted: #6b6b70;
-  --border: #d9d9de;
-  --accent: #3a5bd9;
-  --danger: #c62828;
-  --ok: #2e7d32;
-  --warn: #b26a00;
-  color-scheme: light;
-}
-
-:root[data-theme='dark'] {
-  --bg: #1b1b1d;
-  --panel: #242427;
-  --text: #ececef;
-  --muted: #a0a0a8;
-  --border: #3a3a40;
-  --accent: #7d97ff;
-  --danger: #ff6b6b;
-  --ok: #6fcf73;
-  --warn: #ffb74d;
-  color-scheme: dark;
-}
-
-.banner {
+:where(.banner) {
   margin: 0.5rem 1.25rem;
   padding: 0.5rem 0.75rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
   display: flex;
   gap: 0.75rem;
   align-items: center;
   flex-wrap: wrap;
 }
 
-.banner.error {
-  border-color: var(--danger);
-  color: var(--danger);
+:where(.banner.error) {
+  background: var(--danger-soft);
 }
 
-.banner.warn {
-  border-color: var(--warn);
+:where(.banner.warn) {
+  background: var(--warn-soft);
 }
 
-.banner.info {
-  border-color: var(--accent);
+:where(.banner.info) {
+  background: var(--accent-soft);
 }
 
-.content .banner {
+:where(.content .banner) {
   margin: 0 0 0.75rem;
 }
 
-.warn-text {
-  color: var(--warn);
-}
-
-fieldset:disabled {
-  opacity: 0.75;
-}
-
-table {
+:where(table) {
   font: inherit;
+}
+
+/* The remote pages use `.app` for an app-list row; the shell's `.app` grid must not reach it. */
+.remote-ui .app {
+  display: block;
+  height: auto;
 }
