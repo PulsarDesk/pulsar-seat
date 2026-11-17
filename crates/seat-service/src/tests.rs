@@ -2016,6 +2016,14 @@ fn seat_one_does_not_claim_a_handover_session() {
     h.s.refresh_console_seat();
     let row = h.s.status().seats.into_iter().find(|r| r.seat == s(1)).unwrap();
     assert_ne!(row.session_id, Some(sess), "{row:?}");
+    // Seat 2's user signs in on the console: the logon is seat 2's, not seat 1's.
+    h.p.sign_in(sess, "ali");
+    h.s.on_session_change(SessionChange::Logon, sess);
+    let rows = h.s.status().seats;
+    let two = rows.iter().find(|r| r.seat == s(2)).unwrap();
+    assert!(matches!(two.state, SeatState::SignedIn { .. }), "{two:?}");
+    let one = rows.iter().find(|r| r.seat == s(1)).unwrap();
+    assert!(!matches!(one.state, SeatState::SignedIn { .. }) && one.session_id != Some(sess), "{one:?}");
 }
 
 /// `fast_user_switch`: seat 2 still at its logon screen when seat 3's hand-over takes the

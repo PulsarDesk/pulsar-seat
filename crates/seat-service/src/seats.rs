@@ -935,7 +935,16 @@ impl Service {
         let dedicated = Self::dedicated(&self.lock());
         // `fast_user_switch` with seat 1 off the console: the console session is another
         // seat's, so its events go to that seat below, not to seat 1.
-        let seat1_away = self.backends().session.console_seat_away().is_some();
+        // Also when seat 1 has no session of its own (the console was at a logon screen when
+        // the hand-over began): the seat's session is the console session then, and its
+        // logon must reach the seat, not seat 1 (VM 2026-11-17: seat 2 signed in, but its
+        // agent was refused and its startup apps never started).
+        let fus = self.backends().session.kind() == seat_core::backend::SessionBackendKind::FastUserSwitch;
+        let held_by_seat = fus && {
+            let st = self.lock();
+            st.seats.values().any(|s| !s.seat.is_console() && Self::managed(&st, s.seat) && s.rt.session_id == Some(session_id))
+        };
+        let seat1_away = self.backends().session.console_seat_away().is_some() || held_by_seat;
         let console_event = !seat1_away && (console == Some(session_id) || change == SessionChange::ConsoleConnect);
         if seat1_away && change == SessionChange::ConsoleConnect && !dedicated {
             self.refresh_console_seat();
