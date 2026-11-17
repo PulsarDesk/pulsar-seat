@@ -27,6 +27,25 @@ this repository: the installer writes `<install>\remote\stream-server.json`
 | `win` (Windows) | real impls: `WinSecureFs`, `PipeClient`/`connect`, `SessionLauncher` (token + per-seat job object), `ComFirewall` (`INetFwPolicy2`), `IpHelperProbe`, `SystemRandom` (BCryptGenRandom), `WinConnector`, `WinHostPipes` (server end of the `pulsar-host` pipe: first instance, no remote clients, `PIPE_NOWAIT` while listening, client pid + creation time check) |
 | `fake` (`cfg(test)` / feature `fake`) | in-memory fakes of every trait for the integrator's tests; `MemSecrets`, `FakeHostPipes`, `pulsar_responder` for the Pulsar backend |
 
+## Pulsar build of the server (2026-11-17)
+
+The patch set lives in `stream-server/` (README there). The service drives it as flavour
+`pulsar_fork` and uses a patched feature only when `hello` reports it:
+
+- `SeatServerConfig::conf_for_caps`: after `hello`, `server.conf` is rebuilt for the reported
+  capabilities (`backend::sunshine::ForkFeatures`): no `pulsar_idd` = default capture, no
+  `pulsar_pad` = `auto` pads, no `pair_timeout` = key left out; if that changes the file the
+  server restarts once (`StreamNotice::Fallback { missing }`).
+- `SeatServerConfig::upstream_conf_text`: a Pulsar build that never opens its seat pipe within
+  the connect window is driven like upstream (upstream config, per-start web-UI credentials,
+  loopback control) instead of counting as a crash; `runtime.stream.fallback = true`.
+- `apps_reload` / `pair_cancel` missing from a listed capability set: restart-when-idle /
+  `unsupported`, as upstream. A `bad_request` "unknown request type" answer = `Unsupported`.
+
+Pulsar backend seat options (`RemoteSeatRecord::pulsar`) reach `config.apply`
+(`backend::pulsar::host_config`); the LAN discovery option creates / removes the seat's
+`PulsarSplit seat <id> discovery` rule (`firewall::apply_pulsar_seat_rules`).
+
 ## Pairing without a browser UI (and the "no local web server" rule)
 
 - **Fork (preferred, spec 80 §8.4):** `pulsar_web_ui = disabled`, so the server opens no

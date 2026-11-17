@@ -169,9 +169,11 @@ Error codes: `bad_request`, `unsupported_protocol`, `not_found`, `no_pending_req
 
 Per seat, like spec 80 §9.2, program = `pulsar-host.exe`, profiles Private (+ Domain),
 never Public by default. Rule `PulsarSplit seat <seat-id> UDP`: the node port (default
-= base). TCP: none (the Pulsar transport is UDP). No rule for 21117 is added by default;
-LAN discovery needs one inbound UDP 21117 rule shared by all seats
-(`PulsarSplit pulsar-host discovery`), created only when some seat has discovery on.
+= base). TCP: none (the Pulsar transport is UDP). LAN discovery (2026-11-17,
+implemented): one inbound UDP 21117 rule **per seat** with discovery on,
+`PulsarSplit seat <seat-id> discovery` (program `pulsar-host.exe`, remote scope local
+subnet, same profiles as the node rule), created at seat start, removed when the option is
+off, when the seat switches to Sunshine and with the seat (`seat_stream::firewall`).
 
 ### 3.7 Mapping onto the existing manager flow
 
@@ -193,7 +195,7 @@ and routes each request to the seat's backend.
 | **new** `answer_relay_auth {name, password: Secret, totp?: Secret}` | refused | `relay.auth` |
 | `get_seat_runtime` → `stream` | `{flavour, status, capabilities}` | `{backend: "pulsar", relay_state, relay_id, node_port, status, capabilities}` |
 | `poll_events` kinds | `pair_pending`, `pair_ended`, `stream_started`, `stream_ended` | same kinds, `data.backend = "pulsar"`; plus `relay_auth_required`, `otp_changed` |
-| Seat setting | `stream.gamepad`, `stream.capture`, `min_fps` | Designed: `stream.backend` + `pulsar` block (`relay`, `network_mode`, `node_port_mode`, `port_mapping`, `lan_discovery`, `access`). **Implemented:** top-level `SeatConfig.stream_backend` (`sunshine` default / `pulsar`), no `pulsar` block yet; fixed values in `host_config` (OQ stream-backends-1). `stream.capture` is used by both backends |
+| Seat setting | `stream.gamepad`, `stream.capture`, `min_fps` | Designed: `stream.backend` + `pulsar` block (`relay`, `network_mode`, `node_port_mode`, `port_mapping`, `lan_discovery`, `access`). **Implemented:** top-level `SeatConfig.stream_backend` (`sunshine` default / `pulsar`) and, since 2026-11-17, the seat's `pulsar` block (`PulsarSeatOptions`: `relay`, `network_mode`, `node_port_mode` + `node_port`, `port_mapping`, `lan_discovery`, `access`, `max_clients`) feeding `config.apply` (OQ stream-backends-1 closed). `stream.capture` is used by both backends |
 
 Pair dialog copy (Turkish, goes to `i18n.ts`): Sunshine mode keeps the PIN field. Pulsar
 mode shows "Bağlantı isteği", the device name and key fingerprint, and buttons

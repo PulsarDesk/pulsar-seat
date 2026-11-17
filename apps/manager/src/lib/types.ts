@@ -275,6 +275,7 @@ export interface RemoteSeat {
   audio?: R.SeatAudioSettings;
   stream?: R.SeatStreamSettings;
   stream_backend?: R.StreamBackendKind;
+  pulsar?: R.PulsarSeatOptions;
   /** Service-owned. */
   last_mode?: { width: number; height: number; hz: number };
   /** Hyper-V VM seat (config schema 3, hyperv-seats 2026-11-17): the seat's session runs in

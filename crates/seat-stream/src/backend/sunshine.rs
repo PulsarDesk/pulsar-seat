@@ -13,9 +13,11 @@ use crate::firewall::{apply_seat_rules, remove_seat_rules, Firewall};
 use crate::journal::RestoreLog;
 use crate::ports::ListenerProbe;
 use crate::seatdir::{SecureFs, SeatDir};
-use crate::supervise::{AppsReload, ControlConnector, SeatServer, SeatServerConfig, ServerLauncher, StreamNotice};
+use crate::supervise::{caps, AppsReload, ConfForCaps, ControlConnector, SeatServer, SeatServerConfig, ServerLauncher, StreamNotice};
 use crate::{Clock, StreamError};
-use seat_proto::remote::{CapturePref, GamepadPref, Secret, StreamBackendInfo, StreamBackendKind};
+use seat_proto::remote::{
+    CapturePref, GamepadPref, RemoteSeatRecord, RemoteSettings, Secret, StreamBackendInfo, StreamBackendKind,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -78,19 +80,57 @@ fn gamepad_for(pref: GamepadPref, flavour: ServerFlavour) -> Gamepad {
     }
 }
 
-fn conf_text(spec: &SeatStreamSpec<'_>, dist: &ServerDist, dir: &SeatDir) -> Result<String, StreamError> {
-    let seat = spec.seat;
+/// What a Pulsar build can do, from its `hello` capabilities (`None` = assume the whole
+/// patch set, before the first `hello`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkFeatures {
+    pub pulsar_idd: bool,
+    pub pulsar_pad: bool,
+    pub pair_timeout: bool,
+}
+
+impl ForkFeatures {
+    pub const ALL: Self = Self { pulsar_idd: true, pulsar_pad: true, pair_timeout: true };
+
+    pub fn from_caps(caps: &[String]) -> Self {
+        let has = |c: &str| caps.iter().any(|x| x == c);
+        Self { pulsar_idd: has(caps::PULSAR_IDD), pulsar_pad: has(caps::PULSAR_PAD), pair_timeout: has(caps::PAIR_TIMEOUT) }
+    }
+}
+
+/// `server.conf` for `flavour`; on the Pulsar build only the features in `f` are used, the
+/// rest falls back to the stock values (default capture, `auto` pads, no pair timeout).
+fn conf_text_for(
+    seat: &RemoteSeatRecord,
+    global: &RemoteSettings,
+    audio_keys: &[(String, String)],
+    dir: &SeatDir,
+    flavour: ServerFlavour,
+    f: ForkFeatures,
+) -> Result<String, StreamError> {
+    let mut capture = capture_for(seat.stream.capture, flavour);
+    if capture == Capture::PulsarIdd && !f.pulsar_idd {
+        capture = Capture::Default;
+    }
+    let mut gamepad = gamepad_for(seat.stream.gamepad, flavour);
+    if matches!(gamepad, Gamepad::Pulsar(_)) && !f.pulsar_pad {
+        gamepad = Gamepad::Auto;
+    }
     generate(&ConfInputs {
         seat,
-        global: spec.global,
+        global,
         dir,
-        flavour: dist.flavour,
-        capture: capture_for(seat.stream.capture, dist.flavour),
-        gamepad: gamepad_for(seat.stream.gamepad, dist.flavour),
-        audio_keys: spec.audio_keys.clone(),
+        flavour,
+        capture,
+        gamepad,
+        audio_keys: audio_keys.to_vec(),
         min_fps: seat.stream.min_fps,
-        pair_timeout_s: PAIR_TIMEOUT_DEFAULT_S,
+        pair_timeout_s: if f.pair_timeout { PAIR_TIMEOUT_DEFAULT_S } else { 0 },
     })
+}
+
+fn conf_text(spec: &SeatStreamSpec<'_>, dist: &ServerDist, dir: &SeatDir) -> Result<String, StreamError> {
+    conf_text_for(spec.seat, spec.global, &spec.audio_keys, dir, dist.flavour, ForkFeatures::ALL)
 }
 
 impl StreamBackend for SunshineBackend {
@@ -136,6 +176,18 @@ impl StreamBackend for SunshineBackend {
             log::warn!("seat '{}': firewall rules not applied: {e}", seat.name);
             warnings.push(serde_json::json!({"kind": "firewall", "reason": e.code()}));
         }
+        // Pulsar build: config for the features it reports, and an upstream config for a
+        // binary that never opens the seat pipe (supervise: StreamNotice::Fallback).
+        let (conf_for_caps, upstream_conf_text) = if dist.flavour == ServerFlavour::PulsarFork {
+            let (seat_c, global_c, audio_c, dir_c) = (seat.clone(), spec.global.clone(), spec.audio_keys.clone(), dir.clone());
+            let f: Arc<ConfForCaps> = Arc::new(move |caps: &[String]| {
+                conf_text_for(&seat_c, &global_c, &audio_c, &dir_c, ServerFlavour::PulsarFork, ForkFeatures::from_caps(caps))
+            });
+            let upstream = conf_text_for(seat, spec.global, &spec.audio_keys, &dir, ServerFlavour::Upstream, ForkFeatures::ALL)?;
+            (Some(f), Some(upstream))
+        } else {
+            (None, None)
+        };
         let cfg = SeatServerConfig {
             seat_id: seat.id.clone(),
             dist,
@@ -146,6 +198,8 @@ impl StreamBackend for SunshineBackend {
             default_apps_json: render_apps_json(&spec.default_apps, &serde_json::Map::new()),
             service_version: spec.service_version.to_string(),
             verify_binary: s.verify_binary,
+            conf_for_caps,
+            upstream_conf_text,
         };
         let connector = (s.connector)(&dir, seat.port);
         let server = SeatServer::new(cfg, s.fs.clone(), s.launcher.clone(), connector, s.rng.clone(), s.clock.clone());
@@ -205,6 +259,8 @@ impl SeatStream for SunshineSeat {
             "status": s.last_status(),
             "capabilities": s.capabilities(),
             "crash_count": s.crash_count(),
+            // A Pulsar build driven like upstream (it never opened its seat pipe).
+            "fallback": s.fell_back(),
         })
     }
     fn reload_apps(&mut self, _apps: &[AppEntry]) -> Result<AppsReload, StreamError> {
@@ -214,6 +270,11 @@ impl SeatStream for SunshineSeat {
         self.control()?.pair_submit(request_id, pin, name)
     }
     fn pair_cancel(&mut self, request_id: Option<u32>) -> Result<(), StreamError> {
+        // A Pulsar build that lists its capabilities without `pair_cancel` is not asked.
+        let s = &self.0;
+        if s.flavour() == ServerFlavour::PulsarFork && !s.capabilities().is_empty() && !s.has_capability(caps::PAIR_CANCEL) {
+            return Err(StreamError::Unsupported("pair.cancel".into()));
+        }
         self.control()?.pair_cancel(request_id)
     }
     fn clients_list(&mut self) -> Result<Vec<PairedClient>, StreamError> {

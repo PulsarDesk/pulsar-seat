@@ -1932,7 +1932,27 @@ const rt = {
     backendStopFirst: 'Yayın sunucusunu değiştirmek için önce koltuğu durdurun.',
     relayId: 'Pulsar kimliği',
     relayState: (s: string) =>
-      (({ ok: 'bağlı', auth_required: 'giriş bekliyor', unreachable: 'ulaşılamıyor', version_mismatch: 'sürüm uyumsuz' }) as Record<string, string>)[s] ?? s
+      (({ ok: 'bağlı', auth_required: 'giriş bekliyor', unreachable: 'ulaşılamıyor', version_mismatch: 'sürüm uyumsuz' }) as Record<string, string>)[s] ?? s,
+    pulsarOptions: 'Pulsar bağlantısı',
+    pulsarRelay: 'Aktarma sunucusu',
+    pulsarRelayHint: 'ana makine veya ana makine:bağlantı noktası; boş bırakılırsa varsayılan sunucu kullanılır.',
+    pulsarRelayInvalid: 'Bir ana makine adı veya adresi girin; isterseniz :bağlantı noktası ekleyin.',
+    pulsarNetworkMode: 'Bağlantı türü',
+    pulsarNetworkAuto: 'Mümkünse doğrudan, değilse aktarma sunucusu üzerinden',
+    pulsarNetworkP2p: 'Yalnızca doğrudan',
+    pulsarNetworkRelay: 'Yalnızca aktarma sunucusu',
+    pulsarNodePort: 'Ağ bağlantı noktası (UDP)',
+    pulsarNodePortBase: (p: number) => `Koltuk bağlantı noktası (${p})`,
+    pulsarNodePortEphemeral: 'Boştaki herhangi bir bağlantı noktası',
+    pulsarNodePortFixed: 'Şu bağlantı noktası:',
+    pulsarNodePortInvalid: 'Bağlantı noktası 1024-65535 arasında olmalı.',
+    pulsarPortMapping: 'Yönlendiriciden bağlantı noktasını açmasını iste (UPnP)',
+    pulsarDiscovery: 'Bu koltuğu yerel ağdaki cihazlara göster',
+    pulsarDiscoveryHint: 'Koltuk bu seçenekle çalışırken güvenlik duvarında yerel alt ağ için UDP 21117 açılır.',
+    pulsarAccess: 'Kimler bağlanabilir',
+    pulsarAccessApprove: 'Her bağlantı burada onay ister',
+    pulsarAccessPassword: 'Burada onay veya koltuğun şifresi',
+    pulsarMaxClients: 'Aynı anda cihaz sayısı'
   },
   seatState: {
     stopped: 'Durdu',
@@ -2027,7 +2047,8 @@ const rt = {
     firewall: 'Güvenlik duvarı kuralları eklenemedi; yerel ağdaki cihazlar koltuğa bağlanamayabilir.',
     control_unavailable: 'Akış sunucusunun denetim kanalı açılamadı; eşleştirme bu koltukta kullanılamıyor.',
     capture_error: 'Akış sunucusu görüntü yakalayamadı.',
-    dpi_mismatch: 'Koltuğun ekran ölçeği sabit ölçek ayarından farklı (Windows başka bir ölçek seçti).'
+    dpi_mismatch: 'Koltuğun ekran ölçeği sabit ölçek ayarından farklı (Windows başka bir ölçek seçti).',
+    stream_fallback: 'Bu akış sunucusu sürümünde bazı Pulsar özellikleri yok; koltuk bunlar için standart davranışı kullanıyor.'
   } as Record<string, string>,
   signal: {
     ref_arp: 'Başka bir çoklu koltuk ürünü kurulu.',

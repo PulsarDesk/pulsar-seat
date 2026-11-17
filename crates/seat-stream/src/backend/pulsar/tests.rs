@@ -321,11 +321,73 @@ fn firewall_is_one_udp_rule_and_replaces_a_sunshine_pair() {
     }
     let _ = prepare(&w);
     let rules = w.firewall.rules();
-    assert_eq!(rules.len(), 1, "{rules:?}");
-    assert_eq!(rules[0].protocol, FwProto::Udp);
-    assert_eq!(rules[0].local_ports, [48100]);
-    assert!(rules[0].program.ends_with("pulsar-host.exe"));
-    assert!(!rules[0].profiles.public);
+    // The node rule, plus the LAN discovery rule (option on by default, 2026-11-17).
+    assert_eq!(rules.len(), 2, "{rules:?}");
+    let node: Vec<_> = rules.iter().filter(|r| r.name == crate::firewall::seat_rule_name(ID, FwProto::Udp)).collect();
+    assert_eq!(node.len(), 1);
+    assert_eq!(node[0].protocol, FwProto::Udp);
+    assert_eq!(node[0].local_ports, [48100]);
+    assert!(node[0].program.ends_with("pulsar-host.exe"));
+    assert!(!node[0].profiles.public);
+    assert!(rules.iter().any(|r| r.name == crate::firewall::discovery_rule_name(ID)));
+}
+
+fn prepare_seat(w: &W, s: &RemoteSeatRecord) -> Box<dyn SeatStream> {
+    let g = RemoteSettings::default();
+    let spec = SeatStreamSpec {
+        seat: s,
+        global: &g,
+        data_root: Path::new(ROOT),
+        audio_keys: Vec::new(),
+        default_apps: crate::apps::default_apps(),
+        service_version: "0.1.0",
+        mic_sink: None,
+    };
+    w.backend.prepare(&spec).unwrap().stream
+}
+
+#[test]
+fn seat_options_reach_config_apply_and_the_firewall() {
+    use seat_proto::remote::{PulsarAccess, PulsarNetworkMode, PulsarNodePort, PulsarSeatOptions};
+    let w = world();
+    let mut s = seat();
+    s.pulsar = PulsarSeatOptions {
+        relay: " relay.example.net:21116 ".into(),
+        network_mode: PulsarNetworkMode::RelayOnly,
+        node_port_mode: PulsarNodePort::Fixed,
+        node_port: 50123,
+        port_mapping: true,
+        lan_discovery: false,
+        access: PulsarAccess::Approve,
+        max_clients: 3,
+    };
+    let mut st = prepare_seat(&w, &s);
+    st.start(3).unwrap();
+    let n = st.poll(w.clock.advance(100));
+    assert!(matches!(n.as_slice(), [StreamNotice::ControlReady { .. }]), "{n:?}");
+    let sent = w.pipes.pipe(0).sent();
+    let cfg = &sent.iter().find(|m| m["type"] == "config.apply").unwrap()["body"];
+    assert_eq!(cfg["relay"], "relay.example.net:21116");
+    assert_eq!(cfg["network_mode"], "relay-only");
+    assert_eq!(cfg["node_port"], 50123);
+    assert_eq!(cfg["port_mapping"], true);
+    assert_eq!(cfg["lan_discovery"], false);
+    assert_eq!(cfg["access"], "approve");
+    assert_eq!(cfg["max_clients"], 3);
+    let rules = w.firewall.rules();
+    assert_eq!(rules.len(), 1, "discovery off: no discovery rule");
+    assert_eq!(rules[0].local_ports, [50123]);
+
+    // Ephemeral node port: program-scoped rule on any port; no relay key when empty.
+    let w = world();
+    let mut s = seat();
+    s.pulsar.node_port_mode = PulsarNodePort::Ephemeral;
+    let cfg = host_config(&s);
+    assert_eq!(cfg.node_port, 0);
+    assert!(cfg.relay.is_none());
+    let _ = prepare_seat(&w, &s);
+    let node = w.firewall.rules().into_iter().find(|r| r.name == crate::firewall::seat_rule_name(ID, FwProto::Udp)).unwrap();
+    assert!(node.local_ports.is_empty());
 }
 
 #[test]

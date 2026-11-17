@@ -18,6 +18,7 @@
   import { gpuWarnings } from '#lib/remote/gpu.ts';
   import CredentialTestDialog from './CredentialTestDialog.svelte';
   import { displayNameError, portError, portOverlapError, type FieldError } from '#lib/remote/validation.ts';
+  import { defaultPulsar, relayValid } from '#lib/remote/model.ts';
 
   interface Props {
     seat: SeatConfig;
@@ -99,7 +100,8 @@
     autostart: [],
     rdp_client_name: '',
     audio: { stream_audio: true, microphone: false },
-    stream: { gamepad: 'auto', capture: 'default', min_fps: 1, firewall_domain: false, keep_pairing_on_delete: false }
+    stream: { gamepad: 'auto', capture: 'default', min_fps: 1, firewall_domain: false, keep_pairing_on_delete: false },
+    pulsar: defaultPulsar()
   });
   let draft = $state<SeatConfig>(emptySeat());
   let portText = $state('');
@@ -109,6 +111,8 @@
     if (json === applied) return;
     applied = json;
     draft = JSON.parse(json) as SeatConfig;
+    // Seats saved before the Pulsar options existed get the defaults.
+    draft.pulsar = { ...defaultPulsar(), ...(draft.pulsar ?? {}) };
     portText = String(draft.port);
   });
 
@@ -128,6 +132,11 @@
   const enabledUsers = $derived(users.filter((u) => u.enabled || u.name === draft.user_name));
   const backend = $derived<StreamBackendKind>(draft.stream_backend ?? 'sunshine');
   const backendLabel = (k: StreamBackendKind) => (k === 'pulsar' ? t.seat.backendPulsar : t.seat.backendSunshine);
+  const pulsar = $derived(draft.pulsar ?? defaultPulsar());
+  const relayErr = $derived(!relayValid(pulsar.relay.trim()));
+  const nodePortErr = $derived(
+    pulsar.node_port_mode === 'fixed' && !(Number.isInteger(pulsar.node_port) && pulsar.node_port >= 1024 && pulsar.node_port <= 65535)
+  );
   /** Known to be missing (no answer from the service = not marked). */
   const missing = (k: StreamBackendKind) => backends.find((b) => b.backend === k)?.installed === false;
 
@@ -147,7 +156,9 @@
   /** `true` when the service stored the seat. */
   async function save(): Promise<boolean> {
     if (displayErr || portErr) return false;
+    if (backend === 'pulsar' && (relayErr || nodePortErr)) return false;
     draft.port = Number(portText);
+    if (draft.pulsar) draft.pulsar.relay = draft.pulsar.relay.trim();
     error = null;
     notice = null;
     try {
@@ -517,6 +528,65 @@
       {t.seat.keepPairing}
     </label>
   </fieldset>
+
+  {#if backend === 'pulsar' && draft.pulsar}
+  <fieldset disabled={locked} data-testid="pulsar-options">
+    <legend>{t.seat.pulsarOptions}</legend>
+    <label class="field">
+      <span>{t.seat.pulsarRelay}</span>
+      <input
+        bind:value={draft.pulsar.relay}
+        placeholder="relay.example.net:21116"
+        aria-invalid={relayErr}
+        onchange={save}
+      />
+    </label>
+    {#if relayErr}<small class="error" role="alert">{t.seat.pulsarRelayInvalid}</small>{:else}<small class="hint">{t.seat.pulsarRelayHint}</small>{/if}
+    <label class="field">
+      <span>{t.seat.pulsarNetworkMode}</span>
+      <select bind:value={draft.pulsar.network_mode} onchange={save}>
+        <option value="auto">{t.seat.pulsarNetworkAuto}</option>
+        <option value="p2p-only">{t.seat.pulsarNetworkP2p}</option>
+        <option value="relay-only">{t.seat.pulsarNetworkRelay}</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>{t.seat.pulsarNodePort}</span>
+      <select bind:value={draft.pulsar.node_port_mode} onchange={save}>
+        <option value="base">{t.seat.pulsarNodePortBase(draft.port)}</option>
+        <option value="ephemeral">{t.seat.pulsarNodePortEphemeral}</option>
+        <option value="fixed">{t.seat.pulsarNodePortFixed}</option>
+      </select>
+    </label>
+    {#if draft.pulsar.node_port_mode === 'fixed'}
+    <label class="field">
+      <span>{t.seat.pulsarNodePortFixed}</span>
+      <input type="number" min="1024" max="65535" bind:value={draft.pulsar.node_port} aria-invalid={nodePortErr} onchange={save} />
+    </label>
+    {#if nodePortErr}<small class="error" role="alert">{t.seat.pulsarNodePortInvalid}</small>{/if}
+    {/if}
+    <label class="toggle">
+      <input type="checkbox" bind:checked={draft.pulsar.port_mapping} onchange={save} />
+      {t.seat.pulsarPortMapping}
+    </label>
+    <label class="toggle">
+      <input type="checkbox" bind:checked={draft.pulsar.lan_discovery} onchange={save} />
+      {t.seat.pulsarDiscovery}
+    </label>
+    {#if draft.pulsar.lan_discovery}<small class="hint">{t.seat.pulsarDiscoveryHint}</small>{/if}
+    <label class="field">
+      <span>{t.seat.pulsarAccess}</span>
+      <select bind:value={draft.pulsar.access} onchange={save}>
+        <option value="approve">{t.seat.pulsarAccessApprove}</option>
+        <option value="approve_or_password">{t.seat.pulsarAccessPassword}</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>{t.seat.pulsarMaxClients}</span>
+      <input type="number" min="1" max="4" bind:value={draft.pulsar.max_clients} onchange={save} />
+    </label>
+  </fieldset>
+  {/if}
 
   <fieldset disabled={locked}>
     <legend>{t.seat.autostart}</legend>

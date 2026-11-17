@@ -53,6 +53,8 @@ pub struct RemoteSeat {
     pub audio: SeatAudioSettings,
     pub stream: SeatStreamSettings,
     pub stream_backend: StreamBackendKind,
+    /// Pulsar backend options (relay, ports, discovery, access). Added 2026-11-17.
+    pub pulsar: PulsarSeatOptions,
     /// Service-owned: last display mode a client asked for and the display applied.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_mode: Option<LastMode>,
@@ -90,6 +92,7 @@ impl RemoteSeat {
             audio: self.audio,
             stream: self.stream.clone(),
             stream_backend: self.stream_backend,
+            pulsar: self.pulsar.clone(),
             last_mode: self.last_mode,
             pad_ignore_devices: seat.pad_ignore_devices.clone(),
             environment: seat.environment.clone(),
@@ -110,6 +113,7 @@ impl RemoteSeat {
             audio: r.audio,
             stream: r.stream.clone(),
             stream_backend: r.stream_backend,
+            pulsar: r.pulsar.clone(),
             last_mode: r.last_mode,
             vm: r.vm.clone(),
         }
@@ -233,6 +237,16 @@ mod tests {
             port: 48200,
             start_with_service: false,
             stream_backend: StreamBackendKind::Pulsar,
+            pulsar: PulsarSeatOptions {
+                relay: "relay.example.net:21116".into(),
+                network_mode: PulsarNetworkMode::RelayOnly,
+                node_port_mode: PulsarNodePort::Fixed,
+                node_port: 50000,
+                lan_discovery: false,
+                access: PulsarAccess::Approve,
+                max_clients: 2,
+                ..Default::default()
+            },
             rdp_client_name: "PSS0F8FAD5B".into(),
             last_mode: Some(LastMode { width: 2560, height: 1440, hz: 120 }),
             autostart: vec![AutostartApp { id: "a".into(), path: r"C:\x.exe".into(), ..Default::default() }],

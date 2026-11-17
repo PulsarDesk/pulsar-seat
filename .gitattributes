@@ -14,3 +14,6 @@
 # Vendored third-party sources are pinned by SHA-256 (shim/module/build.rs): keep them byte-exact
 # (upstream disasm.cpp has two CRLF lines).
 shim/third_party/** -text
+
+# Patches against the pinned stream-server source: byte-exact (git apply --check in CI).
+stream-server/sunshine-patches/*.patch -text

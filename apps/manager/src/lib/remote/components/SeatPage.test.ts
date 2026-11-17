@@ -137,3 +137,33 @@ describe('SeatPage microphone', () => {
     expect(screen.queryByTestId('mic-state')).toBeNull();
   });
 });
+
+describe('SeatPage Pulsar options', () => {
+  it('shows the options only for a Pulsar seat', () => {
+    setup(seat, status('stopped'), both(true));
+    expect(screen.queryByTestId('pulsar-options')).toBeNull();
+  });
+
+  it('saves relay, ports, discovery, access and clients', async () => {
+    const { onSave, user } = setup({ ...seat, stream_backend: 'pulsar' }, status('stopped'), both(true));
+    expect(screen.getByTestId('pulsar-options')).toBeInTheDocument();
+    const relay = screen.getByRole('textbox', { name: t.seat.pulsarRelay });
+    await user.type(relay, 'relay.example.net:21116');
+    await user.tab();
+    expect(onSave.mock.calls.at(-1)![1].pulsar?.relay).toBe('relay.example.net:21116');
+    await user.selectOptions(screen.getByRole('combobox', { name: t.seat.pulsarNetworkMode }), 'relay-only');
+    expect(onSave.mock.calls.at(-1)![1].pulsar?.network_mode).toBe('relay-only');
+    await user.click(screen.getByRole('checkbox', { name: t.seat.pulsarDiscovery }));
+    expect(onSave.mock.calls.at(-1)![1].pulsar?.lan_discovery).toBe(false);
+    await user.selectOptions(screen.getByRole('combobox', { name: t.seat.pulsarAccess }), 'approve');
+    expect(onSave.mock.calls.at(-1)![1].pulsar?.access).toBe('approve');
+  });
+
+  it('does not save an invalid relay', async () => {
+    const { onSave, user } = setup({ ...seat, stream_backend: 'pulsar' }, status('stopped'), both(true));
+    await user.type(screen.getByRole('textbox', { name: t.seat.pulsarRelay }), 'not a host');
+    await user.tab();
+    expect(screen.getByText(t.seat.pulsarRelayInvalid)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});

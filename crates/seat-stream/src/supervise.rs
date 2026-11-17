@@ -108,6 +108,26 @@ pub enum StreamNotice {
     /// Pulsar backend only: operator prompts, relay and trust changes, app launches
     /// (docs/split/agents/pulsar-host-backend.md §3.4).
     Peer(crate::backend::PeerEvent),
+    /// The Pulsar build lacks features the seat's config used, or never opened its seat
+    /// pipe: the server was restarted with upstream behaviour for them. `missing` names the
+    /// capabilities (or `control_pipe`).
+    Fallback { missing: Vec<String> },
+}
+
+/// Builds `server.conf` for a Pulsar build that reported these `hello` capabilities.
+pub type ConfForCaps = dyn Fn(&[String]) -> Result<String, StreamError> + Send + Sync;
+
+/// Capability strings of the Pulsar stream-server patch set (`hello`, spec 80 §8.4).
+pub mod caps {
+    pub const CONTROL_PIPE: &str = "control_pipe";
+    pub const APPS_RELOAD: &str = "apps_reload";
+    pub const PAIR_CANCEL: &str = "pair_cancel";
+    pub const PAIR_TIMEOUT: &str = "pair_timeout";
+    pub const CLIENT_NAME: &str = "client_name";
+    pub const AUDIO_STATE: &str = "audio_state";
+    pub const GRACEFUL_SHUTDOWN: &str = "graceful_shutdown";
+    pub const PULSAR_IDD: &str = "pulsar_idd";
+    pub const PULSAR_PAD: &str = "pulsar_pad";
 }
 
 /// Outcome of [`SeatServer::reload_apps`].
@@ -139,6 +159,12 @@ pub struct SeatServerConfig {
     pub service_version: String,
     /// Re-check the binary's SHA-256 before every launch (off only in tests).
     pub verify_binary: bool,
+    /// Pulsar build only: `server.conf` for the capabilities the server reports in `hello`
+    /// (a build without `pulsar_idd` gets the stock capture, ...). `None` keeps `conf_text`.
+    pub conf_for_caps: Option<Arc<ConfForCaps>>,
+    /// Pulsar build only: `server.conf` with upstream behaviour (no `pulsar_*` keys, web UI
+    /// on loopback) for a binary that never opens the seat pipe.
+    pub upstream_conf_text: Option<String>,
 }
 
 pub struct SeatServer {
@@ -162,6 +188,11 @@ pub struct SeatServer {
     next_connect_ms: u64,
     connect_deadline_ms: u64,
     connect_abandoned: bool,
+    /// Flavour the server is driven as: the manifest's, or `Upstream` after a Pulsar build
+    /// never opened its seat pipe ([`SeatServerConfig::upstream_conf_text`]).
+    effective: ServerFlavour,
+    /// The config was already adjusted to the reported capabilities (no restart loop).
+    caps_applied: bool,
 }
 
 impl SeatServer {
@@ -173,6 +204,7 @@ impl SeatServer {
         rng: Arc<dyn Random>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let effective = cfg.dist.flavour;
         Self {
             cfg,
             fs,
@@ -180,6 +212,8 @@ impl SeatServer {
             connector,
             rng,
             clock,
+            effective,
+            caps_applied: false,
             watchdog: Watchdog::new(server_policy()),
             session_id: None,
             child: None,
@@ -195,8 +229,24 @@ impl SeatServer {
         }
     }
 
+    /// Flavour the server is driven as (see [`Self::fell_back`]).
     pub fn flavour(&self) -> ServerFlavour {
-        self.cfg.dist.flavour
+        self.effective
+    }
+
+    /// A Pulsar build is driven with upstream behaviour (it never opened its seat pipe).
+    pub fn fell_back(&self) -> bool {
+        self.effective != self.cfg.dist.flavour
+    }
+
+    /// The server reported this capability in `hello`.
+    pub fn has_capability(&self, cap: &str) -> bool {
+        self.capabilities.iter().any(|c| c == cap)
+    }
+
+    /// The config text the next launch writes.
+    pub fn conf_text(&self) -> &str {
+        &self.cfg.conf_text
     }
 
     pub fn is_running(&self) -> bool {
@@ -286,7 +336,7 @@ impl SeatServer {
         self.fs.write_atomic(&dir.conf, self.cfg.conf_text.as_bytes())?;
         self.fs.rotate_log(&dir.log, LOG_KEEP)?;
         self.creds = None;
-        if self.cfg.dist.flavour == ServerFlavour::Upstream {
+        if self.effective == ServerFlavour::Upstream {
             let creds = WebUiCredentials::generate(self.rng.as_ref())?;
             let existing = self.fs.read(&dir.state)?;
             let doc = merge_web_ui_credentials(existing.as_deref(), &creds.user, &creds.password, &creds.salt)?;
@@ -365,9 +415,52 @@ impl SeatServer {
         }
     }
 
+    /// Stop and start again with the current config (fallbacks). A failure here takes the
+    /// seat down ([`StreamNotice::GaveUp`]); the watchdog cannot help with a bad install.
+    fn relaunch(&mut self, out: &mut Vec<StreamNotice>) {
+        let Some(session) = self.session_id else { return };
+        match self.stop().and_then(|()| self.start(session)) {
+            Ok(()) => out.push(StreamNotice::Running),
+            Err(e) => {
+                log::warn!("stream server relaunch failed: {e}");
+                out.push(StreamNotice::GaveUp { last_log: self.last_log() });
+            }
+        }
+    }
+
+    /// After `hello` from a Pulsar build: rewrite the config for the features it reports
+    /// and restart once if that changes anything (stock capture / pads / no pair timeout).
+    fn apply_capabilities(&mut self, out: &mut Vec<StreamNotice>) -> bool {
+        if self.caps_applied || self.effective != ServerFlavour::PulsarFork {
+            return false;
+        }
+        self.caps_applied = true;
+        let Some(f) = self.cfg.conf_for_caps.clone() else { return false };
+        let new = match f(&self.capabilities) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("config for the reported capabilities: {e}");
+                return false;
+            }
+        };
+        if new == self.cfg.conf_text {
+            return false;
+        }
+        let missing: Vec<String> = [caps::PULSAR_IDD, caps::PULSAR_PAD, caps::PAIR_TIMEOUT]
+            .into_iter()
+            .filter(|c| !self.has_capability(c))
+            .map(str::to_string)
+            .collect();
+        log::warn!("Pulsar stream server lacks {missing:?}: restarting with upstream behaviour for them");
+        self.cfg.conf_text = new;
+        out.push(StreamNotice::Fallback { missing });
+        self.relaunch(out);
+        true
+    }
+
     fn try_connect(&mut self, now: u64, out: &mut Vec<StreamNotice>) {
         let Some(child) = self.child else { return };
-        let flavour = self.cfg.dist.flavour;
+        let flavour = self.effective;
         let res = self
             .connector
             .connect(&self.cfg.seat_id, flavour, &child, self.creds.as_ref())
@@ -376,7 +469,25 @@ impl SeatServer {
             Ok((c, h)) => {
                 self.capabilities = h.capabilities.clone();
                 self.control = Some(c);
+                if self.apply_capabilities(out) {
+                    return;
+                }
                 out.push(StreamNotice::ControlReady { capabilities: h.capabilities });
+            }
+            // A Pulsar build that never opens its seat pipe is driven like upstream once
+            // (loopback web UI), when the backend supplied an upstream config.
+            Err(e)
+                if now >= self.connect_deadline_ms
+                    && flavour == ServerFlavour::PulsarFork
+                    && self.cfg.upstream_conf_text.is_some() =>
+            {
+                log::warn!("Pulsar seat pipe never came up ({e}); falling back to upstream behaviour");
+                self.effective = ServerFlavour::Upstream;
+                if let Some(t) = self.cfg.upstream_conf_text.take() {
+                    self.cfg.conf_text = t;
+                }
+                out.push(StreamNotice::Fallback { missing: vec![caps::CONTROL_PIPE.to_string()] });
+                self.relaunch(out);
             }
             Err(e) if now >= self.connect_deadline_ms => match flavour {
                 // The fork must create its pipe before it opens listeners (spec 80 §8.4).
@@ -457,7 +568,11 @@ impl SeatServer {
         if self.child.is_none() {
             return Ok(AppsReload::NotRunning);
         }
-        if let Some(c) = self.control.as_mut() {
+        // A Pulsar build whose `hello` lists capabilities but not `apps_reload` gets the
+        // restart-when-idle path below, as upstream does (an empty list = protocol 1 base).
+        let reload_cap =
+            self.effective == ServerFlavour::Upstream || self.capabilities.is_empty() || self.has_capability(caps::APPS_RELOAD);
+        if let Some(c) = self.control.as_mut().filter(|_| reload_cap) {
             match c.apps_reload() {
                 Ok(n) => return Ok(AppsReload::Reloaded(n)),
                 Err(StreamError::Unsupported(_)) => {}

@@ -2042,7 +2042,33 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
 - **Remote stream options.** `GamepadPref::{PulsarDs4, PulsarDs5, PulsarDs5e, PulsarXone}`
   and `CapturePref::PulsarIdd` reach the Pulsar stream-server build's keys
   (`gamepad = pulsar_*`, `capture = pulsar_idd`); a stock server falls back to `auto` /
-  its default. The fork patch set itself is still to be written (open issue).
+  its default. The patch set exists since the stream-server round (below).
+
+## Stream server patch set (Pulsar build, 2026-11-17)
+
+- **Source of truth:** `stream-server/sunshine-patches/0001-0006` against Sunshine
+  `v2026.516.143833` (`14ffa6fd`), pins in `stream-server/sunshine.json`, build
+  `stream-server/build-sunshine.ps1` (MSYS2 UCRT64 / CLANGARM64; portable MSYS2 under
+  `target\wf\msys2`), CI job `stream-server`. Details: `stream-server/README.md`.
+- **Wire:** seat pipe protocol 1 as spec 80 §8.4 (both directions, `hello` first) plus the
+  shared events of the service (`display.mode.request`, `pad.wanted`, `pad.released`,
+  `audio.state`); frame channel = spec 40 §6.4 (`PulsarIddShared.h`); pad channel =
+  `seat_pads::layout` protocol 1.
+- **Capability gating (service, `seat_stream::supervise`):** `hello` capabilities decide what
+  the service uses. `SeatServerConfig::conf_for_caps` rebuilds `server.conf` for the
+  reported features (`pulsar_idd`, `pulsar_pad`, `pair_timeout`; missing ones fall back to
+  the stock capture / `auto` / no key) and restarts once (`StreamNotice::Fallback`, event
+  `host_warning` `stream_fallback`); `upstream_conf_text` drives a Pulsar build that never
+  opens its seat pipe like upstream (loopback web UI, per-start credentials) instead of a
+  crash loop; `apps_reload` / `pair_cancel` missing from a listed capability set = upstream
+  paths; a `bad_request "unknown request type"` answer maps to `Unsupported`.
+- **Pulsar backend options:** `RemoteSeatRecord::pulsar` (`PulsarSeatOptions`: relay,
+  network mode, node port base / ephemeral / fixed, port mapping, LAN discovery, access,
+  max clients) → `config.apply`; validated in `seat_core::remote::validate` (relay syntax,
+  fixed port 1024-65535 and outside other seats' blocks, 1-4 clients); manager seat page
+  "Pulsar connection". LAN discovery: per-seat rule `PulsarSplit seat <id> discovery`
+  (UDP 21117, `pulsar-host.exe`, local subnet, Private [+ Domain]) created with the option,
+  removed when it is off, when the seat switches to Sunshine and with the seat.
 - **CPU.** See §4 "CPU limits": Explorer in the seat job, opt-in `cpu_seat_wide`.
 - **Display.** IddCx frame source for seats without a session display (see HDR section).
 - **Network.** `seat-wfp` remembers explicitly bound endpoints (bind classify, endpoint

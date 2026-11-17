@@ -189,6 +189,39 @@ jobs:
       - name: Workflow lint (this file)
         run: bun installer/scripts/lint-ci.ts .github/workflows/ci.yml
 
+  # Pulsar build of the stream server (stream-server/README.md): upstream Sunshine fetched by
+  # the commit SHA pinned in stream-server/sunshine.json, the patch set applied with
+  # `git apply --check` first, then upstream's documented MSYS2 build (UCRT64 on x64,
+  # CLANGARM64 on ARM64) with the pinned msys2-base archive extracted under target\wf\msys2.
+  # The exe, its build record and runtime manifest are uploaded; the installers use them
+  # through fetch-deps --stream-local once the maintainer pins a release of this build.
+  stream-server:
+    name: stream server (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: windows-11-arm
+          - arch: x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patches apply to the pinned upstream commit
+        run: ./stream-server/build-sunshine.ps1 -Arch ${{ matrix.arch }} -Check
+      - name: Build (MSYS2, pinned base archive)
+        run: ./stream-server/build-sunshine.ps1 -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stream-server-${{ matrix.arch }}
+          path: |
+            target/wf/sunshine-out/${{ matrix.arch }}/sunshine.exe
+            target/wf/sunshine-out/${{ matrix.arch }}/stream-server.json
+            target/wf/sunshine-out/${{ matrix.arch }}/build-record.json
+            target/wf/sunshine-out/${{ matrix.arch }}/build.log
+
   # Per-process HID shim (shim/, own workspace), x64 + x86 part on the x64 runner
   # (shim/README.md). Its release DLLs / exes go into the x64 MSI (artifact shim-x64, laid
   # out as the payload's shim folder); the ARM64 MSI's comes from job shim-arm64.

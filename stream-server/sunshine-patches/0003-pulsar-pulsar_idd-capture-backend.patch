@@ -1,0 +1,830 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pulsar Seat <pulsar-seat@invalid>
+Date: Tue, 17 Nov 2026 08:05:04 +0300
+Subject: [PATCH 3/6] pulsar: pulsar_idd capture backend
+
+capture = pulsar_idd reads the seat's frame channel of the Pulsar Seat IddCx driver (Global\PulsarSplit.Display.<seat>.Header / FrameReady / Tex<gen>.<i> / Fence<gen>), opened by name on the render adapter named in the header, with hardware and software encoder variants, HDR metadata from the header, producer liveness and capture.error, and the client's mode asked from the service over the seat pipe (display.mode.request / display.mode.result). SPDX-License-Identifier: GPL-3.0-only
+---
+ cmake/compile_definitions/windows.cmake     |   1 +
+ src/platform/windows/display.h              | 115 +++++
+ src/platform/windows/display_base.cpp       |  22 +
+ src/platform/windows/display_pulsar_idd.cpp | 533 ++++++++++++++++++++
+ src/platform/windows/display_vram.cpp       |  44 ++
+ src/pulsar/control.cpp                      |  10 +
+ src/pulsar/control.h                        |   2 +
+ 7 files changed, 727 insertions(+)
+ create mode 100644 src/platform/windows/display_pulsar_idd.cpp
+
+diff --git a/cmake/compile_definitions/windows.cmake b/cmake/compile_definitions/windows.cmake
+index 843dafe..9316b0f 100644
+--- a/cmake/compile_definitions/windows.cmake
++++ b/cmake/compile_definitions/windows.cmake
+@@ -70,6 +70,7 @@ set(PLATFORM_TARGET_FILES
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_vram.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_ram.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp"
++        "${CMAKE_SOURCE_DIR}/src/platform/windows/display_pulsar_idd.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
+         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
+diff --git a/src/platform/windows/display.h b/src/platform/windows/display.h
+index 2fcb7dc..6fbd26e 100644
+--- a/src/platform/windows/display.h
++++ b/src/platform/windows/display.h
+@@ -387,4 +387,119 @@ namespace platf::dxgi {
+     capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
+     capture_e release_snapshot() override;
+   };
++
++  // ---- Pulsar Seat: `capture = pulsar_idd` (frame channel of the Pulsar Seat IddCx driver) ----
++  // SPDX-License-Identifier: GPL-3.0-only
++
++#pragma pack(push, 1)
++
++  /**
++   * Frame channel header v1 at offset 0 of `Global\PulsarSplit.Display.<seat>.Header`
++   * (little-endian, packed; same layout as the driver's PULSAR_FRAME_HEADER_V1).
++   */
++  struct pulsar_frame_header_t {
++    char magic[4];  // "PSDH"
++    std::uint16_t version;  // 1
++    std::uint16_t header_size;
++    std::uint8_t seat_guid[16];
++    std::uint32_t generation;
++    std::uint32_t ring_size;  // 3
++    std::uint64_t frame_number;
++    std::uint32_t latest_index;
++    std::uint32_t flags;  // bit 0 path active, bit 1 HDR, bit 2 driver stopping
++    std::uint64_t fence_value;
++    std::uint64_t present_qpc;
++    std::uint32_t width;
++    std::uint32_t height;
++    std::uint32_t refresh_milli_hz;
++    std::uint32_t dxgi_format;  // 87 B8G8R8A8_UNORM or 10 R16G16B16A16_FLOAT
++    std::uint32_t color_space;
++    std::uint64_t adapter_luid;
++    std::uint32_t hdr_meta_generation;
++    std::uint16_t chromaticity[8];  // R x,y G x,y B x,y W x,y; CIE * 1024
++    std::uint32_t min_luminance_x10000;
++    std::uint32_t max_luminance_x10000;
++    std::uint32_t max_full_frame_luminance_x10000;
++    std::uint32_t sdr_white_nits;
++    std::uint8_t reserved[8];
++    std::uint64_t producer_heartbeat;  // QPC
++    std::uint64_t consumer_heartbeat;  // QPC, written by us
++    std::uint64_t consumer_frame;  // written by us
++  };
++
++#pragma pack(pop)
++
++  static_assert(sizeof(pulsar_frame_header_t) == 0xA0, "frame header v1 is 160 bytes");
++
++  /**
++   * Consumer side of the frame channel: header section, FrameReady event, named shared
++   * ring textures and fence of the current generation.
++   */
++  class pulsar_idd_channel_t {
++  public:
++    ~pulsar_idd_channel_t();
++
++    /// Opens the header section and the FrameReady event of the seat (`no_display` when missing).
++    int open(const std::string &seat_id);
++    /// Consistent copy of the header; false when it is not valid.
++    bool read_header(pulsar_frame_header_t &out) const;
++    /// Opens the ring textures and the fence of `header.generation` on `device`.
++    int open_ring(ID3D11Device *device, IDXGIAdapter1 *adapter, const pulsar_frame_header_t &header);
++    /**
++     * Waits for the next published frame. On `ok`, `out` is the ring texture (already
++     * ordered after the producer's copy on `ctx`) and `qpc` its present time.
++     */
++    capture_e next_frame(ID3D11DeviceContext *ctx, std::chrono::milliseconds timeout, texture2d_t &out, std::uint64_t &qpc);
++    /// Writes the consumer heartbeat.
++    void heartbeat();
++
++    pulsar_frame_header_t opened {};
++
++  private:
++    HANDLE section = nullptr;
++    pulsar_frame_header_t *view = nullptr;
++    HANDLE frame_ready = nullptr;
++    std::string seat;
++    texture2d_t ring[4];
++    util::safe_ptr<ID3D11Fence, Release<ID3D11Fence>> fence;
++    std::uint64_t last_frame = 0;
++    std::chrono::steady_clock::time_point producer_lost_since {};
++    bool producer_lost = false;
++  };
++
++  /**
++   * Shared init of both `pulsar_idd` displays: adapter by the header's LUID, D3D11 device,
++   * size / format / refresh from the header, mode request to the service.
++   */
++  int pulsar_idd_init(display_base_t *display, pulsar_idd_channel_t &channel, const ::video::config_t &config);
++  /// HDR metadata from the frame header.
++  bool pulsar_idd_hdr_metadata(const pulsar_frame_header_t &header, SS_HDR_METADATA &metadata);
++
++  /**
++   * Pulsar frame channel with a hardware encoder.
++   */
++  class display_pulsar_idd_vram_t: public display_vram_t {
++    pulsar_idd_channel_t channel;
++
++  public:
++    int init(const ::video::config_t &config, const std::string &display_name);
++    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
++    capture_e release_snapshot() override;
++    bool is_hdr() override;
++    bool get_hdr_metadata(SS_HDR_METADATA &metadata) override;
++  };
++
++  /**
++   * Pulsar frame channel with a software encoder.
++   */
++  class display_pulsar_idd_ram_t: public display_ram_t {
++    pulsar_idd_channel_t channel;
++
++  public:
++    int init(const ::video::config_t &config, const std::string &display_name);
++    capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) override;
++    capture_e release_snapshot() override;
++    bool is_hdr() override;
++    bool get_hdr_metadata(SS_HDR_METADATA &metadata) override;
++  };
+ }  // namespace platf::dxgi
+diff --git a/src/platform/windows/display_base.cpp b/src/platform/windows/display_base.cpp
+index e42bb8e..8912704 100644
+--- a/src/platform/windows/display_base.cpp
++++ b/src/platform/windows/display_base.cpp
+@@ -1005,6 +1005,22 @@ namespace platf {
+    * @param hwdevice_type enables possible use of hardware encoder
+    */
+   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
++    // Pulsar Seat: the seat's own frame channel; never falls back to ddx / wgc.
++    if (config::video.capture == "pulsar_idd") {
++      if (hwdevice_type == mem_type_e::dxgi) {
++        auto disp = std::make_shared<dxgi::display_pulsar_idd_vram_t>();
++        if (!disp->init(config, display_name)) {
++          return disp;
++        }
++      } else if (hwdevice_type == mem_type_e::system) {
++        auto disp = std::make_shared<dxgi::display_pulsar_idd_ram_t>();
++        if (!disp->init(config, display_name)) {
++          return disp;
++        }
++      }
++      return nullptr;
++    }
++
+     if (config::video.capture == "ddx" || config::video.capture.empty()) {
+       if (hwdevice_type == mem_type_e::dxgi) {
+         auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
+@@ -1044,6 +1060,12 @@ namespace platf {
+   std::vector<std::string> display_names(mem_type_e) {
+     std::vector<std::string> display_names;
+ 
++    // Pulsar Seat: one display, the seat's frame channel.
++    if (config::video.capture == "pulsar_idd") {
++      display_names.emplace_back("pulsar_idd");
++      return display_names;
++    }
++
+     HRESULT status;
+ 
+     BOOST_LOG(debug) << "Detecting monitors..."sv;
+diff --git a/src/platform/windows/display_pulsar_idd.cpp b/src/platform/windows/display_pulsar_idd.cpp
+new file mode 100644
+index 0000000..33f564f
+--- /dev/null
++++ b/src/platform/windows/display_pulsar_idd.cpp
+@@ -0,0 +1,533 @@
++/**
++ * @file src/platform/windows/display_pulsar_idd.cpp
++ * @brief Pulsar Seat: `capture = pulsar_idd`, the frame channel of the Pulsar Seat IddCx driver.
++ *
++ * SPDX-License-Identifier: GPL-3.0-only
++ *
++ * The driver (producer, a WUDF host) publishes each frame of the seat's virtual monitor
++ * into a ring of three named NT-shared D3D11 textures on the render adapter, signals a
++ * named shared fence, updates a 4 KiB header section and sets an auto-reset event:
++ *
++ *   Global\PulsarSplit.Display.<seat>.Header       section (header v1, "PSDH")
++ *   Global\PulsarSplit.Display.<seat>.FrameReady   auto-reset event
++ *   Global\PulsarSplit.Display.<seat>.Tex<gen>.<i> textures, i = 0..2
++ *   Global\PulsarSplit.Display.<seat>.Fence<gen>   fence
++ *
++ * This file is the consumer. It opens everything by name (the server runs as SYSTEM in
++ * the seat session; the objects grant SYSTEM), waits on the fence before it copies a
++ * slot, writes its heartbeat and the frame it holds, and asks the Pulsar Seat service for
++ * the client's mode over the seat pipe (`display.mode.request` / `display.mode.result`).
++ */
++// standard includes
++#include <atomic>
++#include <condition_variable>
++#include <cstring>
++#include <map>
++#include <mutex>
++#include <thread>
++
++// platform includes
++#include <d3d12.h>
++
++// local includes
++#include "display.h"
++#include "misc.h"
++#include "src/config.h"
++#include "src/logging.h"
++#include "src/pulsar/control.h"
++#include "utf_utils.h"
++
++using namespace std::literals;
++
++namespace platf::dxgi {
++  namespace {
++    constexpr std::uint32_t FLAG_PATH_ACTIVE = 0x1;
++    constexpr std::uint32_t FLAG_HDR = 0x2;
++    constexpr std::uint32_t FLAG_DRIVER_STOPPING = 0x4;
++    constexpr auto PRODUCER_GRACE = 10s;
++    constexpr auto MODE_TIMEOUT = 5s;
++
++    std::wstring object_name(const std::string &seat, const std::string &suffix) {
++      auto s = "Global\\PulsarSplit.Display." + seat + "." + suffix;
++      return std::wstring(s.begin(), s.end());
++    }
++
++    std::uint64_t qpc_now() {
++      LARGE_INTEGER v;
++      QueryPerformanceCounter(&v);
++      return (std::uint64_t) v.QuadPart;
++    }
++
++    std::uint64_t qpc_freq() {
++      LARGE_INTEGER v;
++      QueryPerformanceFrequency(&v);
++      return (std::uint64_t) v.QuadPart;
++    }
++
++    // ---- display.mode.request / display.mode.result over the seat pipe ----
++
++    std::mutex mode_mutex;
++    std::condition_variable mode_cv;
++    std::map<std::uint32_t, std::string> mode_results;
++    std::uint32_t mode_counter = 0;
++    std::once_flag mode_handler_once;
++
++    void install_mode_handler() {
++      std::call_once(mode_handler_once, []() {
++        pulsar::register_handler("display.mode.result", [](const nlohmann::json &body, pulsar::responder_t) -> std::optional<nlohmann::json> {
++          auto id = body.value("request_id", 0u);
++          auto status = body.value("status", "unsupported"s);
++          {
++            std::lock_guard lg {mode_mutex};
++            mode_results[id] = status;
++          }
++          mode_cv.notify_all();
++          return nlohmann::json::object();
++        });
++        pulsar::add_capability("pulsar_idd");
++      });
++    }
++
++    /// Asks the service for the client's mode; returns the status word or "timeout".
++    std::string request_mode(int width, int height, int fps, bool hdr) {
++      if (!pulsar::connected()) {
++        return "no_pipe";
++      }
++      std::uint32_t id;
++      {
++        std::lock_guard lg {mode_mutex};
++        id = ++mode_counter;
++        if (id == 0) {
++          id = ++mode_counter;
++        }
++      }
++      pulsar::emit("display.mode.request", {{"request_id", id}, {"w", width}, {"h", height}, {"hz", fps}, {"hdr", hdr}});
++      std::unique_lock lg {mode_mutex};
++      if (!mode_cv.wait_for(lg, MODE_TIMEOUT, [&]() {
++            return mode_results.contains(id);
++          })) {
++        return "timeout";
++      }
++      auto status = mode_results[id];
++      mode_results.erase(id);
++      return status;
++    }
++
++    /// Launch generation whose mode was already asked for (encoder probes never ask).
++    std::uint32_t last_requested_launch = 0;
++  }  // namespace
++
++  pulsar_idd_channel_t::~pulsar_idd_channel_t() {
++    if (view) {
++      UnmapViewOfFile(view);
++    }
++    if (section) {
++      CloseHandle(section);
++    }
++    if (frame_ready) {
++      CloseHandle(frame_ready);
++    }
++  }
++
++  int pulsar_idd_channel_t::open(const std::string &seat_id) {
++    seat = seat_id;
++    section = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, object_name(seat, "Header").c_str());
++    if (!section) {
++      BOOST_LOG(error) << "pulsar_idd: no frame channel for seat "sv << seat << " (error "sv << GetLastError() << ')';
++      return -1;
++    }
++    view = (pulsar_frame_header_t *) MapViewOfFile(section, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 4096);
++    if (!view) {
++      BOOST_LOG(error) << "pulsar_idd: cannot map the frame header (error "sv << GetLastError() << ')';
++      return -1;
++    }
++    frame_ready = OpenEventW(SYNCHRONIZE, FALSE, object_name(seat, "FrameReady").c_str());
++    if (!frame_ready) {
++      BOOST_LOG(error) << "pulsar_idd: cannot open FrameReady (error "sv << GetLastError() << ')';
++      return -1;
++    }
++    return 0;
++  }
++
++  bool pulsar_idd_channel_t::read_header(pulsar_frame_header_t &out) const {
++    if (!view) {
++      return false;
++    }
++    for (int tries = 0; tries < 8; ++tries) {
++      auto before = ((volatile pulsar_frame_header_t *) view)->frame_number;
++      std::atomic_thread_fence(std::memory_order_acquire);
++      std::memcpy(&out, (const void *) view, sizeof(out));
++      std::atomic_thread_fence(std::memory_order_acquire);
++      auto after = ((volatile pulsar_frame_header_t *) view)->frame_number;
++      if (before == after) {
++        return std::memcmp(out.magic, "PSDH", 4) == 0 && out.version == 1 && out.header_size >= sizeof(out) &&
++               out.ring_size > 0 && out.ring_size <= 4 && out.latest_index < out.ring_size;
++      }
++    }
++    return false;
++  }
++
++  int pulsar_idd_channel_t::open_ring(ID3D11Device *device, IDXGIAdapter1 *adapter, const pulsar_frame_header_t &header) {
++    for (auto &t : ring) {
++      t.reset();
++    }
++    fence.reset();
++
++    device1_t device1;
++    if (FAILED(device->QueryInterface(__uuidof(ID3D11Device1), (void **) &device1))) {
++      BOOST_LOG(error) << "pulsar_idd: ID3D11Device1 not available"sv;
++      return -1;
++    }
++    for (std::uint32_t i = 0; i < header.ring_size; ++i) {
++      auto name = object_name(seat, "Tex" + std::to_string(header.generation) + "." + std::to_string(i));
++      ID3D11Texture2D *tex = nullptr;
++      auto hr = device1->OpenSharedResourceByName(name.c_str(), DXGI_SHARED_RESOURCE_READ, __uuidof(ID3D11Texture2D), (void **) &tex);
++      if (FAILED(hr)) {
++        BOOST_LOG(error) << "pulsar_idd: cannot open ring texture "sv << i << " [0x"sv << util::hex(hr).to_string_view() << ']';
++        return -1;
++      }
++      ring[i].reset(tex);
++    }
++
++    // A named fence opens only through D3D12; the handle then goes to D3D11.
++    auto d3d12 = LoadLibraryExW(L"d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
++    auto create12 = d3d12 ? (PFN_D3D12_CREATE_DEVICE) GetProcAddress(d3d12, "D3D12CreateDevice") : nullptr;
++    if (!create12) {
++      BOOST_LOG(error) << "pulsar_idd: d3d12.dll is not available for the shared fence"sv;
++      return -1;
++    }
++    ID3D12Device *dev12 = nullptr;
++    auto hr = create12(adapter, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void **) &dev12);
++    if (FAILED(hr)) {
++      BOOST_LOG(error) << "pulsar_idd: D3D12 device for the fence failed [0x"sv << util::hex(hr).to_string_view() << ']';
++      return -1;
++    }
++    HANDLE fence_handle = nullptr;
++    auto fence_name = object_name(seat, "Fence" + std::to_string(header.generation));
++    hr = dev12->OpenSharedHandleByName(fence_name.c_str(), GENERIC_ALL, &fence_handle);
++    dev12->Release();
++    if (FAILED(hr)) {
++      BOOST_LOG(error) << "pulsar_idd: cannot open the shared fence [0x"sv << util::hex(hr).to_string_view() << ']';
++      return -1;
++    }
++    ID3D11Device5 *device5 = nullptr;
++    hr = device->QueryInterface(__uuidof(ID3D11Device5), (void **) &device5);
++    if (SUCCEEDED(hr)) {
++      ID3D11Fence *f = nullptr;
++      hr = device5->OpenSharedFence(fence_handle, __uuidof(ID3D11Fence), (void **) &f);
++      device5->Release();
++      if (SUCCEEDED(hr)) {
++        fence.reset(f);
++      }
++    }
++    CloseHandle(fence_handle);
++    if (!fence) {
++      BOOST_LOG(error) << "pulsar_idd: ID3D11Fence open failed [0x"sv << util::hex(hr).to_string_view() << ']';
++      return -1;
++    }
++
++    opened = header;
++    last_frame = header.frame_number;
++    return 0;
++  }
++
++  void pulsar_idd_channel_t::heartbeat() {
++    if (view) {
++      ((volatile pulsar_frame_header_t *) view)->consumer_heartbeat = qpc_now();
++    }
++  }
++
++  capture_e pulsar_idd_channel_t::next_frame(ID3D11DeviceContext *ctx, std::chrono::milliseconds timeout, texture2d_t &out, std::uint64_t &qpc) {
++    heartbeat();
++
++    pulsar_frame_header_t h;
++    if (!read_header(h)) {
++      return capture_e::timeout;
++    }
++
++    // Producer liveness: heartbeat older than 3 s means gone; keep the client for 10 s.
++    auto freq = qpc_freq();
++    auto now = qpc_now();
++    bool alive = freq != 0 && now >= h.producer_heartbeat && (now - h.producer_heartbeat) <= freq * 3;
++    if (!alive || (h.flags & FLAG_DRIVER_STOPPING)) {
++      auto t = std::chrono::steady_clock::now();
++      if (!producer_lost) {
++        producer_lost = true;
++        producer_lost_since = t;
++        BOOST_LOG(warning) << "pulsar_idd: frame producer stopped answering"sv;
++      }
++      if (t - producer_lost_since > PRODUCER_GRACE) {
++        pulsar::capture_error("producer_lost");
++        return capture_e::error;
++      }
++      std::this_thread::sleep_for(std::min<std::chrono::milliseconds>(timeout, 500ms));
++      return capture_e::timeout;
++    }
++    if (producer_lost) {
++      producer_lost = false;
++      pulsar::capture_error("");
++    }
++
++    if (h.generation != opened.generation || h.width != opened.width || h.height != opened.height || h.dxgi_format != opened.dxgi_format) {
++      BOOST_LOG(info) << "pulsar_idd: frame channel changed (generation "sv << h.generation << ", "sv << h.width << 'x' << h.height << ')';
++      return capture_e::reinit;
++    }
++
++    if (h.frame_number == last_frame) {
++      auto r = WaitForSingleObject(frame_ready, (DWORD) timeout.count());
++      if (r == WAIT_TIMEOUT) {
++        return capture_e::timeout;
++      }
++      if (r != WAIT_OBJECT_0) {
++        return capture_e::error;
++      }
++      if (!read_header(h)) {
++        return capture_e::timeout;
++      }
++      if (h.generation != opened.generation) {
++        return capture_e::reinit;
++      }
++      if (h.frame_number == last_frame) {
++        return capture_e::timeout;
++      }
++    }
++
++    // Hold the slot: the producer never writes the slot of `consumer_frame`.
++    ((volatile pulsar_frame_header_t *) view)->consumer_frame = h.frame_number;
++    last_frame = h.frame_number;
++
++    ID3D11DeviceContext4 *ctx4 = nullptr;
++    if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext4), (void **) &ctx4))) {
++      ctx4->Wait(fence.get(), h.fence_value);
++      ctx4->Release();
++    }
++
++    auto &slot = ring[h.latest_index];
++    if (!slot) {
++      return capture_e::reinit;
++    }
++    slot->AddRef();
++    out.reset(slot.get());
++    qpc = h.present_qpc;
++    return capture_e::ok;
++  }
++
++  int pulsar_idd_init(display_base_t *d, pulsar_idd_channel_t &channel, const ::video::config_t &config) {
++    if (!pulsar::active()) {
++      BOOST_LOG(error) << "capture = pulsar_idd needs pulsar_seat_id"sv;
++      return -1;
++    }
++    install_mode_handler();
++
++    if (channel.open(pulsar::config.seat_id)) {
++      pulsar::capture_error("no_display");
++      return -1;
++    }
++
++    // Ask for the client's mode once per client launch / resume (not for encoder probes);
++    // the service applies it through the driver (spec 40 §4.4).
++    bool hdr_wanted = config.dynamicRange > 0;
++    auto launch = pulsar::launch_generation();
++    if (launch != 0 && launch != last_requested_launch && config.width > 0 && config.height > 0) {
++      last_requested_launch = launch;
++      auto status = request_mode(config.width, config.height, config.framerate, hdr_wanted);
++      BOOST_LOG(info) << "pulsar_idd: mode "sv << config.width << 'x' << config.height << '@' << config.framerate << (hdr_wanted ? " HDR"sv : ""sv) << ": "sv << status;
++      if (status == "ok"sv || status == "ok_sdr_fallback"sv || status == "clamped"sv) {
++        // Give the driver a moment to publish the new generation.
++        std::this_thread::sleep_for(100ms);
++      }
++    }
++
++    pulsar_frame_header_t h;
++    auto deadline = std::chrono::steady_clock::now() + 2s;
++    while (!channel.read_header(h) || !(h.flags & FLAG_PATH_ACTIVE) || h.width == 0 || h.height == 0) {
++      if (std::chrono::steady_clock::now() > deadline) {
++        BOOST_LOG(error) << "pulsar_idd: the seat display has no active path"sv;
++        pulsar::capture_error("no_display");
++        return -1;
++      }
++      std::this_thread::sleep_for(50ms);
++    }
++
++    // Adapter: the render GPU named in the header (no cross-adapter or CPU copy path).
++    if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &d->factory))) {
++      BOOST_LOG(error) << "pulsar_idd: CreateDXGIFactory1 failed"sv;
++      return -1;
++    }
++    adapter_t::pointer adapter_p;
++    for (int x = 0; d->factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
++      adapter_t a {adapter_p};
++      DXGI_ADAPTER_DESC1 desc;
++      a->GetDesc1(&desc);
++      auto luid = ((std::uint64_t) (std::uint32_t) desc.AdapterLuid.HighPart << 32) | desc.AdapterLuid.LowPart;
++      if (luid == h.adapter_luid) {
++        if (!config::video.adapter_name.empty() && utf_utils::from_utf8(config::video.adapter_name) != desc.Description) {
++          BOOST_LOG(warning) << "pulsar_idd: adapter_name is ignored; the seat renders on "sv << utf_utils::to_utf8(desc.Description);
++        }
++        d->adapter = std::move(a);
++        break;
++      }
++    }
++    if (!d->adapter) {
++      BOOST_LOG(error) << "pulsar_idd: no adapter with the seat's render LUID"sv;
++      pulsar::capture_error("adapter_mismatch");
++      return -1;
++    }
++
++    D3D_FEATURE_LEVEL levels[] {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
++    auto hr = D3D11CreateDevice(d->adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_FLAGS, levels, 2, D3D11_SDK_VERSION, &d->device, &d->feature_level, &d->device_ctx);
++    if (FAILED(hr)) {
++      BOOST_LOG(error) << "pulsar_idd: D3D11 device failed [0x"sv << util::hex(hr).to_string_view() << ']';
++      pulsar::capture_error("adapter_mismatch");
++      return -1;
++    }
++
++    if (channel.open_ring(d->device.get(), d->adapter.get(), h)) {
++      pulsar::capture_error("no_display");
++      return -1;
++    }
++
++    d->width = (int) h.width;
++    d->height = (int) h.height;
++    d->width_before_rotation = d->width;
++    d->height_before_rotation = d->height;
++    d->display_rotation = DXGI_MODE_ROTATION_IDENTITY;
++    d->offset_x = 0;
++    d->offset_y = 0;
++    d->env_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
++    d->env_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
++    d->capture_format = (DXGI_FORMAT) h.dxgi_format;
++    auto refresh = h.refresh_milli_hz ? h.refresh_milli_hz : 60000;
++    d->display_refresh_rate = DXGI_RATIONAL {refresh, 1000};
++    d->display_refresh_rate_rounded = (int) ((refresh + 500) / 1000);
++    d->client_frame_rate = config.framerate;
++    d->client_frame_rate_strict = {0, 0};
++    if (config.framerateX100 > 0) {
++      AVRational fps = ::video::framerateX100_to_rational(config.framerateX100);
++      d->client_frame_rate_strict = DXGI_RATIONAL {static_cast<UINT>(fps.num), static_cast<UINT>(fps.den)};
++    }
++
++    dxgi_t dxgi_device;
++    if (SUCCEEDED(d->device->QueryInterface(IID_IDXGIDevice, (void **) &dxgi_device))) {
++      dxgi_device->SetGPUThreadPriority(7);
++    }
++    dxgi1_t dxgi_device1;
++    if (SUCCEEDED(d->device->QueryInterface(IID_IDXGIDevice1, (void **) &dxgi_device1))) {
++      dxgi_device1->SetMaximumFrameLatency(1);
++    }
++
++    if (!d->timer || !*d->timer) {
++      BOOST_LOG(error) << "Uninitialized high precision timer";
++      return -1;
++    }
++
++    pulsar::capture_error("");
++    BOOST_LOG(info) << "pulsar_idd: capturing "sv << d->width << 'x' << d->height << " "sv << d->dxgi_format_to_string(d->capture_format) << " at "sv << refresh / 1000.0 << " Hz, generation "sv << h.generation;
++    return 0;
++  }
++
++  bool pulsar_idd_hdr_metadata(const pulsar_frame_header_t &h, SS_HDR_METADATA &metadata) {
++    std::memset(&metadata, 0, sizeof(metadata));
++    if (!(h.flags & FLAG_HDR)) {
++      return false;
++    }
++    // CIE * 1024 -> units of 0.00002
++    auto cie = [](std::uint16_t v) -> std::uint16_t {
++      return (std::uint16_t) ((std::uint32_t) v * 50000 / 1024);
++    };
++    for (int i = 0; i < 3; ++i) {
++      metadata.displayPrimaries[i].x = cie(h.chromaticity[2 * i]);
++      metadata.displayPrimaries[i].y = cie(h.chromaticity[2 * i + 1]);
++    }
++    metadata.whitePoint.x = cie(h.chromaticity[6]);
++    metadata.whitePoint.y = cie(h.chromaticity[7]);
++    metadata.maxDisplayLuminance = (std::uint16_t) (h.max_luminance_x10000 / 10000);
++    metadata.minDisplayLuminance = (std::uint16_t) std::min<std::uint32_t>(h.min_luminance_x10000, 0xFFFF);
++    metadata.maxContentLightLevel = 0;
++    metadata.maxFrameAverageLightLevel = 0;
++    metadata.maxFullFrameLuminance = (std::uint16_t) (h.max_full_frame_luminance_x10000 / 10000);
++    return true;
++  }
++
++  // ---- software encoder variant ----
++
++  int display_pulsar_idd_ram_t::init(const ::video::config_t &config, const std::string &) {
++    return pulsar_idd_init(this, channel, config);
++  }
++
++  capture_e display_pulsar_idd_ram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool) {
++    texture2d_t src;
++    std::uint64_t frame_qpc = 0;
++    auto status = channel.next_frame(device_ctx.get(), timeout, src, frame_qpc);
++    if (status != capture_e::ok) {
++      return status;
++    }
++    auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), (int64_t) frame_qpc);
++
++    if (!texture) {
++      D3D11_TEXTURE2D_DESC t {};
++      t.Width = width;
++      t.Height = height;
++      t.MipLevels = 1;
++      t.ArraySize = 1;
++      t.SampleDesc.Count = 1;
++      t.Usage = D3D11_USAGE_STAGING;
++      t.Format = capture_format;
++      t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++      if (FAILED(device->CreateTexture2D(&t, nullptr, &texture))) {
++        BOOST_LOG(error) << "pulsar_idd: staging texture failed"sv;
++        return capture_e::error;
++      }
++    }
++
++    device_ctx->CopyResource(texture.get(), src.get());
++
++    if (!pull_free_image_cb(img_out)) {
++      return capture_e::interrupted;
++    }
++    auto img = (img_t *) img_out.get();
++    if (FAILED(device_ctx->Map(texture.get(), 0, D3D11_MAP_READ, 0, &img_info))) {
++      return capture_e::error;
++    }
++    if (complete_img(img, false)) {
++      device_ctx->Unmap(texture.get(), 0);
++      img_info.pData = nullptr;
++      return capture_e::error;
++    }
++    std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
++    device_ctx->Unmap(texture.get(), 0);
++    img_info.pData = nullptr;
++    img->frame_timestamp = frame_timestamp;
++    return capture_e::ok;
++  }
++
++  capture_e display_pulsar_idd_ram_t::release_snapshot() {
++    return capture_e::ok;
++  }
++
++  bool display_pulsar_idd_ram_t::is_hdr() {
++    return (channel.opened.flags & FLAG_HDR) && channel.opened.dxgi_format == DXGI_FORMAT_R16G16B16A16_FLOAT;
++  }
++
++  bool display_pulsar_idd_ram_t::get_hdr_metadata(SS_HDR_METADATA &metadata) {
++    return pulsar_idd_hdr_metadata(channel.opened, metadata);
++  }
++
++  // ---- hardware encoder variant (snapshot lives in display_vram.cpp) ----
++
++  int display_pulsar_idd_vram_t::init(const ::video::config_t &config, const std::string &) {
++    return pulsar_idd_init(this, channel, config);
++  }
++
++  capture_e display_pulsar_idd_vram_t::release_snapshot() {
++    return capture_e::ok;
++  }
++
++  bool display_pulsar_idd_vram_t::is_hdr() {
++    return (channel.opened.flags & FLAG_HDR) && channel.opened.dxgi_format == DXGI_FORMAT_R16G16B16A16_FLOAT;
++  }
++
++  bool display_pulsar_idd_vram_t::get_hdr_metadata(SS_HDR_METADATA &metadata) {
++    return pulsar_idd_hdr_metadata(channel.opened, metadata);
++  }
++}  // namespace platf::dxgi
+diff --git a/src/platform/windows/display_vram.cpp b/src/platform/windows/display_vram.cpp
+index d659c4b..12d0922 100644
+--- a/src/platform/windows/display_vram.cpp
++++ b/src/platform/windows/display_vram.cpp
+@@ -1700,6 +1700,50 @@ namespace platf::dxgi {
+     return dup.release_frame();
+   }
+ 
++  /**
++   * Pulsar Seat: take the newest frame of the seat's frame channel and copy it into a new
++   * snapshot texture (`capture = pulsar_idd`, display_pulsar_idd.cpp).
++   * SPDX-License-Identifier: GPL-3.0-only
++   */
++  capture_e display_pulsar_idd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
++    texture2d_t src;
++    std::uint64_t frame_qpc = 0;
++    auto capture_status = channel.next_frame(device_ctx.get(), timeout, src, frame_qpc);
++    if (capture_status != capture_e::ok) {
++      return capture_status;
++    }
++
++    auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), (int64_t) frame_qpc);
++    D3D11_TEXTURE2D_DESC desc;
++    src->GetDesc(&desc);
++    if (desc.Width != width_before_rotation || desc.Height != height_before_rotation || desc.Format != capture_format) {
++      BOOST_LOG(info) << "pulsar_idd: ring texture does not match the capture setup, reinitializing"sv;
++      return capture_e::reinit;
++    }
++
++    std::shared_ptr<platf::img_t> img;
++    if (!pull_free_image_cb(img)) {
++      return capture_e::interrupted;
++    }
++
++    auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
++    d3d_img->blank = false;
++    if (complete_img(d3d_img.get(), false) == 0) {
++      texture_lock_helper lock_helper(d3d_img->capture_mutex.get());
++      if (lock_helper.lock()) {
++        device_ctx->CopyResource(d3d_img->capture_texture.get(), src.get());
++      } else {
++        BOOST_LOG(error) << "Failed to lock capture texture";
++        return capture_e::error;
++      }
++    } else {
++      return capture_e::error;
++    }
++    img_out = img;
++    img_out->frame_timestamp = frame_timestamp;
++    return capture_e::ok;
++  }
++
+   int display_wgc_vram_t::init(const ::video::config_t &config, const std::string &display_name) {
+     if (display_base_t::init(config, display_name) || dup.init(this, config)) {
+       return -1;
+diff --git a/src/pulsar/control.cpp b/src/pulsar/control.cpp
+index f8726c9..dc24ad7 100644
+--- a/src/pulsar/control.cpp
++++ b/src/pulsar/control.cpp
+@@ -49,10 +49,14 @@ namespace pulsar {
+       "graceful_shutdown",
+       "log_level",
+       "pair_timeout",
++#ifdef _WIN32
++      "pulsar_idd",
++#endif
+     };
+     std::string state = "starting";
+     std::string capture_error_code;
+     std::optional<nlohmann::json> last_video;
++    std::uint32_t launches = 0;
+     std::atomic_bool client_ready {false};
+ 
+     /// Writes one frame to the connected client (set by the pipe thread).
+@@ -661,6 +665,12 @@ namespace pulsar {
+   void on_launch(int width, int height, int fps, bool hdr) {
+     std::lock_guard lg {state_mutex};
+     last_video = nlohmann::json {{"width", width}, {"height", height}, {"fps", fps}, {"hdr", hdr}};
++    ++launches;
++  }
++
++  std::uint32_t launch_generation() {
++    std::lock_guard lg {state_mutex};
++    return launches;
+   }
+ 
+   void audio_state(std::string_view s) {
+diff --git a/src/pulsar/control.h b/src/pulsar/control.h
+index 4e296a9..43e99fa 100644
+--- a/src/pulsar/control.h
++++ b/src/pulsar/control.h
+@@ -103,4 +103,6 @@ namespace pulsar {
+   void capture_error(std::string_view code);
+   /// Last capture error, empty when none.
+   std::string last_capture_error();
++  /// Counts client launches / resumes (0 = none yet); capture asks for a mode once per launch.
++  std::uint32_t launch_generation();
+ }  // namespace pulsar

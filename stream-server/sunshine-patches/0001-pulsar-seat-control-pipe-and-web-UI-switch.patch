@@ -1,0 +1,1410 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pulsar Seat <pulsar-seat@invalid>
+Date: Tue, 17 Nov 2026 08:00:43 +0300
+Subject: [PATCH 1/6] pulsar: seat control pipe and web UI switch
+
+Adds pulsar_seat_id, pulsar_web_ui and pulsar_control_pipe. With a seat id the server creates \.\pipe\PulsarSplit\seat\<seat-id>\server (SYSTEM only, first instance, no remote clients) before any network listener and serves hello, status, pair.submit (with client name), pair.cancel, clients.*, apps.reload, session.close, server.shutdown and log.level; events pair.pending, pair.ended, stream.started, stream.ended, capture.error and audio.state. pulsar_web_ui = disabled never creates the HTTPS config server. SPDX-License-Identifier: GPL-3.0-only
+---
+ cmake/compile_definitions/common.cmake |   2 +
+ src/audio.cpp                          |   3 +
+ src/config.cpp                         |  28 +
+ src/httpcommon.cpp                     |   8 +-
+ src/logging.cpp                        |   6 +
+ src/logging.h                          |   6 +
+ src/main.cpp                           |  22 +-
+ src/nvhttp.cpp                         | 158 ++++++
+ src/nvhttp.h                           |  46 ++
+ src/process.cpp                        |   6 +
+ src/process.h                          |   7 +
+ src/pulsar/control.cpp                 | 682 +++++++++++++++++++++++++
+ src/pulsar/control.h                   | 106 ++++
+ src/video.cpp                          |   5 +
+ src/video.h                            |   5 +
+ 15 files changed, 1087 insertions(+), 3 deletions(-)
+ create mode 100644 src/pulsar/control.cpp
+ create mode 100644 src/pulsar/control.h
+
+diff --git a/cmake/compile_definitions/common.cmake b/cmake/compile_definitions/common.cmake
+index 73cfdae..40e7485 100644
+--- a/cmake/compile_definitions/common.cmake
++++ b/cmake/compile_definitions/common.cmake
+@@ -105,6 +105,8 @@ set(SUNSHINE_TARGET_FILES
+         "${CMAKE_SOURCE_DIR}/src/platform/common.h"
+         "${CMAKE_SOURCE_DIR}/src/process.cpp"
+         "${CMAKE_SOURCE_DIR}/src/process.h"
++        "${CMAKE_SOURCE_DIR}/src/pulsar/control.cpp"
++        "${CMAKE_SOURCE_DIR}/src/pulsar/control.h"
+         "${CMAKE_SOURCE_DIR}/src/network.cpp"
+         "${CMAKE_SOURCE_DIR}/src/network.h"
+         "${CMAKE_SOURCE_DIR}/src/move_by_copy.h"
+diff --git a/src/audio.cpp b/src/audio.cpp
+index da5a221..472cdab 100644
+--- a/src/audio.cpp
++++ b/src/audio.cpp
+@@ -14,6 +14,7 @@
+ #include "globals.h"
+ #include "logging.h"
+ #include "platform/common.h"
++#include "pulsar/control.h"
+ #include "thread_safe.h"
+ #include "utility.h"
+ 
+@@ -146,6 +147,7 @@ namespace audio {
+ 
+     auto init_failure_fg = util::fail_guard([&shutdown_event]() {
+       BOOST_LOG(error) << "Unable to initialize audio capture. The stream will not have audio."sv;
++      pulsar::audio_state("no_device");
+ 
+       // Wait for shutdown to be signalled if we fail init.
+       // This allows streaming to continue without audio.
+@@ -203,6 +205,7 @@ namespace audio {
+ 
+     // Audio is initialized, so we don't want to print the failure message
+     init_failure_fg.disable();
++    pulsar::audio_state("capturing");
+ 
+     // Capture takes place on this thread
+     platf::adjust_thread_priority(platf::thread_priority_e::critical);
+diff --git a/src/config.cpp b/src/config.cpp
+index a79f7d8..bfca2c6 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -26,6 +26,7 @@
+ #include "logging.h"
+ #include "nvhttp.h"
+ #include "platform/common.h"
++#include "pulsar/control.h"
+ #include "rtsp.h"
+ #include "utility.h"
+ 
+@@ -1317,6 +1318,33 @@ namespace config {
+     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
+     bool_f(vars, "system_tray", sunshine.system_tray);
+ 
++    // Pulsar Seat: seat id, browser web UI switch and seat control pipe (src/pulsar/control.h).
++    {
++      std::string seat_id;
++      string_f(vars, "pulsar_seat_id", seat_id);
++      if (!seat_id.empty()) {
++        if (pulsar::valid_seat_id(seat_id)) {
++          pulsar::config.seat_id = seat_id;
++          // A seat server runs in the seat user's session: never show a tray icon there.
++          sunshine.system_tray = false;
++        } else {
++          BOOST_LOG(error) << "pulsar_seat_id is not a lowercase GUID without braces; ignored"sv;
++        }
++      }
++
++      std::string web_ui;
++      string_restricted_f(vars, "pulsar_web_ui", web_ui, {"enabled"sv, "disabled"sv});
++      if (!web_ui.empty()) {
++        pulsar::config.web_ui = web_ui == "enabled"sv;
++      }
++
++      std::string pipe;
++      string_restricted_f(vars, "pulsar_control_pipe", pipe, {"enabled"sv, "disabled"sv});
++      if (!pipe.empty()) {
++        pulsar::config.control_pipe = pipe == "enabled"sv;
++      }
++    }
++
+     int port = sunshine.port;
+     int_between_f(vars, "port"s, port, {1024 + nvhttp::PORT_HTTPS, 65535 - rtsp_stream::RTSP_SETUP_PORT});
+     sunshine.port = (std::uint16_t) port;
+diff --git a/src/httpcommon.cpp b/src/httpcommon.cpp
+index 2f09268..13762c9 100644
+--- a/src/httpcommon.cpp
++++ b/src/httpcommon.cpp
+@@ -28,6 +28,7 @@
+ #include "nvhttp.h"
+ #include "platform/common.h"
+ #include "process.h"
++#include "pulsar/control.h"
+ #include "rtsp.h"
+ #include "utility.h"
+ #include "uuid.h"
+@@ -58,6 +59,10 @@ namespace http {
+         create_creds(config::nvhttp.pkey, config::nvhttp.cert)) {
+       return -1;
+     }
++    if (!pulsar::web_ui_enabled()) {
++      // Pulsar Seat: no browser web UI, so no web UI credentials are needed or read.
++      return 0;
++    }
+     if (!user_creds_exist(config::sunshine.credentials_file)) {
+       BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
+     } else if (reload_user_creds(config::sunshine.credentials_file)) {
+@@ -129,7 +134,8 @@ namespace http {
+     fs::path pkey_path = pkey;
+     fs::path cert_path = cert;
+ 
+-    auto creds = crypto::gen_creds("Sunshine Gamestream Host"sv, 2048);
++    // Pulsar Seat: a neutral subject for per-seat certificates (clients pin the certificate only).
++    auto creds = crypto::gen_creds(pulsar::active() ? "Pulsar Seat Stream Host"sv : "Sunshine Gamestream Host"sv, 2048);
+ 
+     auto pkey_dir = pkey_path;
+     auto cert_dir = cert_path;
+diff --git a/src/logging.cpp b/src/logging.cpp
+index d360d6a..1e244dd 100644
+--- a/src/logging.cpp
++++ b/src/logging.cpp
+@@ -187,6 +187,12 @@ namespace logging {
+     return std::make_unique<deinit_t>();
+   }
+ 
++  void set_min_log_level(int min_log_level) {
++    if (sink) {
++      sink->set_filter(severity >= min_log_level);
++    }
++  }
++
+ #ifndef __ANDROID__
+   void setup_av_logging(int min_log_level) {
+     if (min_log_level >= 1) {
+diff --git a/src/logging.h b/src/logging.h
+index 02e0146..d963f40 100644
+--- a/src/logging.h
++++ b/src/logging.h
+@@ -56,6 +56,12 @@ namespace logging {
+    */
+   [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file);
+ 
++  /**
++   * @brief Pulsar Seat: change the minimum log level until the next start.
++   * @param min_log_level The log level (0 verbose ... 6 none).
++   */
++  void set_min_log_level(int min_log_level);
++
+   /**
+    * @brief Setup AV logging.
+    * @param min_log_level The log level.
+diff --git a/src/main.cpp b/src/main.cpp
+index 13df678..45066cc 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -23,6 +23,7 @@
+ #include "main.h"
+ #include "nvhttp.h"
+ #include "process.h"
++#include "pulsar/control.h"
+ #include "system_tray.h"
+ #include "upnp.h"
+ #include "video.h"
+@@ -343,6 +344,13 @@ int main(int argc, char *argv[]) {
+   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+ #endif
+ 
++  // Pulsar Seat: the seat pipe exists before any network listener (fails if the name is taken).
++  auto pulsar_deinit_guard = pulsar::start();
++  if (!pulsar_deinit_guard) {
++    BOOST_LOG(fatal) << "Pulsar seat pipe failed to start"sv;
++    return 3;
++  }
++
+   proc::refresh(config::stream.file_apps);
+ 
+   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
+@@ -396,8 +404,15 @@ int main(int argc, char *argv[]) {
+   }
+ 
+   std::thread httpThread {nvhttp::start};
+-  std::thread configThread {confighttp::start};
++  // Pulsar Seat: `pulsar_web_ui = disabled` never creates the HTTPS config server on base+1.
++  std::thread configThread;
++  if (pulsar::web_ui_enabled()) {
++    configThread = std::thread {confighttp::start};
++  } else {
++    BOOST_LOG(info) << "Web UI disabled (pulsar_web_ui = disabled)"sv;
++  }
+   std::thread rtspThread {rtsp_stream::start};
++  pulsar::set_ready();
+ 
+ #ifdef _WIN32
+   // If we're using the default port and GameStream is enabled, warn the user
+@@ -422,9 +437,12 @@ int main(int argc, char *argv[]) {
+   }
+ 
+   mainThreadLoop(shutdown_event);
++  pulsar::set_stopping();
+ 
+   httpThread.join();
+-  configThread.join();
++  if (configThread.joinable()) {
++    configThread.join();
++  }
+   rtspThread.join();
+ 
+   task_pool.stop();
+diff --git a/src/nvhttp.cpp b/src/nvhttp.cpp
+index 4db8c6e..98e0bd6 100644
+--- a/src/nvhttp.cpp
++++ b/src/nvhttp.cpp
+@@ -8,6 +8,7 @@
+ // standard includes
+ #include <filesystem>
+ #include <format>
++#include <mutex>
+ #include <string>
+ #include <utility>
+ 
+@@ -30,6 +31,7 @@
+ #include "nvhttp.h"
+ #include "platform/common.h"
+ #include "process.h"
++#include "pulsar/control.h"
+ #include "rtsp.h"
+ #include "system_tray.h"
+ #include "utility.h"
+@@ -144,6 +146,74 @@ namespace nvhttp {
+   client_t client_root;
+   std::atomic<uint32_t> session_id_counter;
+ 
++  // Pulsar Seat: pairing state is shared by the HTTP thread and the seat pipe.
++  std::recursive_mutex pulsar_pair_mutex;
++  std::uint32_t pulsar_request_counter = 0;
++
++  /**
++   * @brief Pulsar Seat: send `tree` to the client whose `/pair` request is held, if any.
++   */
++  void pulsar_answer_held(pair_session_t &sess, pt::ptree &tree) {
++    auto &async_response = sess.async_insert_pin.response;
++    if (!(async_response.has_left() && async_response.left()) && !(async_response.has_right() && async_response.right())) {
++      return;
++    }
++    std::ostringstream data;
++    pt::write_xml(data, tree);
++    if (async_response.has_left() && async_response.left()) {
++      async_response.left()->write(data.str());
++    } else {
++      async_response.right()->write(data.str());
++    }
++    async_response = std::decay_t<decltype(async_response.left())>();
++  }
++
++  /**
++   * @brief Pulsar Seat: the `/pair` request of `sess` still waits for a PIN.
++   */
++  bool pulsar_held(pair_session_t &sess) {
++    auto &async_response = sess.async_insert_pin.response;
++    return (async_response.has_left() && async_response.left()) || (async_response.has_right() && async_response.right());
++  }
++
++  /**
++   * @brief Pulsar Seat: report the end of a pending request once (event + waiting `pair.submit`).
++   */
++  void pulsar_finish(pair_session_t &sess, std::string_view result, const std::string &uuid = {}) {
++    if (sess.pulsar_request_id == 0) {
++      return;
++    }
++    auto id = sess.pulsar_request_id;
++    sess.pulsar_request_id = 0;
++    if (sess.pulsar_done) {
++      auto done = std::move(sess.pulsar_done);
++      sess.pulsar_done = nullptr;
++      if (result == "paired"sv) {
++        done({"", "", uuid});
++      } else if (result == "wrong_pin"sv) {
++        done({"wrong_pin", "the PIN did not match", ""});
++      } else {
++        done({"no_pending_request", std::string(result), ""});
++      }
++    }
++    pulsar::on_pair_ended(id, result);
++  }
++
++  /**
++   * @brief Pulsar Seat: fail every pending request towards its client.
++   */
++  void pulsar_fail_all(std::string_view result, const std::string &status_msg) {
++    for (auto &[_, sess] : map_id_sess) {
++      pt::ptree tree;
++      tree.put("root.paired", 0);
++      tree.put("root.<xmlattr>.status_code", 400);
++      tree.put("root.<xmlattr>.status_message", status_msg);
++      pulsar_answer_held(sess, tree);
++      pulsar_finish(sess, result);
++    }
++    map_id_sess.clear();
++  }
++
+   using args_t = SimpleWeb::CaseInsensitiveMultimap;
+   using resp_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SunshineHTTPS>::Response>;
+   using req_https_t = std::shared_ptr<typename SimpleWeb::ServerBase<SunshineHTTPS>::Request>;
+@@ -327,6 +397,9 @@ namespace nvhttp {
+     }
+     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
+ 
++    // Pulsar Seat: remember the requested mode for `status` and `stream.started`.
++    pulsar::on_launch(launch_session->width, launch_session->height, launch_session->fps, launch_session->enable_hdr);
++
+     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
+     unsigned char raw_payload[8];
+     RAND_bytes(raw_payload, sizeof(raw_payload));
+@@ -348,6 +421,8 @@ namespace nvhttp {
+     tree.put("root.paired", 0);
+     tree.put("root.<xmlattr>.status_code", 400);
+     tree.put("root.<xmlattr>.status_message", status_msg);
++    // Pulsar Seat: a failure after the PIN was entered is a wrong PIN, before it the client gave up.
++    pulsar_finish(sess, sess.last_phase == PAIR_PHASE::NONE ? "client_gone"sv : "wrong_pin"sv);
+     remove_session(sess);  // Security measure, delete the session when something went wrong and force a re-pair
+   }
+ 
+@@ -489,8 +564,10 @@ namespace nvhttp {
+ 
+       // The client is now successfully paired and will be authorized to connect
+       add_authorized_client(client.name, std::move(client.cert));
++      pulsar_finish(sess, "paired"sv, client_root.named_devices.empty() ? std::string() : client_root.named_devices.back().uuid);
+     } else {
+       tree.put("root.paired", 0);
++      pulsar_finish(sess, "wrong_pin"sv);
+     }
+ 
+     remove_session(sess);
+@@ -573,9 +650,16 @@ namespace nvhttp {
+ 
+     auto uniqID {get_arg(args, "uniqueid")};
+ 
++    std::unique_lock pulsar_lg {pulsar_pair_mutex};
++
+     args_t::const_iterator it;
+     if (it = args.find("phrase"); it != std::end(args)) {
+       if (it->second == "getservercert"sv) {
++        if (pulsar::active()) {
++          // Pulsar Seat: one pending request at a time; a new one replaces the old one.
++          pulsar_fail_all("cancelled"sv, "Replaced by a newer pairing request");
++        }
++
+         pair_session_t sess;
+ 
+         sess.client.uniqueID = std::move(uniqID);
+@@ -599,6 +683,15 @@ namespace nvhttp {
+ #endif
+           ptr->second.async_insert_pin.response = std::move(response);
+ 
++          if (pulsar::active()) {
++            ptr->second.pulsar_request_id = ++pulsar_request_counter;
++            if (ptr->second.pulsar_request_id == 0) {
++              ptr->second.pulsar_request_id = ++pulsar_request_counter;
++            }
++            ptr->second.pulsar_created = std::chrono::steady_clock::now();
++            pulsar::on_pair_pending(ptr->second.pulsar_request_id, ptr->second.client.uniqueID, get_arg(args, "devicename", ""));
++          }
++
+           fg.disable();
+           return;
+         }
+@@ -633,6 +726,7 @@ namespace nvhttp {
+   }
+ 
+   bool pin(std::string pin, std::string name) {
++    std::unique_lock pulsar_lg {pulsar_pair_mutex};
+     pt::ptree tree;
+     if (map_id_sess.empty()) {
+       return false;
+@@ -1264,4 +1358,68 @@ namespace nvhttp {
+     }
+     return true;
+   }
++
++  bool pulsar_pair_pending() {
++    std::unique_lock lg {pulsar_pair_mutex};
++    for (auto &[_, sess] : map_id_sess) {
++      if (pulsar_held(sess)) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  void pulsar_pair_submit(std::optional<std::uint32_t> request_id, const std::string &pin, const std::string &name, std::function<void(pulsar_pair_result_t)> done) {
++    std::unique_lock lg {pulsar_pair_mutex};
++
++    auto it = std::find_if(map_id_sess.begin(), map_id_sess.end(), [&](auto &entry) {
++      auto &sess = entry.second;
++      return pulsar_held(sess) && (!request_id || sess.pulsar_request_id == *request_id);
++    });
++    if (it == map_id_sess.end()) {
++      done({"no_pending_request", "no pairing request is waiting", ""});
++      return;
++    }
++
++    auto uniq_id = it->first;
++    it->second.pulsar_done = std::move(done);
++    it->second.client.name = name;
++
++    // Take the held client response out first: getservercert() may drop the session.
++    auto held = std::move(it->second.async_insert_pin.response);
++    it->second.async_insert_pin.response = std::decay_t<decltype(held.left())>();
++
++    pt::ptree tree;
++    getservercert(it->second, tree, pin);
++
++    std::ostringstream data;
++    pt::write_xml(data, tree);
++    if (held.has_left() && held.left()) {
++      held.left()->write(data.str());
++    } else if (held.has_right() && held.right()) {
++      held.right()->write(data.str());
++    }
++    // On success the session stays; `pulsar_done` fires when the client's last step
++    // (clientpairingsecret) succeeds or fails, or when the request times out.
++    (void) uniq_id;
++  }
++
++  bool pulsar_pair_cancel(std::optional<std::uint32_t> request_id) {
++    std::unique_lock lg {pulsar_pair_mutex};
++    for (auto it = map_id_sess.begin(); it != map_id_sess.end(); ++it) {
++      auto &sess = it->second;
++      if (sess.pulsar_request_id == 0 || (request_id && sess.pulsar_request_id != *request_id)) {
++        continue;
++      }
++      pt::ptree tree;
++      tree.put("root.paired", 0);
++      tree.put("root.<xmlattr>.status_code", 400);
++      tree.put("root.<xmlattr>.status_message", "Pairing cancelled by the host");
++      pulsar_answer_held(sess, tree);
++      pulsar_finish(sess, "cancelled"sv);
++      map_id_sess.erase(it);
++      return true;
++    }
++    return false;
++  }
+ }  // namespace nvhttp
+diff --git a/src/nvhttp.h b/src/nvhttp.h
+index c24d018..f98251c 100644
+--- a/src/nvhttp.h
++++ b/src/nvhttp.h
+@@ -6,6 +6,10 @@
+ #pragma once
+ 
+ // standard includes
++#include <chrono>
++#include <cstdint>
++#include <functional>
++#include <optional>
+ #include <string>
+ 
+ // lib includes
+@@ -80,6 +84,15 @@ namespace nvhttp {
+     CLIENTPAIRINGSECRET  ///< Sunshine is in the client pairing secret phase
+   };
+ 
++  /**
++   * @brief Pulsar Seat: outcome of a `pair.submit` (empty code = paired).
++   */
++  struct pulsar_pair_result_t {
++    std::string code;
++    std::string detail;
++    std::string uuid;
++  };
++
+   struct pair_session_t {
+     struct {
+       std::string uniqueID = {};
+@@ -105,8 +118,41 @@ namespace nvhttp {
+      * @brief used as a security measure to prevent out of order calls
+      */
+     PAIR_PHASE last_phase = PAIR_PHASE::NONE;
++
++    /**
++     * @brief Pulsar Seat: id of this pending request on the seat pipe (0 = none).
++     */
++    std::uint32_t pulsar_request_id = 0;
++    /**
++     * @brief Pulsar Seat: when the request arrived (pairing timeout).
++     */
++    std::chrono::steady_clock::time_point pulsar_created = {};
++    /**
++     * @brief Pulsar Seat: completion of a `pair.submit` waiting for the client's last step.
++     */
++    std::function<void(pulsar_pair_result_t)> pulsar_done = {};
+   };
+ 
++  /**
++   * @brief Pulsar Seat: a `/pair` request waits for a PIN.
++   */
++  bool pulsar_pair_pending();
++
++  /**
++   * @brief Pulsar Seat: answer the pending request with a PIN and a client name.
++   * @param request_id Pending request id, or the pending request when empty.
++   * @param pin Four decimal digits.
++   * @param name Name stored for the client.
++   * @param done Called once with the outcome (from this or the HTTP thread).
++   */
++  void pulsar_pair_submit(std::optional<std::uint32_t> request_id, const std::string &pin, const std::string &name, std::function<void(pulsar_pair_result_t)> done);
++
++  /**
++   * @brief Pulsar Seat: fail the pending request towards the client.
++   * @return `false` if no request matched.
++   */
++  bool pulsar_pair_cancel(std::optional<std::uint32_t> request_id);
++
+   /**
+    * @brief removes the temporary pairing session
+    * @param sess
+diff --git a/src/process.cpp b/src/process.cpp
+index 95c7bda..dc870cc 100644
+--- a/src/process.cpp
++++ b/src/process.cpp
+@@ -748,6 +748,12 @@ namespace proc {
+     return std::nullopt;
+   }
+ 
++  std::size_t proc_t::replace_apps(proc_t &&other) {
++    _env = std::move(other._env);
++    _apps = std::move(other._apps);
++    return _apps.size();
++  }
++
+   void refresh(const std::string &file_name) {
+     auto proc_opt = proc::parse(file_name);
+ 
+diff --git a/src/process.h b/src/process.h
+index 0f2f5f5..e5756d7 100644
+--- a/src/process.h
++++ b/src/process.h
+@@ -97,6 +97,13 @@ namespace proc {
+     std::string get_last_run_app_name();
+     void terminate();
+ 
++    /**
++     * @brief Pulsar Seat: take the app list and environment of `other`.
++     * A running app keeps running; changed entries apply to the next launch.
++     * @return Number of apps now loaded.
++     */
++    std::size_t replace_apps(proc_t &&other);
++
+   private:
+     int _app_id;
+ 
+diff --git a/src/pulsar/control.cpp b/src/pulsar/control.cpp
+new file mode 100644
+index 0000000..a861fa4
+--- /dev/null
++++ b/src/pulsar/control.cpp
+@@ -0,0 +1,682 @@
++/**
++ * @file src/pulsar/control.cpp
++ * @brief Pulsar Seat: seat control pipe of a per-seat stream server.
++ *
++ * SPDX-License-Identifier: GPL-3.0-only
++ */
++// standard includes
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <format>
++#include <map>
++#include <mutex>
++#include <thread>
++
++// platform includes
++#ifdef _WIN32
++  #include <winsock2.h>
++  #include <windows.h>
++  #include <sddl.h>
++#endif
++
++// local includes
++#include "control.h"
++#include "src/config.h"
++#include "src/entry_handler.h"
++#include "src/logging.h"
++#include "src/nvhttp.h"
++#include "src/process.h"
++#include "src/rtsp.h"
++#include "src/video.h"
++
++using namespace std::literals;
++
++namespace pulsar {
++  config_t config;
++
++  namespace {
++    std::mutex state_mutex;
++    std::map<std::string, handler_t> handlers;
++    std::vector<std::string> caps {
++      "control_pipe",
++      "web_ui_off",
++      "apps_reload",
++      "pair_cancel",
++      "client_name",
++      "audio_state",
++      "session_close",
++      "graceful_shutdown",
++      "log_level",
++    };
++    std::string state = "starting";
++    std::string capture_error_code;
++    std::optional<nlohmann::json> last_video;
++    std::atomic_bool client_ready {false};
++
++    /// Writes one frame to the connected client (set by the pipe thread).
++    std::mutex write_mutex;
++    std::function<bool(const std::string &)> writer;
++
++    bool write_message(const nlohmann::json &msg) {
++      std::string text;
++      try {
++        text = msg.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
++      } catch (const std::exception &e) {
++        BOOST_LOG(error) << "pulsar: cannot serialise message: "sv << e.what();
++        return false;
++      }
++      if (text.size() > MAX_FRAME) {
++        BOOST_LOG(error) << "pulsar: message too large, dropped"sv;
++        return false;
++      }
++      std::lock_guard lg {write_mutex};
++      if (!writer) {
++        return false;
++      }
++      return writer(text);
++    }
++
++    nlohmann::json err(std::string_view code, std::string_view detail) {
++      return nlohmann::json {{"code", std::string(code)}, {"detail", std::string(detail)}};
++    }
++
++    nlohmann::json app_json() {
++      auto id = proc::proc.running();
++      if (id <= 0) {
++        return nullptr;
++      }
++      for (auto &app : proc::proc.get_apps()) {
++        if (app.id == std::to_string(id)) {
++          return nlohmann::json {{"id", app.id}, {"name", app.name}};
++        }
++      }
++      return nlohmann::json {{"id", std::to_string(id)}, {"name", proc::proc.get_last_run_app_name()}};
++    }
++
++    int level_from_word(std::string_view w) {
++      static const std::pair<std::string_view, int> levels[] {
++        {"verbose"sv, 0},
++        {"debug"sv, 1},
++        {"info"sv, 2},
++        {"warning"sv, 3},
++        {"error"sv, 4},
++        {"fatal"sv, 5},
++        {"none"sv, 6},
++      };
++      for (auto &[name, v] : levels) {
++        if (name == w) {
++          return v;
++        }
++      }
++      return -1;
++    }
++
++    nlohmann::json status_body() {
++      auto sessions = rtsp_stream::session_count();
++      std::lock_guard lg {state_mutex};
++      nlohmann::json s;
++      s["state"] = (state == "ready" && sessions > 0) ? "streaming"s : state;
++      s["stream_active"] = sessions > 0;
++      s["clients_connected"] = sessions;
++      s["app"] = app_json();
++      s["encoder"] = video::chosen_encoder_name();
++      s["video"] = (sessions > 0 && last_video) ? *last_video : nlohmann::json(nullptr);
++      s["pair_pending"] = nvhttp::pulsar_pair_pending();
++      s["capture_error"] = capture_error_code.empty() ? nlohmann::json(nullptr) : nlohmann::json(capture_error_code);
++      return s;
++    }
++
++    std::optional<std::uint32_t> opt_request_id(const nlohmann::json &body) {
++      if (body.contains("request_id") && body["request_id"].is_number_unsigned()) {
++        return body["request_id"].get<std::uint32_t>();
++      }
++      return std::nullopt;
++    }
++
++    void install_builtin_handlers() {
++      register_handler("status", [](const nlohmann::json &, responder_t) -> std::optional<nlohmann::json> {
++        return status_body();
++      });
++
++      register_handler("pair.submit", [](const nlohmann::json &body, responder_t respond) -> std::optional<nlohmann::json> {
++        if (!body.contains("pin") || !body["pin"].is_string() || !body.contains("name") || !body["name"].is_string()) {
++          throw error_t {"bad_request", "pin and name are required"};
++        }
++        auto pin = body["pin"].get<std::string>();
++        auto name = body["name"].get<std::string>();
++        if (pin.size() != 4 || !std::all_of(pin.begin(), pin.end(), [](char c) {
++              return c >= '0' && c <= '9';
++            })) {
++          throw error_t {"bad_request", "the PIN must be 4 digits"};
++        }
++        if (name.empty() || name.size() > 256) {
++          throw error_t {"bad_request", "name must be 1-64 characters"};
++        }
++        nvhttp::pulsar_pair_submit(opt_request_id(body), pin, name, [respond](nvhttp::pulsar_pair_result_t r) {
++          if (r.code.empty()) {
++            respond(true, nlohmann::json {{"uuid", r.uuid}});
++          } else {
++            respond(false, err(r.code, r.detail));
++          }
++        });
++        // Wipe the local copy of the PIN.
++        std::fill(pin.begin(), pin.end(), '\0');
++        return std::nullopt;
++      });
++
++      register_handler("pair.cancel", [](const nlohmann::json &body, responder_t) -> std::optional<nlohmann::json> {
++        if (!nvhttp::pulsar_pair_cancel(opt_request_id(body))) {
++          throw error_t {"no_pending_request", "no pairing request is waiting"};
++        }
++        return nlohmann::json::object();
++      });
++
++      register_handler("clients.list", [](const nlohmann::json &, responder_t) -> std::optional<nlohmann::json> {
++        nlohmann::json list = nlohmann::json::array();
++        for (auto &c : nvhttp::get_all_clients()) {
++          list.push_back({{"uuid", c.value("uuid", ""s)}, {"name", c.value("name", ""s)}});
++        }
++        return nlohmann::json {{"clients", list}};
++      });
++
++      register_handler("clients.unpair", [](const nlohmann::json &body, responder_t) -> std::optional<nlohmann::json> {
++        if (!body.contains("uuid") || !body["uuid"].is_string()) {
++          throw error_t {"bad_request", "uuid is required"};
++        }
++        if (!nvhttp::unpair_client(body["uuid"].get<std::string>())) {
++          throw error_t {"not_found", "no paired client with this uuid"};
++        }
++        return nlohmann::json::object();
++      });
++
++      register_handler("clients.unpairAll", [](const nlohmann::json &, responder_t) -> std::optional<nlohmann::json> {
++        nvhttp::erase_all_clients();
++        return nlohmann::json::object();
++      });
++
++      register_handler("apps.reload", [](const nlohmann::json &, responder_t) -> std::optional<nlohmann::json> {
++        auto parsed = proc::parse(::config::stream.file_apps);
++        if (!parsed) {
++          throw error_t {"bad_request", "the app list does not parse; the previous list stays active"};
++        }
++        auto count = proc::proc.replace_apps(std::move(*parsed));
++        BOOST_LOG(info) << "pulsar: app list reloaded ("sv << count << " apps)"sv;
++        return nlohmann::json {{"count", count}};
++      });
++
++      register_handler("session.close", [](const nlohmann::json &body, responder_t) -> std::optional<nlohmann::json> {
++        bool quit_app = body.value("quit_app", false);
++        rtsp_stream::terminate_sessions();
++        if (quit_app) {
++          proc::proc.terminate();
++        }
++        return nlohmann::json::object();
++      });
++
++      register_handler("server.shutdown", [](const nlohmann::json &body, responder_t respond) -> std::optional<nlohmann::json> {
++        auto grace = body.value("grace_ms", 5000u);
++        set_stopping();
++        respond(true, nlohmann::json::object());
++        std::thread([grace]() {
++          rtsp_stream::terminate_sessions();
++          std::this_thread::sleep_for(std::chrono::milliseconds(std::min(grace, 60000u) / 10));
++          lifetime::exit_sunshine(0, true);
++        }).detach();
++        return std::nullopt;
++      });
++
++      register_handler("log.level", [](const nlohmann::json &body, responder_t) -> std::optional<nlohmann::json> {
++        auto word = body.value("level", ""s);
++        auto level = level_from_word(word);
++        if (level < 0) {
++          throw error_t {"bad_request", "unknown log level"};
++        }
++        logging::set_min_log_level(level);
++        return nlohmann::json::object();
++      });
++    }
++
++    void dispatch(const std::string &text, bool &hello_done) {
++      nlohmann::json msg;
++      try {
++        msg = nlohmann::json::parse(text);
++      } catch (const std::exception &) {
++        BOOST_LOG(warning) << "pulsar: request is not JSON"sv;
++        return;
++      }
++      if (!msg.is_object() || !msg.contains("id") || !msg["id"].is_number_unsigned() || !msg.contains("type") || !msg["type"].is_string()) {
++        BOOST_LOG(warning) << "pulsar: malformed request"sv;
++        return;
++      }
++      auto id = msg["id"].get<std::uint32_t>();
++      auto type = msg["type"].get<std::string>();
++      nlohmann::json body = msg.contains("body") && msg["body"].is_object() ? msg["body"] : nlohmann::json::object();
++
++      auto answered = std::make_shared<std::atomic_bool>(false);
++      responder_t respond = [id, answered](bool ok, nlohmann::json payload) {
++        if (answered->exchange(true)) {
++          return;
++        }
++        nlohmann::json out {{"id", id}, {"ok", ok}};
++        out[ok ? "body" : "error"] = std::move(payload);
++        write_message(out);
++      };
++
++      if (type == "hello") {
++        auto protocol = body.value("protocol", 0u);
++        if (protocol != PROTOCOL) {
++          respond(false, err("unsupported_protocol", "this server speaks protocol 1"));
++          hello_done = false;
++          throw std::runtime_error("unsupported protocol");
++        }
++        hello_done = true;
++        client_ready = true;
++        respond(true, nlohmann::json {
++                        {"protocol", PROTOCOL},
++                        {"server_version", std::string(PROJECT_VERSION)},
++                        {"seat_id", config.seat_id},
++                        {"capabilities", capabilities()},
++                      });
++        return;
++      }
++      if (!hello_done) {
++        respond(false, err("bad_request", "hello must be the first request"));
++        return;
++      }
++
++      handler_t handler;
++      {
++        std::lock_guard lg {state_mutex};
++        auto it = handlers.find(type);
++        if (it != handlers.end()) {
++          handler = it->second;
++        }
++      }
++      if (!handler) {
++        respond(false, err("bad_request", "unknown request type"));
++        return;
++      }
++      try {
++        auto result = handler(body, respond);
++        if (result) {
++          respond(true, std::move(*result));
++        }
++      } catch (const error_t &e) {
++        respond(false, err(e.code, e.detail));
++      } catch (const std::exception &e) {
++        respond(false, err("internal", e.what()));
++      }
++    }
++
++    /// Watches the stream sessions for `stream.started` / `stream.ended`.
++    void stream_monitor(std::shared_ptr<std::atomic_bool> stop) {
++      int last = 0;
++      while (!*stop) {
++        std::this_thread::sleep_for(500ms);
++        int now = rtsp_stream::session_count();
++        if (last == 0 && now > 0) {
++          nlohmann::json video;
++          {
++            std::lock_guard lg {state_mutex};
++            video = last_video ? *last_video : nlohmann::json(nullptr);
++          }
++          emit("stream.started", {{"app", app_json()}, {"video", video}});
++          if (!::config::audio.stream) {
++            audio_state("disabled");
++          }
++        } else if (last > 0 && now == 0) {
++          emit("stream.ended", {{"reason", "client_disconnected"}});
++        }
++        last = now;
++      }
++    }
++
++#ifdef _WIN32
++    struct handle_t {
++      HANDLE h = nullptr;
++
++      handle_t() = default;
++
++      explicit handle_t(HANDLE v):
++          h(v) {
++      }
++
++      handle_t(const handle_t &) = delete;
++      handle_t &operator=(const handle_t &) = delete;
++
++      ~handle_t() {
++        if (h && h != INVALID_HANDLE_VALUE) {
++          CloseHandle(h);
++        }
++      }
++    };
++
++    /// True when the connected client runs as LocalSystem.
++    bool client_is_system(HANDLE pipe) {
++      if (!ImpersonateNamedPipeClient(pipe)) {
++        return false;
++      }
++      HANDLE token = nullptr;
++      bool ok = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
++      RevertToSelf();
++      if (!ok) {
++        return false;
++      }
++      handle_t token_guard {token};
++      alignas(8) std::uint8_t buf[256];
++      DWORD len = 0;
++      if (!GetTokenInformation(token, TokenUser, buf, sizeof(buf), &len)) {
++        return false;
++      }
++      auto user = reinterpret_cast<TOKEN_USER *>(buf);
++      return IsWellKnownSid(user->User.Sid, WinLocalSystemSid);
++    }
++
++    /// Waits for an overlapped operation or the stop event; false on stop or error.
++    bool wait_io(HANDLE pipe, OVERLAPPED &ov, HANDLE stop_event, DWORD &bytes) {
++      HANDLE waits[] {ov.hEvent, stop_event};
++      auto r = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
++      if (r != WAIT_OBJECT_0) {
++        CancelIoEx(pipe, &ov);
++        GetOverlappedResult(pipe, &ov, &bytes, TRUE);
++        return false;
++      }
++      return GetOverlappedResult(pipe, &ov, &bytes, FALSE);
++    }
++
++    bool read_exact(HANDLE pipe, HANDLE stop_event, std::uint8_t *dst, std::size_t len) {
++      while (len > 0) {
++        OVERLAPPED ov {};
++        handle_t ev {CreateEventW(nullptr, TRUE, FALSE, nullptr)};
++        ov.hEvent = ev.h;
++        DWORD got = 0;
++        if (!ReadFile(pipe, dst, (DWORD) std::min<std::size_t>(len, 65536), &got, &ov)) {
++          if (GetLastError() != ERROR_IO_PENDING || !wait_io(pipe, ov, stop_event, got)) {
++            return false;
++          }
++        } else if (!GetOverlappedResult(pipe, &ov, &got, TRUE)) {
++          return false;
++        }
++        if (got == 0) {
++          return false;
++        }
++        dst += got;
++        len -= got;
++      }
++      return true;
++    }
++
++    bool write_all(HANDLE pipe, const std::uint8_t *src, std::size_t len) {
++      while (len > 0) {
++        OVERLAPPED ov {};
++        handle_t ev {CreateEventW(nullptr, TRUE, FALSE, nullptr)};
++        ov.hEvent = ev.h;
++        DWORD put = 0;
++        if (!WriteFile(pipe, src, (DWORD) len, &put, &ov) && GetLastError() != ERROR_IO_PENDING) {
++          return false;
++        }
++        if (!GetOverlappedResult(pipe, &ov, &put, TRUE) || put == 0) {
++          return false;
++        }
++        src += put;
++        len -= put;
++      }
++      return true;
++    }
++
++    class pipe_server_t: public platf::deinit_t {
++    public:
++      bool open() {
++        auto name = L"\\\\.\\pipe\\PulsarSplit\\seat\\" + std::wstring(config.seat_id.begin(), config.seat_id.end()) + L"\\server";
++        PSECURITY_DESCRIPTOR sd = nullptr;
++        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;SY)", SDDL_REVISION_1, &sd, nullptr)) {
++          BOOST_LOG(error) << "pulsar: cannot build the pipe security descriptor"sv;
++          return false;
++        }
++        SECURITY_ATTRIBUTES sa {sizeof(sa), sd, FALSE};
++        pipe.h = CreateNamedPipeW(
++          name.c_str(),
++          PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED,
++          PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
++          1,
++          65536,
++          65536,
++          0,
++          &sa
++        );
++        LocalFree(sd);
++        if (pipe.h == INVALID_HANDLE_VALUE) {
++          pipe.h = nullptr;
++          BOOST_LOG(error) << "pulsar: cannot create the seat pipe (error "sv << GetLastError() << ')';
++          return false;
++        }
++        stop_event.h = CreateEventW(nullptr, TRUE, FALSE, nullptr);
++        stop_flag = std::make_shared<std::atomic_bool>(false);
++        thread = std::thread([this]() {
++          run();
++        });
++        monitor = std::thread(stream_monitor, stop_flag);
++        BOOST_LOG(info) << "pulsar: seat pipe ready for seat "sv << config.seat_id;
++        return true;
++      }
++
++      ~pipe_server_t() override {
++        *stop_flag = true;
++        if (stop_event.h) {
++          SetEvent(stop_event.h);
++        }
++        if (thread.joinable()) {
++          thread.join();
++        }
++        if (monitor.joinable()) {
++          monitor.join();
++        }
++        std::lock_guard lg {write_mutex};
++        writer = nullptr;
++      }
++
++    private:
++      void run() {
++        platf::set_thread_name("pulsar_pipe");
++        while (!*stop_flag) {
++          OVERLAPPED ov {};
++          handle_t ev {CreateEventW(nullptr, TRUE, FALSE, nullptr)};
++          ov.hEvent = ev.h;
++          DWORD dummy = 0;
++          if (!ConnectNamedPipe(pipe.h, &ov)) {
++            auto e = GetLastError();
++            if (e == ERROR_IO_PENDING) {
++              if (!wait_io(pipe.h, ov, stop_event.h, dummy)) {
++                break;
++              }
++            } else if (e != ERROR_PIPE_CONNECTED) {
++              BOOST_LOG(warning) << "pulsar: pipe connect failed (error "sv << e << ')';
++              std::this_thread::sleep_for(500ms);
++              continue;
++            }
++          }
++          if (!client_is_system(pipe.h)) {
++            BOOST_LOG(warning) << "pulsar: refused a seat-pipe client that is not SYSTEM"sv;
++            DisconnectNamedPipe(pipe.h);
++            continue;
++          }
++          {
++            std::lock_guard lg {write_mutex};
++            HANDLE p = pipe.h;
++            writer = [p](const std::string &text) {
++              std::uint32_t n = (std::uint32_t) text.size();
++              std::uint8_t len[4] {(std::uint8_t) n, (std::uint8_t) (n >> 8), (std::uint8_t) (n >> 16), (std::uint8_t) (n >> 24)};
++              return write_all(p, len, 4) && write_all(p, (const std::uint8_t *) text.data(), text.size());
++            };
++          }
++          serve();
++          client_ready = false;
++          {
++            std::lock_guard lg {write_mutex};
++            writer = nullptr;
++          }
++          DisconnectNamedPipe(pipe.h);
++        }
++      }
++
++      void serve() {
++        bool hello_done = false;
++        while (!*stop_flag) {
++          std::uint8_t len[4];
++          if (!read_exact(pipe.h, stop_event.h, len, 4)) {
++            return;
++          }
++          std::uint32_t n = len[0] | (len[1] << 8) | (len[2] << 16) | ((std::uint32_t) len[3] << 24);
++          if (n == 0 || n > MAX_FRAME) {
++            BOOST_LOG(warning) << "pulsar: frame size out of range, closing the pipe"sv;
++            return;
++          }
++          std::string text(n, '\0');
++          if (!read_exact(pipe.h, stop_event.h, (std::uint8_t *) text.data(), n)) {
++            return;
++          }
++          try {
++            dispatch(text, hello_done);
++          } catch (const std::exception &) {
++            return;
++          }
++          std::fill(text.begin(), text.end(), '\0');
++        }
++      }
++
++      handle_t pipe;
++      handle_t stop_event;
++      std::shared_ptr<std::atomic_bool> stop_flag;
++      std::thread thread;
++      std::thread monitor;
++    };
++#endif
++  }  // namespace
++
++  bool valid_seat_id(std::string_view id) {
++    if (id.size() != 36) {
++      return false;
++    }
++    for (std::size_t i = 0; i < id.size(); ++i) {
++      char c = id[i];
++      if (i == 8 || i == 13 || i == 18 || i == 23) {
++        if (c != '-') {
++          return false;
++        }
++      } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  bool active() {
++    return !config.seat_id.empty();
++  }
++
++  bool web_ui_enabled() {
++    return config.web_ui;
++  }
++
++  bool pipe_enabled() {
++    return active() && config.control_pipe.value_or(true);
++  }
++
++  void register_handler(const std::string &type, handler_t handler) {
++    std::lock_guard lg {state_mutex};
++    handlers[type] = std::move(handler);
++  }
++
++  void add_capability(const std::string &capability) {
++    std::lock_guard lg {state_mutex};
++    if (std::find(caps.begin(), caps.end(), capability) == caps.end()) {
++      caps.push_back(capability);
++    }
++  }
++
++  std::vector<std::string> capabilities() {
++    std::lock_guard lg {state_mutex};
++    return caps;
++  }
++
++  void emit(const std::string &event, nlohmann::json body) {
++    if (!client_ready) {
++      return;
++    }
++    write_message(nlohmann::json {{"event", event}, {"body", std::move(body)}});
++  }
++
++  bool connected() {
++    return client_ready;
++  }
++
++  std::unique_ptr<platf::deinit_t> start() {
++    if (!pipe_enabled()) {
++      return std::make_unique<platf::deinit_t>();
++    }
++    install_builtin_handlers();
++#ifdef _WIN32
++    auto server = std::make_unique<pipe_server_t>();
++    if (!server->open()) {
++      return nullptr;
++    }
++    return server;
++#else
++    BOOST_LOG(error) << "pulsar: the seat pipe is only available on Windows"sv;
++    return nullptr;
++#endif
++  }
++
++  void set_ready() {
++    std::lock_guard lg {state_mutex};
++    if (state == "starting") {
++      state = "ready";
++    }
++  }
++
++  void set_stopping() {
++    std::lock_guard lg {state_mutex};
++    state = "stopping";
++  }
++
++  void on_pair_pending(std::uint32_t request_id, const std::string &client_uniqueid, const std::string &device_name) {
++    auto now = std::chrono::system_clock::now();
++    auto secs = std::chrono::time_point_cast<std::chrono::seconds>(now);
++    emit("pair.pending", {
++                           {"request_id", request_id},
++                           {"client_uniqueid", client_uniqueid},
++                           {"device_name", device_name},
++                           {"received_at", std::format("{:%Y-%m-%dT%H:%M:%SZ}", secs)},
++                         });
++  }
++
++  void on_pair_ended(std::uint32_t request_id, std::string_view result) {
++    emit("pair.ended", {{"request_id", request_id}, {"result", std::string(result)}});
++  }
++
++  void on_launch(int width, int height, int fps, bool hdr) {
++    std::lock_guard lg {state_mutex};
++    last_video = nlohmann::json {{"width", width}, {"height", height}, {"fps", fps}, {"hdr", hdr}};
++  }
++
++  void audio_state(std::string_view s) {
++    emit("audio.state", {{"state", std::string(s)}});
++  }
++
++  void capture_error(std::string_view code) {
++    {
++      std::lock_guard lg {state_mutex};
++      if (capture_error_code == code) {
++        return;
++      }
++      capture_error_code = std::string(code);
++    }
++    emit("capture.error", {{"code", code.empty() ? nlohmann::json(nullptr) : nlohmann::json(std::string(code))}});
++  }
++
++  std::string last_capture_error() {
++    std::lock_guard lg {state_mutex};
++    return capture_error_code;
++  }
++}  // namespace pulsar
+diff --git a/src/pulsar/control.h b/src/pulsar/control.h
+new file mode 100644
+index 0000000..4e296a9
+--- /dev/null
++++ b/src/pulsar/control.h
+@@ -0,0 +1,106 @@
++/**
++ * @file src/pulsar/control.h
++ * @brief Pulsar Seat: seat control pipe of a per-seat stream server.
++ *
++ * SPDX-License-Identifier: GPL-3.0-only
++ *
++ * Part of the Pulsar Seat patch set for Sunshine (GPL-3.0). When the config file sets
++ * `pulsar_seat_id`, the server creates `\\.\pipe\PulsarSplit\seat\<seat-id>\server`
++ * (SYSTEM only, first instance, no remote clients) before it opens any network listener.
++ * The Pulsar Seat service is its only client. Messages are a 4-byte little-endian length
++ * followed by one UTF-8 JSON object (requests `{id, type, body}`, responses
++ * `{id, ok, body | error}`, events `{event, body}`). The browser web UI can be turned off
++ * with `pulsar_web_ui = disabled`; the Moonlight protocol listeners are unaffected.
++ */
++#pragma once
++
++// standard includes
++#include <cstdint>
++#include <functional>
++#include <memory>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++// lib includes
++#include <nlohmann/json.hpp>
++
++// local includes
++#include "src/platform/common.h"
++
++namespace pulsar {
++  /// Protocol version of the seat pipe.
++  constexpr std::uint32_t PROTOCOL = 1;
++  /// Largest frame in either direction.
++  constexpr std::size_t MAX_FRAME = 1024 * 1024;
++
++  struct config_t {
++    /// Lowercase GUID without braces; empty = not a Pulsar seat (upstream behaviour).
++    std::string seat_id;
++    /// `pulsar_web_ui`: false = the HTTPS config server on base+1 is never created.
++    bool web_ui = true;
++    /// `pulsar_control_pipe`: defaults to on when a seat id is set.
++    std::optional<bool> control_pipe;
++    /// `pulsar_pair_timeout` in seconds (10-600).
++    int pair_timeout = 120;
++  };
++
++  extern config_t config;
++
++  /// A Pulsar seat id is configured.
++  bool active();
++  /// The browser web UI may start.
++  bool web_ui_enabled();
++  /// The seat pipe is wanted.
++  bool pipe_enabled();
++  /// True when `id` is a lowercase GUID without braces.
++  bool valid_seat_id(std::string_view id);
++
++  /// Error answer of a request handler (spec codes: bad_request, not_found, busy, ...).
++  struct error_t {
++    std::string code;
++    std::string detail;
++  };
++
++  /// Sends the response of one request; may be called from any thread, once.
++  using responder_t = std::function<void(bool ok, nlohmann::json body_or_error)>;
++  /// A request handler. Synchronous handlers return the body (or throw `error_t`);
++  /// asynchronous ones call `respond` later and return `std::nullopt`.
++  using handler_t = std::function<std::optional<nlohmann::json>(const nlohmann::json &body, responder_t respond)>;
++
++  /// Registers (or replaces) the handler of a request type.
++  void register_handler(const std::string &type, handler_t handler);
++  /// Adds a capability string reported in the `hello` answer.
++  void add_capability(const std::string &capability);
++  /// Capabilities reported in the `hello` answer.
++  std::vector<std::string> capabilities();
++
++  /// Sends an event to the connected service (dropped while no client is connected).
++  void emit(const std::string &event, nlohmann::json body);
++  /// A client is connected and has completed `hello`.
++  bool connected();
++
++  /// Creates the pipe and its thread. Returns nullptr when the pipe is wanted but cannot be
++  /// created (the caller exits); returns an empty guard when the pipe is not wanted.
++  std::unique_ptr<platf::deinit_t> start();
++  /// The server finished starting (status `ready`).
++  void set_ready();
++  /// The server is shutting down (status `stopping`).
++  void set_stopping();
++
++  // ---- hooks called by the upstream code ----
++
++  /// A `/pair` request waits for a PIN.
++  void on_pair_pending(std::uint32_t request_id, const std::string &client_uniqueid, const std::string &device_name);
++  /// A pending pair request finished (`paired`, `wrong_pin`, `timeout`, `cancelled`, `client_gone`).
++  void on_pair_ended(std::uint32_t request_id, std::string_view result);
++  /// A client launched or resumed a stream with this mode.
++  void on_launch(int width, int height, int fps, bool hdr);
++  /// Audio capture state (`capturing`, `no_device`, `blocked_by_policy`, `disabled`).
++  void audio_state(std::string_view state);
++  /// Capture failed (`no_display`, `adapter_mismatch`, `producer_lost`) or recovered (empty).
++  void capture_error(std::string_view code);
++  /// Last capture error, empty when none.
++  std::string last_capture_error();
++}  // namespace pulsar
+diff --git a/src/video.cpp b/src/video.cpp
+index 00af66c..6f7db36 100644
+--- a/src/video.cpp
++++ b/src/video.cpp
+@@ -3177,4 +3177,9 @@ namespace video {
+     return platf::pix_fmt_e::unknown;
+   }
+ 
++  std::string chosen_encoder_name() {
++    auto encoder = chosen_encoder;
++    return encoder ? std::string(encoder->name) : std::string();
++  }
++
+ }  // namespace video
+diff --git a/src/video.h b/src/video.h
+index 8fa2585..0851dc2 100644
+--- a/src/video.h
++++ b/src/video.h
+@@ -364,6 +364,11 @@ namespace video {
+    */
+   int probe_encoders();
+ 
++  /**
++   * @brief Pulsar Seat: name of the encoder chosen by the last probe (empty before it).
++   */
++  std::string chosen_encoder_name();
++
+   // Several NTSC standard refresh rates are hardcoded here, because their
+   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could
+   // reduce 29.97 to 2997/100 but this would be slightly wrong. We also include
