@@ -407,6 +407,13 @@ pub trait PhysicalPadIo: Send {
 /// Writes output reports to a physical pad.
 pub trait PhysicalPadWriter: Send + Sync {
     fn write(&self, report: &[u8]) -> Result<(), String>;
+    /// Rumble for a pad without a usable output report (parity review 2026-11-17): the XUSB
+    /// interface of an Xbox pad on USB, or the HID PID force-feedback reports of a generic
+    /// pad (`seat_pads::ff`). `Err` = the pad has neither.
+    fn rumble_fallback(&self, strong: u16, weak: u16) -> Result<(), String> {
+        let _ = (strong, weak);
+        Err("no rumble path".into())
+    }
 }
 
 /// Feeds one physical input report into its virtual pad: unchanged when the wire kind is
@@ -590,7 +597,17 @@ impl FeedbackSink for LocalFeedbackRouter {
                     }
                     Some(bt::xbox_bt_output(s.strong, s.weak, s.lt, s.rt).to_vec())
                 }
-                PhysicalLayout::Hid { .. } => None,
+                PhysicalLayout::Hid { .. } => match f {
+                    // Xbox on USB (XUSB) and generic HID pads with force feedback (PID).
+                    Feedback::Rumble { strong, weak } => {
+                        drop(s);
+                        if let Err(e) = t.writer.rumble_fallback(strong, weak) {
+                            log::debug!("pad {pad}: rumble on the physical pad: {e}");
+                        }
+                        return;
+                    }
+                    _ => None,
+                },
             }
         };
         let Some(report) = report else { return };
@@ -761,7 +778,9 @@ impl LocalPadHub {
             let init = {
                 let mut st = lock(&target.state);
                 let mut c = st.seq;
-                let r = switch_pro::init_reports(p.bus == PadBus::Usb, &mut c, slot);
+                let mut r = switch_pro::init_reports(p.bus == PadBus::Usb, &mut c, slot);
+                // Factory / user stick calibration (SPI flash); replies come as 0x21.
+                r.extend(switch_pro::calibration_reads(&mut c));
                 st.seq = c;
                 r
             };
@@ -850,6 +869,8 @@ fn read_loop(
     unit_key: &str,
 ) {
     let mut wire_known = false;
+    // Switch Pro: the pad's own stick calibration once its SPI replies arrive.
+    let mut cal = switch_pro::StickCal::default();
     while !stop.load(Ordering::SeqCst) {
         let report = match io.read(READ_TIMEOUT_MS) {
             Ok(Some(r)) => r,
@@ -868,10 +889,18 @@ fn read_loop(
                 }
                 None
             }
-            Decoder::Switch => match switch_pro::parse_input(&report) {
-                Some(s) => Some(s),
-                None => continue,
-            },
+            Decoder::Switch => {
+                if let Some((addr, data)) = switch_pro::parse_spi_reply(&report) {
+                    if cal.apply_reply(addr, data) {
+                        log::info!("pad {pad}: Switch Pro stick calibration read (0x{addr:04X})");
+                    }
+                    continue;
+                }
+                match switch_pro::parse_input_cal(&report, Some(&cal)) {
+                    Some(s) => Some(s),
+                    None => continue,
+                }
+            }
             Decoder::Hid { profile, layout } => match io.hid_sample(&report) {
                 Some(sample) => Some(generic::map_sample(*profile, layout, &sample)),
                 None => continue,
@@ -1094,6 +1123,8 @@ mod tests {
         fail_open: std::sync::atomic::AtomicBool,
         /// Descriptor of a generic HID pad (None: not decodable).
         hid: Mutex<Option<HidLayout>>,
+        /// `rumble_fallback` calls (XUSB / HID PID path).
+        fallback: Mutex<Vec<(u16, u16)>>,
     }
 
     struct PhysIo(Arc<Phys>);
@@ -1131,6 +1162,10 @@ mod tests {
     impl PhysicalPadWriter for PhysWriter {
         fn write(&self, report: &[u8]) -> Result<(), String> {
             self.0.writes.lock().unwrap().push(report.to_vec());
+            Ok(())
+        }
+        fn rumble_fallback(&self, strong: u16, weak: u16) -> Result<(), String> {
+            self.0.fallback.lock().unwrap().push((strong, weak));
             Ok(())
         }
     }
@@ -1337,11 +1372,13 @@ mod tests {
         let sw = RoutedPad { vendor_id: 0x057E, product_id: 0x2009, ..ds5("hid;inst=SW") };
         let notes = r.hub.sync(&[seat(2, 4, vec![sw])]);
         assert!(matches!(&notes[..], [LocalPadNote::Attached { .. }]), "{notes:?}");
-        // USB init: four 0x80 commands, then four sub-commands.
+        // USB init: four 0x80 commands, four sub-commands, then two SPI calibration reads.
         let w = r.phys.writes.lock().unwrap().clone();
-        assert_eq!(w.len(), 8);
+        assert_eq!(w.len(), 10);
         assert_eq!(w[0], vec![0x80, 0x02]);
         assert_eq!((w[4][0], w[4][10], w[4][11]), (0x01, 0x03, 0x30));
+        assert_eq!((w[8][10], w[8][11], w[8][12]), (seat_pads::switch_pro::subcmd::SPI_READ, 0x3D, 0x60));
+        assert_eq!((w[9][10], w[9][11], w[9][12]), (seat_pads::switch_pro::subcmd::SPI_READ, 0x10, 0x80));
         let pad = PadId::new(&local_seat_pad_id(2), 0).unwrap();
         let mut rep = vec![0u8; 49];
         rep[0] = 0x30;
@@ -1380,7 +1417,9 @@ mod tests {
         fb.feedback(&pad, Feedback::TriggerRumble { left: 0, right: 0xFFFF });
         let w = r.phys.writes.lock().unwrap().clone();
         assert_eq!(w.last().unwrap(), &seat_pads::bt::xbox_bt_output(0xFFFF, 0, 0, 0xFFFF).to_vec());
-        // A generic USB HID pad: input yes, feedback none.
+        assert!(r.phys.fallback.lock().unwrap().is_empty(), "Bluetooth Xbox pads use their output report");
+        // A generic USB HID pad: no output report of its own; rumble goes to the fallback
+        // path (HID PID force feedback / XUSB, parity review 2026-11-17).
         r.hub.sync(&[]);
         let g = RoutedPad { vendor_id: 0x1234, product_id: 0x5678, ..ds5("hid;inst=GEN") };
         r.hub.sync(&[seat(3, 5, vec![g])]);
@@ -1388,6 +1427,7 @@ mod tests {
         let pad3 = PadId::new(&local_seat_pad_id(3), 0).unwrap();
         r.vigem.sink(&pad3).unwrap().feedback(&pad3, Feedback::Rumble { strong: 0xFFFF, weak: 0 });
         assert_eq!(r.phys.writes.lock().unwrap().len(), before);
+        assert_eq!(*r.phys.fallback.lock().unwrap(), vec![(0xFFFF, 0)]);
     }
 
     #[test]

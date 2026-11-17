@@ -328,8 +328,11 @@ Cost, and how to pay it:
   - **Done on the service side (2026-11-17, additive, `seat_pads::media`):** every pad
     channel also has the section `<base>_Media` (131072 bytes, same DACL as `_In` /
     `_Out`) and the auto-reset event `<base>_MediaEvt` (set after each out write).
-    `pad.attach` carries `media: true` when the pad has controller audio (DualSense /
-    Edge); absent = false. Header (little-endian): magic `PPMD` at 0, version 2 at 4,
+    `pad.attach` carries `media: true` only when the virtual pad really has the controller
+    audio endpoints (DualSense / Edge on usbip-win2 **and** the audio interfaces were
+    exposed: `pad_audio` / console session; parity review 2026-11-17). Absent = false:
+    the host must then not open the client's controller microphone; the service reads
+    nothing from the in ring of such a pad. Header (little-endian): magic `PPMD` at 0, version 2 at 4,
     header size 64 at 6, rate 48000 at 8, out channels 4 at 12, in channels 2 at 14; out
     ring: capacity 65536 at 16, write counter at 20, read counter at 24, dropped blocks at
     28; in ring: capacity 32768 at 32, write at 36, read at 40, dropped at 44; flags at 48

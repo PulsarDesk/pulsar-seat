@@ -245,6 +245,19 @@ impl AccountOps for WinAccountOps {
         net("NetUserSetInfo(1003)", unsafe { NetUserSetInfo(ptr::null(), n.as_ptr(), 1003, (&info as *const USER_INFO_1003).cast(), &mut parm) })
     }
 
+    fn set_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
+        let n = wide(name);
+        let mut flags = UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_DONT_EXPIRE_PASSWD | UF_PASSWD_CANT_CHANGE;
+        if !enabled {
+            flags |= UF_ACCOUNTDISABLE;
+        }
+        let info = USER_INFO_1008 { usri1008_flags: flags };
+        let mut parm = 0u32;
+        // SAFETY: level-1008 struct.
+        net("NetUserSetInfo(1008)", unsafe { NetUserSetInfo(ptr::null(), n.as_ptr(), 1008, (&info as *const USER_INFO_1008).cast(), &mut parm) })
+    }
+
     fn set_flags(&self, name: &str) -> Result<(), String> {
         let n = wide(name);
         // Without UF_ACCOUNTDISABLE / UF_LOCKOUT: enabled.
@@ -463,14 +476,19 @@ pub fn ensure_kiosk(seat: SeatNumber) -> Result<HostAccount, String> {
     crate::host_account::ensure_kiosk(&WinAccountOps, seat)
 }
 
-/// [`crate::host_account::prune_kiosk`] with the real system.
-pub fn prune_kiosk(keep: &[SeatNumber]) -> Vec<String> {
-    crate::host_account::prune_kiosk(&WinAccountOps, keep)
+/// [`crate::host_account::disable_unused_kiosk`] with the real system (service start).
+pub fn disable_unused_kiosk(keep: &[SeatNumber]) -> Vec<String> {
+    crate::host_account::disable_unused_kiosk(&WinAccountOps, keep)
+}
+
+/// [`crate::host_account::remove_kiosk_user`] with the real system (manager request).
+pub fn remove_kiosk_user(seat: SeatNumber, in_use: bool) -> Result<Vec<String>, String> {
+    crate::host_account::remove_kiosk_user(&WinAccountOps, seat, in_use)
 }
 
 /// [`crate::host_account::remove_all`] with the real system (uninstall).
-pub fn remove() -> Vec<String> {
-    crate::host_account::remove_all(&WinAccountOps)
+pub fn remove(remove_user_data: bool) -> Vec<String> {
+    crate::host_account::remove_all(&WinAccountOps, remove_user_data)
 }
 
 /// A host account's password from the LSA private data `secret`.

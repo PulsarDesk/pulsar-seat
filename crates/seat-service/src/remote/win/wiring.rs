@@ -179,6 +179,11 @@ impl IsolationPort for WinIsolation {
         }
         let sys = seat_shim_core::win::WinShimSystem;
         let names: Vec<String> = targets.iter().map(|t| t.exe_name.to_lowercase()).collect();
+        // Opt-in: listing the game-input service as a target turns its focus filter on
+        // (`seat_shim_core::decide::GAME_INPUT_SERVICE`, parity review 2026-11-17).
+        let game_input = names.iter().any(|n| n == seat_shim_core::decide::GAME_INPUT_SERVICE);
+        sys.reg_write(seat_shim_core::REG_SHIM, seat_shim_core::values::GAME_INPUT_FOCUS, &RegValue::Dword(u32::from(game_input)))
+            .map_err(shim_err)?;
         sys.reg_write(seat_shim_core::REG_SHIM, PENDING_TARGETS, &RegValue::MultiSz(names)).map_err(shim_err)?;
         let ro = NoJournal;
         let installed = AppHelpInstaller { sys: &sys, log: &ro, clock: &clock_text }.status().map_err(shim_err)?.installed;

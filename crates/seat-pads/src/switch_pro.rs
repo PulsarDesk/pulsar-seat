@@ -11,10 +11,15 @@
 //!   amplitude). We use fixed frequencies (high 320 Hz, low 160 Hz, the neutral values) and
 //!   scale only the amplitudes.
 //!
+//! - Stick calibration (parity review 2026-11-17): at open the pad is asked for its SPI
+//!   flash calibration (sub-command 0x10: factory sticks at 0x603D, user sticks at 0x8010);
+//!   the replies (report 0x21) set the centre and range of each axis ([`StickCal`]). Until
+//!   they arrive, and when a block is blank, centre 2048 and ±1600 are used.
+//!
 //! HYPOTHESIS (untested on hardware): the init sequence timing (we write it once at open,
-//! without waiting for each reply), the stick centre / range (factory calibration is not
-//! read; centre 2048, ±1600 assumed), the amplitude encoding (linear in the encoded value,
-//! capped at the documented safe maximum) and the IMU axis order.
+//! without waiting for each reply), the calibration block layout (public protocol notes),
+//! the amplitude encoding (linear in the encoded value, capped at the documented safe
+//! maximum) and the IMU axis order.
 
 use crate::types::{buttons as b, PadState};
 
@@ -29,6 +34,7 @@ pub const MAX_AMP: u8 = 0xC8;
 /// Sub-commands used at open.
 pub mod subcmd {
     pub const SET_REPORT_MODE: u8 = 0x03;
+    pub const SPI_READ: u8 = 0x10;
     pub const SET_PLAYER_LIGHTS: u8 = 0x30;
     pub const ENABLE_IMU: u8 = 0x40;
     pub const ENABLE_VIBRATION: u8 = 0x48;
@@ -107,9 +113,141 @@ pub fn init_reports(usb: bool, counter: &mut u8, slot: u8) -> Vec<Vec<u8>> {
     out
 }
 
+/// SPI address of the factory stick calibration (left 9 bytes, right 9 bytes).
+pub const SPI_FACTORY_STICKS: u32 = 0x603D;
+/// SPI address of the user stick calibration (left: magic `B2 A1` + 9 bytes, right: same).
+pub const SPI_USER_STICKS: u32 = 0x8010;
+
+/// One axis: centre and the reach below / above it (12-bit units).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AxisCal {
+    pub center: u16,
+    pub below: u16,
+    pub above: u16,
+}
+
+impl Default for AxisCal {
+    fn default() -> Self {
+        Self { center: 2048, below: 1600, above: 1600 }
+    }
+}
+
+impl AxisCal {
+    /// 12-bit value -> signed 16-bit.
+    pub fn scale(&self, v: u16) -> i16 {
+        let d = i32::from(v) - i32::from(self.center);
+        let out = if d >= 0 { d * 32767 / i32::from(self.above.max(1)) } else { d * 32768 / i32::from(self.below.max(1)) };
+        out.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+    }
+}
+
+/// Both sticks' calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StickCal {
+    pub lx: AxisCal,
+    pub ly: AxisCal,
+    pub rx: AxisCal,
+    pub ry: AxisCal,
+}
+
+/// Six packed 12-bit values from 9 bytes.
+fn unpack6(d: &[u8]) -> [u16; 6] {
+    let mut out = [0u16; 6];
+    for i in 0..3 {
+        let (a, b) = unpack_stick(&d[i * 3..i * 3 + 3]);
+        out[i * 2] = a;
+        out[i * 2 + 1] = b;
+    }
+    out
+}
+
+/// A calibration block that is all 0xFF (never written) or too small is ignored.
+fn usable(d: &[u8]) -> bool {
+    d.len() >= 9 && !d[..9].iter().all(|&b| b == 0xFF)
+}
+
+/// Left stick block: x / y above centre, x / y centre, x / y below centre.
+pub fn left_cal(d: &[u8]) -> Option<(AxisCal, AxisCal)> {
+    if !usable(d) {
+        return None;
+    }
+    let v = unpack6(d);
+    Some((AxisCal { above: v[0], center: v[2], below: v[4] }, AxisCal { above: v[1], center: v[3], below: v[5] }))
+}
+
+/// Right stick block: x / y centre, x / y below centre, x / y above centre.
+pub fn right_cal(d: &[u8]) -> Option<(AxisCal, AxisCal)> {
+    if !usable(d) {
+        return None;
+    }
+    let v = unpack6(d);
+    Some((AxisCal { center: v[0], below: v[2], above: v[4] }, AxisCal { center: v[1], below: v[3], above: v[5] }))
+}
+
+/// Output report 0x01 with sub-command 0x10: read `len` bytes of SPI flash at `addr`.
+pub fn spi_read_report(counter: u8, addr: u32, len: u8) -> Vec<u8> {
+    let mut args = addr.to_le_bytes().to_vec();
+    args.push(len);
+    subcommand_report(counter, subcmd::SPI_READ, &args)
+}
+
+/// The calibration reads sent after the init reports, in order.
+pub fn calibration_reads(counter: &mut u8) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for (addr, len) in [(SPI_FACTORY_STICKS, 18u8), (SPI_USER_STICKS, 22u8)] {
+        out.push(spi_read_report(*counter, addr, len));
+        *counter = counter.wrapping_add(1) & 0x0F;
+    }
+    out
+}
+
+/// `(address, data)` of an SPI read reply (report 0x21, ACK with data, sub-command 0x10).
+pub fn parse_spi_reply(r: &[u8]) -> Option<(u32, &[u8])> {
+    if r.first() != Some(&0x21) || r.len() < 20 || r[13] & 0x80 == 0 || r[14] != subcmd::SPI_READ {
+        return None;
+    }
+    let addr = u32::from_le_bytes(r[15..19].try_into().ok()?);
+    let len = usize::from(r[19]);
+    Some((addr, r.get(20..20 + len)?))
+}
+
+impl StickCal {
+    /// Applies an SPI read reply; `true` when it carried calibration. User calibration
+    /// (magic `B2 A1`) wins over the factory one.
+    pub fn apply_reply(&mut self, addr: u32, data: &[u8]) -> bool {
+        match addr {
+            SPI_FACTORY_STICKS => {
+                let mut any = false;
+                if let Some((x, y)) = left_cal(data) {
+                    (self.lx, self.ly) = (x, y);
+                    any = true;
+                }
+                if let Some((x, y)) = data.get(9..).and_then(right_cal) {
+                    (self.rx, self.ry) = (x, y);
+                    any = true;
+                }
+                any
+            }
+            SPI_USER_STICKS => {
+                let mut any = false;
+                if data.get(0..2) == Some(&[0xB2, 0xA1]) && let Some((x, y)) = data.get(2..).and_then(left_cal) {
+                    (self.lx, self.ly) = (x, y);
+                    any = true;
+                }
+                if data.get(11..13) == Some(&[0xB2, 0xA1]) && let Some((x, y)) = data.get(13..).and_then(right_cal) {
+                    (self.rx, self.ry) = (x, y);
+                    any = true;
+                }
+                any
+            }
+            _ => false,
+        }
+    }
+}
+
 /// 12-bit stick value -> signed 16-bit (centre 2048, ±1600 assumed).
 fn stick12(v: u16) -> i16 {
-    ((i32::from(v) - 2048) * 32767 / 1600).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+    AxisCal::default().scale(v)
 }
 
 fn unpack_stick(d: &[u8]) -> (u16, u16) {
@@ -127,6 +265,11 @@ fn get_i16(r: &[u8], at: usize) -> i16 {
 /// IMU sample, accel scaled from 4096 / g to 8192 / g, gyro from 2000 dps full scale to the
 /// pad state's calibration (HYPOTHESIS: axis order).
 pub fn parse_full(r: &[u8]) -> Option<PadState> {
+    parse_full_cal(r, None)
+}
+
+/// [`parse_full`] with the pad's own stick calibration.
+pub fn parse_full_cal(r: &[u8], cal: Option<&StickCal>) -> Option<PadState> {
     if r.len() < 49 || r[0] != 0x30 {
         return None;
     }
@@ -156,12 +299,16 @@ pub fn parse_full(r: &[u8]) -> Option<PadState> {
     }
     let (lx, ly) = unpack_stick(&r[6..9]);
     let (rx, ry) = unpack_stick(&r[9..12]);
+    let (lxs, lys, rxs, rys) = match cal {
+        Some(c) => (c.lx.scale(lx), c.ly.scale(ly), c.rx.scale(rx), c.ry.scale(ry)),
+        None => (stick12(lx), stick12(ly), stick12(rx), stick12(ry)),
+    };
     let mut s = PadState {
         buttons,
-        lx: stick12(lx),
-        ly: stick12(ly),
-        rx: stick12(rx),
-        ry: stick12(ry),
+        lx: lxs,
+        ly: lys,
+        rx: rxs,
+        ry: rys,
         lt: if left & 0x80 != 0 { 65535 } else { 0 },
         rt: if right & 0x80 != 0 { 65535 } else { 0 },
         ..PadState::neutral()
@@ -229,8 +376,13 @@ pub fn parse_simple(r: &[u8]) -> Option<PadState> {
 
 /// Either input report -> pad state; `None` for replies (0x21, 0x81) and other reports.
 pub fn parse_input(r: &[u8]) -> Option<PadState> {
+    parse_input_cal(r, None)
+}
+
+/// [`parse_input`] with the pad's own stick calibration (full reports only).
+pub fn parse_input_cal(r: &[u8], cal: Option<&StickCal>) -> Option<PadState> {
     match r.first() {
-        Some(0x30) => parse_full(r),
+        Some(0x30) => parse_full_cal(r, cal),
         Some(0x3F) => parse_simple(r),
         _ => None,
     }
@@ -311,5 +463,43 @@ mod tests {
         assert_eq!((s.lx, s.ly, s.rx, s.ry), (32767, 32767, 0, 0));
         assert_eq!(s.lt, 65535);
         assert!(is_switch_pro(0x057E, 0x2009));
+    }
+
+    #[test]
+    fn spi_calibration_reads_and_replies() {
+        let mut c = 3u8;
+        let reads = calibration_reads(&mut c);
+        assert_eq!(c, 5);
+        assert_eq!(&reads[0][10..16], &[subcmd::SPI_READ, 0x3D, 0x60, 0, 0, 18]);
+        assert_eq!(&reads[1][10..16], &[subcmd::SPI_READ, 0x10, 0x80, 0, 0, 22]);
+        // Factory block: left above (1500, 1400), centre (2000, 2100), below (1300, 1200);
+        // right centre (2050, 2040), below (1450, 1460), above (1550, 1560).
+        let pack = |a: u16, b: u16| [(a & 0xFF) as u8, ((a >> 8) as u8 & 0x0F) | ((b & 0x0F) << 4) as u8, (b >> 4) as u8];
+        let mut data = Vec::new();
+        for (a, b) in [(1500, 1400), (2000, 2100), (1300, 1200), (2050, 2040), (1450, 1460), (1550, 1560)] {
+            data.extend_from_slice(&pack(a, b));
+        }
+        let mut reply = vec![0u8; 20];
+        reply[0] = 0x21;
+        reply[13] = 0x90;
+        reply[14] = subcmd::SPI_READ;
+        reply[15..19].copy_from_slice(&SPI_FACTORY_STICKS.to_le_bytes());
+        reply[19] = 18;
+        reply.extend_from_slice(&data);
+        let (addr, d) = parse_spi_reply(&reply).unwrap();
+        assert_eq!(addr, SPI_FACTORY_STICKS);
+        let mut cal = StickCal::default();
+        assert!(cal.apply_reply(addr, d));
+        assert_eq!(cal.lx, AxisCal { center: 2000, below: 1300, above: 1500 });
+        assert_eq!(cal.ry, AxisCal { center: 2040, below: 1460, above: 1560 });
+        assert_eq!(cal.lx.scale(2000), 0);
+        assert_eq!(cal.lx.scale(3500), i16::MAX);
+        assert_eq!(cal.lx.scale(700), i16::MIN);
+        // A blank user block (all 0xFF) changes nothing.
+        let mut blank = cal;
+        assert!(!blank.apply_reply(SPI_USER_STICKS, &[0xFF; 22]));
+        assert_eq!(blank, cal);
+        // Not a reply.
+        assert!(parse_spi_reply(&[0x30; 64]).is_none());
     }
 }

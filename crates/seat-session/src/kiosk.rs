@@ -38,6 +38,13 @@ pub struct KioskPlan {
     /// cannot be read). Empty = unknown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub monitors: Vec<Rect>,
+    /// The seat's physical outputs when its frames come from our IddCx monitors
+    /// (`pulsar_idd` without a session display, parity review 2026-11-17): the shell then
+    /// presents each virtual monitor (connector = output index) on its target, HDR frames
+    /// included (`seat_display::win::idd::pump`). `None` = the seat's monitors are in the
+    /// console desktop as usual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idd_outputs: Option<seat_core::backend::display::SeatOutputs>,
 }
 
 /// The seat runs as a kiosk shell seat: it has a shell config, and seat 1 only when it is
@@ -67,6 +74,7 @@ pub fn plan_for(seat: SeatNumber, config: &SeatConfig, settings: &GlobalSettings
         idle_reset_minutes: k.idle_reset_minutes.min(1440),
         seat1_desktop: settings.kiosk.seat1_desktop,
         monitors,
+        idd_outputs: None,
     })
 }
 

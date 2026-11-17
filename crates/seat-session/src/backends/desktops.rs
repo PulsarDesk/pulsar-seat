@@ -187,6 +187,9 @@ pub struct DesktopsBackend {
     /// Seats whose own user could not be logged on at their last start (console user
     /// instead; probe note `kiosk_account_fallback`).
     fallback: Mutex<std::collections::BTreeSet<SeatNumber>>,
+    /// Seats 2+ whose kiosk shell or bare kiosk app runs as the console user at their last
+    /// start (`accounts = shared`, bare app, fallback): probe note `no_per_user_isolation`.
+    console_user: Mutex<std::collections::BTreeSet<SeatNumber>>,
 }
 
 impl DesktopsBackend {
@@ -198,6 +201,23 @@ impl DesktopsBackend {
             seat_op: Mutex::new(()),
             logons: Mutex::new(HashMap::new()),
             fallback: Mutex::new(Default::default()),
+            console_user: Mutex::new(Default::default()),
+        }
+    }
+
+    fn console_user_seats(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<SeatNumber>> {
+        self.console_user.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Records whether seat `seat` (2+) runs as the console user.
+    fn note_console_user(&self, seat: SeatNumber, as_console: bool) {
+        if seat.is_console() {
+            return;
+        }
+        if as_console {
+            self.console_user_seats().insert(seat);
+        } else {
+            self.console_user_seats().remove(&seat);
         }
     }
 
@@ -226,6 +246,7 @@ impl DesktopsBackend {
                         log::info!("seat {}: kiosk shell runs as {}", req.seat, logon.label());
                         self.logons().insert(req.seat, logon);
                         self.fallbacks().remove(&req.seat);
+                        self.note_console_user(req.seat, false);
                         return Ok(p);
                     }
                     Err(e) => log::warn!("seat {}: kiosk shell as {} failed, the console user is used: {e}", req.seat, identity.label()),
@@ -234,7 +255,9 @@ impl DesktopsBackend {
             }
             self.fallbacks().insert(req.seat);
         }
-        Ok(self.d.launcher.launch(req.seat, spec)?)
+        let p = self.d.launcher.launch(req.seat, spec)?;
+        self.note_console_user(req.seat, true);
+        Ok(p)
     }
 
     fn seat_op(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -320,10 +343,13 @@ impl SessionBackend for DesktopsBackend {
 
     fn probe(&self) -> BackendResult<HostProbe> {
         let e = self.d.edition.edition()?;
-        // With seat logons wired, kiosk seats 2+ run as their own users (unless the config
-        // says `shared`, which the manager shows from the config itself).
-        let mut notes = vec!["input_not_isolated".to_string()];
-        if self.opts.logons.is_none() {
+        // Kiosk seats share the console's window station and desktop whatever user they
+        // run as: input, screen, clipboard and windows are not a security boundary between
+        // seats (parity review 2026-11-17), so this note is always there.
+        let mut notes = vec!["input_not_isolated".to_string(), "kiosk_users_share_desktop".to_string()];
+        // Seats 2+ that run as the console user: no logons wired, `accounts = shared`, a bare
+        // kiosk app or a logon fallback at their last start.
+        if self.opts.logons.is_none() || !self.console_user_seats().is_empty() {
             notes.insert(0, "no_per_user_isolation".to_string());
         }
         if self.opts.mode == DesktopMode::PerSeat {
@@ -377,8 +403,10 @@ impl SessionBackend for DesktopsBackend {
             if self.alive(req.seat).is_some() {
                 return Ok(StartStep::Started(console));
             }
-            let plan = kiosk::plan_for(req.seat, req.config, req.settings, self.d.geometry_of(req.seat))
+            let mut plan = kiosk::plan_for(req.seat, req.config, req.settings, self.d.geometry_of(req.seat))
                 .ok_or_else(|| err(ErrorKind::Policy, reason::KIOSK_APP_MISSING, "no kiosk shell config"))?;
+            // Frames from our IddCx monitors (pulsar_idd): the shell presents them.
+            plan.idd_outputs = req.idd_outputs.clone();
             let dir = kiosk::install_dir_or_exe(&self.opts.install_dir);
             let log = self.opts.log_dir.as_ref().map(|d| kiosk::shell_log_path(d, req.seat));
             if let Some(l) = &log {
@@ -402,6 +430,8 @@ impl SessionBackend for DesktopsBackend {
         let placement = self.d.geometry_of(req.seat).first().copied();
         let spec = kiosk_spec(app, console.session_id, &desktop, placement);
         let p = self.d.launcher.launch(req.seat, &spec)?;
+        // A bare kiosk app always runs as the console user.
+        self.note_console_user(req.seat, true);
         log::info!("seat {}: kiosk app started (pid {}) on {desktop}", req.seat, p.pid);
         self.running().insert(req.seat, Running { session_id: console.session_id, p, shell: false, sink: false });
         Ok(StartStep::Started(console))

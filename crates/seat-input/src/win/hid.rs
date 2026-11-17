@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{
     HIDP_BUTTON_CAPS, HIDP_CAPS, HIDP_LINK_COLLECTION_NODE, HIDP_STATUS_SUCCESS, HIDP_VALUE_CAPS, HidD_FreePreparsedData,
     HidD_GetPreparsedData, HidP_GetButtonCaps, HidP_GetCaps, HidP_GetLinkCollectionNodes, HidP_GetSpecificValueCaps,
-    HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_Input, PHIDP_PREPARSED_DATA,
+    HidP_GetUsageValue, HidP_GetUsages, HidP_GetValueCaps, HidP_InitializeReportForID, HidP_Input, HidP_Output,
+    HidP_SetUsageValue, HidP_SetUsages, PHIDP_PREPARSED_DATA,
 };
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, ERROR_SHARING_VIOLATION, GENERIC_READ,
@@ -219,6 +220,105 @@ impl HidDevice {
         // SAFETY: report buffer of its length; out value.
         let st = unsafe { HidP_GetUsageValue(HidP_Input, page, link, usage, &mut v, self.ptr(), report.as_ptr(), report.len() as u32) };
         (st == HIDP_STATUS_SUCCESS).then_some(v)
+    }
+
+    /// Output report id and logical maximum of a PID (page 0x0F) value usage.
+    fn pid_value(&self, usage: u16) -> Option<(u8, i32)> {
+        let mut caps = vec![HIDP_VALUE_CAPS::default(); 128];
+        let mut n = caps.len() as u16;
+        // SAFETY: array of `n` caps.
+        if unsafe { HidP_GetValueCaps(HidP_Output, caps.as_mut_ptr(), &mut n, self.ptr()) } != HIDP_STATUS_SUCCESS {
+            return None;
+        }
+        caps.iter().take(usize::from(n)).find_map(|c| {
+            // SAFETY: the union member is chosen by `IsRange`, as documented.
+            let (lo, hi) = unsafe {
+                if c.IsRange { (c.Anonymous.Range.UsageMin, c.Anonymous.Range.UsageMax) } else { (c.Anonymous.NotRange.Usage, c.Anonymous.NotRange.Usage) }
+            };
+            (c.UsagePage == seat_pads::ff::pid::PAGE && (lo..=hi).contains(&usage)).then_some((c.ReportID, c.LogicalMax))
+        })
+    }
+
+    /// Output report id of a PID (page 0x0F) selector / button usage.
+    fn pid_button(&self, usage: u16) -> Option<u8> {
+        let mut caps = vec![HIDP_BUTTON_CAPS::default(); 128];
+        let mut n = caps.len() as u16;
+        // SAFETY: array of `n` caps.
+        if unsafe { HidP_GetButtonCaps(HidP_Output, caps.as_mut_ptr(), &mut n, self.ptr()) } != HIDP_STATUS_SUCCESS {
+            return None;
+        }
+        caps.iter().take(usize::from(n)).find_map(|c| {
+            // SAFETY: the union member is chosen by `IsRange`, as documented.
+            let (lo, hi) = unsafe {
+                if c.IsRange { (c.Anonymous.Range.UsageMin, c.Anonymous.Range.UsageMax) } else { (c.Anonymous.NotRange.Usage, c.Anonymous.NotRange.Usage) }
+            };
+            (c.UsagePage == seat_pads::ff::pid::PAGE && (lo..=hi).contains(&usage)).then_some(c.ReportID)
+        })
+    }
+
+    /// The collection has HID PID force feedback (a periodic magnitude and an effect
+    /// operation it can be started with).
+    pub fn has_pid(&self) -> bool {
+        use seat_pads::ff::pid;
+        self.output_len > 0 && self.pid_value(pid::MAGNITUDE).is_some() && self.pid_button(pid::OP_EFFECT_START).is_some()
+    }
+
+    /// Output reports for one rumble command on a PID device (`seat_pads::ff`): enable
+    /// actuators (first time), set effect (sine, block 1, infinite), set periodic
+    /// (magnitude, 20 ms), effect operation (start / stop). Only usages the descriptor
+    /// declares are written. HYPOTHESIS: never run on a PID device.
+    pub fn pid_rumble_reports(&self, strong: u16, weak: u16, first: bool) -> Vec<Vec<u8>> {
+        use seat_pads::ff::{pid, pid_magnitude};
+        let len = usize::from(self.output_len);
+        let new_report = |id: u8| -> Option<Vec<u8>> {
+            let mut r = vec![0u8; len];
+            // SAFETY: buffer of the collection's output report length.
+            let st = unsafe { HidP_InitializeReportForID(HidP_Output, id, self.ptr(), r.as_mut_ptr(), len as u32) };
+            (st == HIDP_STATUS_SUCCESS).then_some(r)
+        };
+        let set_value = |r: &mut Vec<u8>, usage: u16, v: u32| {
+            // SAFETY: report of the right length; a usage not in this report is refused.
+            unsafe { HidP_SetUsageValue(HidP_Output, pid::PAGE, 0, usage, v, self.ptr(), r.as_mut_ptr(), len as u32) };
+        };
+        let set_usage = |r: &mut Vec<u8>, usage: u16| {
+            let mut u = [usage];
+            let mut n = 1u32;
+            // SAFETY: as above.
+            unsafe { HidP_SetUsages(HidP_Output, pid::PAGE, 0, u.as_mut_ptr(), &mut n, self.ptr(), r.as_mut_ptr(), len as u32) };
+        };
+        let mut out = Vec::new();
+        if first && let Some(mut r) = self.pid_button(pid::DC_ENABLE_ACTUATORS).and_then(new_report) {
+            set_usage(&mut r, pid::DC_ENABLE_ACTUATORS);
+            out.push(r);
+        }
+        let on = strong.max(weak) > 0;
+        if on {
+            if let Some(mut r) = self.pid_value(pid::DURATION).and_then(|(id, _)| new_report(id)) {
+                set_value(&mut r, pid::EFFECT_BLOCK_INDEX, 1);
+                set_usage(&mut r, pid::ET_SINE);
+                set_value(&mut r, pid::DURATION, pid::INFINITE);
+                if let Some((_, max)) = self.pid_value(pid::GAIN) {
+                    set_value(&mut r, pid::GAIN, max.max(0) as u32);
+                }
+                out.push(r);
+            }
+            if let Some((id, max)) = self.pid_value(pid::MAGNITUDE)
+                && let Some(mut r) = new_report(id)
+            {
+                set_value(&mut r, pid::EFFECT_BLOCK_INDEX, 1);
+                set_value(&mut r, pid::MAGNITUDE, pid_magnitude(strong, weak, max));
+                set_value(&mut r, pid::PERIOD, pid::RUMBLE_PERIOD_MS);
+                out.push(r);
+            }
+        }
+        let op = if on { pid::OP_EFFECT_START } else { pid::OP_EFFECT_STOP };
+        if let Some(mut r) = self.pid_button(op).and_then(new_report) {
+            set_value(&mut r, pid::EFFECT_BLOCK_INDEX, 1);
+            set_usage(&mut r, op);
+            set_value(&mut r, pid::LOOP_COUNT, 1);
+            out.push(r);
+        }
+        out
     }
 
     /// Every input value usage (ranges expanded, at most 64), for game pads

@@ -537,6 +537,7 @@ impl Service {
             settings: &settings,
             client_name: crate::seats::client_name(seat),
             credentials: creds,
+            idd_outputs: None,
         };
         let before = self.platform.console_session();
         match self.backends().session.start(&req) {

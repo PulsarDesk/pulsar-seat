@@ -459,6 +459,9 @@ pub struct FakeBackend {
     pub hide_instance: Arc<AtomicBool>,
     /// While set, `create` waits (simulates a slow CLI run without relying on timing).
     pub hold_create: Arc<AtomicBool>,
+    /// New pads expose controller audio (`VirtualPad::has_audio`); default on for the
+    /// usbip DualSense backend.
+    pub audio: Arc<AtomicBool>,
 }
 
 impl FakeBackend {
@@ -476,6 +479,7 @@ impl FakeBackend {
             blocking: AtomicBool::new(false),
             hide_instance: Arc::new(AtomicBool::new(false)),
             hold_create: Arc::new(AtomicBool::new(false)),
+            audio: Arc::new(AtomicBool::new(id == BackendId::UsbipDs5)),
         }
     }
     pub fn calls(&self) -> Vec<FakePadCall> {
@@ -526,6 +530,7 @@ impl PadBackend for FakeBackend {
             lose: self.lose_next_report.clone(),
             reads_channel: self.reads_channel,
             hide: self.hide_instance.clone(),
+            audio: self.audio.load(Ordering::SeqCst),
         }))
     }
     fn blocking_ops(&self) -> bool {
@@ -542,6 +547,7 @@ pub struct FakePad {
     lose: Arc<AtomicBool>,
     reads_channel: bool,
     hide: Arc<AtomicBool>,
+    audio: bool,
 }
 
 impl VirtualPad for FakePad {
@@ -571,6 +577,9 @@ impl VirtualPad for FakePad {
     }
     fn driver_reads_channel(&self) -> bool {
         self.reads_channel
+    }
+    fn has_audio(&self) -> bool {
+        self.audio
     }
     fn remove(self: Box<Self>) -> Result<(), PadError> {
         if let Some(t) = &self.tree {

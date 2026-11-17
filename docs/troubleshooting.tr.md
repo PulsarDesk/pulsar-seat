@@ -456,9 +456,17 @@ ya da ağ üzerinden oturum açamaz.
    parolasını yeniden girin; `PulsarKiosk..` adında Pulsar'ın oluşturmadığı bir hesap
    varsa onu yeniden adlandırın.
 3. Eski davranışa dönmek için Temel sekmesinde "Her kiosk koltuğu kendi Windows
-   kullanıcısıyla çalışsın" seçeneğini kapatın. Pulsar'ın kiosk hesapları ve profilleri
-   koltuk kiosk koltuğu olmaktan çıkınca (hizmetin sonraki açılışında) ya da kaldırmada
-   silinir; seçeneği kapatmak onları silmez.
+   kullanıcısıyla çalışsın" seçeneğini kapatın. Bir koltuk kiosk koltuğu olmaktan çıkınca
+   Pulsar'ın o koltuktaki hesabı hizmetin sonraki açılışında yalnızca **devre dışı
+   bırakılır**; profili (kayıtlar, tarayıcı profilleri) kalır. Kalıcı olarak silmek için
+   koltuk menüsündeki "Koltuğun kiosk kullanıcısını sil…" komutunu kullanın. Kaldırmada
+   hesaplar silinir; profilleri yalnızca "ayarları ve günlükleri de sil" seçilirse
+   (`REMOVEUSERDATA=1`). Seçeneği kapatmak hiçbir şeyi silmez.
+4. Kiosk koltukları bir güvenlik sınırı değildir: bütün kiosk koltukları tek bir Windows
+   masaüstünü paylaşır, bir koltuktaki program diğerlerinin klavyesini, ekranını ve
+   panosunu okuyabilir (normal pano çağrılarını kullanan uygulamalar için Pulsar'ın koltuk
+   başına panosu vardır). Bir kiosk koltuğunda kişisel ya da iş hesabıyla oturum açmayın;
+   koltuğun kayıtlı hesabı kullanılırsa yönetici uygulaması uyarır.
 
 ## 10. Kiosk koltuğunun sesi kendi aygıtından çıkmıyor
 

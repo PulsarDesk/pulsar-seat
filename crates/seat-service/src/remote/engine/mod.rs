@@ -195,7 +195,12 @@ struct Inner {
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// Next Bluetooth refresh (ms, tick clock); 0 = at the next tick.
     bt_next_ms: AtomicU64,
+    /// USB ids of the PC's physical pads (the service's inventory), for the SDL ignore list.
+    physical_pads: Mutex<Option<PadIdSource>>,
 }
+
+/// Source of the physical pads' USB ids (`Engine::set_physical_pads`).
+pub type PadIdSource = Arc<dyn Fn() -> Vec<(u16, u16)> + Send + Sync>;
 
 /// Cheap to clone; every clone drives the same seats.
 #[derive(Clone)]
@@ -304,12 +309,22 @@ pub fn split_args(s: &str) -> Vec<String> {
     out
 }
 
+/// USB ids every remote seat's own virtual pads can have (they must stay visible to SDL).
+fn virtual_pad_ids() -> Vec<(u16, u16)> {
+    use seat_pads::PadKind;
+    [PadKind::X360, PadKind::XOne, PadKind::Ds4, PadKind::Ds5, PadKind::Ds5Edge].iter().map(|k| k.usb_ids()).collect()
+}
+
 /// Environment of the processes the service starts in a remote seat: the Steam IPC
-/// override (when on) and the SDL ignore list (the seat's `pad_ignore_devices`; physical
-/// pads of the PC never reach remote seats, so no ids are added automatically).
-fn seat_env(seat_id: &str, steam: bool, pad_ignore: &[String]) -> Vec<(String, String)> {
+/// override (when on) and the SDL ignore list: the seat's `pad_ignore_devices` plus the USB
+/// ids of the PC's physical pads (parity review 2026-11-17; device scoping is opt-in and
+/// the module does not cover every app, so a remote seat's SDL games could otherwise list
+/// host pads). An id one of the seat's virtual pad kinds shares stays visible (SDL matches
+/// by VID/PID only).
+fn seat_env(seat_id: &str, steam: bool, pad_ignore: &[String], physical: &[(u16, u16)]) -> Vec<(String, String)> {
     let mut env = if steam { seat_shim_core::steam_env(seat_id) } else { Vec::new() };
-    env.extend(seat_input::pad_scope::sdl_env(&seat_input::pad_scope::sdl_ignore_list(pad_ignore, &[], &[])));
+    let list = seat_input::pad_scope::sdl_ignore_list(pad_ignore, physical, &virtual_pad_ids());
+    env.extend(seat_input::pad_scope::sdl_env(&list));
     env
 }
 
@@ -326,7 +341,19 @@ impl Engine {
             host_class: Mutex::new(None),
             workers: Mutex::new(Vec::new()),
             bt_next_ms: AtomicU64::new(0),
+            physical_pads: Mutex::new(None),
         }))
+    }
+
+    /// Where the SDL ignore list of remote seats gets the PC's physical pad ids from (the
+    /// service's device inventory; set once at service start).
+    pub fn set_physical_pads(&self, f: PadIdSource) {
+        *self.0.physical_pads.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
+    fn physical_pad_ids(&self) -> Vec<(u16, u16)> {
+        let f = self.0.physical_pads.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        f.map(|f| f()).unwrap_or_default()
     }
 
     fn d(&self) -> &Deps {
@@ -684,7 +711,7 @@ impl Engine {
                 args: split_args(&app.arguments),
                 session_id,
                 token: TokenKind::SeatUser,
-                env_extra: seat_env(&seat.id, global.steam_isolation, &seat.pad_ignore_devices),
+                env_extra: seat_env(&seat.id, global.steam_isolation, &seat.pad_ignore_devices, &self.physical_pad_ids()),
                 desktop: DEFAULT_DESKTOP.into(),
                 stdout: None,
             };
@@ -1102,7 +1129,7 @@ impl Engine {
             args: argv,
             session_id,
             token: TokenKind::SeatUser,
-            env_extra: seat_env(seat_id, steam, &pad_ignore),
+            env_extra: seat_env(seat_id, steam, &pad_ignore, &self.physical_pad_ids()),
             desktop: DEFAULT_DESKTOP.into(),
             stdout: None,
         };

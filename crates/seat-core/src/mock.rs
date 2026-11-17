@@ -132,6 +132,8 @@ pub struct MockSessionBackend {
     next_id: AtomicU64,
     /// What `kiosk_shells` reports (tests set it).
     pub kiosk_shells: Mutex<Vec<KioskShellProcess>>,
+    /// What `kiosk_users` reports (tests set it).
+    pub kiosk_users: Mutex<Vec<crate::backend::session::KioskUser>>,
     /// Every `start`: (seat, a password was passed).
     pub start_passwords: Mutex<Vec<(SeatNumber, bool)>>,
     /// What `console_seat_away` reports (tests set it).
@@ -149,6 +151,7 @@ impl MockSessionBackend {
             sessions: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(10),
             kiosk_shells: Mutex::new(Vec::new()),
+            kiosk_users: Mutex::new(Vec::new()),
             start_passwords: Mutex::new(Vec::new()),
             console_seat_away: Mutex::new(None),
             start_delay_ms: AtomicU64::new(0),
@@ -264,6 +267,9 @@ impl SessionBackend for MockSessionBackend {
     }
     fn kiosk_shells(&self) -> Vec<KioskShellProcess> {
         lock(&self.kiosk_shells).clone()
+    }
+    fn kiosk_users(&self) -> Vec<crate::backend::session::KioskUser> {
+        lock(&self.kiosk_users).clone()
     }
     fn console_seat_away(&self) -> Option<u32> {
         *lock(&self.console_seat_away)
@@ -561,7 +567,7 @@ mod tests {
         let two = SeatNumber::new(2).unwrap();
         let cfg = SeatConfig::new(two);
         let g = GlobalSettings::default();
-        let req = SeatStartRequest { seat: two, config: &cfg, settings: &g, client_name: "PSEAT-02".into(), credentials: None };
+        let req = SeatStartRequest { seat: two, config: &cfg, settings: &g, client_name: "PSEAT-02".into(), credentials: None, idd_outputs: None };
         assert!(matches!(m.start(&req).unwrap(), StartStep::LaunchHost(_)));
         let info = m.wait_session(two, "PSEAT-02", Duration::from_secs(1)).unwrap();
         assert_eq!(m.query(two, info.session_id).unwrap().session_id, 10);

@@ -312,7 +312,7 @@
     <label class="toggle" title={t.advanced.padDeviceScopeHint}>
       <input
         type="checkbox"
-        checked={draft.settings.input.pad_device_scope ?? true}
+        checked={draft.settings.input.pad_device_scope ?? false}
         onchange={(e) => settings((c) => (c.settings.input.pad_device_scope = e.currentTarget.checked))}
       />
       {t.advanced.padDeviceScope}

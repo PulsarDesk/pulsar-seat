@@ -246,6 +246,8 @@ impl Service {
                 self.relogon(seat)?;
                 Ok(ResponseBody::Ack)
             }
+            B::ResetGraphics { seat } => self.reset_graphics(seat),
+            B::RemoveKioskUser { seat } => self.remove_kiosk_user(seat),
             B::RequestReboot => {
                 log::info(&format!("reboot requested by pid {}", caller.pid));
                 self.platform.reboot()?;

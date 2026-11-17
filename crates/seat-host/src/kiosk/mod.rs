@@ -47,10 +47,17 @@
 //! - Back to the launcher: the bar's "Uygulamalar" button or Ctrl+Alt+Home
 //!   ([`seat_input::kiosk::HOME_CHORD_VK`]).
 //!
-//! Limits (spec 35 §4 U3): one Windows user, profile and clipboard for every seat; apps that
-//! read input by raw input, DirectInput, XInput, `GetAsyncKeyState` or `GetCursorPos`, games
-//! in exclusive full screen, packaged (UWP / MSIX) apps and apps that hand their start to an
-//! already running instance do not work as kiosk apps.
+//! Limits (spec 35 §4 U3), as of the parity review 2026-11-17: every seat shares the one
+//! window station and desktop (per-seat Windows users, `seat_session::kiosk_account`,
+//! separate profiles and app data, not security). With the per-process module (role
+//! `kiosk`) a seat's apps get the seat's own cursor (`GetCursorPos` and friends, DPI
+//! converted), cursor moves and clips (`SetCursorPos`, `ClipCursor` move the seat cursor,
+//! not the console's), key state (`GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`)
+//! and clipboard (a per-seat clipboard for the HGLOBAL formats; `shim/module/src/rt/clip.rs`),
+//! all through the seat section `seat_shim_core::kiosk_cursor` and
+//! `seat_shim_core::kiosk_clip`. Without the module (ARM64 apps where the module is not
+//! loaded, packaged apps) the console's state shows. One game in exclusive full screen per
+//! PC; packaged (UWP / MSIX) apps are best effort.
 //!
 //! **Hard limits (not a confined kiosk):**
 //!
@@ -500,7 +507,7 @@ mod tests {
         SeatNumber::new(n).unwrap()
     }
     fn plan(seat1_desktop: bool) -> KioskPlan {
-        KioskPlan { seat: seat(2), apps: vec![], idle_reset_minutes: 0, seat1_desktop, monitors: vec![] }
+        KioskPlan { seat: seat(2), apps: vec![], idle_reset_minutes: 0, seat1_desktop, monitors: vec![], idd_outputs: None }
     }
 
     fn view(key: &str, kind: DeviceKind, details: DeviceDetails, mask: SeatMask, present: bool) -> DeviceView {

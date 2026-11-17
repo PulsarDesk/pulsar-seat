@@ -203,6 +203,16 @@ pub trait DisplayBinding: Send + Sync {
     /// Per-seat preferences for the next `bind_seat` of `seat` (kept until changed).
     /// Default: ignored. Added 2026-11-13.
     fn configure_seat(&self, _seat: SeatNumber, _prefs: &SeatDisplayPrefs) {}
+    /// The session backend of the next `bind_seat` calls has its own display (RDP) or not
+    /// (`desktops`, fast user switching). Without one, `PulsarIdd` plugs a virtual monitor
+    /// per seat output and the seat's frames come from it ([`Self::idd_frames`]). Default:
+    /// ignored. Added 2026-11-17 (parity review).
+    fn set_session_has_display(&self, _has: bool) {}
+    /// The seat's outputs get their frames from our IddCx monitors (connector = output
+    /// index) instead of an RDP session. Default: false.
+    fn idd_frames(&self, _seat: SeatNumber) -> bool {
+        false
+    }
 }
 
 /// One CPU-side frame (BGRA8, top-down). GPU paths keep their own types inside

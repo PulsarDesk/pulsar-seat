@@ -214,9 +214,10 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
             }
             None => platform_for_hosts.set_seat_provisioner(None),
         }
-        // Pulsar's kiosk accounts of seats that are no longer kiosk seats go, with their
-        // profiles (2026-11-17).
-        for e in crate::win::host_account::prune_kiosk(&service.kiosk_account_seats()) {
+        // Pulsar's kiosk accounts of seats that are no longer kiosk seats are disabled; their
+        // profiles stay (parity review 2026-11-17: deleted only at uninstall or on the
+        // manager's explicit "remove seat user").
+        for e in crate::win::host_account::disable_unused_kiosk(&service.kiosk_account_seats()) {
             log::warn(&format!("kiosk account cleanup: {e}"));
         }
         match crate::win::host_account::ensure_shared(group.as_deref()) {
@@ -259,6 +260,11 @@ pub fn prepare(opts: &Options) -> Result<Running, String> {
         None
     };
     let health_shutdown = health.as_ref().map(crate::remote::win::health::HealthServer::shutdown_handle);
+    if let Some(e) = &engine {
+        // Remote seats' SDL ignore list gets the PC's physical pads (parity review).
+        let weak = Arc::downgrade(&service);
+        e.set_physical_pads(Arc::new(move || weak.upgrade().map(|s| s.physical_pad_ids()).unwrap_or_default()));
+    }
     let local_pads = engine.as_ref().and_then(|e| e.local_pad_parts()).map(|(mgr, router)| {
         seat_input::local_pads::LocalPadHub::new(mgr, Arc::new(seat_input::win::pad_io::WinPadSource), router)
     });

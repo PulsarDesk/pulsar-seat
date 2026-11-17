@@ -127,6 +127,9 @@ pub struct WinPlatform {
     /// apps and launcher-request apps, with the seat's CPU limits. Dropped on every logoff /
     /// session end (session ids are reused).
     jobs: Mutex<HashMap<u32, SessionJob>>,
+    /// Processes of each seat session already handled by `cover_session` (pids; pruned to
+    /// the live ones every call).
+    covered: Mutex<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Token choice and desktop grants of seat hosts / the console listener (host account,
     /// `win::containment`).
     containment: crate::win::containment::Containment,
@@ -183,6 +186,7 @@ impl WinPlatform {
             data_dir,
             power: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
+            covered: Mutex::new(HashMap::new()),
             containment: crate::win::containment::Containment::new(run_dir),
             _notify: notify,
         }
@@ -448,6 +452,17 @@ impl Platform for WinPlatform {
         crate::platform::SourceIpPublish { enforcement: publisher.publish(ctl, &map), dropped_paths }
     }
 
+    fn publish_reader_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+        static LAST: Mutex<Option<Vec<seat_shim_core::readers::ReaderRule>>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(rules) {
+            return Ok(());
+        }
+        seat_shim_core::win::write_reader_rules(rules).map_err(|e| e.to_string())?;
+        *last = Some(rules.to_vec());
+        Ok(())
+    }
+
     fn publish_kiosk_map(&self, entries: &[seat_shim_core::KioskSeatEntry]) -> Result<(), String> {
         use seat_shim_core::kiosk::{KioskMapWriter, kiosk_map_diff};
         let w = seat_shim_core::win::RegKioskMap;
@@ -637,6 +652,84 @@ impl Platform for WinPlatform {
 
     fn drop_session_job(&self, session_id: u32) {
         self.jobs.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+        self.covered.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+    }
+
+    fn cover_session(&self, session_id: u32, j: &crate::platform::SeatJobSpec, seat_wide: bool) -> Vec<String> {
+        use windows_sys::Win32::System::RemoteDesktop::{WTS_PROCESS_INFOW, WTSEnumerateProcessesW};
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+        let limit = seat_compat::launcher::CpuLimit { cpu_sets: j.cpu_sets.clone(), hard_limit: j.hard_limit, cpu_info: self.cpu_sets() };
+        let mut list: *mut WTS_PROCESS_INFOW = ptr::null_mut();
+        let mut count = 0u32;
+        // SAFETY: local server, out pointers valid; freed with WTSFreeMemory below.
+        if unsafe { WTSEnumerateProcessesW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &mut list, &mut count) } == 0 || list.is_null() {
+            return vec!["process list not readable".into()];
+        }
+        // SAFETY: `count` entries from WTSEnumerateProcessesW.
+        let procs: Vec<(u32, String)> = unsafe { std::slice::from_raw_parts(list, count as usize) }
+            .iter()
+            .filter(|p| p.SessionId == session_id)
+            // SAFETY: NUL-terminated name inside the WTS buffer (still allocated here).
+            .map(|p| (p.ProcessId, unsafe { from_wide_ptr(p.pProcessName) }.to_ascii_lowercase()))
+            .collect();
+        // SAFETY: buffer from WTSEnumerateProcessesW.
+        unsafe { WTSFreeMemory(list as *mut c_void) };
+        let mut notes = Vec::new();
+        let mut covered = self.covered.lock().unwrap_or_else(|e| e.into_inner());
+        let seen = covered.entry(session_id).or_default();
+        let live: std::collections::HashSet<u32> = procs.iter().map(|p| p.0).collect();
+        seen.retain(|p| live.contains(p));
+        let own: std::collections::HashSet<u32> =
+            self.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(&session_id).map(|s| s.pids.iter().copied().collect()).unwrap_or_default();
+        for (pid, name) in procs {
+            if seen.contains(&pid) || own.contains(&pid) {
+                continue;
+            }
+            let shell = name == "explorer.exe";
+            if !shell && !seat_wide {
+                continue;
+            }
+            seen.insert(pid);
+            let access = if shell { PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SET_LIMITED_INFORMATION } else { PROCESS_SET_LIMITED_INFORMATION };
+            // SAFETY: plain open; closed below.
+            let h = unsafe { OpenProcess(access, 0, pid) };
+            if h.is_null() {
+                // Protected / gone processes: once per pid.
+                // SAFETY: trivially safe.
+                let code = unsafe { GetLastError() };
+                notes.push(format!("{name} ({pid}) not limited (cannot open: {code})"));
+                continue;
+            }
+            let r = if shell {
+                // The seat's shell joins the session job: everything it starts inherits it.
+                let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+                match jobs.entry(session_id) {
+                    std::collections::hash_map::Entry::Occupied(o) => Ok(o.into_mut()),
+                    std::collections::hash_map::Entry::Vacant(v) => seat_compat::launcher::SeatJob::new()
+                        .map(|job| v.insert(SessionJob { job, pids: Vec::new() }))
+                        .map_err(|e| e.to_string()),
+                }
+                .and_then(|entry| {
+                    // SAFETY: `h` has the access confine needs.
+                    unsafe { entry.job.confine(h, &limit) }.map(|a| a.notes).map_err(|e| e.to_string())
+                })
+            } else {
+                // SAFETY: `h` has PROCESS_SET_LIMITED_INFORMATION.
+                unsafe { seat_compat::launcher::set_soft_limit(h, &limit) }.map(|a| a.notes).map_err(|e| e.to_string())
+            };
+            // SAFETY: our handle.
+            unsafe { CloseHandle(h) };
+            match r {
+                Ok(n) => {
+                    if shell {
+                        notes.push(format!("{name} ({pid}) joined the seat job"));
+                    }
+                    notes.extend(n);
+                }
+                Err(e) => notes.push(format!("{name} ({pid}) not limited: {e}")),
+            }
+        }
+        notes
     }
 
     fn update_session_job(&self, session_id: u32, j: &crate::platform::SeatJobSpec) -> BackendResult<Vec<String>> {
@@ -824,6 +917,12 @@ impl Platform for WinPlatform {
             return Err(os_err("logoff_failed", "WTSLogoffSession"));
         }
         Ok(())
+    }
+
+    fn remove_kiosk_user(&self, seat: seat_core::SeatNumber) -> BackendResult<Vec<String>> {
+        // The service only calls this when the seat runs no kiosk shell.
+        super::host_account::remove_kiosk_user(seat, false)
+            .map_err(|e| seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Internal, "kiosk_user_in_use", &e))
     }
 
     fn reboot(&self) -> BackendResult<()> {
@@ -1174,6 +1273,7 @@ mod tests {
             data_dir: PathBuf::new(),
             power: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
+            covered: Mutex::new(HashMap::new()),
             containment: crate::win::containment::Containment::new(PathBuf::new()),
             _notify: None,
         };

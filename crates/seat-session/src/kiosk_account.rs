@@ -38,6 +38,14 @@
 //! the console user's profile is not copied (documented in troubleshooting). The conhost
 //! delegation (`kiosk_console`) and per-app audio entries are written for the seat user.
 //!
+//! **Not a security boundary** (parity review 2026-11-17): every kiosk seat user gets the
+//! interactive user's rights on the one shared `WinSta0\Default` (hooks, journal playback,
+//! read screen, clipboard; [`KIOSK_WINSTA_ACCESS`], [`KIOSK_DESKTOP_ACCESS`]), so a program
+//! of one seat user can read the keyboard, screen and clipboard of the console user and of
+//! the other seats and post input into their windows. Per-seat users separate profiles,
+//! settings and app data only. The probe always reports `kiosk_users_share_desktop`, and the
+//! manager warns when a seat's own (personal or domain) account is used.
+//!
 //! **HYPOTHESIS (untested on hardware):** windows of different users on one desktop accept
 //! the shell's posted messages and `SetWindowPos` (same integrity level, UIPI only checks
 //! integrity); `AttachThreadInput` between the shell and its apps (same user) is unchanged;
@@ -55,6 +63,9 @@ pub const KIOSK_ACCOUNT_PREFIX: &str = "PulsarKiosk";
 pub const KIOSK_FULL_NAME: seat_core::i18n::Text = seat_core::i18n::Text::new("Pulsar Seat kiosk seat", "Pulsar Seat kiosk koltuğu");
 /// Comment of a kiosk account; marks it as Pulsar's (a user of that name with another
 /// comment, in any supported language, is never taken over or deleted).
+/// The text must never change: existing accounts are recognised by it. (Since the parity
+/// review an unused kiosk account is disabled at service start and deleted only at
+/// uninstall or on the manager's explicit request.)
 pub const KIOSK_COMMENT: seat_core::i18n::Text = seat_core::i18n::Text::new(
     "Automatic account of a Pulsar Seat kiosk seat. Do not delete; it is removed at uninstall.",
     "Pulsar Seat kiosk koltuğunun otomatik hesabı. Silmeyin; kaldırma sırasında silinir.",
@@ -202,13 +213,31 @@ mod tests {
         assert!(!crate::host_account::is_host_account_name("PulsarKiosk02"));
     }
 
+    /// The masks equal the documented constants (winuser.h through windows-sys), not only
+    /// the literals they are written with.
+    #[cfg(windows)]
     #[test]
     fn masks_are_the_interactive_users() {
-        assert_eq!(KIOSK_WINSTA_ACCESS & 0x37F, 0x37F);
-        assert_eq!(KIOSK_DESKTOP_ACCESS & 0x1FF, 0x1FF);
+        use windows_sys::Win32::System::StationsAndDesktops::{
+            DESKTOP_CREATEMENU, DESKTOP_CREATEWINDOW, DESKTOP_DELETE, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK,
+            DESKTOP_JOURNALRECORD, DESKTOP_READ_CONTROL, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP, DESKTOP_SYNCHRONIZE, DESKTOP_WRITE_DAC,
+            DESKTOP_WRITE_OWNER, DESKTOP_WRITEOBJECTS,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::WINSTA_ALL_ACCESS;
+        let desktop = DESKTOP_READOBJECTS
+            | DESKTOP_CREATEWINDOW
+            | DESKTOP_CREATEMENU
+            | DESKTOP_HOOKCONTROL
+            | DESKTOP_JOURNALRECORD
+            | DESKTOP_JOURNALPLAYBACK
+            | DESKTOP_ENUMERATE
+            | DESKTOP_WRITEOBJECTS
+            | DESKTOP_SWITCHDESKTOP;
+        assert_eq!(KIOSK_DESKTOP_ACCESS, desktop | DESKTOP_READ_CONTROL | DESKTOP_SYNCHRONIZE);
+        assert_eq!(KIOSK_WINSTA_ACCESS, WINSTA_ALL_ACCESS as u32 | DESKTOP_READ_CONTROL | DESKTOP_SYNCHRONIZE);
         // Never WRITE_DAC / WRITE_OWNER / DELETE: the seat user cannot take the objects over.
         for m in [KIOSK_WINSTA_ACCESS, KIOSK_DESKTOP_ACCESS] {
-            assert_eq!(m & (0x0004_0000 | 0x0008_0000 | 0x0001_0000), 0);
+            assert_eq!(m & (DESKTOP_WRITE_DAC | DESKTOP_WRITE_OWNER | DESKTOP_DELETE), 0);
         }
     }
 

@@ -30,7 +30,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use std::time::{Duration, Instant};
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFMediaEventGenerator, METransformHaveOutput, METransformNeedInput, MF_E_NO_EVENTS_AVAILABLE, MF_EVENT_FLAG_NO_WAIT,
+    IMFActivate, IMFMediaEventGenerator, IMFShutdown, METransformHaveOutput, METransformNeedInput, MF_E_NO_EVENTS_AVAILABLE, MF_EVENT_FLAG_NO_WAIT,
     MF_TRANSFORM_ASYNC_UNLOCK, MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
     MFT_ENUM_FLAG_SORTANDFILTER, MFT_FRIENDLY_NAME_Attribute, MFT_REGISTER_TYPE_INFO, MFTEnumEx,
 };
@@ -95,10 +95,22 @@ impl AsyncEvents {
     }
 }
 
-/// The first vendor hardware H.264 decoder that activates, and its friendly name.
+/// The activation object of a vendor MFT: `IMFActivate::ShutdownObject` when dropped, as
+/// Media Foundation asks after `ActivateObject` (releases the hardware MFT's resources).
+struct ActivateGuard(IMFActivate);
+
+impl Drop for ActivateGuard {
+    fn drop(&mut self) {
+        // SAFETY: COM call on the activation object we own.
+        let _ = unsafe { self.0.ShutdownObject() };
+    }
+}
+
+/// The first vendor hardware H.264 decoder that activates, its friendly name and its
+/// activation object (shut down when the guard drops).
 ///
 /// SAFETY: plain Media Foundation calls; the activation array is freed here.
-unsafe fn vendor_transform() -> WinResult<(IMFTransform, String)> {
+unsafe fn vendor_transform() -> WinResult<(IMFTransform, String, ActivateGuard)> {
     unsafe {
         let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
         let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
@@ -122,7 +134,7 @@ unsafe fn vendor_transform() -> WinResult<(IMFTransform, String)> {
                     "vendor H.264 decoder".to_string()
                 };
                 match a.ActivateObject::<IMFTransform>() {
-                    Ok(t) => chosen = Some((t, label)),
+                    Ok(t) => chosen = Some((t, label, ActivateGuard(a))),
                     Err(e) => eprintln!("seat-rdp: vendor H.264 decoder {label} did not activate: {e}"),
                 }
             }
@@ -189,7 +201,24 @@ pub(crate) struct Mft {
     events: Option<AsyncEvents>,
     /// Friendly name of the vendor decoder (logs).
     vendor: Option<String>,
+    /// Activation object of the vendor MFT (shut down after the transform, before COM / MF
+    /// go away).
+    _activate: Option<ActivateGuard>,
     _rt: Runtime,
+}
+
+impl Drop for Mft {
+    fn drop(&mut self) {
+        // An asynchronous MFT must be shut down by its client (`IMFShutdown`): it ends the
+        // event queue and the hardware decoder session; the activation object follows when
+        // `_activate` drops. Synchronous MFTs (Microsoft's) need nothing.
+        if self.events.is_some()
+            && let Ok(s) = self.transform.cast::<IMFShutdown>()
+        {
+            // SAFETY: COM call on the live transform.
+            let _ = unsafe { s.Shutdown() };
+        }
+    }
 }
 
 /// A decoded picture: read back, or the decoder's own sample (D3D11 texture inside).
@@ -326,7 +355,7 @@ impl Mft {
         let rt = Runtime::start()?;
         // SAFETY: COM calls on interfaces we own, on this thread.
         unsafe {
-            let (transform, name) = vendor_transform()?;
+            let (transform, name, activate) = vendor_transform()?;
             let attrs = transform.GetAttributes()?;
             // An asynchronous MFT refuses every call until it is unlocked.
             attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
@@ -352,6 +381,7 @@ impl Mft {
                 dropped: 0,
                 events: Some(AsyncEvents { generator, need_input: 0, have_output: 0 }),
                 vendor: Some(name),
+                _activate: Some(activate),
                 _rt: rt,
             };
             m.set_output_type()?;
@@ -401,6 +431,7 @@ impl Mft {
                 dropped: 0,
                 events: None,
                 vendor: None,
+                _activate: None,
                 _rt: rt,
             };
             m.set_output_type()?;
@@ -652,11 +683,19 @@ impl Mft {
         unsafe {
             let _ = self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         }
-        // Asynchronous MFT: announced outputs are gone with the flush; input requests that
-        // arrive afterwards are counted again (HYPOTHESIS: the MFT re-announces input).
+        // Asynchronous MFT ("Asynchronous MFTs", Flush): every announced input request and
+        // output is void after the flush, and the MFT asks for input again only after
+        // MFT_MESSAGE_NOTIFY_START_OF_STREAM. Drain the stale events, zero both counters,
+        // then restart the stream (harmless for synchronous MFTs too). HYPOTHESIS until a
+        // vendor MFT has run: the new METransformNeedInput events arrive after the restart.
         if let Some(ev) = self.events.as_mut() {
             let _ = ev.pump(Duration::ZERO, |_| true);
             ev.have_output = 0;
+            ev.need_input = 0;
+        }
+        // SAFETY: COM call on the live transform.
+        unsafe {
+            let _ = self.transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
         }
     }
 

@@ -24,7 +24,11 @@ use seat_core::device::DeviceKind;
 use seat_core::state::{ProductState, SafeModeReason, SeatRuntime, SeatState};
 use seat_core::store::{ConfigStore, SecretStore};
 use seat_core::{Clock, DeviceKey, SeatNumber};
-use seat_proto::{AgentTask, AgentTaskKind, Event};
+use seat_proto::{AgentTask, AgentTaskKind, ErrorCode, Event, ProtoError, ResponseBody};
+
+fn err(code: ErrorCode, msg: impl Into<String>) -> ProtoError {
+    ProtoError::new(code, msg)
+}
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -877,6 +881,24 @@ impl Service {
                 log::warn(&format!("kiosk seat map: {e}"));
             }
         }
+        // Smart-card readers per seat for the module's WinSCard filter (parity review).
+        {
+            let rules = {
+                let st = self.lock();
+                let kiosk: std::collections::BTreeSet<SeatNumber> = st
+                    .config
+                    .seats
+                    .iter()
+                    .filter(|c| seat_session::kiosk::wants_shell(c.number, c, &st.config.settings))
+                    .map(|c| c.number)
+                    .collect();
+                let sessions: Vec<(SeatNumber, u32)> = logons.iter().map(|l| (l.seat, l.session_id)).collect();
+                reader_rules(&eff, &kiosk, &sessions, |k| st.inventory.get(k).map(|e| e.device.name.clone()))
+            };
+            if let Err(e) = self.platform.publish_reader_rules(&rules) {
+                log::warn(&format!("reader rules: {e}"));
+            }
+        }
         // Source IP per seat (net-wfp): session -> address map for the WFP callout.
         self.publish_source_ip(&logons);
         let mut iso: HashMap<DeviceKey, IsolationStatus> = HashMap::new();
@@ -1110,6 +1132,7 @@ impl Service {
         self.remote_tick();
         self.platform.reap_exited();
         self.enforce_deny_logoffs(now);
+        self.cover_seat_sessions();
         self.update_keep_awake();
         self.idle_saver(now);
         self.ensure_console_listener(now);
@@ -1538,6 +1561,104 @@ impl Service {
     pub(crate) fn kiosk_account_seats(&self) -> Vec<SeatNumber> {
         kiosk_account_seats(&self.lock().config)
     }
+
+    /// Seat-wide CPU limits (spec 80 §11.2, parity review 2026-11-17): every running seat
+    /// with CPU sets has its session's shell put into the seat job and, with
+    /// `cpu_seat_wide`, every new process of the session soft-limited.
+    pub(crate) fn cover_seat_sessions(&self) {
+        let work: Vec<(SeatNumber, u32, crate::platform::SeatJobSpec, bool)> = {
+            let st = self.lock();
+            if !st.config.settings.enabled {
+                return;
+            }
+            st.config
+                .seats
+                .iter()
+                .filter(|c| c.is_local() && !c.cpu_sets.is_empty())
+                .filter_map(|c| {
+                    let session = self.seat_session_now(&st, c.number)?;
+                    // Seats that share a session (kiosk seats in the console session) are
+                    // never limited session-wide: the session is not theirs alone.
+                    let shared = st.seats.iter().any(|(n, s)| *n != c.number && s.rt.session_id == Some(session));
+                    if shared || session == 0 {
+                        return None;
+                    }
+                    Some((c.number, session, Self::seat_job_spec(&st, c.number)?, c.cpu_seat_wide))
+                })
+                .collect()
+        };
+        for (seat, session, spec, wide) in work {
+            for n in self.platform.cover_session(session, &spec, wide) {
+                log::info(&format!("seat {seat}: cpu limit: {n}"));
+            }
+        }
+    }
+
+    /// `reset_graphics` (parity review 2026-11-17, spec/local 50): the seat's agent sends
+    /// Win+Ctrl+Shift+B into its session's input desktop. The seat must run with a session.
+    pub(crate) fn reset_graphics(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
+        let mut st = self.lock();
+        if st.config.seat(seat).is_none() {
+            return Err(err(ErrorCode::NotFound, "no such seat"));
+        }
+        let session = if seat.is_console() {
+            self.platform.console_session()
+        } else {
+            st.seats.get(&seat).and_then(|s| s.rt.session_id)
+        };
+        let Some(session_id) = session else {
+            return Err(err(ErrorCode::InvalidValue, "the seat has no session").with_reason("not_running"));
+        };
+        log::info(&format!("graphics driver restart requested for seat {seat} (session {session_id})"));
+        self.queue_agent_task(&mut st, session_id, AgentTaskKind::ResetGraphics);
+        Ok(ResponseBody::Ack)
+    }
+
+    /// `remove_kiosk_user` (parity review 2026-11-17): Pulsar's kiosk account of `seat`
+    /// with its profile, only while the seat has no kiosk shell.
+    pub(crate) fn remove_kiosk_user(&self, seat: SeatNumber) -> Result<ResponseBody, ProtoError> {
+        if seat.is_console() {
+            return Err(err(ErrorCode::InvalidValue, "seat 1 has no kiosk user"));
+        }
+        if self.kiosk_account_seats().contains(&seat) {
+            return Err(err(ErrorCode::InvalidValue, "the seat still runs a kiosk shell").with_reason("kiosk_user_in_use"));
+        }
+        let errors = self.platform.remove_kiosk_user(seat)?;
+        for e in &errors {
+            log::warn(&format!("remove kiosk user of seat {seat}: {e}"));
+        }
+        log::info(&format!("kiosk user of seat {seat} removed on request"));
+        Ok(ResponseBody::Ack)
+    }
+}
+
+/// Smart-card reader rules (`seat_shim_core::readers`): one per reader that is not shared,
+/// granting seat 1 (console), the kiosk seats it names (console session) and the sessions
+/// of the other seats it names.
+pub(crate) fn reader_rules(
+    eff: &[seat_core::assign::Effective],
+    kiosk: &std::collections::BTreeSet<SeatNumber>,
+    sessions: &[(SeatNumber, u32)],
+    name_of: impl Fn(&DeviceKey) -> Option<String>,
+) -> Vec<seat_shim_core::readers::ReaderRule> {
+    use seat_shim_core::readers::{ReaderGrant, ReaderRule};
+    eff.iter()
+        .filter(|e| e.kind == DeviceKind::SmartCardReader && !e.mask.is_shared())
+        .filter_map(|e| {
+            let name = name_of(&e.key).filter(|n| !n.trim().is_empty())?;
+            let mut allowed = Vec::new();
+            for seat in e.mask.seats() {
+                if seat.is_console() {
+                    allowed.push(ReaderGrant::Console);
+                } else if kiosk.contains(&seat) {
+                    allowed.push(ReaderGrant::Kiosk(u32::from(seat.get())));
+                } else if let Some((_, s)) = sessions.iter().find(|(n, _)| *n == seat) {
+                    allowed.push(ReaderGrant::Session(*s));
+                }
+            }
+            Some(ReaderRule { name: name.trim().to_string(), allowed })
+        })
+        .collect()
 }
 
 /// Pure part of [`Service::kiosk_account_seats`].

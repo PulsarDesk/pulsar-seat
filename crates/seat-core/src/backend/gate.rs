@@ -107,6 +107,10 @@ pub enum IsolationStatus {
     Shared,
     NotSupported,
     Network,
+    /// Smart-card readers (parity review 2026-11-17): RDP seats get only their own
+    /// readers through the smart-card redirect; Pulsar-patched processes of every seat see
+    /// only theirs (`seat_shim_core::readers`). Programs without the module still see all.
+    SeatFilter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

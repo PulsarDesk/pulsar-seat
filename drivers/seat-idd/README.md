@@ -89,7 +89,9 @@ IddCx sample was **not** copied (MS-PL is not GPL-compatible, spec 00 §3.9 item
   (`g_Device`, cleared in the device cleanup callback) when the adapter context is not set
   yet.
 - Frames: CPU copy (staging texture → section) under the frame sequence lock (`Seq`); the seat host reads
-  them with `seat_display::win::idd::IddFrameReader` and `pump()`s them into a presenter.
+  them with `seat_display::win::idd::IddFrameReader` and `pump()`s them into a presenter
+  (parity review 2026-11-17: the kiosk shell's `seat_host::display::IddPresenter` for
+  seats without a session display; architecture.md "HDR / VRR for seats 2..N").
   Shared GPU textures are a later step (spec 40 open question 2).
 - Cursor: hardware cursor shape + position into the section under its own sequence lock
   (`CursorSeq`, bumped on every cursor update; `CursorShapeId` bumped on shape changes),

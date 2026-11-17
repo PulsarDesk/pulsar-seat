@@ -180,6 +180,13 @@ pub struct SeatConfig {
     /// Hard limit through a job (one processor group) instead of soft CPU sets.
     #[serde(default)]
     pub cpu_hard_limit: bool,
+    /// Opt-in seat-wide soft limit (spec 80 §11.2, parity review 2026-11-17): every new
+    /// process of the seat's session (Start menu, UAC-elevated programs, anything outside
+    /// the seat's job) gets `cpu_sets` as its default CPU sets once the service sees it
+    /// (1 s). Protected processes are skipped. Off = only the seat's job (agent, startup
+    /// apps, the launcher request, the seat's Explorer) is limited.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cpu_seat_wide: bool,
     /// Our generated wallpaper in the seat's session (spec 10 §4.4).
     #[serde(default)]
     pub wallpaper: bool,
@@ -534,6 +541,7 @@ impl SeatConfig {
             account: SeatAccount::LogonScreen,
             cpu_sets: Vec::new(),
             cpu_hard_limit: false,
+            cpu_seat_wide: false,
             wallpaper: false,
             ip_binding: None,
             startup_apps: Vec::new(),
@@ -815,7 +823,10 @@ pub struct InputSettings {
     /// (`seat_input::pad_scope`): a pad routed to a local seat opens only for that seat's
     /// user, and while remote seats run the other pads open only for the console user.
     /// Every change is journaled and restored at service stop, on the next start after a
-    /// crash, and when this is turned off. Added 2026-11-17, default on.
+    /// crash, and when this is turned off. Added 2026-11-17. Default **off** since the
+    /// parity review (2026-11-17): it rewrites the security of devices the product does
+    /// not own and restarts them with their parent node (spec/remote 50 §4.4: opt-in only),
+    /// so configs written before it was added read as off too.
     pub pad_device_scope: bool,
 }
 
@@ -827,7 +838,7 @@ impl Default for InputSettings {
             unfiltered_hid_usages: vec![(0x59, 0)],
             gap_buffer_ms: 1_000,
             gap_buffer_packets: 256,
-            pad_device_scope: true,
+            pad_device_scope: false,
         }
     }
 }

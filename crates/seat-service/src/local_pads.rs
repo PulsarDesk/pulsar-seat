@@ -59,23 +59,35 @@ fn pads(st: &State) -> Vec<(&Device, Option<SeatNumber>)> {
         .collect()
 }
 
-/// `(session, user SID)` of a running local seat with a signed-in user.
-fn seat_owner(st: &State, seat: SeatNumber) -> Option<ScopeOwner> {
+/// Windows users of kiosk seats that run as their own user (`desktops` backend,
+/// `SessionBackend::kiosk_users`): seat -> user SID. A kiosk seat shares the console
+/// session, so `rt.user_sid` holds the console user; the seat's shell and its apps run as
+/// this user instead, and the seat's pads must belong to it.
+pub(crate) type KioskSids = std::collections::BTreeMap<SeatNumber, String>;
+
+/// `(session, user SID)` of a running local seat with a signed-in user. A kiosk seat with
+/// its own Windows user (`kiosk`) gets that user's SID with the (console) session id.
+fn seat_owner(st: &State, kiosk: &KioskSids, seat: SeatNumber) -> Option<ScopeOwner> {
     let cfg = st.config.seats.iter().find(|s| s.number == seat)?;
     if cfg.kind != SeatKind::Local {
         return None;
     }
     let slot = st.seats.get(&seat)?;
-    Some(ScopeOwner { session_id: slot.rt.session_id?, user_sid: slot.rt.user_sid.clone()? })
+    let session_id = slot.rt.session_id?;
+    let user_sid = match kiosk.get(&seat) {
+        Some(sid) => sid.clone(),
+        None => slot.rt.user_sid.clone()?,
+    };
+    Some(ScopeOwner { session_id, user_sid })
 }
 
 /// Local seats with virtual pads on and their routed pads, in seat order; pads per seat in
 /// unit-key order (stable slots).
-pub(crate) fn targets(st: &State) -> Vec<LocalPadSeat> {
+pub(crate) fn targets(st: &State, kiosk: &KioskSids) -> Vec<LocalPadSeat> {
     let all = pads(st);
     let mut out = Vec::new();
     for seat in st.config.seats.iter().filter(|s| s.kind == SeatKind::Local && s.local_settings().virtual_pads) {
-        let Some(owner) = seat_owner(st, seat.number) else { continue };
+        let Some(owner) = seat_owner(st, kiosk, seat.number) else { continue };
         let mut list: Vec<RoutedPad> = Vec::new();
         for (d, routed) in &all {
             if *routed != Some(seat.number) {
@@ -106,14 +118,14 @@ pub(crate) fn targets(st: &State) -> Vec<LocalPadSeat> {
 
 /// Every physical pad's device nodes (HID collection + parent, via `parent_of`) and its
 /// owning local seat, for `seat_input::pad_scope::plan`.
-pub(crate) fn scope_pads(st: &State, parent_of: &dyn Fn(&str) -> Option<String>) -> Vec<PadNodes> {
+pub(crate) fn scope_pads(st: &State, kiosk: &KioskSids, parent_of: &dyn Fn(&str) -> Option<String>) -> Vec<PadNodes> {
     pads(st)
         .into_iter()
         .filter_map(|(d, routed)| {
             let inst = d.instance_id.clone()?;
             let mut nodes = vec![inst.clone()];
             nodes.extend(parent_of(&inst));
-            Some(PadNodes { nodes, seat_owner: routed.and_then(|s| seat_owner(st, s)) })
+            Some(PadNodes { nodes, seat_owner: routed.and_then(|s| seat_owner(st, kiosk, s)) })
         })
         .collect()
 }
@@ -126,7 +138,7 @@ pub(crate) fn local_seat_map(st: &State, console: Option<u32>, parent_of: &dyn F
     let effective = st.inventory.effective(&st.config);
     let mut out = Vec::new();
     for seat in st.config.seats.iter().filter(|s| s.kind == SeatKind::Local) {
-        let Some(owner) = seat_owner(st, seat.number) else { continue };
+        let Some(owner) = seat_owner(st, &KioskSids::new(), seat.number) else { continue };
         if Some(owner.session_id) == console || owner.session_id == 0 {
             continue;
         }
@@ -184,14 +196,21 @@ pub(crate) fn sdl_env(st: &State, seat: SeatNumber) -> Vec<(String, String)> {
 }
 
 impl crate::service::Service {
+    /// Kiosk seats running as their own Windows user (read before the state lock).
+    pub(crate) fn kiosk_seat_sids(&self) -> KioskSids {
+        self.backends().session.kiosk_users().into_iter().map(|u| (u.seat, u.user_sid)).collect()
+    }
+
     /// [`targets`] under the state lock.
     pub(crate) fn local_pad_targets(&self) -> Vec<LocalPadSeat> {
-        targets(&self.lock())
+        let kiosk = self.kiosk_seat_sids();
+        targets(&self.lock(), &kiosk)
     }
 
     /// Pad scoping plan (`None` = scoping off: everything restored).
     pub(crate) fn pad_scope_plan(&self, remote_seats_running: bool, parent_of: &dyn Fn(&str) -> Option<String>) -> Option<Vec<seat_input::pad_scope::ScopeWant>> {
         let console = self.platform.console_session();
+        let kiosk = self.kiosk_seat_sids();
         let console_owner = console.and_then(|c| self.platform.session_user(c)).map(|u| ScopeOwner {
             session_id: console.unwrap_or_default(),
             user_sid: u.sid,
@@ -212,7 +231,7 @@ impl crate::service::Service {
         if sessions.len() < 2 && !remote_seats_running {
             return Some(Vec::new());
         }
-        let nodes = scope_pads(&st, parent_of);
+        let nodes = scope_pads(&st, &kiosk, parent_of);
         Some(seat_input::pad_scope::plan(&nodes, console_owner.as_ref(), remote_seats_running))
     }
 
@@ -224,6 +243,15 @@ impl crate::service::Service {
             return Vec::new();
         }
         local_seat_map(&st, console, parent_of)
+    }
+
+    /// USB ids of every live physical pad of the PC (remote seats' SDL ignore list).
+    pub(crate) fn physical_pad_ids(&self) -> Vec<(u16, u16)> {
+        let st = self.lock();
+        let mut v: Vec<(u16, u16)> = pads(&st).into_iter().filter_map(|(d, _)| ids_of(d)).filter(|&(v, p)| v != 0 || p != 0).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
     }
 
     /// [`sdl_env`] under the state lock.

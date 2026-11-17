@@ -283,7 +283,14 @@ const t = {
     stop: 'Stop this seat',
     remove: 'Delete seat',
     cpu: 'Processor cores…',
-    ip: 'Assign IP address…'
+    ip: 'Assign IP address…',
+    resetGraphics: 'Restart the graphics driver',
+    resetGraphicsSent: 'The graphics driver restart was sent to the seat (the screen may flash).',
+    removeKioskUser: 'Delete the seat’s kiosk user…',
+    removeKioskUserTitle: (n: number) => `Delete the kiosk user of seat ${n}?`,
+    removeKioskUserBody:
+      'Pulsar Seat made a Windows user for this seat’s kiosk shell. When the kiosk shell is turned off the user is only disabled and its files (saves, browser profiles) are kept. Deleting it removes the user and all its files for good.',
+    removeKioskUserDone: 'The seat’s kiosk user was deleted.'
   },
 
   systemMenu: {
@@ -463,11 +470,13 @@ const t = {
     fullscreen: 'Full screen',
     perSeatAccounts: 'Each kiosk seat runs as its own Windows user',
     perSeatAccountsHint:
-      'When on, kiosk seats 2 and later run as their own user: the account saved for the seat if it has an account and password, otherwise a hidden local account Pulsar creates (PulsarKiosk02 …). Each seat gets its own profile, settings and app data. A new profile is created at first start; app data left in seat 1’s user is not moved. When off, all kiosk seats run as seat 1’s user.',
+      'When on, kiosk seats 2 and later run as their own user: the account saved for the seat if it has an account and password, otherwise a hidden local account Pulsar creates (PulsarKiosk02 …). Each seat gets its own profile, settings and app data, but this is not a security boundary: all kiosk seats share one desktop, so a program on one seat can read the others’ keyboard, screen and clipboard. A new profile is created at first start; app data left in seat 1’s user is not moved. When off, all kiosk seats run as seat 1’s user. When a seat stops being a kiosk seat, its Pulsar account is only disabled and its files stay (seat menu: “Delete the seat’s kiosk user…”).',
     account: {
       console: 'User: seat 1’s user',
       seat: (user: string) => `User: ${user}`,
-      auto: (user: string) => `User: ${user} (Pulsar account)`
+      auto: (user: string) => `User: ${user} (Pulsar account)`,
+      personalWarning:
+        'This seat’s saved account (a personal or domain account) signs in on a desktop the other kiosk seats share: their programs can read its keyboard, screen and clipboard. Prefer the Pulsar account (remove the saved password).'
     },
     appTitle: 'Tile name',
     program: 'Program path',
@@ -539,7 +548,7 @@ const t = {
     systemButtons: 'Power and sleep buttons on extra seats may affect the whole PC',
     padDeviceScope: 'Lock physical gamepads to their seat',
     padDeviceScopeHint:
-      'A pad given to a seat can be opened only by that seat’s user; while remote seats run, the other pads stay with the user at this PC. Changes are undone when the service stops.',
+      'A pad given to a seat can be opened only by that seat’s user; while remote seats run, the other pads stay with the user at this PC. Off by default (system change): it changes the security of the pads’ device nodes and restarts them, together with the device they hang off (a headset or keyboard with a built-in pad restarts too). Changes are undone when the service stops or this is turned off.',
     devices: 'Devices',
     adminsBypass: 'Administrators can access the devices of all seats',
     classDefaults: 'Class-level default access definitions (system change)',
@@ -711,7 +720,9 @@ const t = {
     one_kiosk_visible_at_a_time: 'Only one kiosk desktop is visible at a time',
     kiosk_shell_seat_aware_apps_only:
       'On kiosk seats input comes as window messages; games using raw input, DirectInput / XInput only get the seat’s devices with per-app isolation on; full-screen and Store (UWP) apps are supported best effort',
-    kiosk_per_seat_accounts: 'Kiosk seats can run as their own Windows users (from seat 2 on)',
+    kiosk_per_seat_accounts: 'Kiosk seats can run as their own Windows users (from seat 2 on): this keeps their files and settings apart, not their security',
+    kiosk_users_share_desktop:
+      'Kiosk seats share one Windows desktop: a program on one seat can see the screen, read the keyboard and use the clipboard and windows of the others. Do not sign a personal or work account in to a kiosk seat.',
     kiosk_account_fallback: 'A kiosk seat’s own user could not be opened; that seat runs as seat 1’s user (see the service log)',
     no_privacy_from_console: 'The seat’s picture cannot be hidden from seat 1',
     audio_off: 'Sound off',
@@ -1000,7 +1011,10 @@ const t = {
     group: (g: number) => `Group ${g}`,
     all: 'All',
     failed: 'The processor information could not be loaded.',
-    oneGroup: 'With a hard limit the chosen cores must be in one processor group.'
+    oneGroup: 'With a hard limit the chosen cores must be in one processor group.',
+    seatWide: 'Whole session',
+    seatWideHint:
+      'Without “Whole session” the cores apply to the seat’s desktop (Explorer and what starts from it, the Start menu) and the apps Pulsar Seat starts. With it, every other new program of the seat’s session (also programs run as administrator) gets them as its preferred cores within a second; protected system processes are left alone.'
   },
 
   hotkey: {
@@ -1132,7 +1146,8 @@ const t = {
       camera_consent: 'Limited by the camera permission',
       shared: 'Shared: everyone can use it',
       not_supported: 'This device cannot be closed to a seat on this PC',
-      network: 'Network adapter: always shared'
+      network: 'Network adapter: always shared',
+      seat_filter: 'Only its seat’s programs see it (smart card redirect / Pulsar Seat module)'
     } as Record<string, string>,
     seat: (v: string) => `Seat: ${v}`,
     location: (v: string) => `Location: ${v}`,
@@ -1524,7 +1539,7 @@ const rt = {
     processPatching: 'Turn on process patching',
     steamIsolation: 'Split Steam per seat',
     isolationNote:
-      'HID isolation and the Steam split apply to newly started seats. Process patching loads the Pulsar Seat module into the apps you choose (x64 and ARM64 PCs; on ARM64 x64 apps too).',
+      'HID isolation and the Steam split apply to newly started seats. Process patching loads the Pulsar Seat module into the apps you choose (x64 and ARM64 PCs). On an ARM64 PC, x64 apps get the module only when Pulsar Seat starts them (stream apps, kiosk apps); an x64 app you start yourself is not patched and is left out of the list Windows uses.',
     antiCheat:
       'Warning: some games that use anti-cheat software may see the module loaded into processes, or remote session masking, as a problem.',
     isolationState: 'Isolation state',
@@ -1534,6 +1549,8 @@ const rt = {
     killSwitch: 'Kill switch on: the module installs no hook in any process.',
     foreign: (s: string) => `Another product’s patching database was found (${s}). Turn off that product’s process patching first.`,
     targets: 'Apps the module loads into (file name)',
+    targetsGameInput:
+      'Adding GameInputSvc.exe (the Windows game-input service) turns on a controller-focus filter there: a remote seat’s window coming to the front no longer takes controller focus from this PC. Experimental, off unless listed.',
     addTarget: 'Add',
     maskApps: 'Apps the remote session is hidden from (full path)',
     maskHint: 'On the seat, the app does not see that it runs in a remote session. Turn it on only for games that need it.',

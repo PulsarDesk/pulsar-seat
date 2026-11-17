@@ -278,6 +278,26 @@ pub fn wnf_known_with(build: u32, name: u64, extra_builds: &[u32]) -> bool {
     WNF_FOCUS_CANDIDATES.contains(&name) && (WNF_VERIFIED_BUILDS.contains(&build) || extra_builds.contains(&build))
 }
 
+/// Runtime check of the focus WNF states on a build that is in no verified list (spec 50
+/// §5.2: "verify the values against the target Windows build at runtime and turn the
+/// feature off if they are unknown"; parity review 2026-11-17). `samples` = each candidate
+/// name with its current payload (`None` = the state could not be queried); `pid_alive`
+/// tells whether a process id exists now.
+///
+/// Plausible when every candidate exists and every non-empty payload is 4..=256 bytes and
+/// starts with 0 or the id of a live process (the layout [`focus_target_pid`] assumes).
+/// This proves the names exist and the PID field reads sensibly; it cannot prove which
+/// candidate means which focus kind (spec 50 §16 q4): HYPOTHESIS until traced on hardware.
+pub fn wnf_runtime_plausible(samples: &[(u64, Option<Vec<u8>>)], pid_alive: &dyn Fn(u32) -> bool) -> bool {
+    WNF_FOCUS_CANDIDATES.iter().all(|name| {
+        let Some((_, Some(p))) = samples.iter().find(|(n, _)| n == name) else { return false };
+        if p.is_empty() {
+            return true;
+        }
+        (4..=256).contains(&p.len()) && focus_target_pid(p).is_none_or(pid_alive)
+    })
+}
+
 /// HYPOTHESIS (spec 50 §16 q4): the focus payload starts with the target PID (u32 LE).
 /// Only used on verified builds.
 pub fn focus_target_pid(payload: &[u8]) -> Option<u32> {
@@ -383,6 +403,33 @@ pub struct ShimConfig {
     pub mask_apps: Vec<String>,
     pub disabled_targets: Vec<String>,
     pub wnf_builds: Vec<u32>,
+    /// Run the runtime check of the focus WNF states ([`wnf_runtime_plausible`]) when the
+    /// build is not in a verified list. Off switch: `Shim\WnfRuntimeCheck` = 0.
+    pub wnf_runtime_check: bool,
+    /// Opt-in focus filter in the game-input service ([`GAME_INPUT_SERVICE`]).
+    pub gameinput_focus: bool,
+    /// The service published smart-card reader rules (`crate::readers`).
+    pub reader_rules: bool,
+}
+
+/// The shared game-input service (spec/remote 50 §2.3, §5.1). It runs in session 0, so it
+/// never gets a role; with [`ShimConfig::gameinput_focus`] the module installs only the
+/// focus WNF filter there ([`filter_focus_service`]). No HID-open or masking hooks: the
+/// service opens devices for every session's clients, so an open cannot be attributed to
+/// a seat inside it (the pads' own device security scopes them instead).
+pub const GAME_INPUT_SERVICE: &str = "gameinputsvc.exe";
+
+/// The module may run in this session-0 process: the game-input service, opted in.
+pub fn service_focus_target(exe_lower: &str, session_id: u32, cfg: &ShimConfig) -> bool {
+    session_id == 0 && cfg.gameinput_focus && file_name(exe_lower) == GAME_INPUT_SERVICE
+}
+
+/// `true` = suppress a controller-focus publication of the game-input service: its target
+/// process lives in a seat's session that is not the console (a seat's foreground change
+/// must not take controller focus from the console and the other seats; spec/remote 50 §5).
+/// HYPOTHESIS: the service publishes these states on foreground changes of any session.
+pub fn filter_focus_service(target_session: u32, console: Option<u32>, seat_sessions: &[u32]) -> bool {
+    Some(target_session) != console && seat_sessions.contains(&target_session)
 }
 
 /// Which hook groups the module installs.
@@ -409,6 +456,9 @@ pub struct HookPlan {
     /// with the seat's own cursor ([`crate::kiosk_cursor`]; kiosk role only, parity
     /// 2026-11-17).
     pub cursor_pos: bool,
+    /// WinSCard filter (`crate::readers`): readers of other seats are hidden (every role,
+    /// while reader rules are published; parity review 2026-11-17).
+    pub scard_filter: bool,
 }
 
 impl HookPlan {
@@ -421,6 +471,7 @@ impl HookPlan {
             || self.hkcu_redirect
             || self.raw_input_data
             || self.cursor_pos
+            || self.scard_filter
     }
 }
 
@@ -457,7 +508,7 @@ pub fn hook_plan_full(
             // devices (games and apps that read keyboards / mice through raw input), while a
             // kiosk seat of their session asks for it.
             let raw = kiosk.iter().any(|e| e.flags.raw_input && e.session_id == p.session_id);
-            HookPlan { hid_open: hid, hid_enumeration: hid, raw_input_data: raw, ..HookPlan::default() }
+            HookPlan { hid_open: hid, hid_enumeration: hid, raw_input_data: raw, scard_filter: cfg.reader_rules, ..HookPlan::default() }
         }
         Role::Kiosk { seat, session_id } => {
             let Some(e) =
@@ -470,6 +521,7 @@ pub fn hook_plan_full(
                 hid_enumeration: e.flags.hid_isolation,
                 raw_input_data: e.flags.raw_input,
                 cursor_pos: e.flags.cursor,
+                scard_filter: cfg.reader_rules,
                 ..HookPlan::default()
             }
         }
@@ -489,6 +541,7 @@ pub fn hook_plan_full(
                 hkcu_redirect: steam && f.shared_account,
                 raw_input_data: false,
                 cursor_pos: false,
+                scard_filter: cfg.reader_rules,
             }
         }
     }
@@ -765,6 +818,10 @@ mod tests {
         let plan = hook_plan_full(&r, &p, &[], &k, &ShimConfig::default(), 26100);
         assert!(plan.hid_open && plan.hid_enumeration && plan.raw_input_data && plan.cursor_pos);
         assert!(!hook_plan_full(&Role::Console, &facts(1, 1, "b.exe"), &[], &k, &ShimConfig::default(), 26100).cursor_pos, "seat 1 keeps the real cursor");
+        // Reader rules published: every role filters WinSCard.
+        let rr = ShimConfig { reader_rules: true, ..Default::default() };
+        assert!(hook_plan_full(&Role::Console, &facts(1, 1, "b.exe"), &[], &k, &rr, 26100).scard_filter);
+        assert!(!hook_plan_full(&Role::Console, &facts(1, 1, "b.exe"), &[], &k, &ShimConfig::default(), 26100).scard_filter);
         assert!(!plan.focus_filter && !plan.mask_remote && !plan.steam_cmdline && !plan.hkcu_redirect);
         let mut off = k.clone();
         off[0].flags = crate::kiosk::KioskFlags { hid_isolation: false, raw_input: false, cursor: false };
@@ -794,6 +851,31 @@ mod tests {
         assert!(plan.hid_open && plan.hid_enumeration && !plan.focus_filter && !plan.steam_cmdline);
         // Verified build -> focus filter in the shell.
         let cfg2 = ShimConfig { wnf_builds: vec![26100], ..Default::default() };
+        // Runtime check: every candidate queryable, payloads empty or a live PID first.
+        let pid = |p: &[u8]| -> Option<Vec<u8>> { Some(p.to_vec()) };
+        let live = |p: u32| p == 4242;
+        let ok: Vec<(u64, Option<Vec<u8>>)> =
+            WNF_FOCUS_CANDIDATES.iter().map(|n| (*n, pid(&[0x92, 0x10, 0, 0, 1, 0, 0, 0]))).collect();
+        assert!(wnf_runtime_plausible(&ok, &live), "PID 0x1092 = 4242 is alive");
+        let empty: Vec<(u64, Option<Vec<u8>>)> = WNF_FOCUS_CANDIDATES.iter().map(|n| (*n, Some(Vec::new()))).collect();
+        assert!(wnf_runtime_plausible(&empty, &live));
+        let mut missing = ok.clone();
+        missing[1].1 = None;
+        assert!(!wnf_runtime_plausible(&missing, &live), "a candidate that cannot be queried");
+        let dead: Vec<(u64, Option<Vec<u8>>)> = WNF_FOCUS_CANDIDATES.iter().map(|n| (*n, pid(&[1, 0, 0, 0]))).collect();
+        assert!(!wnf_runtime_plausible(&dead, &live), "the first u32 is no live process");
+        let short: Vec<(u64, Option<Vec<u8>>)> = WNF_FOCUS_CANDIDATES.iter().map(|n| (*n, pid(&[1, 0]))).collect();
+        assert!(!wnf_runtime_plausible(&short, &live));
+        assert!(!wnf_runtime_plausible(&ok[..2], &live), "all three are needed");
+        // Game-input service (opt-in): only seat sessions' publications are dropped.
+        let gi = ShimConfig { gameinput_focus: true, ..Default::default() };
+        assert!(service_focus_target(r"c:\program files\gameinput\gameinputsvc.exe", 0, &gi));
+        assert!(!service_focus_target(r"c:\program files\gameinput\gameinputsvc.exe", 0, &ShimConfig::default()), "opt-in");
+        assert!(!service_focus_target(r"c:\windows\system32\svchost.exe", 0, &gi));
+        assert!(!service_focus_target(r"c:\program files\gameinput\gameinputsvc.exe", 2, &gi), "session 0 only");
+        assert!(filter_focus_service(5, Some(1), &[5, 6]));
+        assert!(!filter_focus_service(1, Some(1), &[5]), "the console keeps its focus changes");
+        assert!(!filter_focus_service(7, Some(1), &[5]), "not a seat session");
         assert!(hook_plan(&role(&p, &map), &p, &map, &cfg2, 26100).focus_filter);
         // Steam.
         let s = facts(3, 1, r"c:\program files (x86)\steam\steam.exe");

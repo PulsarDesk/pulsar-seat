@@ -70,6 +70,7 @@
     | { kind: 'name'; seat: SeatNumber }
     | { kind: 'account'; seat: SeatNumber }
     | { kind: 'remove'; seat: SeatNumber }
+    | { kind: 'removeKioskUser'; seat: SeatNumber }
     | { kind: 'compare'; diff: ConfigDiff }
     | { kind: 'view' }
     | { kind: 'picture'; item: CanvasItem }
@@ -185,10 +186,14 @@
       { separator: true, label: '' },
       { label: t.seatMenu.start, action: () => commands.startSeat(n), disabled: n === 1 || !store.enabled || !!running },
       { label: t.seatMenu.relogon, action: () => store.relogon(n), disabled: !running },
+      { label: t.seatMenu.resetGraphics, action: () => store.resetGraphics(n), disabled: !running && n !== 1 },
       { label: t.seatMenu.stop, action: () => store.stopSeat(n), disabled: n === 1 || !running }
     ];
     if (n !== 1) {
       items.push({ separator: true, label: '' });
+      const kiosk = !!draft?.seats.find((s) => s.number === n)?.local?.kiosk_shell;
+      // A former kiosk seat's own Windows user stays (disabled) until removed here.
+      items.push({ label: t.seatMenu.removeKioskUser, danger: true, disabled: kiosk, action: () => (dialog = { kind: 'removeKioskUser', seat: n }) });
       items.push({ label: t.seatMenu.remove, danger: true, action: () => (dialog = { kind: 'remove', seat: n }) });
     }
     menu = { ...at(e), items, label: t.canvas.seatMenu(n) };
@@ -453,6 +458,19 @@
     onConfirm={() => {
       store.edit((c) => removeSeat(c, n));
       dialog = null;
+    }}
+    onCancel={() => (dialog = null)}
+  />
+{:else if dialog?.kind === 'removeKioskUser'}
+  {@const n = dialog.seat}
+  <ConfirmDialog
+    title={t.seatMenu.removeKioskUserTitle(n)}
+    body={t.seatMenu.removeKioskUserBody}
+    confirmLabel={t.seatMenu.removeKioskUser}
+    danger
+    onConfirm={() => {
+      dialog = null;
+      void store.removeKioskUser(n);
     }}
     onCancel={() => (dialog = null)}
   />

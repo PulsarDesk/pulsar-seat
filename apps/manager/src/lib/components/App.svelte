@@ -457,7 +457,7 @@
     seats={store.draft.seats}
     loadCpuSets={() => store.api.cpuSets()}
     onSave={(rows) => {
-      store.edit((c) => rows.reduce((acc, r) => setCpuSets(acc, r.seat, r.ids, r.hard), c));
+      store.edit((c) => rows.reduce((acc, r) => setCpuSets(acc, r.seat, r.ids, r.hard, r.wide), c));
       dialog = null;
     }}
     onCancel={() => (dialog = null)}

@@ -106,8 +106,12 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   tabs, so nothing is lost on a tab switch; the question is asked before quitting, before
   the wizard and before other actions that replace the draft.
 - Devices are listed row by row in a container (spec: column-major).
-- Not built (later phases in spec 10): per-seat IP binding, video-output assignment dialog,
-  custom device pictures, webcam preview, log verbosity dialog.
+- Built since the first phases (stale "not built" list removed 2026-11-17): per-seat IP
+  binding (`IpBindingDialog`), video-output assignment (`OutputsDialog`), custom device
+  pictures (`PictureDialog`), webcam preview (`CameraPreview`), log verbosity
+  (`LogLevelDialog`); parity review: seat menu "Restart the graphics driver" and "Delete the
+  seat's kiosk user…", CPU dialog column "Whole session", GameInputSvc hint on the shim
+  targets list.
 
 ## Untested on hardware
 

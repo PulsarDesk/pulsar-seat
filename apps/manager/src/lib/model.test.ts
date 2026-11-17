@@ -22,6 +22,7 @@ import {
   seatNameError,
   seatOneFirstMonitorAdvice,
   setAutostart,
+  setCpuSets,
   setDeviceMask,
   setSoftwareCursor,
   setKeyMask,
@@ -333,8 +334,9 @@ describe('pad ignore lists and pad scoping', () => {
     expect(localIssues(c, null).map((i) => i.code)).toContain('invalid_pad_ignore_device');
     c = setPadIgnoreDevices(c, 2, []);
     expect(c.seats.find((s) => s.number === 2)!).not.toHaveProperty('pad_ignore_devices');
-    expect(setPadDeviceScope(demoConfig(), false).settings.input.pad_device_scope).toBe(false);
-    expect(demoConfig().settings.input.pad_device_scope).toBe(true);
+    expect(demoConfig().settings.input.pad_device_scope).toBe(false);
+    expect(setPadDeviceScope(demoConfig(), true).settings.input.pad_device_scope).toBe(true);
+    expect(setPadDeviceScope(setPadDeviceScope(demoConfig(), true), false).settings.input.pad_device_scope).toBe(false);
   });
 });
 
@@ -358,5 +360,17 @@ describe('display and GPU options (2026-11-17)', () => {
     expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('gpu_preference');
     expect(gpuPrefAppValid('C:\\a.EXE')).toBe(true);
     for (const p of ['C:\\a.bat', ' C:\\a.exe', 'a.exe', 'C:\\a\u0001.exe']) expect(gpuPrefAppValid(p)).toBe(false);
+  });
+});
+describe('cpu limits', () => {
+  it('seat-wide coverage is opt-in and needs cores', () => {
+    let c = setCpuSets(demoConfig(), 2, [3, 1], false, true);
+    const s = c.seats.find((x) => x.number === 2)!;
+    expect(s.cpu_sets).toEqual([1, 3]);
+    expect(s.cpu_seat_wide).toBe(true);
+    c = setCpuSets(c, 2, [1], false);
+    expect(c.seats.find((x) => x.number === 2)!).not.toHaveProperty('cpu_seat_wide');
+    c = setCpuSets(c, 2, [], false, true);
+    expect(c.seats.find((x) => x.number === 2)!).not.toHaveProperty('cpu_seat_wide');
   });
 });

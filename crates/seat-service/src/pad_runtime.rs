@@ -59,6 +59,8 @@ pub struct PadRuntime {
     /// Local seat map as last written: session id -> entry.
     map: BTreeMap<u32, SeatMapEntry>,
     map_at: Option<Instant>,
+    /// Monotonic origin of the scoper's retry clock.
+    born: Instant,
 }
 
 fn log_notes(notes: Vec<ScopeNote>) {
@@ -77,14 +79,17 @@ impl PadRuntime {
         let store = FileScopeStore::new(data_dir.join("pads").join("scope.json"));
         let mut scoper = PadScoper::new(Arc::new(WinScoper), Box::new(store));
         log_notes(scoper.restore_all());
-        Self { scoper, map: BTreeMap::new(), map_at: None }
+        Self { scoper, map: BTreeMap::new(), map_at: None, born: Instant::now() }
     }
 
     /// One tick: scoping, then the local seat map.
     pub fn tick(&mut self, s: &Service, remote_seats_running: bool) {
+        // Failed nodes (busy device, unplugged pad) are retried with back-off and a repeated
+        // error is logged once (`PadScoper::sync_at`).
+        let now = self.born.elapsed().as_millis() as u64;
         match s.pad_scope_plan(remote_seats_running, &parent_of) {
-            Some(want) => log_notes(self.scoper.sync(&want)),
-            None => log_notes(self.scoper.restore_all()),
+            Some(want) => log_notes(self.scoper.sync_at(&want, now)),
+            None => log_notes(self.scoper.restore_all_at(now)),
         }
         self.publish_map(s);
     }

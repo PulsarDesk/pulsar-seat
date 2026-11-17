@@ -662,7 +662,7 @@ mod tests {
         // Additive: absent in JSON, defaults on read.
         let j = serde_json::to_value(Config::default()).unwrap();
         assert!(j["seats"][0].get("pad_ignore_devices").is_none());
-        assert_eq!(j["settings"]["input"]["pad_device_scope"], true);
+        assert_eq!(j["settings"]["input"]["pad_device_scope"], false, "opt-in");
     }
 
     #[test]

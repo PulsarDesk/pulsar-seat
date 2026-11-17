@@ -267,7 +267,7 @@ impl Binding {
     /// Whether the session backend has a display of its own (RDP loopback: yes). IddCx
     /// virtual monitors are only plugged for backends without one (spec 00 T1); until the
     /// service clears this, `pulsar_idd` binds like `display_core`.
-    pub fn set_session_has_display(&self, has: bool) {
+    pub fn set_session_has_display_flag(&self, has: bool) {
         self.inner.session_has_display.store(has, Ordering::SeqCst);
     }
 
@@ -887,6 +887,16 @@ impl DisplayBinding for Binding {
         self.inner.console.exec(&ConsoleCommand::Power { gdi_name: gdi, on })
     }
 
+    fn set_session_has_display(&self, has: bool) {
+        self.set_session_has_display_flag(has);
+    }
+
+    fn idd_frames(&self, seat: SeatNumber) -> bool {
+        self.inner.kind == DisplayBackendKind::PulsarIdd
+            && !self.inner.session_has_display.load(Ordering::SeqCst)
+            && lock(&self.inner.state).bound.contains_key(&seat)
+    }
+
     fn configure_seat(&self, seat: SeatNumber, prefs: &SeatDisplayPrefs) {
         let mut st = lock(&self.inner.state);
         let o = st.options.entry(seat).or_default();
@@ -1125,7 +1135,7 @@ mod tests {
         assert_eq!(idd.0.load(Ordering::SeqCst), 0);
         assert_eq!(idd.1.load(Ordering::SeqCst), 0);
 
-        b.set_session_has_display(false);
+        b.set_session_has_display_flag(false);
         // The service path: `configure_seat` carries the reader SID (host account).
         let prefs = SeatDisplayPrefs {
             frame_reader_sid: Some("S-1-5-21-1-2-3-1001".into()),
@@ -1177,7 +1187,7 @@ mod tests {
         let (b, _) = setup(DisplayBackendKind::PulsarIdd, vec![target(5, 1, true, 0), second, other_gpu]);
         let idd = Arc::new(GpuIdd(Mutex::new(vec![])));
         let b = b.with_idd(idd.clone());
-        b.set_session_has_display(false);
+        b.set_session_has_display_flag(false);
         let devs = b.enumerate().unwrap();
         let prefs = SeatDisplayPrefs { hdr: vec![devs[1].key.clone()], vrr: vec![devs[1].key.clone(), devs[2].key.clone()], ..Default::default() };
         b.configure_seat(s(2), &prefs);

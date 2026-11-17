@@ -12,7 +12,10 @@
  * - FWPS_LAYER_ALE_CONNECT_REDIRECT_V4: an outbound TCP connect / UDP flow of a seat process
  *   to a non-loopback destination gets the seat address as its local address (backstop for
  *   sockets bound before the map arrived). Connections redirected by another callout are
- *   left alone (FwpsQueryConnectionRedirectState0).
+ *   left alone (FwpsQueryConnectionRedirectState0), and so are sockets the program bound
+ *   explicitly to a given address: the bind classify records their transport endpoint
+ *   handle and address in a small table (SeatWfpBound*), the connect classify skips an
+ *   endpoint found there with the same local address (parity review 2026-11-17).
  *
  * The seat of a process is its session (one seat per session; the service leaves shared
  * sessions out of the map). The session is read from the process's primary token
@@ -41,6 +44,54 @@
 #endif
 
 static volatile LONG SeatWfpFiltersAdded;
+
+/*
+ * Explicitly bound endpoints (bind to a non-wildcard address) of the time the map is set:
+ * direct-mapped by the transport endpoint handle. A colliding newer bind evicts the older
+ * one (that socket then falls back to the connect backstop: rewritten). Handles are reused
+ * after a socket closes, so an entry matches only with the same local address too.
+ * HYPOTHESIS: FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE is present at both ALE redirect
+ * layers for the same socket (Windows 8+ documentation).
+ */
+#define SEATWFP_BOUND_SLOTS 1024
+typedef struct _SEATWFP_BOUND {
+    UINT64 Endpoint;
+    UINT32 Local; /* host order */
+} SEATWFP_BOUND;
+static SEATWFP_BOUND SeatWfpBound[SEATWFP_BOUND_SLOTS];
+static EX_SPIN_LOCK SeatWfpBoundLock;
+
+static ULONG
+SeatWfpBoundSlot(_In_ UINT64 Endpoint)
+{
+    UINT64 h = Endpoint ^ (Endpoint >> 17) ^ (Endpoint >> 31);
+    return (ULONG)(h % SEATWFP_BOUND_SLOTS);
+}
+
+static VOID
+SeatWfpBoundRecord(_In_ UINT64 Endpoint, _In_ UINT32 Local)
+{
+    KIRQL irql;
+    ULONG s = SeatWfpBoundSlot(Endpoint);
+
+    irql = ExAcquireSpinLockExclusive(&SeatWfpBoundLock);
+    SeatWfpBound[s].Endpoint = Endpoint;
+    SeatWfpBound[s].Local = Local;
+    ExReleaseSpinLockExclusive(&SeatWfpBoundLock, irql);
+}
+
+static BOOLEAN
+SeatWfpBoundExplicit(_In_ UINT64 Endpoint, _In_ UINT32 Local)
+{
+    KIRQL irql;
+    BOOLEAN hit;
+    ULONG s = SeatWfpBoundSlot(Endpoint);
+
+    irql = ExAcquireSpinLockShared(&SeatWfpBoundLock);
+    hit = (SeatWfpBound[s].Endpoint == Endpoint && SeatWfpBound[s].Local == Local) ? TRUE : FALSE;
+    ExReleaseSpinLockShared(&SeatWfpBoundLock, irql);
+    return hit;
+}
 
 _IRQL_requires_(PASSIVE_LEVEL)
 static VOID
@@ -203,7 +254,13 @@ SeatWfpClassifyBind(_In_ const FWPS_INCOMING_VALUES0* inFixedValues, _In_ const 
     }
     local = inFixedValues->incomingValue[FWPS_FIELD_ALE_BIND_REDIRECT_V4_IP_LOCAL_ADDRESS].value.uint32;
     if (local != 0) {
-        return; /* explicit bind to an address: left alone */
+        /* Explicit bind to an address: left alone, and remembered so the connect backstop
+         * leaves it alone too. Only while a map is set (nothing to protect otherwise). */
+        if (ReadULongAcquire(&g.MapSeats) != 0 && (local >> 24) != 127 &&
+            FWPS_IS_METADATA_FIELD_PRESENT(inMetaValues, FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE)) {
+            SeatWfpBoundRecord(inMetaValues->transportEndpointHandle, local);
+        }
+        return;
     }
     if (!SeatWfpAddressFor(inFixedValues, FWPS_FIELD_ALE_BIND_REDIRECT_V4_ALE_APP_ID, inMetaValues, SEATWFP_SF_BIND, address)) {
         return;
@@ -254,6 +311,10 @@ SeatWfpClassifyConnect(_In_ const FWPS_INCOMING_VALUES0* inFixedValues, _In_ con
     }
     if (local == SeatWfpHostOrder(address)) {
         return; /* already the seat address (bind redirect did it) */
+    }
+    if (FWPS_IS_METADATA_FIELD_PRESENT(inMetaValues, FWPS_METADATA_FIELD_TRANSPORT_ENDPOINT_HANDLE) &&
+        SeatWfpBoundExplicit(inMetaValues->transportEndpointHandle, local)) {
+        return; /* the program bound this socket to this address itself */
     }
     if (SeatWfpRewrite(classifyContext, filter, classifyOut, TRUE, address)) {
         InterlockedIncrement64(&g.ConnectRedirects);

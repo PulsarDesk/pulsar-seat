@@ -336,10 +336,12 @@ export function setPadDeviceScope(c: Config, on: boolean): Config {
   return next;
 }
 
-export function setCpuSets(c: Config, n: SeatNumber, ids: number[], hard: boolean): Config {
+export function setCpuSets(c: Config, n: SeatNumber, ids: number[], hard: boolean, seatWide = false): Config {
   return editSeat(c, n, (s) => {
     s.cpu_sets = [...ids].sort((a, b) => a - b);
     s.cpu_hard_limit = hard;
+    if (seatWide && ids.length) s.cpu_seat_wide = true;
+    else delete s.cpu_seat_wide;
   });
 }
 

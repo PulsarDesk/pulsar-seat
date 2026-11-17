@@ -241,11 +241,15 @@ pub fn activate_packaged(aumid: &str, args: &str) -> Result<u32, String> {
     unsafe { mgr.ActivateApplication(PCWSTR(id.as_ptr()), PCWSTR(a.as_ptr()), AO_NONE) }.map_err(|e| e.to_string())
 }
 
-/// The seat cursor section (`seat_shim_core::kiosk_cursor`), written by the shell.
+/// The seat cursor section (`seat_shim_core::kiosk_cursor`, layout v2): the shell writes
+/// the seat cursor, the app clip and the seat's key state; the seat's apps (module hooks)
+/// write `SetCursorPos` / `ClipCursor` requests the shell picks up on its tick.
 pub struct CursorSection {
     map: HANDLE,
     view: *mut u8,
     writer: seat_shim_core::kiosk_cursor::Writer,
+    requests: seat_shim_core::kiosk_cursor::RequestCursor,
+    last: seat_shim_core::kiosk_cursor::SeatCursor,
 }
 
 impl CursorSection {
@@ -266,15 +270,24 @@ impl CursorSection {
             unsafe { CloseHandle(map) };
             return None;
         }
-        Some(Self { map, view: v.Value.cast(), writer: Default::default() })
+        let view: *mut u8 = v.Value.cast();
+        // SAFETY: inside our view; the shell's UI thread creates the section.
+        unsafe {
+            let tid = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+            for (i, b) in tid.to_le_bytes().iter().enumerate() {
+                std::ptr::write_volatile(view.add(seat_shim_core::kiosk_cursor::SHELL_THREAD + i), *b);
+            }
+        }
+        Some(Self { map, view, writer: Default::default(), requests: Default::default(), last: Default::default() })
     }
 
-    fn put(&mut self, x: i32, y: i32, alive: bool) {
+    fn put(&mut self, c: &seat_shim_core::kiosk_cursor::SeatCursor, alive: bool) {
         use seat_shim_core::kiosk_cursor::encode;
         let (odd, even) = self.writer.advance();
-        let busy = encode(odd, x, y, alive);
-        let done = encode(even, x, y, alive);
-        // SAFETY: our SECTION_SIZE-byte view; volatile so the order of the writes holds.
+        let busy = encode(odd, c, alive);
+        let done = encode(even, c, alive);
+        // SAFETY: our SECTION_SIZE-byte view (the shell part is its first SHELL_SIZE bytes);
+        // volatile so the order of the writes holds.
         unsafe {
             for (i, b) in busy.iter().enumerate().take(8) {
                 std::ptr::write_volatile(self.view.add(i), *b);
@@ -290,17 +303,104 @@ impl CursorSection {
         }
     }
 
+    /// Publishes the seat cursor, clip and key state (only when something changed).
+    pub fn publish(&mut self, x: i32, y: i32, clip: Option<(i32, i32, i32, i32)>, keys: &[u8; 256]) {
+        let c = seat_shim_core::kiosk_cursor::SeatCursor { x, y, clip, keys: *keys };
+        if c == self.last && self.writer_started() {
+            return;
+        }
+        self.put(&c, true);
+        self.last = c;
+    }
+
+    fn writer_started(&self) -> bool {
+        // SAFETY: the sequence word of our view.
+        unsafe { std::ptr::read_volatile(self.view.add(4)) != 0 }
+    }
+
+    /// New `SetCursorPos` / `ClipCursor` requests of the seat's apps.
+    pub fn take_requests(&mut self) -> Vec<seat_shim_core::kiosk_cursor::Request> {
+        use seat_shim_core::kiosk_cursor::{REQ_LOCK, SECTION_SIZE, decode_requests};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        // SAFETY: the lock word is a 4-byte aligned u32 inside our view (the view is page
+        // aligned and REQ_LOCK a multiple of 4); apps take the same lock.
+        let lock = unsafe { &*(self.view.add(REQ_LOCK) as *const AtomicU32) };
+        let mut spins = 0u32;
+        while lock.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+            spins += 1;
+            if spins > 10_000 {
+                // A writer died holding it: take it over (the fields stay usable).
+                break;
+            }
+            std::hint::spin_loop();
+        }
+        let mut b = [0u8; SECTION_SIZE];
+        for (i, x) in b.iter_mut().enumerate().skip(REQ_LOCK) {
+            // SAFETY: inside our view.
+            *x = unsafe { std::ptr::read_volatile(self.view.add(i)) };
+        }
+        lock.store(0, Ordering::Release);
+        decode_requests(&b).map(|r| self.requests.take(&r)).unwrap_or_default()
+    }
+
+    /// Back-compat helper: the cursor only (keys and clip unchanged).
     pub fn set(&mut self, x: i32, y: i32) {
-        self.put(x, y, true);
+        let (clip, keys) = (self.last.clip, self.last.keys);
+        self.publish(x, y, clip, &keys);
     }
 }
 
 impl Drop for CursorSection {
     fn drop(&mut self) {
-        self.put(0, 0, false);
+        self.put(&seat_shim_core::kiosk_cursor::SeatCursor::default(), false);
         use windows_sys::Win32::System::Memory::{MEMORY_MAPPED_VIEW_ADDRESS, UnmapViewOfFile};
         // SAFETY: our view and handle.
         unsafe {
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: self.view.cast() });
+            CloseHandle(self.map);
+        }
+    }
+}
+
+/// The seat's own clipboard (`seat_shim_core::kiosk_clip`): the shell only creates the
+/// section (magic, empty set); the seat's apps read and write it through the module. It
+/// lives as long as the shell (a new shell starts with an empty seat clipboard).
+pub struct ClipSection {
+    map: HANDLE,
+    view: *mut u8,
+}
+
+impl ClipSection {
+    pub fn create(seat: u32) -> Option<Self> {
+        use seat_shim_core::kiosk_clip::{MAGIC, SECTION_SIZE, section_name};
+        use windows_sys::Win32::System::Memory::{CreateFileMappingW, FILE_MAP_WRITE, MapViewOfFile, PAGE_READWRITE};
+        let name = wide(&section_name(seat));
+        // SAFETY: pagefile-backed section with the token's default DACL (the seat user and
+        // SYSTEM), in this session's namespace; pages are committed lazily by use.
+        let map = unsafe { CreateFileMappingW(INVALID_HANDLE_VALUE, std::ptr::null(), PAGE_READWRITE, 0, SECTION_SIZE as u32, name.as_ptr()) };
+        if map.is_null() {
+            return None;
+        }
+        // SAFETY: view of the section just created.
+        let v = unsafe { MapViewOfFile(map, FILE_MAP_WRITE, 0, 0, 4096) };
+        if v.Value.is_null() {
+            // SAFETY: our handle.
+            unsafe { CloseHandle(map) };
+            return None;
+        }
+        let view: *mut u8 = v.Value.cast();
+        // SAFETY: the first page of our view; a fresh section is zeroed (empty set).
+        unsafe { std::ptr::write_volatile(view as *mut u32, MAGIC) };
+        Some(Self { map, view })
+    }
+}
+
+impl Drop for ClipSection {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Memory::{MEMORY_MAPPED_VIEW_ADDRESS, UnmapViewOfFile};
+        // SAFETY: our view and handle (apps' views keep the section until they exit).
+        unsafe {
+            std::ptr::write_volatile(self.view as *mut u32, 0);
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: self.view.cast() });
             CloseHandle(self.map);
         }

@@ -187,7 +187,54 @@ mod win {
                     Err(e) => Err((e.reason.clone(), e.win32)),
                 }
             }
+            AgentTaskKind::ResetGraphics => {
+                // A fresh thread: SetThreadDesktop needs a thread without windows / hooks.
+                std::thread::spawn(reset_graphics).join().unwrap_or_else(|_| Err(("reset_graphics_panicked".into(), None)))
+            }
         }
+    }
+
+    /// Win+Ctrl+Shift+B (graphics driver restart) into the session's input desktop
+    /// (spec/local 50). HYPOTHESIS: Windows honours the shortcut from `SendInput` (it is
+    /// handled by the OS, not by an app); untested on hardware.
+    fn reset_graphics() -> Result<(), (String, Option<u32>)> {
+        use windows_sys::Win32::System::StationsAndDesktops::{
+            CloseDesktop, DESKTOP_JOURNALPLAYBACK, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, OpenInputDesktop, SetThreadDesktop,
+        };
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, SendInput};
+        // SAFETY: plain call; the handle is closed below.
+        let desk = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS | DESKTOP_JOURNALPLAYBACK) };
+        if desk.is_null() {
+            return Err(last_error("OpenInputDesktop"));
+        }
+        // SAFETY: this thread owns no windows or hooks.
+        if unsafe { SetThreadDesktop(desk) } == 0 {
+            let e = last_error("SetThreadDesktop");
+            // SAFETY: our handle.
+            unsafe { CloseDesktop(desk) };
+            return Err(e);
+        }
+        let keys = seat_input::kiosk::reset_graphics_keys();
+        let inputs: Vec<INPUT> = keys
+            .iter()
+            .map(|&(vk, up)| {
+                // SAFETY: INPUT is plain data; all-zero is a valid value.
+                let mut i: INPUT = unsafe { std::mem::zeroed() };
+                i.r#type = INPUT_KEYBOARD;
+                let mut flags = if up { KEYEVENTF_KEYUP } else { 0 };
+                if vk == 0x5B {
+                    flags |= KEYEVENTF_EXTENDEDKEY;
+                }
+                i.Anonymous.ki = KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 };
+                i
+            })
+            .collect();
+        // SAFETY: a valid INPUT array of the stated size.
+        let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+        let r = if sent as usize == inputs.len() { Ok(()) } else { Err(last_error("SendInput")) };
+        // SAFETY: our handle (the thread ends right after).
+        unsafe { CloseDesktop(desk) };
+        r
     }
 
     /// Notification-area icon "switch to seat N" (spec 35 §5.5(a), `fast_user_switch`

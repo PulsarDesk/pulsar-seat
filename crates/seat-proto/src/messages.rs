@@ -154,6 +154,15 @@ pub enum RequestBody {
     SwitchSeat { seat: SeatNumber },
     /// Ask the service to restart Windows (it asks nothing itself; the manager confirmed).
     RequestReboot,
+    /// Restart the graphics driver for a running seat (spec/local 50: the Windows shortcut
+    /// Win+Ctrl+Shift+B sent into the seat session's input desktop by its agent). Answers
+    /// `ack` once queued. Added 2026-11-17 (parity review, additive, admin).
+    ResetGraphics { seat: SeatNumber },
+    /// Delete Pulsar's own Windows user of a kiosk seat (`PulsarKiosk<NN>`) with its
+    /// profile and stored password. Refused while the seat runs a kiosk shell. Unused
+    /// kiosk users are otherwise only disabled at service start (their data stays). Added
+    /// 2026-11-17 (parity review, additive, admin).
+    RemoveKioskUser { seat: SeatNumber },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -395,6 +404,8 @@ impl RequestBody {
             | R::SwitchSeat { .. }
             | R::StopSeat { .. }
             | R::RequestReboot
+            | R::ResetGraphics { .. }
+            | R::RemoveKioskUser { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -1028,6 +1039,10 @@ pub enum AgentTaskKind {
     /// these display targets (the seat's monitors) in the desktop and turn the others off.
     /// LUIDs are this boot's (from the service inventory). Added 2026-11-13, additive.
     ApplyTopology { targets: Vec<DisplayTargetRef> },
+    /// Restart the graphics driver: Win+Ctrl+Shift+B sent into this session's input
+    /// desktop (`SendInput`). HYPOTHESIS: Windows honours the shortcut from injected input.
+    /// Added 2026-11-17, additive.
+    ResetGraphics,
 }
 
 /// A CCD display target of this boot (adapter LUID + target id).

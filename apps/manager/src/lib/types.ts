@@ -207,6 +207,8 @@ export interface SeatConfig {
   account: SeatAccount;
   cpu_sets?: number[];
   cpu_hard_limit: boolean;
+  /** Opt-in: every new process of the seat's session gets the soft limit (added 2026-11-17). */
+  cpu_seat_wide?: boolean;
   wallpaper: boolean;
   /** Per-seat source address (spec 10 §7.4). Added 2026-11-13. */
   ip_binding?: IpBinding;
@@ -671,7 +673,8 @@ export type IsolationStatus =
   | 'camera_consent'
   | 'shared'
   | 'not_supported'
-  | 'network';
+  | 'network'
+  | 'seat_filter';
 
 export interface DeviceView {
   device: Device;
@@ -838,6 +841,8 @@ export type RequestBody =
   | { type: 'start_seats'; data: { seats: SeatNumber[] | null } }
   | { type: 'stop_seat'; data: { seat: SeatNumber } }
   | { type: 'relogon_seat'; data: { seat: SeatNumber } }
+  | { type: 'reset_graphics'; data: { seat: SeatNumber } }
+  | { type: 'remove_kiosk_user'; data: { seat: SeatNumber } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }

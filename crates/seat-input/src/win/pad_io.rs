@@ -86,17 +86,23 @@ impl PhysicalPadSource for WinPadSource {
         }
         let owned = Arc::new(Owned(h as usize));
         // The preparsed data stays readable after the open (read-only queries).
-        let dev = HidDevice::from_handle(h);
+        let dev = HidDevice::from_handle(h).map(Arc::new);
         let output_len = dev.as_ref().map_or(0, |d| usize::from(d.output_len));
-        let caps = dev.as_ref().map(HidDevice::value_caps).unwrap_or_default();
-        Ok(Box::new(WinPadIo { h: owned, ev: event()?, dev, caps, output_len }))
+        let caps = dev.as_ref().map(|d| d.value_caps()).unwrap_or_default();
+        // Rumble paths for pads without their own output report (parity review): the XUSB
+        // interface of the collection's parent (Xbox on USB), else HID PID reports.
+        let xusb = xusb_interface_of(interface_path);
+        let pid = dev.clone().filter(|d| d.has_pid());
+        let fallback = Arc::new(Fallback { xusb, pid, started: std::sync::atomic::AtomicBool::new(false) });
+        Ok(Box::new(WinPadIo { h: owned, ev: event()?, dev, caps, output_len, fallback }))
     }
 }
 
 struct WinPadIo {
     h: Arc<Owned>,
     ev: Owned,
-    dev: Option<HidDevice>,
+    dev: Option<Arc<HidDevice>>,
+    fallback: Arc<Fallback>,
     /// Input value usages (generic decoding), read once.
     caps: Vec<ValueCap>,
     output_len: usize,
@@ -138,7 +144,7 @@ impl PhysicalPadIo for WinPadIo {
     }
 
     fn writer(&self) -> Arc<dyn PhysicalPadWriter> {
-        Arc::new(WinPadWriter { h: self.h.clone(), output_len: self.output_len })
+        Arc::new(WinPadWriter { h: self.h.clone(), output_len: self.output_len, fallback: self.fallback.clone() })
     }
 
     fn hid_layout(&self) -> Option<HidLayout> {
@@ -169,6 +175,76 @@ struct WinPadWriter {
     h: Arc<Owned>,
     /// `OutputReportByteLength` of the collection (0 = unknown: written as given).
     output_len: usize,
+    fallback: Arc<Fallback>,
+}
+
+/// Rumble for pads without an output report of their own (`seat_pads::ff`).
+struct Fallback {
+    /// XUSB device interface path of the pad (Xbox on USB).
+    xusb: Option<String>,
+    /// The collection, when it declares HID PID force feedback.
+    pid: Option<Arc<HidDevice>>,
+    /// The PID actuators were enabled once.
+    started: std::sync::atomic::AtomicBool,
+}
+
+/// `DEVPKEY_Device_InstanceId` of a device interface.
+fn interface_instance_id(interface_path: &str) -> Option<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{CM_Get_Device_Interface_PropertyW, CR_SUCCESS};
+    use windows_sys::Win32::Devices::Properties::DEVPKEY_Device_InstanceId;
+    let path = super::wide(interface_path);
+    let mut buf = vec![0u16; 512];
+    let mut size = (buf.len() * 2) as u32;
+    let mut ty = 0u32;
+    // SAFETY: NUL-terminated path, buffer of `size` bytes.
+    let rc = unsafe { CM_Get_Device_Interface_PropertyW(path.as_ptr(), &DEVPKEY_Device_InstanceId, &mut ty, buf.as_mut_ptr().cast(), &mut size, 0) };
+    if rc != CR_SUCCESS {
+        return None;
+    }
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..n]))
+}
+
+/// The XUSB interface on the HID collection's parent node, if any (Xbox pads on USB).
+fn xusb_interface_of(interface_path: &str) -> Option<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW, CR_SUCCESS,
+    };
+    let inst = interface_instance_id(interface_path)?;
+    let parent = seat_pads::win::devtree::parent_instance(&inst)?;
+    let guid = windows_sys::core::GUID::from_u128(seat_pads::ff::XUSB_INTERFACE_GUID);
+    let id = super::wide(&parent);
+    let mut len = 0u32;
+    // SAFETY: valid GUID and device id; out size.
+    if unsafe { CM_Get_Device_Interface_List_SizeW(&mut len, &guid, id.as_ptr(), CM_GET_DEVICE_INTERFACE_LIST_PRESENT) } != CR_SUCCESS || len <= 1 {
+        return None;
+    }
+    let mut buf = vec![0u16; len as usize];
+    // SAFETY: buffer of `len` characters.
+    if unsafe { CM_Get_Device_Interface_ListW(&guid, id.as_ptr(), buf.as_mut_ptr(), len, CM_GET_DEVICE_INTERFACE_LIST_PRESENT) } != CR_SUCCESS {
+        return None;
+    }
+    let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    (n > 0).then(|| String::from_utf16_lossy(&buf[..n]))
+}
+
+/// One XUSB set-state request (opened per call: rumble changes are rare).
+fn xusb_set_state(path: &str, strong: u16, weak: u16) -> Result<(), String> {
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    let p = super::wide(path);
+    // SAFETY: NUL-terminated path; closed by `Owned`.
+    let h = unsafe { CreateFileW(p.as_ptr(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut()) };
+    if h == INVALID_HANDLE_VALUE {
+        return Err(last_error("open XUSB interface"));
+    }
+    let h = Owned(h as usize);
+    let req = seat_pads::ff::xusb_set_state(strong, weak);
+    let mut got = 0u32;
+    // SAFETY: 5-byte input buffer; no output.
+    let ok = unsafe {
+        DeviceIoControl(h.raw(), seat_pads::ff::IOCTL_XUSB_SET_STATE, req.as_ptr().cast(), req.len() as u32, std::ptr::null_mut(), 0, &mut got, std::ptr::null_mut())
+    };
+    if ok == 0 { Err(last_error("IOCTL_XUSB_SET_STATE")) } else { Ok(()) }
 }
 
 // SAFETY: see WinPadIo; each write has its own event and OVERLAPPED.
@@ -177,6 +253,18 @@ unsafe impl Send for WinPadWriter {}
 unsafe impl Sync for WinPadWriter {}
 
 impl PhysicalPadWriter for WinPadWriter {
+    fn rumble_fallback(&self, strong: u16, weak: u16) -> Result<(), String> {
+        if let Some(path) = &self.fallback.xusb {
+            return xusb_set_state(path, strong, weak);
+        }
+        let Some(dev) = &self.fallback.pid else { return Err("no XUSB interface and no HID PID force feedback".into()) };
+        let first = !self.fallback.started.swap(true, std::sync::atomic::Ordering::SeqCst);
+        for r in dev.pid_rumble_reports(strong, weak, first) {
+            self.write(&r)?;
+        }
+        Ok(())
+    }
+
     fn write(&self, report: &[u8]) -> Result<(), String> {
         let padded;
         let report = if self.output_len > report.len() {

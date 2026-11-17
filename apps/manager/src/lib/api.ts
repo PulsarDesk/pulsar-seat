@@ -113,6 +113,10 @@ export interface Api extends LocalApi {
   startSeats(seats: SeatNumber[] | null): Promise<void>;
   stopSeat(seat: SeatNumber): Promise<void>;
   relogonSeat(seat: SeatNumber): Promise<void>;
+  /** Restart the graphics driver in the seat's session (Win+Ctrl+Shift+B, `reset_graphics`). */
+  resetGraphics(seat: SeatNumber): Promise<void>;
+  /** Delete Pulsar's own Windows user of a former kiosk seat with its profile (`remove_kiosk_user`). */
+  removeKioskUser(seat: SeatNumber): Promise<void>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -177,6 +181,8 @@ export function createRequestApi(
     startSeats: (seats) => ack({ type: 'start_seats', data: { seats } }),
     stopSeat: (seat) => ack({ type: 'stop_seat', data: { seat } }),
     relogonSeat: (seat) => ack({ type: 'relogon_seat', data: { seat } }),
+    resetGraphics: (seat) => ack({ type: 'reset_graphics', data: { seat } }),
+    removeKioskUser: (seat) => ack({ type: 'remove_kiosk_user', data: { seat } }),
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

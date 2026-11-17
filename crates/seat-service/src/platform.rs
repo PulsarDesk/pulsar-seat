@@ -130,10 +130,25 @@ pub trait Platform: Send + Sync {
         let _ = (session_id, job);
         Ok(Vec::new())
     }
+    /// Seat-wide CPU coverage (parity review 2026-11-17), called every tick for each
+    /// running seat with CPU limits: the seat session's shell (`explorer.exe`) joins the
+    /// session's job, so programs started from the Start menu / Explorer inherit it; with
+    /// `seat_wide` every other new process of the session gets the soft limit too. Each
+    /// process is handled once. Returns notes (refusals, protected processes).
+    fn cover_session(&self, session_id: u32, job: &SeatJobSpec, seat_wide: bool) -> Vec<String> {
+        let _ = (session_id, job, seat_wide);
+        Vec::new()
+    }
     /// Live seat apps (not service children) this platform started in `session_id` and
     /// still tracks (launcher concurrency limit). `0` when not tracked.
     fn live_app_count(&self, _session_id: u32) -> usize {
         0
+    }
+    /// Publish the smart-card reader rules for the module (`seat_shim_core::readers`).
+    /// Default: nothing (no shim on this platform).
+    fn publish_reader_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+        let _ = rules;
+        Ok(())
     }
     /// Publish the kiosk seat map (seat-shim-core `kiosk`, round 4): exactly `entries`
     /// afterwards (stale seats removed). Default: nothing (no shim on this platform).
@@ -169,6 +184,12 @@ pub trait Platform: Send + Sync {
     fn logoff_session(&self, session_id: u32) -> BackendResult<()>;
     /// Restart Windows (planned, with a reason code).
     fn reboot(&self) -> BackendResult<()>;
+    /// Delete Pulsar's own Windows user of kiosk seat `seat` (account, profile, stored
+    /// password; `crate::host_account::remove_kiosk_user`). Returns the partial errors.
+    fn remove_kiosk_user(&self, seat: seat_core::SeatNumber) -> BackendResult<Vec<String>> {
+        let _ = seat;
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no local accounts here"))
+    }
     fn local_users(&self) -> BackendResult<Vec<LocalUser>>;
     fn cpu_sets(&self) -> Vec<CpuSetInfo>;
     fn os_build(&self) -> u32;
@@ -334,6 +355,12 @@ pub mod mock {
         pub safe_mode: AtomicBool,
         pub build: AtomicU32,
         pub rebooted: AtomicBool,
+        /// Last published reader rules.
+        pub reader_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
+        /// `cover_session` calls: (session, cpu sets, seat-wide).
+        pub covered: Mutex<Vec<(u32, Vec<u32>, bool)>>,
+        /// Seats whose kiosk user was removed (`remove_kiosk_user`).
+        pub kiosk_users_removed: Mutex<Vec<seat_core::SeatNumber>>,
         pub fail_launch: AtomicBool,
         pub fail_rng: AtomicBool,
         /// PIDs whose identity changed (reused after a restart): adoption refuses them.
@@ -445,6 +472,18 @@ pub mod mock {
         fn reboot(&self) -> BackendResult<()> {
             self.rebooted.store(true, Ordering::SeqCst);
             Ok(())
+        }
+        fn remove_kiosk_user(&self, seat: seat_core::SeatNumber) -> BackendResult<Vec<String>> {
+            lock(&self.kiosk_users_removed).push(seat);
+            Ok(Vec::new())
+        }
+        fn publish_reader_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
+            *lock(&self.reader_rules) = rules.to_vec();
+            Ok(())
+        }
+        fn cover_session(&self, session_id: u32, job: &SeatJobSpec, seat_wide: bool) -> Vec<String> {
+            lock(&self.covered).push((session_id, job.cpu_sets.clone(), seat_wide));
+            Vec::new()
         }
         fn local_users(&self) -> BackendResult<Vec<LocalUser>> {
             Ok(vec![LocalUser { name: "ali".into(), full_name: "Ali".into(), sid: "S-1-5-21-9-ali".into(), disabled: false, is_admin: false }])

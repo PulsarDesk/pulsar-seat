@@ -240,6 +240,28 @@ impl SeatMapReader for RegSeatMap {
 }
 
 /// Service writes, module reads (`HKLM\SOFTWARE\PulsarSplit\Runtime\KioskSeats`).
+/// Publishes the smart-card reader rules (`crate::readers`) for the module (`Shim` key,
+/// `ReaderRules`; empty list = the value is removed).
+pub fn write_reader_rules(rules: &[crate::readers::ReaderRule]) -> Result<(), ShimError> {
+    let k = hklm_create(crate::REG_SHIM, winreg::enums::KEY_WRITE).map_err(|e| reg_err(crate::REG_SHIM, e))?;
+    let lines = crate::readers::encode(rules);
+    if lines.is_empty() {
+        return match k.delete_value(crate::values::READER_RULES) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(reg_err(crate::values::READER_RULES, e)),
+        };
+    }
+    k.set_raw_value(crate::values::READER_RULES, &to_winreg(&RegValue::MultiSz(lines))).map_err(|e| reg_err(crate::values::READER_RULES, e))
+}
+
+/// The smart-card reader rules as published.
+pub fn read_reader_rules() -> Vec<crate::readers::ReaderRule> {
+    read_value(crate::REG_SHIM, crate::values::READER_RULES)
+        .and_then(|v| v.as_multi().map(crate::readers::decode))
+        .unwrap_or_default()
+}
+
 pub struct RegKioskMap;
 
 impl crate::kiosk::KioskMapWriter for RegKioskMap {
@@ -362,6 +384,9 @@ pub fn read_shim_config() -> crate::decide::ShimConfig {
         mask_apps: multi(crate::values::MASK_APPS).into_iter().map(|s| s.to_ascii_lowercase()).collect(),
         disabled_targets: multi(crate::values::DISABLED_TARGETS),
         wnf_builds: multi(crate::values::WNF_BUILDS).iter().filter_map(|s| s.trim().parse().ok()).collect(),
+        wnf_runtime_check: read_value(crate::REG_SHIM, crate::values::WNF_RUNTIME_CHECK).and_then(|v| v.as_dword()) != Some(0),
+        gameinput_focus: read_value(crate::REG_SHIM, crate::values::GAME_INPUT_FOCUS).and_then(|v| v.as_dword()) == Some(1),
+        reader_rules: read_value(crate::REG_SHIM, crate::values::READER_RULES).and_then(|v| v.as_multi().map(|l| !l.is_empty())).unwrap_or(false),
     }
 }
 
@@ -450,6 +475,17 @@ fn random16() -> [u8; 16] {
 pub struct WinShimSystem;
 
 impl ShimSystem for WinShimSystem {
+    fn host_is_arm64(&self) -> bool {
+        // The service is a native build: its own architecture is the PC's.
+        cfg!(target_arch = "aarch64")
+    }
+    fn pe_machine(&self, p: &Path) -> Option<u16> {
+        use std::io::Read;
+        let mut head = vec![0u8; 4096];
+        let mut f = std::fs::File::open(p).ok()?;
+        let n = f.read(&mut head).ok()?;
+        crate::install::pe_machine_of(&head[..n])
+    }
     fn reg_read(&self, path: &str, name: &str) -> Result<Option<RegValue>, ShimError> {
         match hklm_open(path, KEY_READ) {
             Ok(k) => Ok(k.get_raw_value(name).ok().and_then(|v| from_winreg(&v))),

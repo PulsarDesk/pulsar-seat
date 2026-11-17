@@ -38,7 +38,7 @@ fn req<'a>(cfg: &'a SeatConfig, settings: &'a GlobalSettings, password: Option<&
         user: u.into(),
         password: password.map(Secret::new),
     });
-    SeatStartRequest { seat: cfg.number, config: cfg, settings, client_name: client_name_for(cfg.number), credentials }
+    SeatStartRequest { seat: cfg.number, config: cfg, settings, client_name: client_name_for(cfg.number), credentials, idd_outputs: None }
 }
 
 // ---------- rds_loopback ----------
@@ -663,6 +663,7 @@ fn desktops_kiosk_shells_run_as_their_seat_users() {
     );
     assert!(b.probe().unwrap().notes.contains(&"kiosk_per_seat_accounts".to_string()));
     assert!(!b.probe().unwrap().notes.contains(&"no_per_user_isolation".to_string()));
+    assert!(b.probe().unwrap().notes.contains(&"kiosk_users_share_desktop".to_string()), "never a security boundary");
     // Stop: the logon (profile, grant) goes with the shell.
     b.log_off(seat(2), 1).unwrap();
     assert_eq!(logons.live.load(Ordering::SeqCst), 1);
@@ -682,6 +683,12 @@ fn desktops_kiosk_shells_run_as_their_seat_users() {
     settings.kiosk.accounts = KioskAccountMode::Shared;
     b.start(&req(&s2, &settings, None)).unwrap();
     assert_eq!(logons.made.lock().unwrap().len(), 3);
+    assert!(b.probe().unwrap().notes.contains(&"no_per_user_isolation".to_string()), "seat 2 runs as the console user again");
+    // Back to its own user: the note goes.
+    b.log_off(seat(2), 1).unwrap();
+    settings.kiosk.accounts = KioskAccountMode::PerSeat;
+    b.start(&req(&s2, &settings, None)).unwrap();
+    assert!(!b.probe().unwrap().notes.contains(&"no_per_user_isolation".to_string()));
 }
 
 /// Two concurrent starts of the same kiosk shell seat launch one shell (VM 2026-11-15:

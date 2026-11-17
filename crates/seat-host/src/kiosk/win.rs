@@ -115,7 +115,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
-const WM_APP_WAKE: u32 = 0x8000 + 0x61;
+/// Also posted by the seat's apps after a cursor request (`seat_shim_core::kiosk_cursor`).
+const WM_APP_WAKE: u32 = seat_shim_core::kiosk_cursor::WAKE_MESSAGE;
 /// The stop event was set: leave the message loop.
 const WM_APP_STOP: u32 = 0x8000 + 0x62;
 /// `WM_NCHITTEST` timeout per button down (a hung app answers "client").
@@ -422,6 +423,10 @@ struct Shell {
     user_minimized: HashSet<u64>,
     /// Seat cursor for the seat's apps (`seat_shim_core::kiosk_cursor`).
     cursor_pub: Option<super::win_track::CursorSection>,
+    /// The seat's own clipboard section (module hooks of the seat's apps).
+    clip_pub: Option<super::win_track::ClipSection>,
+    /// Our IddCx monitors' frames on the seat's targets (`pulsar_idd`, parity review).
+    _idd: Option<crate::display::IddPresenter>,
 }
 
 /// Process / window snapshot interval of the hand-off tracker, in 250 ms ticks.
@@ -968,6 +973,39 @@ impl Shell {
         }
         let acts = self.router.on_packets(&packets, &q, &mut self.keys, now);
         self.run_actions(acts);
+        self.publish_seat_state();
+    }
+
+    /// The seat's cursor, app clip and key state for the module's hooks (only written when
+    /// something changed).
+    fn publish_seat_state(&mut self) {
+        if let Some(c) = self.cursor_pub.as_mut() {
+            let (x, y) = self.router.cursor();
+            c.publish(x, y, self.router.clip(), &self.router.key_state());
+        }
+    }
+
+    /// `SetCursorPos` / `ClipCursor` of the seat's apps (module hooks write the requests
+    /// into the cursor section and wake this thread).
+    fn on_cursor_requests(&mut self) {
+        use seat_shim_core::kiosk_cursor::Request;
+        let Some(c) = self.cursor_pub.as_mut() else { return };
+        let reqs = c.take_requests();
+        if reqs.is_empty() {
+            return;
+        }
+        // SAFETY: no arguments.
+        let me = unsafe { GetCurrentProcessId() };
+        let q = WinQuery { skip: [self.cursor, self.sink], pids: &self.pids, extra: &self.extra_wins, me };
+        let mut acts = Vec::new();
+        for r in reqs {
+            match r {
+                Request::SetPos(x, y) => acts.extend(self.router.warp(x, y, &q)),
+                Request::Clip(clip) => acts.extend(self.router.set_clip(clip, &q)),
+            }
+        }
+        self.run_actions(acts);
+        self.publish_seat_state();
     }
 
     /// 250 ms housekeeping.
@@ -1222,6 +1260,7 @@ impl Shell {
         self.tracker.clear();
         // Apps of a later shell must not read this shell's last position.
         self.cursor_pub = None;
+        self.clip_pub = None;
         self.reader = None;
     }
 
@@ -1747,6 +1786,16 @@ fn run_shell(args: ShellArgs) -> i32 {
     }
     let mut router = KioskRouter::new(SeatArea::new(monitors.clone()));
     router.set_pen_injection(pen.is_some());
+    let idd = args.plan.idd_outputs.as_ref().and_then(|o| match crate::display::IddPresenter::start(o) {
+        Ok(p) => {
+            klog!("idd presenter: {} outputs", o.outputs.len());
+            Some(p)
+        }
+        Err(e) => {
+            klog!("idd presenter not started: {e}");
+            None
+        }
+    });
     let shell = Shell {
         router,
         pen,
@@ -1795,6 +1844,8 @@ fn run_shell(args: ShellArgs) -> i32 {
         per_seat_user: super::win_track::is_per_seat_user(),
         user_minimized: HashSet::new(),
         cursor_pub: super::win_track::CursorSection::create(u32::from(seat.get())),
+        clip_pub: super::win_track::ClipSection::create(u32::from(seat.get())),
+        _idd: idd,
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {
@@ -1849,6 +1900,8 @@ fn run_shell(args: ShellArgs) -> i32 {
                         }
                     }
                 }
+                s.on_cursor_requests();
+                s.publish_seat_state();
                 if tick {
                     s.on_tick();
                 }

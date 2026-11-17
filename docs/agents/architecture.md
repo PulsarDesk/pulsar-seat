@@ -577,7 +577,8 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
     any other result = resume (pad device security and the router still apply).
   - **Module:** role `kiosk` only when the variable names a published seat of the
     process's own session (`decide::role_full`; not a security boundary: every kiosk
-    seat is the same Windows user). Kiosk processes get the HID open / enumeration groups
+    seat shares the console's window station and desktop, also with per-seat Windows
+    users, see "Parity review" below). Kiosk processes get the HID open / enumeration groups
     and the raw-input data group (`GetRawInputData`, `GetRawInputBuffer` in 64-bit
     processes): devices of other seats and unassigned console devices are denied or
     dropped; while a kiosk seat runs, enumeration also looks at keyboard / mouse class
@@ -705,8 +706,11 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
   the cursor onto it; a minimised full-screen window is restored unless the seat user
   minimised it. One exclusive full-screen window per PC at a time (one foreground); with
   `seat1_desktop = true` no kiosk app gets the foreground (seat 1 has it).
-- **Limits / open:** `GetAsyncKeyState` / `GetKeyState` of other threads still show the
-  console's state; `SetCursorPos` of a seat app moves the console cursor; scroll positions
+- **Limits / open:** since the parity review the module answers `GetAsyncKeyState` /
+  `GetKeyState` / `GetKeyboardState` from the seat's own key table and turns
+  `SetCursorPos` / `SetPhysicalCursorPos` / `ClipCursor` into seat-cursor requests (section
+  `kiosk_cursor` v2), and keeps a per-seat clipboard (`kiosk_clip`); processes without the
+  module still see the console's state. Scroll positions
   above 65 535; packaged apps for a per-seat user without Explorer may be refused
   (HYPOTHESIS); in `shared` mode a hand-off to an instance already running for the console
   user stays with that instance. Untested on hardware: everything in the shell, the stop
@@ -879,7 +883,15 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` / `Present(0, ALLOW_TEARING)` where DXGI reports
   the feature; it stays SDR (HDR frames tone-mapped). HDCP: indirect displays and our
   presenter never carry protected content; documented limitation (troubleshooting).
-  HYPOTHESIS throughout (no hardware run).
+  HYPOTHESIS throughout (no hardware run). **Frame source (parity review 2026-11-17):**
+  `seats.rs` tells the binding whether the session backend has its own display
+  (`DisplayBinding::set_session_has_display(caps.remote_display)`); without one (desktops
+  kiosk seats) `pulsar_idd` plugs a virtual monitor per output (frame sections granted to
+  INTERACTIVE, the seats share the console desktop anyway), `DisplayBinding::idd_frames`
+  says so and the outputs travel in `SeatStartRequest::idd_outputs` -> `KioskPlan::
+  idd_outputs` to the kiosk shell, which runs `seat_host::display::IddPresenter`: one
+  `IddFrameReader` per output (connector = output index) `pump()`ing frames, HDR included,
+  into a `HybridPresenter` over the seat's targets. RDP seats keep their RDP frames.
 - *Per-seat GPU preference (2026-11-17).* `LocalSeat::gpu_preference {mode: off |
   seat_gpu | high_performance | power_saving, apps}`: at each seat logon the service
   writes `HKU\<sid>\Software\Microsoft\DirectX\UserGpuPreferences\<exe>` =
@@ -1049,8 +1061,12 @@ monitor's same-container hub keeps a seat the monitor is not on.
   once (`commit_config` -> `Platform::update_session_job`: hard limit for the whole job,
   soft limit re-set on the processes the service started; a hard limit cannot be removed
   until the session's job is dropped). Seat hosts and the console listener never get a
-  job. Not covered: Explorer and anything started from it / the Start menu, UAC-elevated
-  programs; the agent does not call the launcher request yet. Untested on hardware.
+  job. Parity review 2026-11-17: every tick (`Service::cover_seat_sessions`,
+  `Platform::cover_session`) the seat session's `explorer.exe` joins the seat job (so the
+  Start menu and Explorer launches inherit it), and with the opt-in `cpu_seat_wide` every
+  other new process of the session (UAC-elevated ones included) gets the soft limit once
+  (`SetProcessDefaultCpuSets`; protected processes are logged and skipped; seats that share
+  a session are never limited session-wide). Untested on hardware.
 - **Source IP (spec 80 §11.3), two layers (net-wfp, 2026-11-17):**
   1. **Enforced by the WFP callout `drivers/seat-wfp`** (KMDF, non-PnP, ALE bind-redirect +
      connect-redirect V4; `drivers/seat-wfp/README.md`). `Service::publish_source_ip` runs
@@ -1800,7 +1816,8 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
     player lights, Xbox Bluetooth 0x03 (rumble + impulse triggers). Xbox USB and generic
     HID pads have no documented HID output report: no feedback.
   - *Scoping* (`seat_input::pad_scope`, `crate::pad_runtime`, setting
-    `input.pad_device_scope`, default on). Owner of each physical pad: the local seat it is
+    `input.pad_device_scope`, default **off** since the parity review 2026-11-17: opt-in,
+    spec/remote 50 §4.4). Owner of each physical pad: the local seat it is
     routed to alone (session + user), else, while remote seats run, the console user;
     only while a second session exists. Nodes: the HID collection and its parent.
     Original SDDL and session id are journaled (`<data>\pads\scope.json`) **before** a
@@ -1894,6 +1911,53 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
 - **Copy.** One `i18n.ts` (locale tables in `locales/en.ts` / `tr.ts` since 2026-11-17): Split's copy is its `rt` object plus `remoteErrorMessage`,
   `remoteFailureText`, `remoteFieldErrorText`; the remote components import those under
   their old names. Split's styles are `remote/remote.css`, scoped to `.remote-ui`.
+
+## Parity review fixes (2026-11-17)
+
+Contract and behaviour changes of the parity review round (all built and unit-tested,
+nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
+
+- **Pads.** A kiosk seat's virtual and scoped pads belong to the seat's own Windows user
+  (`local_pads::KioskSids` from `SessionBackend::kiosk_users`). Pad scoping is opt-in
+  (`input.pad_device_scope` default off), retries failed nodes with back-off and logs a
+  repeated error once (`PadScoper::sync_at`). `pad.attach.media` is true only when the
+  pad has audio endpoints (`VirtualPad::has_audio`). Remote seats' SDL ignore list gets
+  the PC's physical pad ids (`Engine::set_physical_pads`, virtual pad kinds' ids stay
+  visible). Rumble for Xbox USB (XUSB) and HID PID pads, Switch Pro SPI calibration
+  (`seat_pads::ff`, `switch_pro::StickCal`).
+- **Kiosk seats.** Seat section `Local\PulsarSeat.KioskCursor.<NN>` v2 (360 bytes: cursor,
+  clip, 256-byte key state, app request block, shell thread id); per-seat clipboard
+  `Local\PulsarSeat.KioskClip.<NN>` (32 MiB, `seat_shim_core::kiosk_clip`); module hooks
+  in `shim/module/src/rt/{cursor,clip}.rs`. Logical cursor APIs convert physical pixels for
+  threads that are not per-monitor DPI aware. Probe notes `kiosk_users_share_desktop`
+  (always) and `no_per_user_isolation` (a seat 2+ runs as the console user); the manager
+  warns when a seat's own (personal / domain) account is used. Unused kiosk accounts are
+  disabled at service start (`host_account::disable_unused_kiosk`), deleted at uninstall
+  (profiles only with `REMOVEUSERDATA`) or by `remove_kiosk_user` (admin, refused while
+  the seat has a kiosk shell). The hotkey guard resolves a raw-first key queued behind a
+  held-back hotkey.
+- **Requests (protocol 3, additive, admin):** `reset_graphics { seat }` (agent task
+  `reset_graphics`: Win+Ctrl+Shift+B into the session's input desktop; HYPOTHESIS that
+  injected input triggers it), `remove_kiosk_user { seat }`.
+- **Shim.** On ARM64 PCs x64 executables with a known path stay out of the AppHelp
+  database (`install::apphelp_targets`, PE machine check); launcher path only. Focus WNF
+  filter: runtime check of the candidate states (`decide::wnf_runtime_plausible`,
+  `NtQueryWnfStateData`, off switch `Shim\WnfRuntimeCheck` = 0). Listing
+  `GameInputSvc.exe` as a target sets `Shim\GameInputFocus` = 1: the module then runs in
+  that session-0 service with the focus hook only (`decide::filter_focus_service`).
+  Smart-card readers: `Shim\ReaderRules` (`seat_shim_core::readers`) published by the
+  service from the assignment; `SCardListReaders` / `SCardConnect` filtered in every
+  patched process; gate status `seat_filter`. RDP seats redirect a reader assigned to them
+  alone even with the smart-card switch off.
+- **CPU.** See §4 "CPU limits": Explorer in the seat job, opt-in `cpu_seat_wide`.
+- **Display.** IddCx frame source for seats without a session display (see HDR section).
+- **Network.** `seat-wfp` remembers explicitly bound endpoints (bind classify, endpoint
+  handle + address, 1024 direct-mapped slots) and the connect backstop leaves them alone.
+- **H.264 (vendor MFT).** `flush()` zeroes both event counters and sends
+  `MFT_MESSAGE_NOTIFY_START_OF_STREAM`; `Drop` shuts the async MFT down (`IMFShutdown`)
+  and the activation object (`ShutdownObject`).
+- **Drivers' INF copy:** English `[Strings]` + Turkish `[Strings.041f]`
+  (`installer/scripts/driver-inf-locales.test.ts`).
 
 ## UI language (i18n, 2026-11-17)
 

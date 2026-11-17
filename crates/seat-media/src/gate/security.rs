@@ -290,9 +290,16 @@ impl DeviceGate for DeviceSecurityGate {
                     report.applied.push((d.key.clone(), IsolationStatus::Network));
                     continue;
                 }
-                // v1: readers are shared (spec 70 §5.2(6)); printers are opened by the
-                // spooler from session 0 (§5.2(5)).
-                DeviceKind::SmartCardReader | DeviceKind::Printer => {
+                // Readers: the smart-card service opens them from session 0 (no device ACL);
+                // the RDP redirect and the module's WinSCard filter give each seat its own
+                // (parity review 2026-11-17). Printers are opened by the spooler from
+                // session 0 (§5.2(5)).
+                DeviceKind::SmartCardReader => {
+                    let st = if is_shared(mask) { IsolationStatus::Shared } else { IsolationStatus::SeatFilter };
+                    report.applied.push((d.key.clone(), st));
+                    continue;
+                }
+                DeviceKind::Printer => {
                     let st = if is_shared(mask) { IsolationStatus::Shared } else { IsolationStatus::NotSupported };
                     report.applied.push((d.key.clone(), st));
                     continue;

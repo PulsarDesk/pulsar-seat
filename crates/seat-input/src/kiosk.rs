@@ -594,6 +594,19 @@ fn button_msgs(bit: u8) -> (u32, u32, u32, usize) {
 
 const BUTTON_BITS: [u8; 5] = [buttons::LEFT, buttons::RIGHT, buttons::MIDDLE, buttons::X1, buttons::X2];
 
+/// The Windows graphics-driver restart shortcut, Win+Ctrl+Shift+B, as `(virtual key, up)`
+/// events in press order then release order (spec/local 50; the seat agent's
+/// `reset_graphics` task sends them with `SendInput`).
+pub fn reset_graphics_keys() -> [(u16, bool); 8] {
+    const KEYS: [u16; 4] = [0x5B, 0x11, 0x10, 0x42]; // VK_LWIN, VK_CONTROL, VK_SHIFT, 'B'
+    let mut out = [(0u16, false); 8];
+    for (i, k) in KEYS.iter().enumerate() {
+        out[i] = (*k, false);
+        out[7 - i] = (*k, true);
+    }
+    out
+}
+
 /// One kiosk seat's router.
 pub struct KioskRouter {
     area: SeatArea,
@@ -620,6 +633,9 @@ pub struct KioskRouter {
     pen_injection: bool,
     /// Pen in range over a seat app window: `(contact id, top, touching)`.
     pen: Option<(u32, u64, bool)>,
+    /// `ClipCursor` of a seat app (module hook, parity review 2026-11-17): the seat cursor
+    /// stays inside `(left, top, right, bottom)` (right / bottom exclusive, as `RECT`).
+    clip: Option<(i32, i32, i32, i32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -649,7 +665,58 @@ impl KioskRouter {
             last_input_ms: 0,
             pen_injection: false,
             pen: None,
+            clip: None,
         }
+    }
+
+    /// The seat's keyboard and mouse-button state as a `GetKeyboardState` table (bit 7 =
+    /// down, bit 0 = toggled), published for the module's `GetAsyncKeyState` /
+    /// `GetKeyState` / `GetKeyboardState` hooks (parity review 2026-11-17).
+    pub fn key_state(&self) -> [u8; 256] {
+        let mut k = self.keys;
+        for (bit, v) in [(buttons::LEFT, 0x01), (buttons::RIGHT, 0x02), (buttons::MIDDLE, 0x04), (buttons::X1, 0x05), (buttons::X2, 0x06)] {
+            if self.buttons & bit != 0 {
+                k[v] |= 0x80;
+            } else {
+                k[v] &= !0x80;
+            }
+        }
+        k
+    }
+
+    /// The seat's cursor clip (`ClipCursor` of one of its apps), if any.
+    pub fn clip(&self) -> Option<(i32, i32, i32, i32)> {
+        self.clip
+    }
+
+    /// The point kept inside the seat's monitors and the app's clip rectangle.
+    fn confine(&self, x: i32, y: i32) -> (i32, i32) {
+        let (x, y) = self.area.clamp(x, y);
+        match self.clip {
+            Some((l, t, r, b)) => (x.clamp(l, (r - 1).max(l)), y.clamp(t, (b - 1).max(t))),
+            None => (x, y),
+        }
+    }
+
+    /// `SetCursorPos` of a seat app: moves the seat cursor (not the console's), confined like
+    /// a move of the seat's mouse, with the mouse-move message to the window below.
+    pub fn warp(&mut self, x: i32, y: i32, q: &dyn WindowQuery) -> Vec<KioskAction> {
+        let mut out = Vec::new();
+        let (x, y) = self.confine(x, y);
+        let start = self.cursor;
+        self.move_to(x, y, q, &mut out);
+        if self.cursor != start {
+            out.push(KioskAction::Cursor { x: self.cursor.0, y: self.cursor.1 });
+        }
+        out
+    }
+
+    /// `ClipCursor` of a seat app (`None` = free). An empty or inverted rectangle frees the
+    /// cursor. The cursor moves inside a new clip at once.
+    pub fn set_clip(&mut self, clip: Option<(i32, i32, i32, i32)>, q: &dyn WindowQuery) -> Vec<KioskAction> {
+        self.clip = clip.filter(|&(l, t, r, b)| r > l && b > t);
+        let (x, y) = self.cursor;
+        self.warp(x, y, q)
     }
 
     /// The host created the seat's synthetic pen device: pen contacts over the seat's own
@@ -802,11 +869,12 @@ impl KioskRouter {
             match p {
                 InputPacket::Key { sc, f } => self.key(*sc, *f, q, tr, &mut out),
                 InputPacket::Move { dx, dy } => {
-                    let (x, y) = self.area.clamp(self.cursor.0.saturating_add(*dx), self.cursor.1.saturating_add(*dy));
+                    let (x, y) = self.confine(self.cursor.0.saturating_add(*dx), self.cursor.1.saturating_add(*dy));
                     self.move_to(x, y, q, &mut out);
                 }
                 InputPacket::Abs { x, y, o } => {
                     if let Some((x, y)) = self.area.abs(*x, *y, *o) {
+                        let (x, y) = self.confine(x, y);
                         self.move_to(x, y, q, &mut out);
                     }
                 }
@@ -1234,6 +1302,7 @@ impl KioskRouter {
         let out = self.release_all();
         self.focus = None;
         self.last_click = None;
+        self.clip = None;
         out
     }
 }
@@ -1413,6 +1482,47 @@ mod tests {
         // A letter still arrives.
         let a = route(&mut r, &[key(0x1E, false), key(0x1E, true)], 5);
         assert!(!posts(&a).is_empty());
+    }
+
+    #[test]
+    fn graphics_restart_shortcut_presses_then_releases_in_reverse() {
+        let k = reset_graphics_keys();
+        assert_eq!(&k[..4], &[(0x5B, false), (0x11, false), (0x10, false), (0x42, false)]);
+        assert_eq!(&k[4..], &[(0x42, true), (0x10, true), (0x11, true), (0x5B, true)]);
+    }
+
+    /// Per-seat key state, `SetCursorPos` and `ClipCursor` of seat apps (module hooks).
+    #[test]
+    fn seat_key_state_warp_and_clip() {
+        let mut r = KioskRouter::new(area());
+        let q = Table { dead: vec![] };
+        // Shift held and the left button down show in the seat's table.
+        route(&mut r, &[key(0x2A, false), InputPacket::Buttons { down: buttons::LEFT, up: 0 }], 1);
+        let k = r.key_state();
+        assert_eq!(k[usize::from(vk::SHIFT)] & 0x80, 0x80);
+        assert_eq!(k[0x01] & 0x80, 0x80, "VK_LBUTTON");
+        assert_eq!(k[0x02] & 0x80, 0, "VK_RBUTTON up");
+        route(&mut r, &[key(0x2A, true), InputPacket::Buttons { down: 0, up: buttons::LEFT }], 2);
+        assert_eq!(r.key_state()[usize::from(vk::SHIFT)] & 0x80, 0);
+        assert_eq!(r.key_state()[0x01] & 0x80, 0);
+        // SetCursorPos moves the seat cursor (clamped to the seat's monitors).
+        let a = r.warp(5000, 200, &q);
+        assert_eq!(r.cursor(), (1919, 200));
+        assert!(a.iter().any(|x| matches!(x, KioskAction::Cursor { x: 1919, y: 200 })));
+        // ClipCursor: the cursor jumps inside, mouse moves stay inside.
+        r.set_clip(Some((100, 100, 200, 150)), &q);
+        assert_eq!(r.cursor(), (199, 149));
+        route(&mut r, &[InputPacket::Move { dx: -500, dy: -500 }], 3);
+        assert_eq!(r.cursor(), (100, 100));
+        r.warp(0, 0, &q);
+        assert_eq!(r.cursor(), (100, 100), "SetCursorPos honours the clip too");
+        assert_eq!(r.clip(), Some((100, 100, 200, 150)));
+        // An empty rectangle frees the cursor; a seat reset drops any clip.
+        r.set_clip(Some((5, 5, 5, 5)), &q);
+        assert_eq!(r.clip(), None);
+        r.set_clip(Some((0, 0, 10, 10)), &q);
+        r.reset();
+        assert_eq!(r.clip(), None);
     }
 
     fn pen(phase: &str, x: u16, info: Option<seat_core::backend::input::PenInfo>) -> InputPacket {

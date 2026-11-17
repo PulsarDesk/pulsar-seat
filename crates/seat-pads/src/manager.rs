@@ -308,8 +308,13 @@ impl PadManager {
             kind: lp.wire,
             channel: lp.channel_name.clone(),
             protocol: crate::layout::PROTOCOL,
-            // Controller audio exists only on the DualSense kinds (usbip-win2 composite).
-            media: lp.wire.is_playstation() && lp.wire != PadKind::Ds4 && lp.channel.lock().is_ok_and(|c| c.has_media()),
+            // Controller audio exists only on the DualSense kinds (usbip-win2 composite), and
+            // only when the backend gave this pad its audio interfaces (`pad_audio` /
+            // `AudioPolicy`): a HID-only pad never asks the host for the client's mic.
+            media: lp.wire.is_playstation()
+                && lp.wire != PadKind::Ds4
+                && lp.pad.has_audio()
+                && lp.channel.lock().is_ok_and(|c| c.has_media()),
         }
     }
 
@@ -842,8 +847,9 @@ impl PadManager {
                 }
                 continue;
             }
-            // Protocol 2: the client's microphone, at most 20 ms per pass.
-            let mic = ch.read_media_in(MIC_PER_PUMP).unwrap_or_default();
+            // Protocol 2: the client's microphone, at most 20 ms per pass (pads with audio
+            // endpoints only; nothing is read for a HID-only pad).
+            let mic = if lp.pad.has_audio() { ch.read_media_in(MIC_PER_PUMP).unwrap_or_default() } else { Vec::new() };
             if !mic.is_empty() {
                 if let Err(e) = lp.pad.submit_mic(&mic) {
                     log::debug!("pad {}: mic: {e}", lp.pad_id);

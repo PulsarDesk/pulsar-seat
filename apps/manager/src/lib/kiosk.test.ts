@@ -88,6 +88,9 @@ describe('kiosk parity 2026-11-17', () => {
     expect(t.kiosk.account.auto('PulsarKiosk02')).toContain('PulsarKiosk02');
     expect(noteLabel('kiosk_account_fallback')).toContain('runs as seat 1’s user');
     expect(noteLabel('kiosk_per_seat_accounts')).toContain('own Windows');
+    expect(noteLabel('kiosk_per_seat_accounts')).toContain('not their security');
+    expect(noteLabel('kiosk_users_share_desktop')).toContain('share one Windows desktop');
+    expect(t.kiosk.account.personalWarning).toContain('personal or domain');
   });
 });
 

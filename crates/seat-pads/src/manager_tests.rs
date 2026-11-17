@@ -99,6 +99,23 @@ fn media_section_carries_haptics_and_mic() {
 }
 
 #[test]
+fn hid_only_dualsense_announces_no_media_and_reads_no_mic() {
+    let mut r = rig();
+    // `pad_audio` off for a remote seat: the usbip backend builds a HID-only composite.
+    r.usbip.audio.store(false, std::sync::atomic::Ordering::SeqCst);
+    let a = r.m.wanted(&ctx(), &wanted(0, PadKind::Ds5, 1)).unwrap().unwrap();
+    assert!(!a.media, "no audio interfaces: no media flag");
+    assert!(serde_json::to_value(&a).unwrap().get("media").is_none());
+    // Whatever lands in the in ring is never handed to the pad.
+    let pad = PadId::new(SEAT, 0).unwrap();
+    if let Some(m) = r.chans.media_of(&a.channel) {
+        crate::media::write_ring(&*m, crate::media::Ring::In, &[5u8; 16]);
+    }
+    r.m.pump();
+    assert!(!r.usbip.calls().iter().any(|c| matches!(c, FakePadCall::Mic(p, _) if *p == pad)));
+}
+
+#[test]
 fn attach_reuse_and_generation() {
     let mut r = rig();
     let a = r.m.wanted(&ctx(), &wanted(0, PadKind::Ds5, 1)).unwrap().unwrap();

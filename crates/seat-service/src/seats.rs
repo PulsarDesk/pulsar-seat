@@ -120,6 +120,9 @@ impl Slot {
 }
 
 /// `PSEAT-NN`.
+/// Well-known SID of interactive logons (`NT AUTHORITY\\INTERACTIVE`).
+const INTERACTIVE_SID: &str = "S-1-5-4";
+
 pub fn client_name(seat: SeatNumber) -> String {
     format!("{RDP_CLIENT_NAME_PREFIX}{}", seat.two_digits())
 }
@@ -575,7 +578,15 @@ impl Service {
         // Per-seat preferences (clone groups, software cursor, mode follow) first: the
         // binding reads them in `bind_seat`. The frame sections of `pulsar_idd` must be
         // readable by the seat hosts' account (host containment).
-        let prefs = seat_core::backend::display::SeatDisplayPrefs { frame_reader_sid: self.platform.host_frame_reader_sid(seat), ..prefs };
+        // Without a session display of its own (desktops, fast user switching) the seat's
+        // frames come from our IddCx monitors when the display backend is `pulsar_idd`
+        // (parity review 2026-11-17). They are read in the console session by the kiosk
+        // shell, which shares the console desktop with every interactive user anyway, so
+        // the sections are granted to INTERACTIVE (S-1-5-4) there.
+        let session_display = b.session.caps().remote_display;
+        b.display.set_session_has_display(session_display);
+        let reader = if session_display { self.platform.host_frame_reader_sid(seat) } else { Some(INTERACTIVE_SID.to_string()) };
+        let prefs = seat_core::backend::display::SeatDisplayPrefs { frame_reader_sid: reader, ..prefs };
         b.display.configure_seat(seat, &prefs);
         let outputs = match b.display.bind_seat(seat, &monitors) {
             Ok(o) => o,
@@ -606,7 +617,8 @@ impl Service {
             let settings = self.lock().config.settings.clone();
             (cfg, settings, creds)
         };
-        let req = SeatStartRequest { seat, config: &cfg, settings: &settings, client_name: client_name(seat), credentials: creds };
+        let idd_outputs = if b.display.idd_frames(seat) { self.lock().seats.get(&seat).and_then(|s| s.outputs.clone()) } else { None };
+        let req = SeatStartRequest { seat, config: &cfg, settings: &settings, client_name: client_name(seat), credentials: creds, idd_outputs };
         // fast_user_switch: LogonUI of the fresh session enumerates before the grant is
         // armed; it keeps asking while this hand-over is noted (spec 35 §5.4).
         self.note_credprov_handover(seat);

@@ -107,6 +107,8 @@ struct SysState {
     sdb_ops: Vec<WriteOp>,
     guid_seq: u8,
     suffix_seq: u32,
+    arm64: bool,
+    machines: HashMap<String, u16>,
 }
 
 /// Fake Windows for the installer. `C:\Windows` layout, x64 with SysWOW64. `sdbinst -q
@@ -115,6 +117,14 @@ struct SysState {
 pub struct FakeShimSystem(Mutex<SysState>);
 
 impl FakeShimSystem {
+    /// The fake PC is ARM64 (`host_is_arm64`).
+    pub fn set_arm64(&self, on: bool) {
+        lock(&self.0).arm64 = on;
+    }
+    /// PE machine type `pe_machine` reports for `p`.
+    pub fn set_pe_machine(&self, p: &str, machine: u16) {
+        lock(&self.0).machines.insert(key(Path::new(p)), machine);
+    }
     pub fn add_file(&self, p: &str) {
         lock(&self.0).files.insert(key(Path::new(p)), None);
     }
@@ -143,6 +153,12 @@ impl FakeShimSystem {
 }
 
 impl ShimSystem for FakeShimSystem {
+    fn host_is_arm64(&self) -> bool {
+        lock(&self.0).arm64
+    }
+    fn pe_machine(&self, p: &Path) -> Option<u16> {
+        lock(&self.0).machines.get(&key(p)).copied()
+    }
     fn reg_read(&self, path: &str, name: &str) -> Result<Option<RegValue>, ShimError> {
         let s = lock(&self.0);
         Ok(s.keys.get(&path.to_ascii_lowercase()).and_then(|(_, v)| crate::regval::find(v, name).cloned()))

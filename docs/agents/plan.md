@@ -60,7 +60,8 @@ otherwise:
 
 - Logon-screen seats (no password) on an NLA-only RDP-Tcp listener: design (a), a second
   loopback-only WinStation listener with NLA off for passwordless seats (details and the
-  rejected option in architecture.md §4.1). Not built yet; until then such seats fail with
+  rejected option in architecture.md §4.1). Built (`seat_session::loopback_listener`,
+  setting `loopback_listener`); with the setting off such seats still fail with
   `nla_required`.
 - The IronRDP seat host reconnects by itself only for passwordless seats; with a stored
   password it exits as `disconnected: transient` and the service decides (no password is

@@ -156,7 +156,11 @@ pub fn host_redirection_with(
         }
     }
 
-    if policy.smartcards {
+    // A reader assigned to this seat alone is the seat's even with the smart-card switch
+    // off (parity review 2026-11-17): the assignment is the user's choice, and without the
+    // redirect the reader would not work in its own seat at all.
+    let own_reader = effective.iter().any(|e| e.kind == DeviceKind::SmartCardReader && e.mask.single() == Some(seat) && device(e).is_some());
+    if policy.smartcards || own_reader {
         // A friendly name may stand for the reader only when no other reader of the PC (any
         // seat, present or not) has it: two identical models are told apart by instance id
         // only.
@@ -568,6 +572,25 @@ mod tests {
         let none = host_redirection(s(4), &p, &effective[2..3], &devices, &vol);
         assert!(!none.smartcards && none.readers.is_empty());
         assert_eq!(none.notes, vec!["no_seat_readers"]);
+    }
+
+    #[test]
+    fn a_reader_assigned_to_the_seat_alone_is_redirected_without_the_switch() {
+        let devices = vec![
+            dev("scard;mine", DeviceKind::SmartCardReader, "Reader A", DeviceDetails::None),
+            dev("scard;shared", DeviceKind::SmartCardReader, "Reader S", DeviceDetails::None),
+        ];
+        let effective = vec![
+            eff("scard;mine", DeviceKind::SmartCardReader, SeatMask::from_seats([s(2)])),
+            eff("scard;shared", DeviceKind::SmartCardReader, SeatMask::SHARED),
+        ];
+        let off = SeatRedirect::default();
+        let r = host_redirection(s(2), &off, &effective, &devices, &vol);
+        assert!(r.smartcards, "assigned reader: redirected");
+        assert_eq!(r.readers.len(), 2, "shared readers come along");
+        // Only shared readers: the switch still decides.
+        let r = host_redirection(s(2), &off, &effective[1..], &devices, &vol);
+        assert!(!r.smartcards && r.readers.is_empty());
     }
 
     #[test]

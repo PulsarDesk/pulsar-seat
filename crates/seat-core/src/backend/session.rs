@@ -135,6 +135,11 @@ pub struct SeatStartRequest<'a> {
     pub client_name: String,
     /// `None` when the seat shows the normal logon screen.
     pub credentials: Option<SeatCredentials>,
+    /// The seat's outputs when the display binding plugged our IddCx monitors for it
+    /// (`DisplayBinding::idd_frames`): the `desktops` backend hands them to the kiosk shell,
+    /// which presents the virtual monitors' frames (HDR included) on the seat's targets.
+    /// Added 2026-11-17 (parity review).
+    pub idd_outputs: Option<crate::backend::display::SeatOutputs>,
 }
 
 /// What the service must do next to finish a seat start.

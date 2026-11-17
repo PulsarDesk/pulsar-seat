@@ -10,7 +10,7 @@
   interface Props {
     seats: SeatConfig[];
     loadCpuSets: () => Promise<CpuSetInfo[]>;
-    onSave: (bySeat: { seat: number; ids: number[]; hard: boolean }[]) => void;
+    onSave: (bySeat: { seat: number; ids: number[]; hard: boolean; wide: boolean }[]) => void;
     onCancel: () => void;
   }
   let { seats, loadCpuSets, onSave, onCancel }: Props = $props();
@@ -21,6 +21,8 @@
   let chosen = $state<Record<number, number[]>>(Object.fromEntries(seats.map((s) => [s.number, [...(s.cpu_sets ?? [])]])));
   // svelte-ignore state_referenced_locally
   let hard = $state<Record<number, boolean>>(Object.fromEntries(seats.map((s) => [s.number, s.cpu_hard_limit])));
+  // svelte-ignore state_referenced_locally
+  let wide = $state<Record<number, boolean>>(Object.fromEntries(seats.map((s) => [s.number, s.cpu_seat_wide ?? false])));
 
   onMount(async () => {
     try {
@@ -48,7 +50,7 @@
   const invalid = $derived(seats.some((s) => hard[s.number] && groupsOf(s.number) > 1));
 
   function save() {
-    onSave(seats.map((s) => ({ seat: s.number, ids: chosen[s.number] ?? [], hard: hard[s.number] ?? false })));
+    onSave(seats.map((s) => ({ seat: s.number, ids: chosen[s.number] ?? [], hard: hard[s.number] ?? false, wide: wide[s.number] ?? false })));
   }
 </script>
 
@@ -68,6 +70,7 @@
               </th>
             {/each}
             <th>{t.cpu.hard}</th>
+            <th title={t.cpu.seatWideHint}>{t.cpu.seatWide}</th>
           </tr>
         </thead>
         <tbody>
@@ -85,12 +88,14 @@
                 </td>
               {/each}
               <td><input type="checkbox" aria-label={`${t.seatN(s.number)}, ${t.cpu.hard}`} bind:checked={hard[s.number]} /></td>
+              <td><input type="checkbox" aria-label={`${t.seatN(s.number)}, ${t.cpu.seatWide}`} bind:checked={wide[s.number]} /></td>
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
     {#if hybrid}<p class="hint">P = {t.cpu.performance}, E = {t.cpu.efficiency}</p>{/if}
+    <p class="hint">{t.cpu.seatWideHint}</p>
     {#if invalid}<p class="error" role="alert">{t.cpu.oneGroup}</p>{/if}
   {/if}
   {#snippet buttons()}

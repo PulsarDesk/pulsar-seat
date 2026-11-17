@@ -294,6 +294,13 @@ pub trait VirtualPad: Send {
     fn submit_mic(&mut self, _pcm: &[u8]) -> Result<(), PadError> {
         Ok(())
     }
+    /// `true` when this device exposes the controller audio endpoints (speaker / haptics
+    /// and microphone). Only then does `pad.attach` announce `media: true`, so a stream
+    /// host opens the client's controller microphone only for a pad that can play it
+    /// (parity review 2026-11-17). Default: no audio.
+    fn has_audio(&self) -> bool {
+        false
+    }
     fn remove(self: Box<Self>) -> Result<(), PadError>;
 }
 

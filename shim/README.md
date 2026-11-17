@@ -38,9 +38,15 @@ Opt-in, in this order of preference:
 **Trade-off (svchost / dwm).** The reference targets `svchost.exe` and `dwm.exe` by name, so
 its module lands in every service host and the compositor; a fault there restarts the
 desktop or stops the OS, protected service hosts refuse non-Microsoft modules anyway, and
-masking the console id inside them changes OS decisions. We never target them. Cost:
-controller focus is filtered only in the seat shell (`explorer.exe`, `sihost.exe`), and the
-game-input service is not shimmed; isolation there relies on pad device security.
+masking the console id inside them changes OS decisions. We never target them (a fault
+there takes the desktop or the OS down). Controller focus is filtered in the seat shell
+(`explorer.exe`, `sihost.exe`) and, opt-in since the parity review (2026-11-17), in the
+game-input service: listing `GameInputSvc.exe` as a target sets `Shim\GameInputFocus` = 1
+and the module then installs only the focus hook in that session-0 process
+(`decide::filter_focus_service`: publications that move focus to a seat session are
+dropped), behind the kill switch and the fault guard. HID opens are not filtered there: the
+service opens pads for every session's clients, so an open cannot be attributed to a seat
+(the pads' device security does that). HYPOTHESIS: never run.
 Shell-started games without the AppHelp database get only device-security isolation.
 
 The module installs **no hooks** in session 0, in our own binaries (under
@@ -74,8 +80,11 @@ ARM64 PC: the `System32` copy is the ARM64 build (`launch::system32_module`; shi
 `install --arm64 <dll>` and checks the PE machine), `SysWOW64` the x86 build. **x64 apps on
 ARM64 get no AppHelp shim**: an x64 process cannot load the ARM64 `System32` copy, so the x64
 launcher there never adds our layer and injects its own x64 module (launcher path only).
-HYPOTHESIS: the shim engine of an x64 process that matches our database skips the
-unloadable module without harm.
+Since the parity review an x64 target with a known path is left out of the database on an
+ARM64 PC (`install::apphelp_targets`, PE machine check), so it never matches; targets
+listed by name only stay in (HYPOTHESIS: an x64 process that matches them skips the
+unloadable module without harm). The manager says x64 apps on ARM64 get the module only
+when Pulsar Seat starts them.
 
 ARM64EC (HYPOTHESIS, not run): an ARM64EC app's image carries the x64 machine, so the
 launcher treats it as x64 and injects the x64 module; the loader runs x64 DLLs in ARM64EC
@@ -91,7 +100,9 @@ Each hook calls a pure function of `seat_shim_core::decide`:
 | --- | --- | --- |
 | HID open | `ntdll!NtCreateFile` / `NtOpenFile` on `\??\HID#…` and XUSB interface paths (fallback if those fail: kernelbase `CreateFileW/A`, `CreateFile2`) | `classify_nodes` (parent chain via CfgMgr32) + `hid_access`; deny = `STATUS_ACCESS_DENIED` / `ERROR_ACCESS_DENIED` |
 | HID enumeration | `CM_Get_Device_Interface_ListW`, `SetupDiEnumDeviceInterfaces`, `GetRawInputDeviceList` | same rule; denied devices are removed from the lists |
-| XInput focus | `RtlPublishWnfStateData` (seat shell only) | `filter_focus`; only on builds listed in `Shim\WnfBuilds` (none verified yet, so off) |
+| XInput focus | `RtlPublishWnfStateData` (seat shell; opt-in game-input service) | `filter_focus` / `filter_focus_service`; on builds listed in `Shim\WnfBuilds` or when the runtime check passes (`wnf_runtime_plausible`: every candidate state queryable with `NtQueryWnfStateData`, payloads empty or a live PID first; off switch `Shim\WnfRuntimeCheck` = 0) |
+| Kiosk seat state (parity review) | `GetCursorPos`, `GetPhysicalCursorPos`, `GetCursorInfo`, `GetMessagePos`, `SetCursorPos`, `SetPhysicalCursorPos`, `ClipCursor`, `GetClipCursor`, `GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`, the clipboard API (`OpenClipboard` … `RemoveClipboardFormatListener`) | the seat's sections `kiosk_cursor` (v2) and `kiosk_clip`; logical cursor values DPI-converted for threads that are not per-monitor aware |
+| Smart-card readers (parity review) | winscard `SCardListReadersW/A`, `SCardConnectW/A` | `readers::reader_visible` over `Shim\ReaderRules` (published by the service) |
 | Remote masking | `WTSGetActiveConsoleSessionId`, `RtlGetActiveConsoleId`, `GetSystemMetrics(SM_REMOTESESSION)` | `mask_remote`: only exes listed in `Shim\MaskApps`, seat sessions only |
 | Steam | kernelbase `GetCommandLineW/A` in `steam.exe` + `steam_master_ipc_name_override` env | `steam_cmdline_patch` |
 | HKCU redirect | kernelbase `RegOpenKeyExW/A`, `RegCreateKeyExW/A` | `hkcu_redirect`, only for seats flagged `shared_account` (forbidden by validation) |
@@ -258,8 +269,10 @@ pulsar-split-shimctl restore            # replay %ProgramData%\Pulsar Seat\shim\
   (only `NtCreateFile` ran), deferred hooks from the DLL notification on ARM64, the
   AppHelp path with the ARM64 `System32` copy, x64 / ARM64EC apps under emulation with the
   x64 module, the x86 module under WOW64 on ARM64, the fault handler on ARM64.
-- WNF focus payload layout (`HYPOTHESIS`: target PID first); the filter is off everywhere
-  until a build is verified.
+- WNF focus payload layout (`HYPOTHESIS`: target PID first, checked only for plausibility
+  at run time; which candidate state is which focus kind is unknown); the game-input
+  service focus filter; the kiosk seat-state hooks (DPI conversion, cross-process wake of
+  the shell, per-seat clipboard with OLE delayed rendering); the WinSCard reader filter.
 
 ## Third-party notices
 

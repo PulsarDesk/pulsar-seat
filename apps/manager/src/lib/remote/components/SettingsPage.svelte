@@ -169,6 +169,7 @@
         <input bind:value={newTarget} placeholder={t.common.exampleExe} aria-label={t.settings.targets} />
         <button type="button" disabled={passive || !newTarget.trim()} onclick={addTarget}>{t.settings.addTarget}</button>
       </div>
+      <p class="hint">{t.settings.targetsGameInput}</p>
 
       <h3>{t.settings.maskApps}</h3>
       <p class="hint">{t.settings.maskHint}</p>

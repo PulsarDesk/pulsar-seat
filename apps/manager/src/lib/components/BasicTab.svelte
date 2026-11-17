@@ -165,6 +165,7 @@
                   <br /><small class="hint" data-testid={`kiosk-account-${s.number}`}>
                     {kacc.kind === 'console' ? t.kiosk.account.console : kacc.kind === 'seat' ? t.kiosk.account.seat(kacc.user) : t.kiosk.account.auto(kacc.user)}
                   </small>
+                  {#if kacc.kind === 'seat'}<br /><small class="warn-text" data-testid={`kiosk-account-warning-${s.number}`}>{t.kiosk.account.personalWarning}</small>{/if}
                 {/if}
               </td>
             {/if}

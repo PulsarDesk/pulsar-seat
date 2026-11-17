@@ -32,8 +32,10 @@ pub mod health;
 pub mod install;
 pub mod journal;
 pub mod kiosk;
+pub mod kiosk_clip;
 pub mod kiosk_cursor;
 pub mod launch;
+pub mod readers;
 pub mod regval;
 pub mod sdb;
 pub mod seatmap;
@@ -102,6 +104,14 @@ pub mod values {
     pub const MASK_APPS: &str = "MaskApps";
     pub const DISABLED_TARGETS: &str = "DisabledTargets";
     pub const WNF_BUILDS: &str = "WnfBuilds";
+    /// DWORD: 0 turns the runtime check of the focus WNF states off (then only the built-in
+    /// and `WnfBuilds` lists count). Absent = on.
+    pub const WNF_RUNTIME_CHECK: &str = "WnfRuntimeCheck";
+    /// DWORD 1 = opt in: the game-input service (`GameInputSvc.exe`, session 0) gets the
+    /// controller-focus filter (`crate::decide::filter_focus_service`). Absent / 0 = off.
+    pub const GAME_INPUT_FOCUS: &str = "GameInputFocus";
+    /// `REG_MULTI_SZ`: smart-card reader rules (`crate::readers::encode`).
+    pub const READER_RULES: &str = "ReaderRules";
     pub const TARGETS_SUBKEY: &str = "Targets";
 }
 

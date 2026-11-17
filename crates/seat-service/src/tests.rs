@@ -2557,9 +2557,123 @@ fn local_pad_targets_follow_routing_session_and_the_seat_switch() {
 }
 
 #[test]
+fn reader_rules_follow_the_assignment() {
+    use seat_shim_core::readers::{ReaderGrant, ReaderRule};
+    let mut c = two_seat_config();
+    c.devices.push(assign("scard;a", DeviceKind::SmartCardReader, s(2).mask()));
+    c.devices.push(assign("scard;b", DeviceKind::SmartCardReader, SeatMask::SHARED));
+    let h = harness_with(c, None);
+    let mut ra = device("scard;a", DeviceKind::SmartCardReader);
+    ra.name = "Reader A".into();
+    let mut rb = device("scard;b", DeviceKind::SmartCardReader);
+    rb.name = "Reader B".into();
+    h.f.input.devices.lock().unwrap().extend([ra, rb]);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    h.s.lock().ownership_dirty = true;
+    h.s.tick();
+    let rules = h.p.reader_rules.lock().unwrap().clone();
+    let sid = seat_session_id(&h, s(2));
+    assert_eq!(rules, vec![ReaderRule { name: "Reader A".into(), allowed: vec![ReaderGrant::Session(sid)] }], "shared readers get no rule");
+}
+
+#[test]
+fn seat_sessions_with_cpu_limits_are_covered_every_tick() {
+    let mut c = two_seat_config();
+    c.seats[1].cpu_sets = vec![256, 257];
+    c.seats[1].cpu_seat_wide = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.s.tick();
+    assert!(h.p.covered.lock().unwrap().is_empty(), "no session yet");
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let sid = seat_session_id(&h, s(2));
+    h.s.tick();
+    let covered = h.p.covered.lock().unwrap().clone();
+    assert_eq!(covered, vec![(sid, vec![256, 257], true)], "seat 1 has no limit: not covered");
+}
+
+#[test]
+fn reset_graphics_reaches_the_seats_agent_and_needs_a_session() {
+    let h = harness();
+    let mut a = admin();
+    // Not running: no session to send the shortcut into.
+    let e = call(&h, &mut a, RequestBody::ResetGraphics { seat: s(2) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidValue);
+    assert_eq!(call(&h, &mut a, RequestBody::ResetGraphics { seat: s(9) }).unwrap_err().code, ErrorCode::NotFound);
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let sid = seat_session_id(&h, s(2));
+    call(&h, &mut a, RequestBody::ResetGraphics { seat: s(2) }).unwrap();
+    let tasks = h.s.lock().agent_tasks.get(&sid).cloned().unwrap_or_default();
+    assert!(tasks.iter().any(|t| t.task == AgentTaskKind::ResetGraphics), "{tasks:?}");
+    // Seat 1: the console session's agent.
+    call(&h, &mut a, RequestBody::ResetGraphics { seat: s(1) }).unwrap();
+    assert!(h.s.lock().agent_tasks.get(&1).is_some_and(|t| t.iter().any(|t| t.task == AgentTaskKind::ResetGraphics)));
+    // Standard users may not.
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::ResetGraphics { seat: s(2) }).unwrap_err().code, ErrorCode::AccessDenied);
+}
+
+#[test]
+fn removing_a_kiosk_user_is_explicit_and_refused_while_in_use() {
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().kiosk_shell = Some(Default::default());
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    let e = call(&h, &mut a, RequestBody::RemoveKioskUser { seat: s(2) }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidValue, "seat 2 still has a kiosk shell");
+    assert!(h.p.kiosk_users_removed.lock().unwrap().is_empty());
+    h.s.lock().config.seats[1].local_mut().unwrap().kiosk_shell = None;
+    call(&h, &mut a, RequestBody::RemoveKioskUser { seat: s(2) }).unwrap();
+    assert_eq!(*h.p.kiosk_users_removed.lock().unwrap(), vec![s(2)]);
+    assert_eq!(call(&h, &mut a, RequestBody::RemoveKioskUser { seat: s(1) }).unwrap_err().code, ErrorCode::InvalidValue);
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::RemoveKioskUser { seat: s(2) }).unwrap_err().code, ErrorCode::AccessDenied);
+}
+
+#[test]
+fn kiosk_seat_pads_belong_to_the_seat_user_not_the_console_user() {
+    use seat_core::backend::session::KioskUser;
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().virtual_pads = true;
+    c.settings.input.pad_device_scope = true;
+    let h = harness_with(c, None);
+    let mut pad = ds5_dev("pad;2", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&2&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
+    pad.instance_id = Some(r"HID\VID_054C&PID_0CE6&MI_03\8&2&0&0000".into());
+    *h.f.input.devices.lock().unwrap() = vec![input_dev("kbd;1", DeviceKind::Keyboard, KBD1), pad];
+    h.s.boot();
+    h.s.lock().input_overrides.insert(k("pad;2"), s(2).mask());
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let console_sid = h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.user_sid.clone()).unwrap();
+    // The seat's kiosk shell runs as its own Windows user.
+    *h.f.session.kiosk_users.lock().unwrap() =
+        vec![KioskUser { seat: s(2), user_sid: "S-1-5-21-9-9-9-1002".into(), pulsar_account: true }];
+    let t = h.s.local_pad_targets();
+    assert_eq!(t.len(), 1, "{t:?}");
+    assert_eq!(t[0].owner_sid, "S-1-5-21-9-9-9-1002");
+    assert_ne!(t[0].owner_sid, console_sid);
+    let parent = |id: &str| Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or("")));
+    let want = h.s.pad_scope_plan(true, &parent).unwrap();
+    let seat2: Vec<_> = want.iter().filter(|w| w.owner.user_sid =="S-1-5-21-9-9-9-1002").collect();
+    assert_eq!(seat2.len(), 2, "collection + parent scoped to the kiosk user: {want:?}");
+    // Without a seat logon the session user stays the owner.
+    h.f.session.kiosk_users.lock().unwrap().clear();
+    assert_eq!(h.s.local_pad_targets()[0].owner_sid, console_sid);
+}
+
+#[test]
 fn pad_scope_seat_map_and_sdl_hints_follow_routing() {
     let mut c = two_seat_config();
     c.seats[1].pad_ignore_devices = vec!["0x1234/0x5678".into()];
+    c.settings.input.pad_device_scope = true;
     let h = harness_with(c, None);
     let mut pad1 = ds5_dev("pad;1", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
     pad1.instance_id = Some(r"HID\VID_054C&PID_0CE6&MI_03\8&1&0&0000".into());
@@ -2574,6 +2688,8 @@ fn pad_scope_seat_map_and_sdl_hints_follow_routing() {
     let parent = |id: &str| Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or("")));
     // Only the console session: nobody else could open the pads, nothing scoped.
     assert_eq!(h.s.pad_scope_plan(false, &parent).unwrap(), vec![]);
+    // Opt-in: the default config never scopes physical pads.
+    assert!(!seat_core::config::InputSettings::default().pad_device_scope);
     let mut a = admin();
     call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
     h.p.sign_in(10, "ali");

@@ -104,6 +104,11 @@ pub trait AccountOps {
         let _ = sid;
         Ok(())
     }
+    /// Enable or disable the account (`UF_ACCOUNTDISABLE`), keeping its other flags.
+    fn set_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        let _ = (name, enabled);
+        Err("not supported".into())
+    }
 }
 
 /// What the host group name resolves to.
@@ -346,13 +351,14 @@ pub fn remove_kiosk_account(ops: &dyn AccountOps, seat: SeatNumber) -> Vec<Strin
     remove_named(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat))
 }
 
-/// Service start: remove the kiosk accounts of seats not in `keep`. Returns the errors.
-pub fn prune_kiosk(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
-    use seat_session::kiosk_account::{kiosk_account_name, kiosk_account_seats};
+/// Uninstall: remove the kiosk accounts of seats not in `keep` (their profiles too only
+/// when `with_profiles`, the uninstall's "remove user data" choice). Returns the errors.
+pub fn prune_kiosk(ops: &dyn AccountOps, keep: &[SeatNumber], with_profiles: bool) -> Vec<String> {
+    use seat_session::kiosk_account::{kiosk_account_name, kiosk_account_seats, kiosk_password_secret};
     let mut errors = Vec::new();
     for seat in kiosk_account_seats().filter(|s| !keep.contains(s)) {
         match ops.lookup(&kiosk_account_name(seat)) {
-            Ok(Lookup::User(_)) => errors.extend(remove_kiosk_account(ops, seat)),
+            Ok(Lookup::User(_)) => errors.extend(remove_named_with(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat), with_profiles)),
             Ok(_) => {}
             Err(e) => errors.push(format!("{}: {e}", kiosk_account_name(seat))),
         }
@@ -360,7 +366,48 @@ pub fn prune_kiosk(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
     errors
 }
 
+/// Service start (parity review 2026-11-17): the kiosk accounts of seats that are no longer
+/// kiosk seats are only **disabled** (`UF_ACCOUNTDISABLE`) and lose their stored password;
+/// the account and its profile (saves, browser profiles) stay, so turning the seat's kiosk
+/// shell off for a while never destroys its data. [`ensure_kiosk`] enables the account
+/// again with a new password. Deleting happens only at uninstall ([`remove_all`]) or on the
+/// explicit [`remove_kiosk_user`]. Returns the errors.
+pub fn disable_unused_kiosk(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
+    use seat_session::kiosk_account::{kiosk_account_name, kiosk_account_seats, kiosk_password_secret};
+    let mut errors = Vec::new();
+    for seat in kiosk_account_seats().filter(|s| !keep.contains(s)) {
+        let name = kiosk_account_name(seat);
+        match ops.lookup(&name) {
+            Ok(Lookup::User(_)) => {
+                if let Err(e) = ops.set_enabled(&name, false) {
+                    errors.push(format!("{name}: disable: {e}"));
+                }
+                if let Err(e) = ops.store_password(&kiosk_password_secret(seat), None) {
+                    errors.push(copy::SECRET.fmt(&[&name, &e]));
+                }
+            }
+            Ok(_) => {}
+            Err(e) => errors.push(format!("{name}: {e}")),
+        }
+    }
+    errors
+}
+
+/// The manager's explicit "remove this seat's Windows user" (admin): the kiosk account of
+/// `seat`, its profile and its stored password. Refused while the seat is a kiosk seat
+/// (`in_use`). Returns the errors (empty = done or nothing to remove).
+pub fn remove_kiosk_user(ops: &dyn AccountOps, seat: SeatNumber, in_use: bool) -> Result<Vec<String>, String> {
+    if in_use {
+        return Err("the seat still runs a kiosk shell as this user".into());
+    }
+    Ok(remove_kiosk_account(ops, seat))
+}
+
 fn remove_named(ops: &dyn AccountOps, name: &str, secret: &str) -> Vec<String> {
+    remove_named_with(ops, name, secret, true)
+}
+
+fn remove_named_with(ops: &dyn AccountOps, name: &str, secret: &str, with_profile: bool) -> Vec<String> {
     let name = name.to_string();
     let mut errors = Vec::new();
     match ops.lookup(&name) {
@@ -368,7 +415,7 @@ fn remove_named(ops: &dyn AccountOps, name: &str, secret: &str) -> Vec<String> {
             if let Err(e) = ops.remove_all_rights(&sid) {
                 errors.push(copy::RIGHTS.fmt(&[&name, &e]));
             }
-            if let Err(e) = ops.delete_profile(&sid) {
+            if with_profile && let Err(e) = ops.delete_profile(&sid) {
                 errors.push(copy::PROFILE.fmt(&[&name, &e]));
             }
             if let Err(e) = ops.delete(&name) {
@@ -409,16 +456,17 @@ pub fn prune(ops: &dyn AccountOps, keep: &[SeatNumber]) -> Vec<String> {
     errors
 }
 
-/// Uninstall: the shared account, every seat account and the host group. Returns the
-/// errors (localized).
-pub fn remove_all(ops: &dyn AccountOps) -> Vec<String> {
+/// Uninstall: the shared account, every seat account, Pulsar's kiosk accounts (their
+/// profiles only with `remove_user_data`) and the host group. Returns the errors
+/// (localized).
+pub fn remove_all(ops: &dyn AccountOps, remove_user_data: bool) -> Vec<String> {
     let mut errors = remove(ops);
     for seat in seat_account_seats() {
         if let Ok(Lookup::User(_)) = ops.lookup(&seat_account_name(seat)) {
             errors.extend(remove_seat_account(ops, seat));
         }
     }
-    errors.extend(prune_kiosk(ops, &[]));
+    errors.extend(prune_kiosk(ops, &[], remove_user_data));
     match ops.group_lookup(GROUP_NAME) {
         Ok(GroupLookup::Ours(_)) => {
             if let Err(e) = ops.delete_group(GROUP_NAME) {
@@ -533,6 +581,9 @@ mod tests {
         fn delete_profile(&self, _s: &str) -> Result<(), String> {
             self.call("delete_profile")
         }
+        fn set_enabled(&self, _n: &str, enabled: bool) -> Result<(), String> {
+            self.call(if enabled { "enable" } else { "disable" })
+        }
         fn random32(&self) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
             let mut b = [0u8; 32];
             for (i, x) in b.iter_mut().enumerate() {
@@ -613,18 +664,18 @@ mod tests {
     fn remove_all_takes_seat_accounts_and_the_group() {
         let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Ours(GROUP_SID.into())]), ..Default::default() };
         m.named.lock().unwrap().insert("PulsarSeatHost04".into(), Lookup::User(SID.into()));
-        assert!(remove_all(&m).is_empty());
+        assert!(remove_all(&m, true).is_empty());
         let calls = m.calls();
         assert_eq!(calls.iter().filter(|c| *c == "delete").count(), 1);
         assert_eq!(calls.last().unwrap(), "delete_group");
         let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Foreign]), ..Default::default() };
-        let errs = remove_all(&m);
+        let errs = remove_all(&m, true);
         assert!(!m.calls().contains(&"delete_group".to_string()));
         assert_eq!(errs.len(), 1);
         // Kiosk accounts go at uninstall too, profile included.
         let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Missing]), ..Default::default() };
         m.named.lock().unwrap().insert("PulsarKiosk03".into(), Lookup::User(SID.into()));
-        assert!(remove_all(&m).is_empty());
+        assert!(remove_all(&m, true).is_empty());
         assert!(m.calls().contains(&"delete_profile".to_string()));
         assert_eq!(*m.secrets.lock().unwrap().last().unwrap(), "-L$PulsarSeat.KioskAccount.03");
     }
@@ -651,9 +702,37 @@ mod tests {
         m.named.lock().unwrap().insert("PulsarKiosk02".into(), Lookup::User(SID.into()));
         m.named.lock().unwrap().insert("PulsarKiosk06".into(), Lookup::User("S-1-5-21-1-2-3-1066".into()));
         m.named.lock().unwrap().insert("PulsarKiosk07".into(), Lookup::Foreign);
-        assert!(prune_kiosk(&m, &[s(2)]).is_empty());
+        assert!(prune_kiosk(&m, &[s(2)], true).is_empty());
         assert_eq!(m.calls().iter().filter(|c| *c == "delete").count(), 1);
         assert_eq!(*m.secrets.lock().unwrap(), ["-L$PulsarSeat.KioskAccount.06"]);
+    }
+
+    /// Service start never deletes a kiosk user or its profile: the unused account is only
+    /// disabled and its password forgotten (parity review 2026-11-17).
+    #[test]
+    fn service_start_disables_unused_kiosk_users_and_keeps_their_profiles() {
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarKiosk02".into(), Lookup::User(SID.into()));
+        m.named.lock().unwrap().insert("PulsarKiosk06".into(), Lookup::User("S-1-5-21-1-2-3-1066".into()));
+        m.named.lock().unwrap().insert("PulsarKiosk07".into(), Lookup::Foreign);
+        assert!(disable_unused_kiosk(&m, &[s(2)]).is_empty());
+        let calls = m.calls();
+        assert_eq!(calls.iter().filter(|c| *c == "disable").count(), 1, "{calls:?}");
+        assert!(!calls.iter().any(|c| c == "delete" || c == "delete_profile"), "{calls:?}");
+        assert_eq!(*m.secrets.lock().unwrap(), ["-L$PulsarSeat.KioskAccount.06"]);
+        // Explicit removal: refused while in use, else account + profile + secret.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::User(SID.into())]), ..Default::default() };
+        assert!(remove_kiosk_user(&m, s(3), true).is_err());
+        assert!(m.calls().is_empty());
+        assert!(remove_kiosk_user(&m, s(3), false).unwrap().is_empty());
+        let calls = m.calls();
+        assert!(calls.contains(&"delete_profile".to_string()) && calls.contains(&"delete".to_string()), "{calls:?}");
+        // Uninstall keeping user data: the account goes, the profile stays.
+        let m = Mock { lookup: Mutex::new(vec![Lookup::Missing]), group: Mutex::new(vec![GroupLookup::Missing]), ..Default::default() };
+        m.named.lock().unwrap().insert("PulsarKiosk03".into(), Lookup::User(SID.into()));
+        assert!(remove_all(&m, false).is_empty());
+        let calls = m.calls();
+        assert!(calls.contains(&"delete".to_string()) && !calls.contains(&"delete_profile".to_string()), "{calls:?}");
     }
 
     #[test]

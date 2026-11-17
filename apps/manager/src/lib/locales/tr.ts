@@ -283,7 +283,14 @@ const t = {
     stop: 'Bu koltuğu durdur',
     remove: 'Koltuğu sil',
     cpu: 'İşlemci çekirdekleri…',
-    ip: 'IP adresi ata…'
+    ip: 'IP adresi ata…',
+    resetGraphics: 'Ekran kartı sürücüsünü yeniden başlat',
+    resetGraphicsSent: 'Ekran kartı sürücüsünü yeniden başlatma komutu koltuğa gönderildi (ekran bir an kararabilir).',
+    removeKioskUser: 'Koltuğun kiosk kullanıcısını sil…',
+    removeKioskUserTitle: (n: number) => `${n}. koltuğun kiosk kullanıcısı silinsin mi?`,
+    removeKioskUserBody:
+      'Pulsar Seat bu koltuğun kiosk kabuğu için bir Windows kullanıcısı oluşturdu. Kiosk kabuğu kapatılınca kullanıcı yalnızca devre dışı bırakılır ve dosyaları (kayıtlar, tarayıcı profilleri) korunur. Silmek kullanıcıyı ve bütün dosyalarını kalıcı olarak kaldırır.',
+    removeKioskUserDone: 'Koltuğun kiosk kullanıcısı silindi.'
   },
 
   systemMenu: {
@@ -463,11 +470,13 @@ const t = {
     fullscreen: 'Tam ekran',
     perSeatAccounts: 'Her kiosk koltuğu kendi Windows kullanıcısıyla çalışsın',
     perSeatAccountsHint:
-      'Açıkken 2. ve sonraki kiosk koltukları kendi kullanıcısıyla çalışır: koltuğa hesap ve parola kayıtlıysa o hesapla, değilse Pulsar’ın oluşturduğu gizli bir yerel hesapla (PulsarKiosk02 …). Her koltuğun profili, ayarları ve uygulama verileri ayrı olur. İlk açılışta yeni profil oluşturulur; eskiden 1. koltuğun kullanıcısında kalan uygulama verileri taşınmaz. Kapalıyken bütün kiosk koltukları 1. koltuğun kullanıcısıyla çalışır.',
+      'Açıkken 2. ve sonraki kiosk koltukları kendi kullanıcısıyla çalışır: koltuğa hesap ve parola kayıtlıysa o hesapla, değilse Pulsar’ın oluşturduğu gizli bir yerel hesapla (PulsarKiosk02 …). Her koltuğun profili, ayarları ve uygulama verileri ayrı olur, ama bu bir güvenlik sınırı değildir: bütün kiosk koltukları tek bir masaüstünü paylaşır, bir koltuktaki program diğerlerinin klavyesini, ekranını ve panosunu okuyabilir. İlk açılışta yeni profil oluşturulur; eskiden 1. koltuğun kullanıcısında kalan uygulama verileri taşınmaz. Kapalıyken bütün kiosk koltukları 1. koltuğun kullanıcısıyla çalışır. Bir koltuk kiosk koltuğu olmaktan çıkınca Pulsar hesabı yalnızca devre dışı bırakılır ve dosyaları kalır (koltuk menüsü: “Koltuğun kiosk kullanıcısını sil…”).',
     account: {
       console: 'Kullanıcı: 1. koltuğun kullanıcısı',
       seat: (user: string) => `Kullanıcı: ${user}`,
-      auto: (user: string) => `Kullanıcı: ${user} (Pulsar hesabı)`
+      auto: (user: string) => `Kullanıcı: ${user} (Pulsar hesabı)`,
+      personalWarning:
+        'Bu koltuğun kayıtlı hesabı (kişisel ya da etki alanı hesabı) diğer kiosk koltuklarının paylaştığı bir masaüstünde oturum açar: onların programları bu hesabın klavyesini, ekranını ve panosunu okuyabilir. Pulsar hesabını tercih edin (kayıtlı parolayı kaldırın).'
     },
     appTitle: 'Döşeme adı',
     program: 'Program yolu',
@@ -539,7 +548,7 @@ const t = {
     systemButtons: 'Ek koltuklardaki güç ve uyku tuşları bütün bilgisayarı etkileyebilsin',
     padDeviceScope: 'Fiziksel oyun kollarını koltuğa kilitle',
     padDeviceScopeHint:
-      'Bir koltuğa verilen kol yalnızca o koltuğun kullanıcısı tarafından açılabilir; uzak koltuklar çalışırken diğer kollar yalnızca bu bilgisayarın başındaki kullanıcıya kalır. Değişiklikler hizmet durunca geri alınır.',
+      'Bir koltuğa verilen kol yalnızca o koltuğun kullanıcısı tarafından açılabilir; uzak koltuklar çalışırken diğer kollar yalnızca bu bilgisayarın başındaki kullanıcıya kalır. Varsayılan olarak kapalıdır (sistem değişikliği): kolların aygıt düğümlerinin güvenlik ayarını değiştirir ve onları bağlı oldukları aygıtla birlikte yeniden başlatır (kolu içinde olan bir kulaklık ya da klavye de yeniden başlar). Değişiklikler hizmet durunca ya da bu kapatılınca geri alınır.',
     devices: 'Aygıtlar',
     adminsBypass: 'Yöneticiler bütün koltukların aygıtlarına erişebilsin',
     classDefaults: 'Sınıf düzeyinde varsayılan erişim tanımları (sistem değişikliği)',
@@ -711,7 +720,9 @@ const t = {
     one_kiosk_visible_at_a_time: 'Aynı anda yalnızca bir kiosk masaüstü görünür',
     kiosk_shell_seat_aware_apps_only:
       'Kiosk koltuklarında giriş pencere iletileriyle gelir; ham giriş, DirectInput / XInput kullanan oyunlar koltuğun aygıtlarını yalnızca uygulama başına yalıtım açıksa alır; tam ekran ve mağaza (UWP) uygulamaları en iyi çaba ile desteklenir',
-    kiosk_per_seat_accounts: 'Kiosk koltukları kendi Windows kullanıcılarıyla çalışabilir (2. koltuktan başlayarak)',
+    kiosk_per_seat_accounts: 'Kiosk koltukları kendi Windows kullanıcılarıyla çalışabilir (2. koltuktan başlayarak): bu dosyalarını ve ayarlarını ayırır, güvenliklerini değil',
+    kiosk_users_share_desktop:
+      'Kiosk koltukları tek bir Windows masaüstünü paylaşır: bir koltuktaki program diğerlerinin ekranını görebilir, klavyesini okuyabilir, panosunu ve pencerelerini kullanabilir. Bir kiosk koltuğunda kişisel ya da iş hesabıyla oturum açmayın.',
     kiosk_account_fallback: 'Bir kiosk koltuğunun kendi kullanıcısı açılamadı; o koltuk 1. koltuğun kullanıcısıyla çalışıyor (hizmet günlüğüne bakın)',
     no_privacy_from_console: 'Koltuğun görüntüsü 1. koltuktan gizlenemez',
     audio_off: 'Ses kapalı',
@@ -1000,7 +1011,10 @@ const t = {
     group: (g: number) => `Grup ${g}`,
     all: 'Hepsi',
     failed: 'İşlemci bilgisi alınamadı.',
-    oneGroup: 'Katı sınırda seçilen çekirdekler tek bir işlemci grubunda olmalı.'
+    oneGroup: 'Katı sınırda seçilen çekirdekler tek bir işlemci grubunda olmalı.',
+    seatWide: 'Bütün oturum',
+    seatWideHint:
+      '“Bütün oturum” kapalıyken çekirdekler koltuğun masaüstüne (Gezgin ve ondan başlatılanlar, Başlat menüsü) ve Pulsar Seat’in başlattığı uygulamalara uygulanır. Açıkken koltuğun oturumundaki diğer her yeni program da (yönetici olarak çalıştırılanlar dahil) bir saniye içinde bunları tercih ettiği çekirdekler olarak alır; korumalı sistem işlemlerine dokunulmaz.'
   },
 
   hotkey: {
@@ -1132,7 +1146,8 @@ const t = {
       camera_consent: 'Kamera izniyle sınırlanıyor',
       shared: 'Ortak: herkes kullanabilir',
       not_supported: 'Bu aygıt bu bilgisayarda koltuğa kapatılamıyor',
-      network: 'Ağ bağdaştırıcısı: her zaman ortak'
+      network: 'Ağ bağdaştırıcısı: her zaman ortak',
+      seat_filter: 'Onu yalnızca kendi koltuğunun programları görür (akıllı kart yönlendirmesi / Pulsar Seat modülü)'
     } as Record<string, string>,
     seat: (v: string) => `Koltuk: ${v}`,
     location: (v: string) => `Konum: ${v}`,
@@ -1524,7 +1539,7 @@ const rt = {
     processPatching: 'İşlem yamalamayı etkinleştir',
     steamIsolation: 'Steam’i koltuklara ayır',
     isolationNote:
-      'HID yalıtımı ve Steam ayrımı yeni başlatılan koltuklarda geçerli olur. İşlem yamalama, Pulsar Seat modülünü seçtiğiniz uygulamalara yükler (x64 ve ARM64 bilgisayarlar; ARM64’te x64 uygulamalar da).',
+      'HID yalıtımı ve Steam ayrımı yeni başlatılan koltuklarda geçerli olur. İşlem yamalama, Pulsar Seat modülünü seçtiğiniz uygulamalara yükler (x64 ve ARM64 bilgisayarlar). ARM64 bilgisayarda x64 uygulamalar modülü yalnızca Pulsar Seat onları başlattığında alır (yayın uygulamaları, kiosk uygulamaları); kendiniz başlattığınız bir x64 uygulama yamalanmaz ve Windows’un kullandığı listeye eklenmez.',
     antiCheat:
       'Uyarı: Hile önleme yazılımı kullanan bazı oyunlar, işlemlere yüklenen modülü ya da uzak oturum gizlemeyi sorun olarak görebilir.',
     isolationState: 'Yalıtım durumu',
@@ -1534,6 +1549,8 @@ const rt = {
     killSwitch: 'Acil kapatma açık: modül hiçbir işlemde kanca kurmuyor.',
     foreign: (s: string) => `Başka bir ürünün yamalama veritabanı bulundu (${s}). Önce o ürünün işlem yamalamasını kapatın.`,
     targets: 'Modülün yükleneceği uygulamalar (dosya adı)',
+    targetsGameInput:
+      'GameInputSvc.exe (Windows oyun girişi hizmeti) eklenirse orada bir kumanda odağı filtresi açılır: uzak bir koltuğun penceresi öne gelince bu bilgisayardaki kumanda odağını almaz. Deneyseldir; listede olmadıkça kapalıdır.',
     addTarget: 'Ekle',
     maskApps: 'Uzak oturumu gizlenecek uygulamalar (tam yol)',
     maskHint: 'Uygulama, koltukta “uzak oturumda çalışıyorum” bilgisini görmez. Yalnızca gerekli oyunlar için açın.',

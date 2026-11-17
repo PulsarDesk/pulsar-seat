@@ -386,16 +386,16 @@ mod tests {
         assert!(matches!(t.remove("ROOT\\SYSTEM\\0000"), Err(PadError::MarkerConflict(_))));
     }
 
-    /// Registers and unregisters a notification (no system state changes).
+    /// Reads of a device node that does not exist fail cleanly (nothing is created).
     #[test]
-    fn physical_node_reads_are_read_only() {
-        // An instance id that does not exist: every read fails or is empty, nothing changes.
+    fn missing_node_reads_fail() {
         let id = r"ROOT\PULSAR_NO_SUCH_NODE\0000";
         assert!(parent_instance(id).is_none());
         assert!(session_id_of(id).is_err());
         assert!(security_sds(id).is_err());
     }
 
+    /// Registers and unregisters a notification (no system state changes).
     #[test]
     fn arrival_watch_registers() {
         let w = DeviceArrivalWatch::start().unwrap();

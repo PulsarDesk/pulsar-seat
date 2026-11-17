@@ -513,6 +513,16 @@ export class ManagerStore {
     return this.run(() => this.api.relogonSeat(seat));
   }
 
+  /** Restart the graphics driver in a running seat's session. */
+  resetGraphics(seat: SeatNumber): Promise<boolean> {
+    return this.run(() => this.api.resetGraphics(seat), t.seatMenu.resetGraphicsSent);
+  }
+
+  /** Delete the Windows user Pulsar made for a former kiosk seat, with its profile. */
+  removeKioskUser(seat: SeatNumber): Promise<boolean> {
+    return this.run(() => this.api.removeKioskUser(seat), t.seatMenu.removeKioskUserDone);
+  }
+
   async reboot(): Promise<boolean> {
     const ok = await this.run(() => this.api.requestReboot());
     if (!ok) this.toast('error', t.enable.rebootFailed);

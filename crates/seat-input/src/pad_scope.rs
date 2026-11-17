@@ -165,11 +165,29 @@ pub fn plan(pads: &[PadNodes], console: Option<&ScopeOwner>, remote_seats_runnin
     out.into_iter().map(|(instance_id, owner)| ScopeWant { instance_id, owner }).collect()
 }
 
+/// First retry of a failed node after this long; doubles per failure up to
+/// [`RETRY_MAX_MS`].
+pub const RETRY_MIN_MS: u64 = 5_000;
+/// Longest wait between two retries of a failed node.
+pub const RETRY_MAX_MS: u64 = 60_000;
+
+/// A node whose last apply or restore failed: retried with back-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Retry {
+    next_ms: u64,
+    delay_ms: u64,
+    error: String,
+}
+
 /// Applies and restores node scoping; owns the journal.
 pub struct PadScoper {
     dev: Arc<dyn DeviceScoper>,
     store: Box<dyn ScopeStore>,
     applied: BTreeMap<String, ScopeRecord>,
+    /// Journaled nodes whose last apply / restore failed (upper-case ids). A failed node
+    /// is retried at `next_ms` even when its owner did not change; a repeated identical
+    /// error is not reported again (no log flood while a scoped pad stays unplugged).
+    failed: BTreeMap<String, Retry>,
 }
 
 impl PadScoper {
@@ -177,12 +195,18 @@ impl PadScoper {
     /// [`Self::sync`] or [`Self::restore_all`].
     pub fn new(dev: Arc<dyn DeviceScoper>, store: Box<dyn ScopeStore>) -> Self {
         let applied = store.load().into_iter().map(|r| (r.instance_id.to_ascii_uppercase(), r)).collect();
-        Self { dev, store, applied }
+        Self { dev, store, applied, failed: BTreeMap::new() }
     }
 
-    /// Nodes currently scoped by us (upper-case instance ids).
+    /// Nodes currently scoped by us (upper-case instance ids). A journaled node whose last
+    /// apply or restore failed is not listed: see [`Self::pending`].
     pub fn scoped(&self) -> Vec<String> {
-        self.applied.keys().cloned().collect()
+        self.applied.keys().filter(|k| !self.failed.contains_key(*k)).cloned().collect()
+    }
+
+    /// Journaled nodes whose last apply or restore failed and that wait for a retry.
+    pub fn pending(&self) -> Vec<String> {
+        self.failed.keys().cloned().collect()
     }
 
     fn save(&self) -> Result<(), String> {
@@ -190,28 +214,76 @@ impl PadScoper {
         self.store.save(&rows)
     }
 
-    /// Makes the nodes match `want`: nodes no longer wanted are restored, new ones are
-    /// journaled then scoped, nodes whose owner changed are re-scoped.
+    /// Makes the nodes match `want` now, retrying every failed node at once (no back-off).
     pub fn sync(&mut self, want: &[ScopeWant]) -> Vec<ScopeNote> {
+        self.sync_at(want, u64::MAX)
+    }
+
+    /// Makes the nodes match `want`: nodes no longer wanted are restored, new ones are
+    /// journaled then scoped, nodes whose owner changed are re-scoped, and nodes whose last
+    /// apply / restore failed are retried once their back-off has passed (`now_ms`: any
+    /// monotonic clock). A failure is reported once per distinct error.
+    pub fn sync_at(&mut self, want: &[ScopeWant], now_ms: u64) -> Vec<ScopeNote> {
         let mut notes = Vec::new();
         let wanted: BTreeMap<String, &ScopeOwner> = want.iter().map(|w| (w.instance_id.to_ascii_uppercase(), &w.owner)).collect();
+        let applied = &self.applied;
+        self.failed.retain(|k, _| applied.contains_key(k) || wanted.contains_key(k));
         let gone: Vec<String> = self.applied.keys().filter(|k| !wanted.contains_key(*k)).cloned().collect();
         for id in gone {
-            notes.push(self.restore(&id));
-        }
-        for (id, owner) in wanted {
-            if self.applied.get(&id).is_some_and(|r| &r.owner == owner) {
+            if self.waiting(&id, now_ms) {
                 continue;
             }
-            notes.push(self.apply(&id, owner));
+            let n = self.restore(&id);
+            notes.extend(self.track(&id, n, now_ms));
+        }
+        for (id, owner) in wanted {
+            let same_owner = self.applied.get(&id).is_some_and(|r| &r.owner == owner);
+            if same_owner && (!self.failed.contains_key(&id) || self.waiting(&id, now_ms)) {
+                continue;
+            }
+            let n = self.apply(&id, owner);
+            notes.extend(self.track(&id, n, now_ms));
         }
         notes
     }
 
-    /// Restores every journaled node (service start after a crash, service stop, setting
-    /// off).
+    /// Restores every journaled node (service start after a crash, service stop), without
+    /// back-off.
     pub fn restore_all(&mut self) -> Vec<ScopeNote> {
         self.sync(&[])
+    }
+
+    /// Restores every journaled node, honouring the retry back-off (the 1 s tick while the
+    /// setting is off).
+    pub fn restore_all_at(&mut self, now_ms: u64) -> Vec<ScopeNote> {
+        self.sync_at(&[], now_ms)
+    }
+
+    /// The node failed before and its back-off has not passed yet.
+    fn waiting(&self, id: &str, now_ms: u64) -> bool {
+        self.failed.get(id).is_some_and(|r| now_ms < r.next_ms)
+    }
+
+    /// Records the outcome of one apply / restore: success clears the retry state; a
+    /// failure schedules the next retry (doubling back-off) and is reported only when the
+    /// error text is new.
+    fn track(&mut self, id: &str, note: ScopeNote, now_ms: u64) -> Option<ScopeNote> {
+        let ScopeNote::Failed { error, .. } = &note else {
+            self.failed.remove(id);
+            return Some(note);
+        };
+        let prev = self.failed.get(id).cloned();
+        let repeated = prev.as_ref().is_some_and(|r| &r.error == error);
+        if self.applied.contains_key(id) {
+            let delay_ms = prev.as_ref().map_or(RETRY_MIN_MS, |r| r.delay_ms.saturating_mul(2).min(RETRY_MAX_MS));
+            let next_ms = now_ms.saturating_add(delay_ms);
+            self.failed.insert(id.to_string(), Retry { next_ms, delay_ms, error: error.clone() });
+        } else {
+            // Nothing journaled (the original state could not be read): the next sync
+            // starts from scratch.
+            self.failed.remove(id);
+        }
+        (!repeated).then_some(note)
     }
 
     fn apply(&mut self, id: &str, owner: &ScopeOwner) -> ScopeNote {
@@ -427,9 +499,71 @@ mod tests {
         assert_eq!(store.load().len(), 1, "journaled before the change: restore later");
         assert!(scope_sddl("not a sid").is_none());
         let n = s.sync(&[ScopeWant { instance_id: "Y".into(), owner: ScopeOwner { session_id: 1, user_sid: "bad".into() } }]);
-        assert_eq!(n.len(), 2);
-        assert!(n.iter().all(|x| matches!(x, ScopeNote::Failed { .. })), "{n:?}");
+        // Y fails (invalid SID); X's restore fails with the same error as its apply, so it
+        // is not reported again (one warning per distinct error).
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert!(n.iter().all(|x| matches!(x, ScopeNote::Failed { instance_id, .. } if instance_id == "Y")), "{n:?}");
+        assert_eq!(s.pending(), vec!["X".to_string()]);
         assert_eq!(store.load().len(), 1, "X still journaled after a failed restore");
+    }
+
+    #[test]
+    fn failed_apply_is_retried_with_back_off_for_the_same_owner() {
+        let dev = Arc::new(Dev::default());
+        let store = Mem::default();
+        let mut s = PadScoper::new(dev.clone(), Box::new(store.clone()));
+        let want = [ScopeWant { instance_id: "X".into(), owner: owner(2) }];
+        *dev.fail_set.lock().unwrap() = Some("X".into());
+        let n = s.sync_at(&want, 1_000);
+        assert!(matches!(&n[..], [ScopeNote::Failed { .. }]));
+        assert!(s.scoped().is_empty(), "a failed node is not reported as scoped");
+        assert_eq!(s.pending(), vec!["X".to_string()]);
+        // Before the back-off: nothing; after it: retried, the identical error stays quiet.
+        assert!(s.sync_at(&want, 2_000).is_empty());
+        assert!(s.sync_at(&want, 1_000 + RETRY_MIN_MS).is_empty());
+        // The device recovers: the next due retry (same owner) sets security and restarts.
+        *dev.fail_set.lock().unwrap() = None;
+        let restarts = dev.restarts.lock().unwrap().len();
+        assert!(s.sync_at(&want, 1_000 + RETRY_MIN_MS + 1).is_empty(), "second back-off (10 s) not over");
+        let n = s.sync_at(&want, 1_000 + 3 * RETRY_MIN_MS);
+        assert_eq!(n, vec![ScopeNote::Scoped { instance_id: "X".into(), session_id: 2 }]);
+        assert!(dev.sddl.lock().unwrap()["X"].as_ref().unwrap().contains("1002"));
+        assert_eq!(dev.restarts.lock().unwrap().len(), restarts + 1);
+        assert_eq!(s.scoped(), vec!["X".to_string()]);
+        assert!(s.pending().is_empty());
+    }
+
+    #[test]
+    fn failed_restores_back_off_and_report_once() {
+        let dev = Arc::new(Dev::default());
+        let store = Mem::default();
+        let mut s = PadScoper::new(dev.clone(), Box::new(store.clone()));
+        s.sync(&[ScopeWant { instance_id: "P".into(), owner: owner(2) }]);
+        // The pad is unplugged: every restore fails.
+        *dev.fail_set.lock().unwrap() = Some("P".into());
+        let mut reported = 0;
+        let mut attempts = 0;
+        for sec in 0..120u64 {
+            let before = s.failed.get("P").map(|r| r.next_ms);
+            reported += s.restore_all_at(sec * 1_000).len();
+            if s.failed.get("P").map(|r| r.next_ms) != before {
+                attempts += 1;
+            }
+        }
+        assert_eq!(reported, 1, "one warning, not one per tick");
+        assert!(attempts < 10, "backed off: {attempts} attempts in 2 minutes");
+        assert_eq!(store.load().len(), 1, "still journaled");
+        // Plugged back in: the next due retry restores it.
+        *dev.fail_set.lock().unwrap() = None;
+        let n = s.restore_all_at(1_000_000);
+        assert_eq!(n, vec![ScopeNote::Restored { instance_id: "P".into() }]);
+        assert!(store.load().is_empty());
+        // `restore_all` (service stop) never waits for the back-off.
+        s.sync(&[ScopeWant { instance_id: "Q".into(), owner: owner(2) }]);
+        *dev.fail_set.lock().unwrap() = Some("Q".into());
+        assert_eq!(s.restore_all_at(0).len(), 1);
+        *dev.fail_set.lock().unwrap() = None;
+        assert_eq!(s.restore_all(), vec![ScopeNote::Restored { instance_id: "Q".into() }]);
     }
 
     #[test]

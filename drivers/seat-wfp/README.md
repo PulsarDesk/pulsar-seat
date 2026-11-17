@@ -20,7 +20,11 @@ fallback (`PULSAR_SEAT_SOURCE_IP` in the environment of the programs the service
 | `FWPM_LAYER_ALE_BIND_REDIRECT_V4` | a TCP / UDP socket of a mapped process binds to `0.0.0.0` (explicit `bind`, or the implicit bind of the first `connect` / `sendto`) | the bind becomes `<seat address>:<same port>` |
 | `FWPM_LAYER_ALE_CONNECT_REDIRECT_V4` | an outbound TCP connect / UDP flow of a mapped process to a non-loopback destination, local address not yet the seat's | local address set to the seat address (backstop for sockets bound before the map arrived) |
 
-Left alone: explicit binds to a given address (the program chose it), loopback traffic
+Left alone: explicit binds to a given address (the program chose it; the bind classify
+records the socket's transport endpoint handle and address in a 1024-slot table, and the
+connect classify skips a socket found there with the same local address, parity review
+2026-11-17; HYPOTHESIS: the endpoint handle metadata is present at both layers; a slot
+collision evicts the older socket, which then gets the connect backstop), loopback traffic
 (127.0.0.0/8 local or remote), IPv6 sockets (the seat address is IPv4; HYPOTHESIS: a
 dual-stack socket talking to an IPv4 peer is classified at the V4 layers), connections
 another callout already redirected (`FwpsQueryConnectionRedirectState0` != not

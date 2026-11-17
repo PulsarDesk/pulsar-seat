@@ -262,6 +262,7 @@ impl PadBackend for UsbipDs5Backend {
             counters: Counters::default(),
             motion: req.caps.motion,
             lost,
+            audio,
         }))
     }
 }
@@ -278,6 +279,8 @@ pub struct UsbipPad {
     counters: Counters,
     motion: bool,
     lost: Arc<AtomicBool>,
+    /// The composite has the audio interfaces (`AudioPolicy` decision at create).
+    audio: bool,
 }
 
 impl UsbipPad {
@@ -318,6 +321,9 @@ impl VirtualPad for UsbipPad {
         self.check()?;
         self.slot.push_mic(pcm);
         Ok(())
+    }
+    fn has_audio(&self) -> bool {
+        self.audio
     }
     fn remove(self: Box<Self>) -> Result<(), PadError> {
         let r = self.tool.detach(self.port);

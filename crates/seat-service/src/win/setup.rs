@@ -320,7 +320,7 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
                 eprintln!("{}", copy::DESKTOP_ACE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
             }
-            for e in super::host_account::remove() {
+            for e in super::host_account::remove(opts.remove_user_data) {
                 eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
             }

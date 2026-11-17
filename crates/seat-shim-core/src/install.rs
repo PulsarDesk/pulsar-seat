@@ -145,6 +145,52 @@ pub trait ShimSystem: Send + Sync {
     fn run_sdbinst(&self, args: &[String]) -> Result<u32, ShimError>;
     fn new_guid(&self) -> [u8; 16];
     fn unique_suffix(&self) -> String;
+    /// The PC is ARM64 (the System32 module copy is the ARM64 build).
+    fn host_is_arm64(&self) -> bool {
+        false
+    }
+    /// PE machine type of an executable (`IMAGE_FILE_HEADER.Machine`), `None` when it
+    /// cannot be read.
+    fn pe_machine(&self, p: &Path) -> Option<u16> {
+        let _ = p;
+        None
+    }
+}
+
+/// `IMAGE_FILE_MACHINE_AMD64`.
+pub const MACHINE_AMD64: u16 = 0x8664;
+
+/// `IMAGE_FILE_HEADER.Machine` of a PE image from its first bytes (`MZ`, `e_lfanew` at
+/// 0x3C, `PE\0\0`, machine right after).
+pub fn pe_machine_of(head: &[u8]) -> Option<u16> {
+    if head.get(0..2)? != b"MZ" {
+        return None;
+    }
+    let off = u32::from_le_bytes(head.get(0x3C..0x40)?.try_into().ok()?) as usize;
+    if head.get(off..off + 4)? != b"PE\0\0" {
+        return None;
+    }
+    Some(u16::from_le_bytes(head.get(off + 4..off + 6)?.try_into().ok()?))
+}
+
+/// Targets AppHelp can give the module on this PC. On ARM64 the System32 copy AppHelp
+/// loads is the ARM64 build, which an emulated x64 process cannot load: an x64 executable
+/// (known by its path) is left out of the database (parity review 2026-11-17) and gets the
+/// module only when Pulsar Seat starts it (launcher path: stream apps, kiosk apps). Targets
+/// without a known path stay in (HYPOTHESIS: an x64 process matching them skips the
+/// unloadable module without harm).
+pub fn apphelp_targets(sys: &dyn ShimSystem, targets: &[ShimTarget]) -> (Vec<usize>, Vec<String>) {
+    let mut keep = Vec::new();
+    let mut skipped = Vec::new();
+    for (i, t) in targets.iter().enumerate() {
+        let x64_on_arm64 = sys.host_is_arm64() && t.path.as_deref().and_then(|p| sys.pe_machine(p)) == Some(MACHINE_AMD64);
+        if x64_on_arm64 {
+            skipped.push(t.exe_name.to_ascii_lowercase());
+        } else {
+            keep.push(i);
+        }
+    }
+    (keep, skipped)
 }
 
 pub const APPCOMPAT: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags";
@@ -294,7 +340,12 @@ impl AppHelpInstaller<'_> {
 
     fn build_and_register(&self, targets: &[ShimTarget]) -> Result<(), ShimError> {
         let resolved: Vec<ResolvedTarget> = targets.iter().map(|t| self.resolve(t)).collect();
-        let tree = build_tree(&guid_bytes(crate::SHIM_DB_GUID)?, &resolved);
+        let (keep, skipped) = apphelp_targets(self.sys, targets);
+        for s in &skipped {
+            log::info!("shim: {s} is an x64 program on an ARM64 PC; AppHelp cannot load the ARM64 module into it (launcher path only)");
+        }
+        let in_db: Vec<ResolvedTarget> = keep.iter().map(|&i| resolved[i].clone()).collect();
+        let tree = build_tree(&guid_bytes(crate::SHIM_DB_GUID)?, &in_db);
         let path = self.sdb_copy_path();
         self.sys.write_sdb(&path, &tree)?;
         if self.sys.reg_key_exists(&Self::installed_sdb_key(crate::SHIM_DB_GUID)) {
@@ -579,6 +630,54 @@ mod tests {
         s.add_file(r"C:\PF\shim\x86\PulsarSplitShim.dll");
         s.add_file_with_version(r"C:\Windows\System32\explorer.exe", "Microsoft Windows", "Windows Explorer");
         s
+    }
+
+    #[test]
+    fn pe_machine_from_the_header() {
+        let mut h = vec![0u8; 0x100];
+        h[0..2].copy_from_slice(b"MZ");
+        h[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        h[0x80..0x84].copy_from_slice(b"PE\0\0");
+        h[0x84..0x86].copy_from_slice(&MACHINE_AMD64.to_le_bytes());
+        assert_eq!(pe_machine_of(&h), Some(MACHINE_AMD64));
+        h[0x84..0x86].copy_from_slice(&0xAA64u16.to_le_bytes());
+        assert_eq!(pe_machine_of(&h), Some(0xAA64));
+        assert_eq!(pe_machine_of(&h[..0x82]), None, "truncated");
+        h[0] = b'X';
+        assert_eq!(pe_machine_of(&h), None);
+    }
+
+    #[test]
+    fn x64_targets_stay_out_of_the_database_on_arm64() {
+        let s = sys();
+        s.add_file_with_version(r"D:\Games\x64game.exe", "Game", "Game");
+        s.add_file_with_version(r"D:\Games\armgame.exe", "Game", "Game");
+        s.set_pe_machine(r"D:\Games\x64game.exe", MACHINE_AMD64);
+        s.set_pe_machine(r"D:\Games\armgame.exe", 0xAA64);
+        let targets = vec![
+            ShimTarget { exe_name: "x64game.exe".into(), product_name: None, path: Some(PathBuf::from(r"D:\Games\x64game.exe")) },
+            ShimTarget { exe_name: "armgame.exe".into(), product_name: None, path: Some(PathBuf::from(r"D:\Games\armgame.exe")) },
+            t("explorer.exe"),
+        ];
+        // x64 PC: everything goes in.
+        assert_eq!(apphelp_targets(&s, &targets), (vec![0, 1, 2], vec![]));
+        s.set_arm64(true);
+        assert_eq!(apphelp_targets(&s, &targets), (vec![1, 2], vec!["x64game.exe".to_string()]));
+        let log = MemoryLog::default();
+        let clock = || "t".to_string();
+        let i = AppHelpInstaller { sys: &s, log: &log, clock: &clock };
+        i.install(&targets, &mods()).unwrap();
+        let names: Vec<String> = s
+            .last_sdb_ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                crate::sdb::WriteOp::Str(crate::sdb::tag::NAME, n) if n.ends_with(".exe") => Some(n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["armgame.exe".to_string(), "explorer.exe".to_string()]);
+        // The configured list still holds all three (shown in the manager).
+        assert_eq!(i.configured_targets().len(), 3);
     }
 
     #[test]

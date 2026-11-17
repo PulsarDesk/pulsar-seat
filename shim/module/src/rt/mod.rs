@@ -17,6 +17,7 @@
 //!    registry / API calls) sees `None` and passes through, so it can never deadlock.
 
 mod backend;
+mod clip;
 mod cursor;
 mod device;
 mod fault;
@@ -28,6 +29,7 @@ mod log;
 mod mask;
 mod raw;
 mod reg;
+mod scard;
 mod steam;
 mod threads;
 
@@ -83,6 +85,7 @@ fn mask(plan: HookPlan, installed: HookPlan) -> HookPlan {
         hkcu_redirect: plan.hkcu_redirect && installed.hkcu_redirect,
         raw_input_data: plan.raw_input_data && installed.raw_input_data,
         cursor_pos: plan.cursor_pos && installed.cursor_pos,
+        scard_filter: plan.scard_filter && installed.scard_filter,
     }
 }
 
@@ -159,7 +162,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
     if matches!(now.role, Role::Kiosk { .. }) || (matches!(now.role, Role::Console) && facts.kiosk_seat.is_some()) {
         // Started by a kiosk shell (round 4): the HID groups and the raw-input data filter,
         // also when the kiosk map entry is not published yet (the live plan decides).
-        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, cursor_pos: true, ..Default::default() };
+        return HookPlan { hid_open: true, hid_enumeration: true, raw_input_data: true, cursor_pos: true, scard_filter: cfg.reader_rules, ..Default::default() };
     }
     if matches!(now.role, Role::Console) {
         // The console only needs the HID rule, and only while a seat asks for it; and the
@@ -169,6 +172,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
             hid_open: now.plan.hid_open,
             hid_enumeration: now.plan.hid_enumeration,
             raw_input_data: now.plan.raw_input_data,
+            scard_filter: cfg.reader_rules,
             ..Default::default()
         };
     }
@@ -186,6 +190,7 @@ fn potential(facts: &ProcessFacts, cfg: &ShimConfig, build: u32, now: &Live) -> 
         hkcu_redirect: STEAM_EXES.contains(&exe),
         raw_input_data: false,
         cursor_pos: false,
+        scard_filter: cfg.reader_rules,
     }
 }
 
@@ -208,12 +213,37 @@ fn init(path: InitPath) {
     });
 }
 
+/// The game-input service (session 0), opted in through `Shim\GameInputFocus`: only the
+/// focus WNF filter, and only on a verified build or after the runtime check. `true` = this
+/// process was handled (hooked or not).
+fn init_game_input_service(facts: &ProcessFacts) -> bool {
+    let mut cfg = win::read_shim_config();
+    if !seat_shim_core::decide::service_focus_target(&facts.exe_lower, facts.session_id, &cfg) {
+        return false;
+    }
+    log::set_verbosity(cfg.verbosity);
+    let build = win::windows_build();
+    if !WNF_FOCUS_CANDIDATES.iter().all(|n| wnf_known_with(build, *n, &cfg.wnf_builds)) && cfg.wnf_runtime_check && focus::runtime_verified() {
+        cfg.wnf_builds.push(build);
+    }
+    let verified = WNF_FOCUS_CANDIDATES.iter().all(|n| wnf_known_with(build, *n, &cfg.wnf_builds));
+    // SAFETY: init path, once.
+    let ok = verified && unsafe { focus::install_service() };
+    log::init(facts.exe_name(), "game_input_service", ok);
+    true
+}
+
 fn init_once() {
     {
         log::register();
         let facts = win::process_facts();
         let exe = facts.exe_name().to_string();
         let skip = if facts.session_id == 0 {
+            // Opt-in exception (parity review 2026-11-17): the game-input service gets the
+            // controller-focus filter only, behind the kill switch and the fault guard.
+            if !facts.kill_switch && !facts.safe_mode && init_game_input_service(&facts) {
+                return;
+            }
             Some("session_0")
         } else if facts.is_our_binary {
             Some("own_binary")
@@ -231,9 +261,21 @@ fn init_once() {
             }
             return;
         }
-        let cfg = win::read_shim_config();
+        let mut cfg = win::read_shim_config();
         log::set_verbosity(cfg.verbosity);
         let build = win::windows_build();
+        // Focus WNF names on a build in no verified list: the runtime check (parity review
+        // 2026-11-17) in the focus hosts only; a pass counts this build as verified here.
+        if cfg.wnf_runtime_check
+            && FOCUS_HOSTS.contains(&exe.as_str())
+            && !WNF_FOCUS_CANDIDATES.iter().all(|n| wnf_known_with(build, *n, &cfg.wnf_builds))
+        {
+            let ok = focus::runtime_verified();
+            log::redirect("wnf_runtime_check", if ok { "plausible" } else { "failed" });
+            if ok {
+                cfg.wnf_builds.push(build);
+            }
+        }
         let now = compute(&facts, &cfg, build);
         let want = potential(&facts, &cfg, build, &now);
         let disabled = is_disabled(&cfg, &exe);
@@ -270,7 +312,8 @@ fn init_once() {
             || (want.steam_cmdline && !got.steam_cmdline)
             || (want.hkcu_redirect && !got.hkcu_redirect)
             || (want.raw_input_data && !got.raw_input_data)
-            || (want.cursor_pos && !got.cursor_pos);
+            || (want.cursor_pos && !got.cursor_pos)
+            || (want.scard_filter && !got.scard_filter);
         health::send(&facts, role_label, got.any(), failed.then_some("hook_failed"));
     }
 }
@@ -287,7 +330,9 @@ unsafe fn install_hooks(want: HookPlan) -> HookPlan {
             steam_cmdline: want.steam_cmdline && steam::install(),
             hkcu_redirect: want.hkcu_redirect && reg::install(),
             raw_input_data: want.raw_input_data && raw::install(),
-            cursor_pos: want.cursor_pos && cursor::install(),
+            // Seat cursor, key state and clipboard (kiosk seat features).
+            cursor_pos: want.cursor_pos && cursor::install() && clip::install(),
+            scard_filter: want.scard_filter && scard::install(),
         }
     }
 }

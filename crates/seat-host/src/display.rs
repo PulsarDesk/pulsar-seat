@@ -123,6 +123,91 @@ impl SeatDisplay {
     }
 }
 
+/// Frames of our IddCx monitors presented on the seat's targets (parity review
+/// 2026-11-17): a seat whose session has no display of its own (`desktops` kiosk seats)
+/// and the `pulsar_idd` display backend. One thread per output reads the virtual monitor
+/// of the same index (`seat_display::win::idd::IddFrameReader`, connector = output index)
+/// and `pump()`s its frames, HDR included, into one presenter over the seat's targets
+/// (Display Core scan-out where available, else a window). A reader that cannot open yet
+/// (monitor not plugged, driver not loaded) is retried every 2 s. HYPOTHESIS: never run
+/// on hardware (the driver is unsigned and was never loaded).
+#[cfg(windows)]
+pub struct IddPresenter {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+struct LockedSink(std::sync::Arc<std::sync::Mutex<Box<dyn FrameSink>>>);
+
+#[cfg(windows)]
+impl LockedSink {
+    fn get(&self) -> std::sync::MutexGuard<'_, Box<dyn FrameSink>> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+#[cfg(windows)]
+impl FrameSink for LockedSink {
+    fn configure(&mut self, outputs: &SeatOutputs) -> BackendResult<()> {
+        self.get().configure(outputs)
+    }
+    fn present(&mut self, frame: &seat_core::backend::display::FrameRef<'_>) -> BackendResult<()> {
+        self.get().present(frame)
+    }
+    fn cursor(&mut self, cursor: &seat_core::backend::display::CursorState) -> BackendResult<()> {
+        self.get().cursor(cursor)
+    }
+    fn blank(&mut self, message: &str) -> BackendResult<()> {
+        self.get().blank(message)
+    }
+    fn present_hdr(&mut self, frame: &seat_core::backend::hdr::HdrFrameRef<'_>) -> BackendResult<()> {
+        self.get().present_hdr(frame)
+    }
+}
+
+#[cfg(windows)]
+impl IddPresenter {
+    pub fn start(outputs: &SeatOutputs) -> BackendResult<Self> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        let display = SeatDisplay::new(DisplayBackendKind::PulsarIdd, outputs, Arc::new(|_| {}))?;
+        let sink = Arc::new(Mutex::new(display.sink));
+        let stop = Arc::new(AtomicBool::new(false));
+        let seat = outputs.seat;
+        let threads = (0..outputs.outputs.len())
+            .map(|i| {
+                let (sink, stop) = (sink.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut s = LockedSink(sink);
+                    while !stop.load(Ordering::Relaxed) {
+                        match seat_display::win::idd::IddFrameReader::open(seat, i as u32) {
+                            Ok(mut r) => {
+                                if let Err(e) = seat_display::win::idd::pump(&mut r, &mut s, i, &stop) {
+                                    eprintln!("idd presenter: output {i}: {e}");
+                                    std::thread::sleep(std::time::Duration::from_secs(2));
+                                }
+                            }
+                            Err(_) => std::thread::sleep(std::time::Duration::from_secs(2)),
+                        }
+                    }
+                })
+            })
+            .collect();
+        Ok(Self { stop, threads })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for IddPresenter {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
+}
+
 /// Shown on clone monitors when the RDP client draws its own window (no frames to copy).
 pub const TEXT_NO_CLONE: seat_core::i18n::Text =
     seat_core::i18n::Text::new("This RDP client does not support mirroring the screen", "Bu RDP istemcisi ekran yansıtmayı desteklemiyor");

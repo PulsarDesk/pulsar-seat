@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createDemoApi } from './demo.ts';
 import { addSeat, setDeviceMask } from './model.ts';
 import { ManagerStore } from './store.svelte.ts';
+import { t } from './i18n.ts';
 
 async function ready(opts = {}) {
   const api = createDemoApi(opts);
@@ -68,6 +69,20 @@ describe('ManagerStore', () => {
     api.emit({ type: 'seat_state', data: { runtime: { seat: 2, state: { state: 'error', reason: 'logon_failed', detail: '' }, since_ms: 1 } } });
     expect(store.status?.seats.find((s) => s.seat === 2)?.state.state).toBe('error');
     expect(store.toasts.at(-1)?.text).toContain('password');
+    store.dispose();
+  });
+
+  it('graphics restart and kiosk user removal go to the service', async () => {
+    const { api, store } = await ready();
+    expect(await store.setEnabled(true)).toBe(true);
+    expect(await store.resetGraphics(2)).toBe(false);
+    expect(await store.startSeats(null)).toBe(true);
+    expect(await store.resetGraphics(2)).toBe(true);
+    expect(api.calls).toContain('reset_graphics');
+    expect(store.toasts.at(-1)?.text).toBe(t.seatMenu.resetGraphicsSent);
+    expect(await store.removeKioskUser(2)).toBe(true);
+    expect(api.calls).toContain('remove_kiosk_user');
+    expect(store.toasts.at(-1)?.text).toBe(t.seatMenu.removeKioskUserDone);
     store.dispose();
   });
 

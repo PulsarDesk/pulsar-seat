@@ -105,6 +105,7 @@ impl Service {
             settings: &settings,
             client_name: client_name(SeatNumber::CONSOLE),
             credentials: None,
+            idd_outputs: None,
         };
         match b.session.start(&req) {
             Ok(StartStep::Started(info)) => {

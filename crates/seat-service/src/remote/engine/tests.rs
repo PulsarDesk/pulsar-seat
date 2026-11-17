@@ -734,3 +734,16 @@ fn sunshine_seat_never_asks_for_a_mic() {
     let lim = w.engine.seat_runtime(&s).audio.unwrap()["limitations"].clone();
     assert!(lim.as_array().unwrap().iter().any(|l| l == "mic_needs_pulsar"), "{lim}");
 }
+
+/// Remote seats' SDL ignore list gets the PC's physical pads (parity review 2026-11-17),
+/// except ids one of the seat's own virtual pad kinds shares.
+#[test]
+fn remote_seat_sdl_list_hides_the_pcs_physical_pads() {
+    let none = seat_env("s", false, &[], &[]);
+    assert!(none.is_empty());
+    let env = seat_env("s", false, &["0x1234/0x5678".into()], &[(0x057E, 0x2009), (0x054C, 0x0CE6)]);
+    let list = &env.iter().find(|(k, _)| k == "SDL_GAMECONTROLLER_IGNORE_DEVICES").unwrap().1;
+    assert!(list.contains("0x057E/0x2009"), "{list}");
+    assert!(list.contains("0x1234/0x5678"), "{list}");
+    assert!(!list.contains("0x054C/0x0CE6"), "a DualSense id stays visible for the seat's own virtual DualSense: {list}");
+}

@@ -170,7 +170,10 @@ impl Attributor {
             if self.pending.len() >= MAX_PENDING {
                 return HookVerdict::Pass;
             }
-            self.pending.push_back((k, None));
+            // Raw-first for this key: its record is already in `recent` and `on_raw` will
+            // never see it again, so resolve it now (queued in order behind the others).
+            let known = self.recent.iter().position(|r| same(&k, r)).and_then(|i| self.recent.remove(i)).map(|r| r.kiosk);
+            self.pending.push_back((k, known));
             return HookVerdict::Swallow;
         }
         if let Some(r) = self.recent.iter().position(|r| same(&k, r)).and_then(|i| self.recent.remove(i)) {
@@ -368,6 +371,21 @@ mod tests {
         assert_eq!((a.replayed, a.timed_out), (3, 1));
         // An unguarded key without a record passes untouched.
         assert_eq!(a.on_hook(hk(0x1E, false, 200), false), HookVerdict::Pass);
+    }
+
+    #[test]
+    fn raw_first_key_behind_a_held_back_hotkey_keeps_its_keyboard() {
+        let mut a = Attributor::default();
+        // Seat 1's Win, hook first: held back.
+        assert_eq!(a.on_hook(hk(0x5B, false, 0), true), HookVerdict::Swallow);
+        // A kiosk keyboard's 'a', raw first, then its hook call while Win is queued.
+        assert!(a.on_raw(raw(0x1E, false, true, 1)).is_empty());
+        assert_eq!(a.on_hook(hk(0x1E, false, 2), false), HookVerdict::Swallow);
+        // Win's record (seat 1): Win is replayed, 'a' is dropped (never reaches seat 1).
+        let out = a.on_raw(raw(0x5B, false, false, 3));
+        assert_eq!(out, vec![Resolution::Replay(hk(0x5B, false, 0)), Resolution::Drop(hk(0x1E, false, 2))]);
+        assert_eq!(a.timed_out, 0, "nothing waited for the timeout");
+        assert_eq!(a.pending(), 0);
     }
 
     #[test]

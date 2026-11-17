@@ -457,9 +457,16 @@ sign in over Remote Desktop or the network.
    password again; if an account named `PulsarKiosk..` exists that Pulsar did not create,
    rename it.
 3. To go back to the old behaviour, turn off "Each kiosk seat runs as its own Windows user"
-   in the Basic tab. Pulsar's kiosk accounts and profiles are deleted when the seat stops
-   being a kiosk seat (at the next service start) or at uninstall; turning the option off
-   does not delete them.
+   in the Basic tab. When a seat stops being a kiosk seat, Pulsar's account of that seat
+   is only **disabled** at the next service start; its profile (saves, browser profiles)
+   stays. To delete it for good use the seat menu "Delete the seat's kiosk user…". At
+   uninstall the accounts are removed; their profiles only with "delete settings and logs
+   too" (`REMOVEUSERDATA=1`). Turning the option off deletes nothing.
+4. Kiosk seats are not a security boundary: every kiosk seat shares one Windows desktop,
+   so a program on one seat can read the keyboard, screen and clipboard of the others
+   (Pulsar's own per-seat clipboard covers apps that use the normal clipboard calls). Do
+   not sign a personal or work account in to a kiosk seat; the manager warns when a
+   seat's saved account is used.
 
 ## 10. A kiosk seat's sound does not come from its own device
 
