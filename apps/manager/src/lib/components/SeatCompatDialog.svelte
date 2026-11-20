@@ -17,15 +17,19 @@
     denyLocalLogon: boolean;
     /** The seat signs in through Remote Desktop and has an account. */
     denyAllowed: boolean;
-    onSave: (environment: EnvVar[], denyLocalLogon: boolean) => void;
+    /** Per-user `NoClose` (OSMS parity G4, 2026-11-18). */
+    noPowerMenu?: boolean;
+    onSave: (environment: EnvVar[], denyLocalLogon: boolean, noPowerMenu: boolean) => void;
     onCancel: () => void;
   }
-  let { seat, seatName, environment, denyLocalLogon, denyAllowed, onSave, onCancel }: Props = $props();
+  let { seat, seatName, environment, denyLocalLogon, denyAllowed, noPowerMenu = false, onSave, onCancel }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let vars = $state<EnvVar[]>((environment ?? []).map((v) => ({ ...v })));
   // svelte-ignore state_referenced_locally
   let deny = $state(denyLocalLogon);
+  // svelte-ignore state_referenced_locally
+  let noPower = $state(noPowerMenu);
   const filled = $derived(vars.filter((v) => v.name.trim() !== '' || v.value !== ''));
   const bad = $derived(vars.map((v) => (v.name !== '' || v.value !== '') && (!envNameOk(v.name.trim()) || !envValueOk(v.value))));
   const envBad = $derived(bad.some(Boolean) || !envListOk(filled.map((v) => ({ name: v.name.trim(), value: v.value }))));
@@ -35,7 +39,8 @@
     if (invalid) return;
     onSave(
       filled.map((v) => ({ name: v.name.trim(), value: v.value })),
-      deny
+      deny,
+      noPower
     );
   }
 </script>
@@ -82,6 +87,11 @@
         {:else}
           <LockedValue text={t.no} />
         {/if}
+      {/snippet}
+    </Row>
+    <Row label={t.seatCompat.noPowerMenu} help={t.seatCompat.noPowerMenuHint}>
+      {#snippet control()}
+        <Switch bind:checked={noPower} label={t.seatCompat.noPowerMenu} />
       {/snippet}
     </Row>
   </Group>

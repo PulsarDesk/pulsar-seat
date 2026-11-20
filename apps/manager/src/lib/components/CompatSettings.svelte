@@ -2,7 +2,8 @@
 <!-- The last two sections of the Advanced page (redesign P4 2026-11-17):
      - "Optional system settings": hide fast user switching, driver updates, and the
        compatibility options (compat-tweaks 2026-11-17): fast startup, Windows Update
-       policies, device-install deny classes, Defender exclusions;
+       policies, device-install deny classes, Defender exclusions; the console lock guard,
+       the inactivity lock and the Users shutdown right (OSMS parity G4, 2026-11-18);
      - "Apps on seats": Steam per seat, single-instance program rules and the Steam add-on
        DLL report.
      Each system change is a visible opt-in, off by default, journaled by the service and
@@ -11,6 +12,7 @@
   import { Button, Checkbox, Group, IconButton, LockedValue, Notice, Row, Section, Select, SubLabel, Switch } from '#lib/ui/index.ts';
   import { t } from '#lib/i18n.ts';
   import {
+    consoleGuard,
     defaultInstallDeny,
     defaultWindowsUpdate,
     INSTALL_CLASSES,
@@ -33,6 +35,8 @@
   const deny = $derived(draft?.settings.tweaks.device_install_deny ?? defaultInstallDeny());
   const rules = $derived(draft?.settings.apps?.object_rules ?? []);
   const unused = $derived(draft ? unusedInstallClasses(draft, store.devices) : []);
+  const dedicated = $derived(draft?.settings.backends.host_topology === 'dedicated_host');
+  const guard = $derived(consoleGuard(draft?.settings.console_guard));
   let steam = $state<SteamProxyStatus | null>(null);
   let steamBusy = $state(false);
 
@@ -57,6 +61,14 @@
       const d = c.settings.tweaks.device_install_deny ?? defaultInstallDeny();
       f(d);
       c.settings.tweaks.device_install_deny = d;
+    });
+  }
+
+  function editGuard(f: (g: Required<NonNullable<Config['settings']['console_guard']>>) => void) {
+    settings((c) => {
+      const g = consoleGuard(c.settings.console_guard);
+      f(g);
+      c.settings.console_guard = g;
     });
   }
 
@@ -129,7 +141,43 @@
             />
           {/snippet}
         </Row>
+        <Row label={t.compat.inactivityLock} help={t.compat.inactivityLockHint}>
+          {#snippet control()}
+            <Switch
+              checked={draft.settings.tweaks.inactivity_lock_off ?? false}
+              label={t.compat.inactivityLock}
+              onchange={(on) => settings((c) => (c.settings.tweaks.inactivity_lock_off = on))}
+            />
+          {/snippet}
+        </Row>
+        <Row label={t.compat.usersShutdown} help={t.compat.usersShutdownHint}>
+          {#snippet control()}
+            <Switch
+              checked={draft.settings.tweaks.users_shutdown_right_off ?? false}
+              label={t.compat.usersShutdown}
+              onchange={(on) => settings((c) => (c.settings.tweaks.users_shutdown_right_off = on))}
+            />
+          {/snippet}
+        </Row>
       </Group>
+
+      <SubLabel text={t.compat.consoleLock} />
+      <p class="help sub">{t.compat.consoleLockHint}</p>
+      <Group>
+        <Row label={t.compat.hostLockOff} help={dedicated ? t.compat.hostLockOffHint : t.compat.hostLockOffNa}>
+          {#snippet control()}
+            <Switch checked={guard.host_lock_off} label={t.compat.hostLockOff} onchange={(on) => editGuard((g) => (g.host_lock_off = on))} />
+          {/snippet}
+        </Row>
+        {#if !dedicated}
+          <Row label={t.compat.seatOneLockOff} help={t.compat.seatOneLockOffHint}>
+            {#snippet control()}
+              <Switch checked={guard.seat_one_lock_off} label={t.compat.seatOneLockOff} onchange={(on) => editGuard((g) => (g.seat_one_lock_off = on))} />
+            {/snippet}
+          </Row>
+        {/if}
+      </Group>
+      {#if !dedicated && !guard.seat_one_lock_off}<div class="after" data-testid="seat-one-lock-notice"><Notice kind="info" text={t.compat.seatOneLockNotice} /></div>{/if}
 
       <SubLabel text={t.compat.wu} />
       <p class="help sub">{t.compat.wuHint}</p>

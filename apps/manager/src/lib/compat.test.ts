@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
   compatIssues,
+  consoleGuard,
   dockCountStable,
   denyLogonAllowed,
   envListOk,
@@ -86,6 +87,21 @@ describe('compat validation mirror', () => {
     expect(s.environment).toBeUndefined();
     expect(s.deny_local_logon).toBeUndefined();
   });
+
+  it('setSeatCompat sets no_power_menu only when given (OSMS parity G4)', () => {
+    const on = setSeatCompat(twoSeats(), 2, [], false, true);
+    expect(on.seats.find((x) => x.number === 2)!.no_power_menu).toBe(true);
+    const kept = setSeatCompat(on, 2, [], false);
+    expect(kept.seats.find((x) => x.number === 2)!.no_power_menu).toBe(true);
+    const off = setSeatCompat(kept, 2, [], false, false);
+    expect(off.seats.find((x) => x.number === 2)!.no_power_menu).toBeUndefined();
+  });
+
+  it('consoleGuard fills the service defaults', () => {
+    expect(consoleGuard(undefined)).toEqual({ host_lock_off: true, seat_one_lock_off: false });
+    expect(consoleGuard({ seat_one_lock_off: true })).toEqual({ host_lock_off: true, seat_one_lock_off: true });
+    expect(consoleGuard({ host_lock_off: false })).toEqual({ host_lock_off: false, seat_one_lock_off: false });
+  });
 });
 
 describe('device-install deny suggestion', () => {
@@ -153,7 +169,7 @@ describe('SeatCompatDialog', () => {
     await fireEvent.input(screen.getByTestId('env-value'), { target: { value: 'seat2' } });
     await user.click(screen.getByRole('switch', { name: t.seatCompat.deny }));
     await user.click(screen.getByRole('button', { name: t.save }));
-    expect(onSave).toHaveBeenCalledWith([{ name: 'GAME_PROFILE', value: 'seat2' }], true);
+    expect(onSave).toHaveBeenCalledWith([{ name: 'GAME_PROFILE', value: 'seat2' }], true, false);
   });
 
   it('refuses a reserved name and explains when deny is not possible', async () => {
@@ -163,5 +179,14 @@ describe('SeatCompatDialog', () => {
     expect(screen.getByText(t.seatCompat.denyUnavailable)).toBeInTheDocument();
     // Not possible here: a plain value, no switch (redesign P4).
     expect(screen.queryByRole('switch', { name: t.seatCompat.deny })).toBeNull();
+  });
+
+  it('saves the no-power-menu option', async () => {
+    const onSave = vi.fn();
+    render(SeatCompatDialog, { seat: 2, environment: [], denyLocalLogon: false, denyAllowed: false, onSave, onCancel: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('switch', { name: t.seatCompat.noPowerMenu }));
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave).toHaveBeenCalledWith([], false, true);
   });
 });

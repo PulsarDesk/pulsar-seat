@@ -189,12 +189,15 @@ Seat sessions 2..N (RDP sessions on RDSH / wrapped TermService)
 
 - `seat_one_console` (default): hosts run in seat 1's console session. Seat 1 keeps native
   GPU speed and no Winlogon value changes. Costs: seat 1's lock / UAC / sign-out hide the
-  other seats; with `raw_input_host` other seats' keys also reach seat 1's foreground
+  other seats (the manager says so; opt-in `console_guard.seat_one_lock_off` blocks seat 1's
+  lock while other seats run, see "Console lock guard"); with `raw_input_host` other seats' keys also reach seat 1's foreground
   window — the manager shows `input_not_isolated` until the signed filter exists.
 - `dedicated_host` (opt-in): a dedicated host account owns the console and runs only seat
   hosts; every seat including seat 1 is an RDP session. Raw-input isolation is complete in
   user mode (the host session's foreground window is always ours, `RIDEV_NOLEGACY`). Needs
   the documented auto-logon of that host account (maintainer decision, spec 30 §6.2.1).
+  The console account gets lock and screen saver off (`console_guard.host_lock_off`, default
+  on) and the preflight asks for `sleep_off` ("Console lock guard").
 
 ## 4. Backends
 
@@ -1570,7 +1573,9 @@ DisplaySettings (remote) { ..., fixed_width, fixed_height, lock_refresh }
 GlobalSettings.remote: RemoteSettings        // Split's old GlobalSettings (hid_isolation, ..., vm)
 GlobalSettings.apps                          // per-app compatibility entries
 GlobalSettings.tweaks { ..., fast_startup_off, windows_update, device_install_deny,
-                        defender_exclusions }
+                        defender_exclusions, inactivity_lock_off, users_shutdown_right_off }
+GlobalSettings.console_guard { host_lock_off, seat_one_lock_off }   // 2026-11-18, G4
+SeatConfig.no_power_menu                                            // 2026-11-18, G4
 ```
 
 - Migration 1 -> 2 (`Config::from_json`): every seat without `kind` becomes `kind = local`
@@ -2319,6 +2324,45 @@ install share the library and the machine-wide Steam Client Service; a seat that
 own library uses its own Steam install folder, started from its startup apps); named-object
 isolation only reaches programs on the shim target list (never anti-cheat games); the deny
 right is ordinary local policy that domain Group Policy may overwrite.
+
+## Console lock guard and seat power policies (OSMS parity G4, 2026-11-18)
+
+Local seats are presenter windows on the console's desktop. A locked console (Win+L,
+Ctrl+Alt+Del > Lock, screen-saver lock, machine inactivity limit) switches to the secure
+desktop and every seat monitor shows the lock screen. The values below are documented
+per-user / machine policies, written by the service only, journaled before each write in
+the compat journal (no journal of their own) and undone through it.
+
+| Option | Config | Mechanism | Journal entry (owner) |
+| --- | --- | --- | --- |
+| Host account lock + screen saver off | `settings.console_guard.host_lock_off` (default **on**), only under `dedicated_host` | `HKU\<console SID>\Software\Microsoft\Windows\CurrentVersion\Policies\System` `DisableLockWorkstation` = 1 and `HKU\<SID>\Software\Policies\Microsoft\Windows\Control Panel\Desktop` `ScreenSaveActive` = "0" (`seat_compat::console_guard::sync_host`, `with_user_hive`) | `UserPolicy` (`console_guard:host`) |
+| Seat 1 lock off while seats run | `settings.console_guard.seat_one_lock_off` (default off), only under `seat_one_console` | `DisableLockWorkstation` = 1 for the console (seat 1) user: engaged when a seat other than the console seat is in use, released on the last seat stop, on service stop, on disable, and at the first sync of every service run (crash leftover) (`sync_seat_one`) | `UserPolicy` (`console_guard:seat_one`) |
+| No power menu for a seat user | `seats[].no_power_menu` (needs the seat's account) | `HKU\<seat SID>\...\Policies\Explorer` `NoClose` = 1 (`sync_no_close`, in `sync_compat` and again at the seat user's sign-in, when a new profile exists) | `UserPolicy` (`seat_policy:no_close`) |
+| Users shutdown right off | `settings.tweaks.users_shutdown_right_off` | `LsaRemoveAccountRights(BUILTIN\Users, SeShutdownPrivilege)` only while `BUILTIN\Administrators` holds it (else refused); given back on off / disable / uninstall; a tampered entry naming another right is refused | `AccountRightRemoved` (`seat_policy:users_shutdown`) |
+| Inactivity lock off | `settings.tweaks.inactivity_lock_off` | `HKLM\...\Policies\System` `InactivityTimeoutSecs` = 0 (`TweakId::InactivityLockOff`) | `Registry` (`tweak:inactivity_lock_off`) |
+| Displays and PC stay on | existing `TweakId::SleepOff` (`--tweak=sleep_off`) | no new power code; preflight check `host_sleep_off` (`seat_compat::tweaks::sleep_off_state`) warns under `dedicated_host` when the active plan's AC `STANDBY_IDLE` / `VIDEO_IDLE` are not 0 | — |
+
+Rules: nothing is written to HKLM `DisableLockWorkstation` (Windows reads it per user only,
+OSMS notes the same). A value the user already holds is never recorded and never undone;
+a value changed by someone else since our write is left alone (`ChangedSince`). The host
+guard follows the account signed in at the console under `dedicated_host` (the auto-logon
+host account by design); a different console account takes it over and the old one is
+undone; while nobody is signed in the last state is kept. The service syncs from the tick
+(only on a change) and after every config change (`Service::update_console_guard`,
+`seat-service/src/console_guard.rs`); `Platform::sync_console_guard` /
+`sync_no_power_menu` / `sleep_off_state` are the seams (fake in `platform::mock`).
+Preflight adds `host_sleep_off` and `console_lock` (`seat_compat::preflight::console_checks`)
+to the `Preflight` response. The manager shows the options in Advanced > Compatibility >
+Console lock (plus the "locking seat 1 hides every local seat" notice under
+`seat_one_console`) and the per-seat switch in "Environment and sign-in…". `PromptOnSecureDesktop`
+is never written (a UAC prompt still blanks the presenters; changing it is a security
+trade-off left to the maintainer). x64 and ARM64 share every code path.
+
+HYPOTHESIS (nothing ran on hardware): `DisableLockWorkstation` blocks Win+L and
+Ctrl+Alt+Del > Lock for an auto-logon account without a sign-out; the per-user
+`ScreenSaveActive` policy stops the screen saver for that account; `NoClose` is honoured by
+a running Explorer (else from the next sign-in); the removed shutdown right applies from
+each user's next sign-in; `InactivityTimeoutSecs` = 0 clears a policy-set limit at once.
 
 ## Remote seats on the own display: protocol provider, modes, HDR (2026-11-17)
 

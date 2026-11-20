@@ -509,9 +509,10 @@
           seatName={name}
           environment={s.environment}
           denyLocalLogon={s.deny_local_logon ?? false}
+          noPowerMenu={s.no_power_menu ?? false}
           denyAllowed={denyLogonAllowed(draft, n)}
-          onSave={(env, deny) => {
-            store.edit((c) => setSeatCompat(c, n, env, deny));
+          onSave={(env, deny, noPower) => {
+            store.edit((c) => setSeatCompat(c, n, env, deny, noPower));
             dialog = null;
           }}
           onCancel={() => (dialog = null)}

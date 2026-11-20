@@ -5,6 +5,7 @@
 
 import type {
   Config,
+  ConsoleGuard,
   Device,
   DeviceInstallClass,
   DeviceInstallDeny,
@@ -58,6 +59,12 @@ export function defaultWindowsUpdate(): WindowsUpdatePolicy {
 
 export function defaultInstallDeny(): DeviceInstallDeny {
   return { classes: [], admins_override: true };
+}
+
+/** `settings.console_guard` with the service defaults filled in (`seat_core::config::ConsoleGuard`:
+ *  host_lock_off on, seat_one_lock_off off; OSMS parity G4, 2026-11-18). */
+export function consoleGuard(g: ConsoleGuard | undefined): Required<ConsoleGuard> {
+  return { host_lock_off: g?.host_lock_off ?? true, seat_one_lock_off: g?.seat_one_lock_off ?? false };
 }
 
 /** `seat_core::config::env_name_ok`. */

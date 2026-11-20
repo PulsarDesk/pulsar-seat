@@ -1101,7 +1101,17 @@ const t = {
     reference_product: { pass: 'Not installed.', fail: 'Another multiseat product is installed.' },
     termservice_stock: { pass: 'The Remote Desktop service uses Windows’ own file.', warn: 'The Remote Desktop service does not use the Windows default.' },
     foreign_input_filters: { pass: 'None.', warn: 'Other input filters are present (left untouched).' },
-    steam_proxy_dll: { warn: 'An old Steam add-on DLL (version.dll) is next to steam.exe. Pulsar Seat does not remove it; see Advanced > Compatibility.' }
+    steam_proxy_dll: { warn: 'An old Steam add-on DLL (version.dll) is next to steam.exe. Pulsar Seat does not remove it; see Advanced > Compatibility.' },
+    host_sleep_off: {
+      pass: 'The power plan keeps the PC and its displays on.',
+      warn: 'The power plan lets the PC sleep or the displays turn off; every local seat goes dark then. Turn on “Keep the PC awake” (sleep_off).',
+      info: 'The power plan could not be read.'
+    },
+    console_lock: {
+      pass: 'The console cannot lock while seats are in use.',
+      warn: 'The host account can lock the console; every local seat then shows the lock screen (Advanced > Compatibility > Console lock).',
+      info: 'Locking seat 1 hides every local seat until seat 1 unlocks (Advanced > Compatibility > Console lock).'
+    }
   } as Record<string, Partial<Record<CheckOutcome, string>>>,
   technicalDetail: 'technical detail',
 
@@ -1327,6 +1337,8 @@ const t = {
     reference_product: 'Another multiseat product',
     foreign_input_filters: 'Other input filter drivers',
     steam_proxy_dll: 'Old Steam add-on DLL',
+    host_sleep_off: 'Host console stays awake',
+    console_lock: 'Console lock',
     arch_native: 'Native build',
     admin: 'Administrator rights',
     smart_app_control: 'Smart App Control',
@@ -1801,6 +1813,23 @@ const t = {
     defender: 'Exclude Pulsar Seat from Microsoft Defender scans',
     defenderHint:
       'Adds Pulsar Seat’s install folder, its data folder and its three background programs to the Defender exclusion lists, so scans do not slow seat start-up. Exclusions you made yourself are left alone. Nothing happens when another antivirus is active.',
+    inactivityLock: 'No inactivity lock of the console',
+    inactivityLockHint:
+      'Clears the machine inactivity limit policy (InactivityTimeoutSecs), so Windows does not lock the console after an idle time and hide every local seat. Affects the whole PC.',
+    usersShutdown: 'Only administrators may shut down or restart the PC',
+    usersShutdownHint:
+      'Removes the Windows right “Shut down the system” from the Users group, so a seat user cannot switch the PC off under the other seats. Done only while the Administrators group keeps the right; given back when you turn this off. Applies from each user’s next sign-in.',
+    consoleLock: 'Console lock',
+    consoleLockHint:
+      'Local seats are windows on the console’s desktop. When the console locks (Win+L, the screen saver, Ctrl+Alt+Del > Lock), every seat monitor shows the lock screen until it is unlocked. A UAC prompt on the secure desktop blanks them too; Pulsar Seat does not change that.',
+    hostLockOff: 'Lock and screen saver off for the host account',
+    hostLockOffHint:
+      'Dedicated host: the account signed in at the console cannot lock it and gets no screen saver (per-user policies DisableLockWorkstation and ScreenSaveActive). Undone when you turn this off, leave dedicated host mode or uninstall.',
+    hostLockOffNa: 'Only with the dedicated host topology (Advanced > Session).',
+    seatOneLockOff: 'Seat 1 cannot lock while other seats run',
+    seatOneLockOffHint:
+      'Seat 1 is a person’s own account, so this is off by default. When on, seat 1’s user cannot lock the PC while another seat is in use; the lock comes back when the last seat stops.',
+    seatOneLockNotice: 'Locking seat 1 hides every local seat until seat 1 unlocks.',
     apps: 'Apps on seats',
     steamPerSeat: 'Steam on every seat (own Steam client per local seat)',
     steamPerSeatHint:
@@ -1839,7 +1868,10 @@ const t = {
     deny: 'Deny log on locally for this seat’s account',
     denyHint:
       'The seat’s user cannot sign in at the PC itself (console or a physical seat) while the seat signs in through Remote Desktop. Pulsar Seat adds the Windows right “Deny log on locally” to the account and removes it again when turned off.',
-    denyUnavailable: 'Only for seats with an account that sign in through Remote Desktop (remote seats, or seats 2 and up with the Remote Desktop session method).'
+    denyUnavailable: 'Only for seats with an account that sign in through Remote Desktop (remote seats, or seats 2 and up with the Remote Desktop session method).',
+    noPowerMenu: 'Hide shut down and restart for this seat’s user',
+    noPowerMenuHint:
+      'Removes Shut down, Restart and Sleep from the seat user’s Start menu, Ctrl+Alt+Del screen and Alt+F4 dialog (per-user policy NoClose). Needs the seat’s account. Undone when you turn this off or turn Pulsar Seat off.'
   },
 
   usbDock: {

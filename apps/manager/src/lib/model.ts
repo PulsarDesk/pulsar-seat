@@ -252,12 +252,15 @@ function editSeat(c: Config, n: SeatNumber, f: (s: SeatConfig) => void): Config 
 
 /** Per-seat environment variables and "Deny log on locally" (compat-tweaks 2026-11-17).
  *  Empty / false values are removed from the document. */
-export function setSeatCompat(c: Config, n: SeatNumber, environment: EnvVar[], denyLocalLogon: boolean): Config {
+export function setSeatCompat(c: Config, n: SeatNumber, environment: EnvVar[], denyLocalLogon: boolean, noPowerMenu?: boolean): Config {
   return editSeat(c, n, (s) => {
     if (environment.length) s.environment = environment.map((v) => ({ ...v }));
     else delete s.environment;
     if (denyLocalLogon) s.deny_local_logon = true;
     else delete s.deny_local_logon;
+    // `undefined` keeps the seat's value (callers without the option).
+    if (noPowerMenu === true) s.no_power_menu = true;
+    else if (noPowerMenu === false) delete s.no_power_menu;
   });
 }
 

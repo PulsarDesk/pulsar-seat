@@ -1101,7 +1101,17 @@ const t = {
     reference_product: { pass: 'Kurulu değil.', fail: 'Başka bir çoklu koltuk yazılımı kurulu.' },
     termservice_stock: { pass: 'Uzak Masaüstü hizmeti Windows’un kendi dosyasını kullanıyor.', warn: 'Uzak Masaüstü hizmeti Windows varsayılanını kullanmıyor.' },
     foreign_input_filters: { pass: 'Yok.', warn: 'Başka giriş süzgeçleri var (dokunulmadı).' },
-    steam_proxy_dll: { warn: 'steam.exe’nin yanında eski bir Steam eklenti DLL’si (version.dll) var. Pulsar Seat onu kaldırmaz; Gelişmiş > Uyumluluk bölümüne bakın.' }
+    steam_proxy_dll: { warn: 'steam.exe’nin yanında eski bir Steam eklenti DLL’si (version.dll) var. Pulsar Seat onu kaldırmaz; Gelişmiş > Uyumluluk bölümüne bakın.' },
+    host_sleep_off: {
+      pass: 'Güç planı bilgisayarı ve ekranlarını açık tutuyor.',
+      warn: 'Güç planı bilgisayarın uyumasına veya ekranların kapanmasına izin veriyor; o zaman tüm yerel koltuklar kararır. “Bilgisayarı uyanık tut” (sleep_off) ayarını açın.',
+      info: 'Güç planı okunamadı.'
+    },
+    console_lock: {
+      pass: 'Koltuklar kullanılırken konsol kilitlenemez.',
+      warn: 'Ana hesap konsolu kilitleyebilir; o zaman tüm yerel koltuklar kilit ekranını gösterir (Gelişmiş > Uyumluluk > Konsol kilidi).',
+      info: '1. koltuğu kilitlemek, 1. koltuğun kilidi açılana dek tüm yerel koltukları gizler (Gelişmiş > Uyumluluk > Konsol kilidi).'
+    }
   } as Record<string, Partial<Record<CheckOutcome, string>>>,
   technicalDetail: 'teknik ayrıntı',
 
@@ -1327,6 +1337,8 @@ const t = {
     reference_product: 'Başka bir çoklu koltuk yazılımı',
     foreign_input_filters: 'Başka giriş süzgeç sürücüleri',
     steam_proxy_dll: 'Eski Steam eklenti DLL’si',
+    host_sleep_off: 'Ana konsol uyanık kalır',
+    console_lock: 'Konsol kilidi',
     arch_native: 'Yerel derleme',
     admin: 'Yönetici hakları',
     smart_app_control: 'Akıllı Uygulama Denetimi',
@@ -1797,6 +1809,23 @@ const t = {
     defender: 'Pulsar Seat’i Microsoft Defender taramalarının dışında tut',
     defenderHint:
       'Pulsar Seat’in kurulum klasörünü, veri klasörünü ve üç arka plan programını Defender dışlama listelerine ekler; böylece taramalar koltukların açılışını yavaşlatmaz. Sizin eklediğiniz dışlamalara dokunulmaz. Başka bir virüsten koruma etkinse hiçbir şey yapılmaz.',
+    inactivityLock: 'Konsol etkinlik dışı kalınca kilitlenmesin',
+    inactivityLockHint:
+      'Makine etkinlik dışı kalma sınırı ilkesini (InactivityTimeoutSecs) kapatır; Windows boşta kalma süresinden sonra konsolu kilitleyip tüm yerel koltukları gizlemez. Bilgisayarın tamamını etkiler.',
+    usersShutdown: 'Bilgisayarı yalnızca yöneticiler kapatıp yeniden başlatabilsin',
+    usersShutdownHint:
+      'Users grubundan Windows’un “Sistemi kapat” hakkını kaldırır; bir koltuk kullanıcısı bilgisayarı diğer koltukların altından kapatamaz. Yalnızca Administrators grubu bu hakkı korurken yapılır; bunu kapattığınızda geri verilir. Her kullanıcının bir sonraki oturum açışından itibaren geçerlidir.',
+    consoleLock: 'Konsol kilidi',
+    consoleLockHint:
+      'Yerel koltuklar konsolun masaüstündeki pencerelerdir. Konsol kilitlenince (Win+L, ekran koruyucu, Ctrl+Alt+Del > Kilitle) kilit açılana dek tüm koltuk monitörleri kilit ekranını gösterir. Güvenli masaüstündeki bir UAC sorusu da onları karartır; Pulsar Seat bunu değiştirmez.',
+    hostLockOff: 'Ana hesap için kilit ve ekran koruyucu kapalı',
+    hostLockOffHint:
+      'Ayrılmış ana makine: konsolda oturum açmış hesap konsolu kilitleyemez ve ekran koruyucu almaz (kullanıcı ilkeleri DisableLockWorkstation ve ScreenSaveActive). Bunu kapattığınızda, ayrılmış ana makine kipinden çıktığınızda veya kaldırdığınızda geri alınır.',
+    hostLockOffNa: 'Yalnızca ayrılmış ana makine düzeninde (Gelişmiş > Oturum).',
+    seatOneLockOff: 'Başka koltuklar çalışırken 1. koltuk kilitlenemesin',
+    seatOneLockOffHint:
+      '1. koltuk bir kişinin kendi hesabıdır, bu yüzden varsayılan olarak kapalıdır. Açıkken başka bir koltuk kullanımdayken 1. koltuğun kullanıcısı bilgisayarı kilitleyemez; son koltuk durunca kilit geri gelir.',
+    seatOneLockNotice: '1. koltuğu kilitlemek, 1. koltuğun kilidi açılana dek tüm yerel koltukları gizler.',
     apps: 'Koltuklardaki uygulamalar',
     steamPerSeat: 'Her koltukta Steam (her yerel koltuğa ayrı Steam istemcisi)',
     steamPerSeatHint:
@@ -1835,7 +1864,10 @@ const t = {
     deny: 'Bu koltuğun hesabı için yerel oturum açmayı reddet',
     denyHint:
       'Koltuk Uzak Masaüstü ile oturum açarken koltuğun kullanıcısı bilgisayarın kendisinde (konsol veya fiziksel bir koltuk) oturum açamaz. Pulsar Seat hesaba Windows’un “Yerel oturum açmayı reddet” hakkını ekler ve kapatılınca yeniden kaldırır.',
-    denyUnavailable: 'Yalnızca hesabı olan ve Uzak Masaüstü ile oturum açan koltuklar için (uzak koltuklar veya Uzak Masaüstü oturum yöntemiyle 2. ve sonraki koltuklar).'
+    denyUnavailable: 'Yalnızca hesabı olan ve Uzak Masaüstü ile oturum açan koltuklar için (uzak koltuklar veya Uzak Masaüstü oturum yöntemiyle 2. ve sonraki koltuklar).',
+    noPowerMenu: 'Bu koltuğun kullanıcısı için kapatma ve yeniden başlatmayı gizle',
+    noPowerMenuHint:
+      'Koltuk kullanıcısının Başlat menüsünden, Ctrl+Alt+Del ekranından ve Alt+F4 penceresinden Kapat, Yeniden başlat ve Uyku seçeneklerini kaldırır (kullanıcı ilkesi NoClose). Koltuğun hesabı gerekir. Bunu kapattığınızda veya Pulsar Seat’i kapattığınızda geri alınır.'
   },
 
   usbDock: {

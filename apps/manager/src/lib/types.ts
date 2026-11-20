@@ -225,6 +225,9 @@ export interface SeatConfig {
   environment?: EnvVar[];
   /** "Deny log on locally" for the seat's account (RDP-signed-in seats only). Added 2026-11-17. */
   deny_local_logon?: boolean;
+  /** No shut down / restart / sleep for the seat user (per-user `NoClose`, journaled; needs
+   *  the seat's account). Added 2026-11-18 (OSMS parity G4); absent = off. */
+  no_power_menu?: boolean;
   /** Physical-seat part; set exactly when `kind` is `local`. */
   local?: LocalSeat;
   /** Streamed-seat part (from Pulsar Split); set exactly when `kind` is `remote`. Edited
@@ -535,6 +538,21 @@ export interface Tweaks {
   windows_update?: WindowsUpdatePolicy;
   device_install_deny?: DeviceInstallDeny;
   defender_exclusions?: boolean;
+  /** Machine inactivity lock off (`InactivityTimeoutSecs` = 0). Added 2026-11-18 (OSMS
+   *  parity G4); absent = off. */
+  inactivity_lock_off?: boolean;
+  /** Remove "Shut down the system" from `BUILTIN\Users` (only while Administrators keep
+   *  it). Added 2026-11-18 (OSMS parity G4); absent = off. */
+  users_shutdown_right_off?: boolean;
+}
+
+/** Console lock guard (`settings.console_guard`, added 2026-11-18, OSMS parity G4). The
+ *  service omits it while it holds the defaults (host_lock_off on, seat_one_lock_off off). */
+export interface ConsoleGuard {
+  /** `dedicated_host`: lock and screen saver off for the console (host) account. */
+  host_lock_off?: boolean;
+  /** `seat_one_console`: seat 1's user cannot lock while other seats run. */
+  seat_one_lock_off?: boolean;
 }
 
 /** Windows Update for Business policies (`seat_core::config::WindowsUpdatePolicy`). */
@@ -595,6 +613,8 @@ export interface GlobalSettings {
   kiosk?: KioskSettings;
   /** App compatibility: Steam per local seat, named-object rules (added 2026-11-17). */
   apps?: AppCompatSettings;
+  /** Console lock guard (added 2026-11-18); absent = defaults. */
+  console_guard?: ConsoleGuard;
   /** Remote seat machine settings (config schema 2, `seat_core::remote::RemoteSettings`);
    *  edited on the remote seats tab. */
   remote?: R.GlobalSettings;
