@@ -262,7 +262,18 @@ impl UsbSwap for WinUsbSwap {
     }
 
     fn release(&self, node: &str, original: &OriginalDriver) -> BackendResult<()> {
-        let mut d = DevInfo::open(node)?;
+        let mut d = match DevInfo::open(node) {
+            Ok(d) => d,
+            Err(e) if e.kind == ErrorKind::NotFound => {
+                // The node no longer exists at all (removed in Device Manager, or Windows'
+                // clean-up of long-absent devices): nothing of ours is left on it, and a
+                // replugged device is enumerated fresh with its own driver. Done, so the
+                // journal entry goes instead of failing at every start.
+                log::info!("USB release of {node}: device node no longer exists; nothing to restore");
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
         if !present(node) {
             // Unplugged: a driver cannot be installed on a phantom node. Remove the node
             // (its `Device Parameters` with our interface GUID go with it); when the
@@ -359,5 +370,7 @@ mod tests {
         assert_eq!(WinUsbSwap.check(), Ok(()));
         assert!(WinUsbSwap.captured_nodes().is_empty(), "no node carries the Pulsar capture interface");
         assert_eq!(WinUsbSwap.original(r"USB\VID_0000&PID_0000\NOPE").unwrap_err().kind, ErrorKind::NotFound);
+        // A journaled node that no longer exists is done (nothing is changed: the open fails).
+        assert_eq!(WinUsbSwap.release(r"USB\VID_0000&PID_0000\NOPE", &OriginalDriver::hid_default()).map_err(|e| e.reason), Ok(()));
     }
 }
