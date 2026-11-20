@@ -57,7 +57,7 @@ pub const INTERFACE_GUID: &str = "{6f1d3a52-9c47-4b8e-a5d0-2e7c41b98f36}";
 /// Setup class `USBDevice` (inbox `winusb.inf`).
 pub const USB_DEVICE_CLASS: &str = "{88bae032-5a81-49f0-bc3d-a4ff138216d6}";
 /// Setup class `HIDClass` (inbox `input.inf`), the restore fallback.
-pub const HID_CLASS: &str = "{745a17a0-74d3-11d0-b6fe-00a0c9213be4}";
+pub const HID_CLASS: &str = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
 /// Journal file name under `%ProgramData%\Pulsar Seat\journal`.
 pub const JOURNAL_FILE: &str = "usb-capture.json";
 /// How long [`UsbCapture`] waits for a reader thread to stop.
@@ -1422,5 +1422,16 @@ mod tests {
         assert_eq!(Refusal::LastConsoleInput.note(), "usb_capture_last_console_input");
         assert_eq!(Refusal::MixedSeats.note(), "usb_capture_mixed_seats");
         assert_eq!(Refusal::UnsupportedCollection.note(), "usb_capture_unsupported_collection");
+    }
+
+    /// The setup classes the swap writes are the documented ones (`devguid.h`:
+    /// `GUID_DEVCLASS_HIDCLASS`, `GUID_DEVCLASS_USBDEVICE`); a wrong `HIDClass` GUID would
+    /// leave a restored node in a class that does not exist.
+    #[test]
+    fn setup_class_guids_are_the_documented_ones() {
+        assert_eq!(HID_CLASS, "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}");
+        assert!(HID_CLASS.eq_ignore_ascii_case(crate::pad_scope::HID_CLASS));
+        assert_eq!(USB_DEVICE_CLASS, "{88bae032-5a81-49f0-bc3d-a4ff138216d6}");
+        assert_eq!(OriginalDriver::hid_default().class_guid, HID_CLASS);
     }
 }
