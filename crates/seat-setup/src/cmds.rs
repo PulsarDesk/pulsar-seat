@@ -198,7 +198,11 @@ impl SetupCtx {
             .and_then(|s| s.trim().parse().ok())
     }
     fn own_targets(&self) -> BTreeSet<String> {
-        journal::read_dir_journals(&self.layout.journal_dir()).map(|f| journal::own_targets(&f)).unwrap_or_default()
+        let dir = self.layout.journal_dir();
+        let mut own = journal::read_dir_journals(&dir).map(|f| journal::own_targets(&f)).unwrap_or_default();
+        // The service's own machine values (Guide-button guard, OSMS parity G5).
+        own.extend(journal::compat_registry_targets(&dir));
+        own
     }
 }
 

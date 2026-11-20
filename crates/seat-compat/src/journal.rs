@@ -116,6 +116,14 @@ pub enum Change {
         previous: Option<RegData>,
         written: RegData,
     },
+    /// Game Bar's "open with the controller button" we turned off in user `sid`'s hive
+    /// (`Software\Microsoft\GameBar\UseNexusForGameBarEnabled`, OSMS parity G5,
+    /// 2026-11-18, `crate::guide_guard`). Undone through `HKEY_USERS\<sid>`.
+    UserGameBarGuide {
+        sid: String,
+        previous: Option<RegData>,
+        written: RegData,
+    },
     /// A file we moved out of the way on the administrator's request (the legacy Steam
     /// proxy DLL, added 2026-11-17, `crate::steam`). Undone by moving it back while its
     /// place is free.
@@ -170,6 +178,7 @@ impl Change {
             Self::UserEnvironment { sid, name, .. } => {
                 format!("userenv:{}:{}", sid.to_ascii_uppercase(), name.to_ascii_lowercase())
             }
+            Self::UserGameBarGuide { sid, .. } => format!("usergamebar:{}", sid.to_ascii_uppercase()),
             Self::QuarantinedFile { original, .. } => format!("quarantine:{}", original.to_ascii_lowercase()),
             Self::Certificate { store, thumbprint } => format!("cert:{store:?}:{}", thumbprint.to_ascii_uppercase()),
             Self::OptionalFeature { name } => format!("feature:{}", name.to_ascii_lowercase()),
@@ -680,6 +689,7 @@ fn inherit_previous(new: &mut Change, old: &Change) {
             Change::UserEnvironment { previous, .. },
             Change::UserEnvironment { previous: p, .. },
         ) => *previous = p.clone(),
+        (Change::UserGameBarGuide { previous, .. }, Change::UserGameBarGuide { previous: p, .. }) => *previous = p.clone(),
         _ => {}
     }
 }
@@ -825,6 +835,7 @@ fn revert_one(
             previous,
             written,
         } => crate::user_env::revert_value(ops, sid, name, previous.as_ref(), written, force),
+        Change::UserGameBarGuide { sid, previous, written } => crate::guide_guard::revert_value(ops, sid, previous.as_ref(), written, force),
         Change::QuarantinedFile { original, quarantined } => {
             if !crate::steam::is_quarantine_pair(original, quarantined) {
                 return Ok(RevertOutcome::Refused);

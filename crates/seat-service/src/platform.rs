@@ -377,6 +377,13 @@ pub trait Platform: Send + Sync {
     fn revert_user_environments(&self) -> Result<usize, String> {
         Ok(0)
     }
+    /// Make the Guide-button guard match `want` (`seat_compat::guide_guard::sync`,
+    /// journaled; an empty want reverts everything ours). Returns a one-line summary.
+    /// Default: nothing.
+    fn sync_guide_guard(&self, want: &seat_compat::guide_guard::GuardWant) -> Result<String, String> {
+        let _ = want;
+        Ok(String::new())
+    }
     /// Steam legacy proxy-DLL report / quarantine / restore (`seat_compat::steam`).
     fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
         let _ = action;
@@ -519,6 +526,10 @@ pub mod mock {
         /// `sync_user_environment` calls: (sid, variables).
         pub user_env: Mutex<Vec<(String, Vec<seat_core::config::EnvVar>)>>,
         pub user_env_reverts: AtomicU32,
+        /// `sync_guide_guard` calls.
+        pub guide_guard: Mutex<Vec<seat_compat::guide_guard::GuardWant>>,
+        /// Next `sync_guide_guard` fails with this error.
+        pub guide_guard_fail: Mutex<Option<String>>,
         /// `steam_proxy` actions.
         pub steam_actions: Mutex<Vec<seat_proto::steam::SteamProxyAction>>,
         next_pid: AtomicU32,
@@ -823,6 +834,13 @@ pub mod mock {
         fn revert_user_environments(&self) -> Result<usize, String> {
             self.user_env_reverts.fetch_add(1, Ordering::SeqCst);
             Ok(0)
+        }
+        fn sync_guide_guard(&self, want: &seat_compat::guide_guard::GuardWant) -> Result<String, String> {
+            lock(&self.guide_guard).push(want.clone());
+            match lock(&self.guide_guard_fail).take() {
+                Some(e) => Err(e),
+                None => Ok(String::new()),
+            }
         }
         fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
             lock(&self.steam_actions).push(action.clone());

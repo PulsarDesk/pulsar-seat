@@ -286,6 +286,33 @@ pub struct LocalSeat {
     /// apps still see every GPU.
     #[serde(skip_serializing_if = "GpuPreference::is_default")]
     pub gpu_preference: GpuPreference,
+    /// How the physical pads routed to this seat are handed over (OSMS parity G5,
+    /// 2026-11-18, additive; default [`PadMode::Passthrough`], not written). Only has an
+    /// effect while the global kill switch `settings.input.pad_device_scope` is on.
+    #[serde(skip_serializing_if = "PadMode::is_default")]
+    pub pad_mode: PadMode,
+}
+
+/// Physical pad hand-over of one local seat (see [`LocalSeat::pad_mode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadMode {
+    /// The physical pad itself is handed to the seat (`seat_input::pad_scope`): its USB /
+    /// Bluetooth device node and every XUSB, GIP and HID node below it get a security
+    /// descriptor that only the seat (its user, or its logon SID when the same user is
+    /// signed in to two seats) can open, and are restarted so that handles opened by other
+    /// sessions close. No virtual pad is involved.
+    #[default]
+    Passthrough,
+    /// The seat's pads are not scoped to it: every session can open them (the behaviour
+    /// before parity G5).
+    Shared,
+}
+
+impl PadMode {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Per-seat GPU preference (see [`LocalSeat::gpu_preference`]).
@@ -923,6 +950,12 @@ pub struct InputSettings {
     /// parity review (2026-11-17): it rewrites the security of devices the product does
     /// not own and restarts them with their parent node (spec/remote 50 §4.4: opt-in only),
     /// so configs written before it was added read as off too.
+    ///
+    /// Since OSMS parity G5 (2026-11-18) this is also the kill switch of the per-seat
+    /// [`PadMode`] and of the Guide-button guard (`seat_compat::guide_guard`: Game Bar's
+    /// "open with the controller button" off for the signed-in seat users and the console
+    /// user, and `ControllerToVKMapping\Enabled` = 0, both journaled). Its default may flip
+    /// to on only after a VM / hardware check.
     pub pad_device_scope: bool,
 }
 
@@ -1319,6 +1352,22 @@ mod tests {
         assert_eq!(j["local"]["virtual_pads"], true);
         let back: SeatConfig = serde_json::from_value(j).unwrap();
         assert!(back.local_settings().virtual_pads);
+    }
+
+    #[test]
+    fn pad_mode_is_additive_and_passthrough_by_default() {
+        let mut s = SeatConfig::new(SeatNumber::new(2).unwrap());
+        let j = serde_json::to_value(&s).unwrap();
+        assert!(j["local"].get("pad_mode").is_none(), "default is not written");
+        assert_eq!(s.local_settings().pad_mode, PadMode::Passthrough);
+        // A config written before the field existed reads as passthrough.
+        let old: LocalSeat = serde_json::from_str(r#"{"virtual_pads":true}"#).unwrap();
+        assert_eq!(old.pad_mode, PadMode::Passthrough);
+        s.local_mut().unwrap().pad_mode = PadMode::Shared;
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["local"]["pad_mode"], "shared");
+        let back: SeatConfig = serde_json::from_value(j).unwrap();
+        assert_eq!(back.local_settings().pad_mode, PadMode::Shared);
     }
 
     #[test]

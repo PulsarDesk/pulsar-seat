@@ -9,7 +9,12 @@
 //!    every HID pad is read (PlayStation, Switch Pro, Xbox HID collections, generic HID),
 //!    not only PlayStation pads.
 //! 2. Pad scoping (2026-11-17, [`scope_pads`]): which session each physical pad's device
-//!    nodes belong to (`seat_input::pad_scope`, setting `input.pad_device_scope`).
+//!    nodes belong to (`seat_input::pad_scope`, setting `input.pad_device_scope`). Since
+//!    OSMS parity G5 (2026-11-18) the pads are found by class (XUSB, GIP, HID game
+//!    collections) with their whole pad subtree, routed by their HID units or by the
+//!    inventory device / USB hub above them, per seat [`PadMode`], with the logon SID when
+//!    one user is signed in to two sessions; and the Guide-button guard
+//!    ([`guide_guard_want`], `seat_compat::guide_guard`) follows the same switch.
 //! 3. The shim seat map for local seats with their own session ([`local_seat_map`]): their
 //!    routed HID units (and the parents, where the XInput interface of Xbox pads lives) are
 //!    the seat's `PadInstances`, so XInput / HID opens in shimmed processes follow the
@@ -23,12 +28,12 @@
 //!
 //! Untested on hardware (HYPOTHESIS): every Windows path behind these.
 
-use seat_core::config::SeatKind;
+use seat_core::config::{PadMode, SeatKind};
 use seat_core::device::{Device, DeviceKind};
 use seat_core::SeatNumber;
 use seat_input::gamepad::pad_family;
 use seat_input::local_pads::{LocalPadSeat, PadBus, RoutedPad, local_seat_pad_id};
-use seat_input::pad_scope::{PadNodes, ScopeOwner, sdl_ignore_list};
+use seat_input::pad_scope::{PadGroup, PadNodes, PadTree, ScopeOwner, discover, principal, sdl_ignore_list};
 use seat_input::units::{input_info, vid_pid};
 
 use crate::service::State;
@@ -116,18 +121,126 @@ pub(crate) fn targets(st: &State, kiosk: &KioskSids) -> Vec<LocalPadSeat> {
     out
 }
 
-/// Every physical pad's device nodes (HID collection + parent, via `parent_of`) and its
-/// owning local seat, for `seat_input::pad_scope::plan`.
-pub(crate) fn scope_pads(st: &State, kiosk: &KioskSids, parent_of: &dyn Fn(&str) -> Option<String>) -> Vec<PadNodes> {
-    pads(st)
-        .into_iter()
-        .filter_map(|(d, routed)| {
-            let inst = d.instance_id.clone()?;
-            let mut nodes = vec![inst.clone()];
-            nodes.extend(parent_of(&inst));
-            Some(PadNodes { nodes, seat_owner: routed.and_then(|s| seat_owner(st, kiosk, s)) })
-        })
-        .collect()
+/// Pad hand-over of a seat that pads may be routed to: `None` for a seat that is not a
+/// local seat.
+fn pad_mode_of(st: &State, seat: SeatNumber) -> Option<PadMode> {
+    st.config.seats.iter().find(|s| s.number == seat && s.kind == SeatKind::Local).map(|s| s.local_settings().pad_mode)
+}
+
+/// Owner principals per session: user SIDs signed in to more than one session use the
+/// session's logon SID (`seat_input::pad_scope::principal`). `logon` = session -> logon SID
+/// for the sessions the service asked about ([`shared_user_sessions`]).
+pub(crate) type LogonSids = std::collections::BTreeMap<u32, String>;
+
+/// Sessions whose user is signed in to another session too (running local seats and the
+/// console), i.e. the sessions whose logon SID scoping needs.
+fn shared_user_sessions(st: &State, kiosk: &KioskSids, console: Option<&ScopeOwner>) -> std::collections::BTreeSet<u32> {
+    let mut by_user: std::collections::BTreeMap<String, std::collections::BTreeSet<u32>> = Default::default();
+    let owners = st.config.seats.iter().filter_map(|c| seat_owner(st, kiosk, c.number)).chain(console.cloned());
+    for o in owners {
+        by_user.entry(o.user_sid.to_ascii_uppercase()).or_default().insert(o.session_id);
+    }
+    by_user.into_values().filter(|s| s.len() > 1).flatten().collect()
+}
+
+/// [`seat_owner`] for scoping: only seats in [`PadMode::Passthrough`], with the logon SID
+/// when the seat's session shares its user with another session.
+fn scope_owner(st: &State, kiosk: &KioskSids, seat: SeatNumber, logon: &LogonSids) -> Option<ScopeOwner> {
+    if pad_mode_of(st, seat)? != PadMode::Passthrough {
+        return None;
+    }
+    let o = seat_owner(st, kiosk, seat)?;
+    let l = logon.get(&o.session_id).map(String::as_str);
+    Some(principal(o, l.is_some(), l))
+}
+
+/// The single seat a pad group is routed to: one of its HID units in the inventory
+/// (pending hotkey move first), else the nearest inventory device on its node chain (the
+/// pad's own USB device, or the hub / port it is plugged into).
+fn group_seat(st: &State, effective: &[seat_core::assign::Effective], g: &PadGroup) -> Option<SeatNumber> {
+    let up = |d: &Device| d.instance_id.as_ref().map(|i| i.to_ascii_uppercase());
+    let live: Vec<&Device> = st.inventory.live().collect();
+    if let Some(s) = live.iter().filter(|d| up(d).is_some_and(|i| g.nodes.contains(&i))).find_map(|d| routed_seat(st, effective, d)) {
+        return Some(s);
+    }
+    g.ancestors.iter().find_map(|a| live.iter().find(|d| up(d).as_deref() == Some(a.as_str())).and_then(|d| routed_seat(st, effective, d)))
+}
+
+/// Every physical pad's device nodes and its owning local seat, for
+/// `seat_input::pad_scope::plan`: the pads `tree` finds by class (OSMS parity G5: XUSB,
+/// GIP and HID game controllers with their whole pad subtree), plus, for an inventory pad
+/// unit the class walk did not find, its HID collection and parent. A pad routed to a
+/// local seat in [`PadMode::Shared`] is left out (never scoped, not even to the console).
+pub(crate) fn scope_pads(st: &State, kiosk: &KioskSids, tree: &dyn PadTree, logon: &LogonSids) -> Vec<PadNodes> {
+    let effective = st.inventory.effective(&st.config);
+    let shared = |seat: Option<SeatNumber>| seat.and_then(|s| pad_mode_of(st, s)) == Some(PadMode::Shared);
+    let mut out = Vec::new();
+    let mut covered: std::collections::BTreeSet<String> = Default::default();
+    for g in discover(tree) {
+        covered.extend(g.nodes.iter().cloned());
+        let seat = group_seat(st, &effective, &g);
+        if shared(seat) {
+            continue;
+        }
+        out.push(PadNodes { nodes: g.nodes, seat_owner: seat.and_then(|s| scope_owner(st, kiosk, s, logon)) });
+    }
+    for (d, routed) in pads(st) {
+        let Some(inst) = d.instance_id.clone() else { continue };
+        if covered.contains(&inst.to_ascii_uppercase()) || shared(routed) {
+            continue;
+        }
+        let mut nodes = vec![inst.clone()];
+        nodes.extend(tree.parent(&inst));
+        out.push(PadNodes { nodes, seat_owner: routed.and_then(|s| scope_owner(st, kiosk, s, logon)) });
+    }
+    out
+}
+
+/// Whether pad scoping matters now: another session than the console could open the pads
+/// (a second running local seat with its own session, or a remote seat).
+fn scoping_matters(st: &State, console: Option<u32>, remote_seats_running: bool) -> bool {
+    let sessions: std::collections::BTreeSet<u32> = st
+        .seats
+        .iter()
+        .filter(|(n, _)| st.config.seats.iter().any(|c| c.number == **n && c.kind == SeatKind::Local))
+        .filter_map(|(_, s)| s.rt.session_id)
+        .chain(console)
+        .collect();
+    sessions.len() >= 2 || remote_seats_running
+}
+
+/// What the Guide-button guard wants (`seat_compat::guide_guard`): while pad scoping is on
+/// and matters, the users of every running seat with a session (local seats in
+/// passthrough, remote seats) and the console user; plus `ControllerToVKMapping` off.
+/// Empty when the product or `input.pad_device_scope` is off, or no seat needs it.
+pub(crate) fn guide_guard_want(st: &State, kiosk: &KioskSids, console: Option<&ScopeOwner>, remote_seats_running: bool) -> seat_compat::guide_guard::GuardWant {
+    use seat_compat::guide_guard::GuardWant;
+    if !st.config.settings.enabled || !st.config.settings.input.pad_device_scope {
+        return GuardWant::default();
+    }
+    if !scoping_matters(st, console.map(|c| c.session_id), remote_seats_running) {
+        return GuardWant::default();
+    }
+    let console_session = console.map(|c| c.session_id);
+    let mut sids: Vec<String> = Vec::new();
+    for c in &st.config.seats {
+        let user = match c.kind {
+            SeatKind::Local if c.local_settings().pad_mode == PadMode::Passthrough => seat_owner(st, kiosk, c.number).map(|o| (o.session_id, o.user_sid)),
+            SeatKind::Local => None,
+            _ => st.seats.get(&c.number).and_then(|s| Some((s.rt.session_id?, s.rt.user_sid.clone()?))),
+        };
+        // The seat running in the console session is the console user (added below), not
+        // a seat that needs the guard.
+        sids.extend(user.filter(|(sess, _)| Some(*sess) != console_session).map(|(_, sid)| sid));
+    }
+    if sids.is_empty() {
+        return GuardWant::default();
+    }
+    sids.extend(console.map(|c| c.user_sid.clone()));
+    sids.iter_mut().for_each(|s| *s = s.to_ascii_uppercase());
+    sids.sort();
+    sids.dedup();
+    GuardWant { sids, vk_mapping_off: true }
 }
 
 /// Shim seat map entries for local seats that have a session of their own (not the
@@ -237,32 +350,43 @@ impl crate::service::Service {
         targets(&self.lock(), &kiosk)
     }
 
+    /// The console session's user as a scope owner.
+    fn console_owner(&self) -> Option<ScopeOwner> {
+        let console = self.platform.console_session()?;
+        self.platform.session_user(console).map(|u| ScopeOwner { session_id: console, user_sid: u.sid })
+    }
+
     /// Pad scoping plan (`None` = scoping off: everything restored).
-    pub(crate) fn pad_scope_plan(&self, remote_seats_running: bool, parent_of: &dyn Fn(&str) -> Option<String>) -> Option<Vec<seat_input::pad_scope::ScopeWant>> {
-        let console = self.platform.console_session();
+    pub(crate) fn pad_scope_plan(&self, remote_seats_running: bool, tree: &dyn PadTree) -> Option<Vec<seat_input::pad_scope::ScopeWant>> {
+        let console_owner = self.console_owner();
         let kiosk = self.kiosk_seat_sids();
-        let console_owner = console.and_then(|c| self.platform.session_user(c)).map(|u| ScopeOwner {
-            session_id: console.unwrap_or_default(),
-            user_sid: u.sid,
+        // Sessions whose user is signed in twice: their logon SIDs, asked outside the lock.
+        let shared = {
+            let st = self.lock();
+            if !st.config.settings.enabled || !st.config.settings.input.pad_device_scope {
+                return None;
+            }
+            // Scoping only matters while another session could open the pads.
+            if !scoping_matters(&st, console_owner.as_ref().map(|c| c.session_id), remote_seats_running) {
+                return Some(Vec::new());
+            }
+            shared_user_sessions(&st, &kiosk, console_owner.as_ref())
+        };
+        let logon: LogonSids = shared.into_iter().filter_map(|s| self.platform.session_user(s).map(|u| (s, u.logon_sid))).collect();
+        let console_owner = console_owner.map(|c| {
+            let l = logon.get(&c.session_id).map(String::as_str);
+            principal(c, l.is_some(), l)
         });
         let st = self.lock();
-        if !st.config.settings.enabled || !st.config.settings.input.pad_device_scope {
-            return None;
-        }
-        // Scoping only matters while another session could open the pads: a second running
-        // local seat with its own session, or a remote seat.
-        let sessions: std::collections::BTreeSet<u32> = st
-            .seats
-            .iter()
-            .filter(|(n, _)| st.config.seats.iter().any(|c| c.number == **n && c.kind == SeatKind::Local))
-            .filter_map(|(_, s)| s.rt.session_id)
-            .chain(console)
-            .collect();
-        if sessions.len() < 2 && !remote_seats_running {
-            return Some(Vec::new());
-        }
-        let nodes = scope_pads(&st, &kiosk, parent_of);
+        let nodes = scope_pads(&st, &kiosk, tree, &logon);
         Some(seat_input::pad_scope::plan(&nodes, console_owner.as_ref(), remote_seats_running))
+    }
+
+    /// [`guide_guard_want`] (user SIDs, not logon SIDs: the value lives in the user's hive).
+    pub(crate) fn guide_guard_want(&self, remote_seats_running: bool) -> seat_compat::guide_guard::GuardWant {
+        let console_owner = self.console_owner();
+        let kiosk = self.kiosk_seat_sids();
+        guide_guard_want(&self.lock(), &kiosk, console_owner.as_ref(), remote_seats_running)
     }
 
     /// [`local_seat_map`] under the state lock.
