@@ -28,6 +28,17 @@ pub enum GuardOwner {
     SeatOne,
 }
 
+/// Access a handle gets in the target process ([`Platform::duplicate_handles`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleAccess {
+    /// The access the source handle has (`DUPLICATE_SAME_ACCESS`): shared textures.
+    Same,
+    /// Read-only section mapping (`FILE_MAP_READ`): the capture mailbox for the host.
+    MapRead,
+    /// Wait only (`SYNCHRONIZE`): the capture frame event for the host.
+    Synchronize,
+}
+
 /// A signed-in session user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUser {
@@ -226,6 +237,15 @@ pub trait Platform: Send + Sync {
     fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<BrokerPipes> {
         let _ = (host_pid, agent_pid);
         Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no drive broker here"))
+    }
+    /// Handle broker (OSMS-parity G1, in-session capture): duplicate `handles` (values valid
+    /// in `from_pid`) into `to_pid` with the given access; the answer holds the values valid
+    /// in `to_pid`, in order. All or nothing: on a failure the handles already made in
+    /// `to_pid` are closed again (`DUPLICATE_CLOSE_SOURCE` from the target). The source
+    /// handles stay open.
+    fn duplicate_handles(&self, from_pid: u32, to_pid: u32, handles: &[(u64, HandleAccess)]) -> BackendResult<Vec<u64>> {
+        let _ = (from_pid, to_pid, handles);
+        Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Unsupported, "unsupported", "no handle broker here"))
     }
     /// Publish the camera rules for the module (`seat_shim_core::readers::camera_visible`).
     fn publish_camera_rules(&self, rules: &[seat_shim_core::readers::ReaderRule]) -> Result<(), String> {
@@ -467,6 +487,8 @@ mod driver_status_tests {
 
 #[cfg(test)]
 pub mod mock {
+    /// One recorded handle duplication: `(from pid, to pid, handles)`.
+    pub type Duplication = (u32, u32, Vec<(u64, super::HandleAccess)>);
     use super::*;
     use seat_core::backend::{BackendError, ErrorKind};
     use std::collections::{BTreeMap, BTreeSet};
@@ -517,6 +539,8 @@ pub mod mock {
         pub guest_notices: Mutex<BTreeMap<String, Vec<(String, serde_json::Value)>>>,
         /// `(host pid, agent pid)` of every drive broker link made.
         pub broker_links: Mutex<Vec<(u32, u32)>>,
+        /// `(from pid, to pid, handles)` of every handle duplication (capture ring).
+        pub duplicated: Mutex<Vec<Duplication>>,
         /// Last published camera rules.
         pub camera_rules: Mutex<Vec<seat_shim_core::readers::ReaderRule>>,
         /// `cover_session` calls: (session, cpu sets, seat-wide).
@@ -766,6 +790,11 @@ pub mod mock {
         fn broker_pipes(&self, host_pid: u32, agent_pid: u32) -> BackendResult<BrokerPipes> {
             lock(&self.broker_links).push((host_pid, agent_pid));
             Ok(BrokerPipes { host_read: 0x10, host_write: 0x14, agent_read: 0x20, agent_write: 0x24 })
+        }
+        fn duplicate_handles(&self, from_pid: u32, to_pid: u32, handles: &[(u64, HandleAccess)]) -> BackendResult<Vec<u64>> {
+            lock(&self.duplicated).push((from_pid, to_pid, handles.to_vec()));
+            // The target's value: the source value plus 0x1000 (recognisable in tests).
+            Ok(handles.iter().map(|(h, _)| h + 0x1000).collect())
         }
         fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
             lock(&self.hyperv_actions).push(action.clone());

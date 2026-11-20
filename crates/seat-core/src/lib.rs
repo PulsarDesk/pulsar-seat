@@ -10,6 +10,7 @@
 //! - [`store`]: [`store::ConfigStore`] and [`store::SecretStore`] traits + file/memory impls.
 //! - [`pnp`]: [`pnp::PnpTree`] trait (device tree access) and pure key-building helpers.
 //! - [`backend`]: the swappable backend traits (session, display, input, audio, device gate).
+//! - [`capture`]: in-session capture contract (mailbox, ring, output choice; OSMS-parity G1).
 //! - [`mock`]: in-memory implementations of every trait (feature `mock`, and in tests).
 //! - [`consts`]: names shared by service, manager, installer, hosts and drivers.
 //! - [`error`]: the one wire error ([`error::ProtoError`], [`error::ErrorCode`]).
@@ -24,6 +25,7 @@
 
 pub mod assign;
 pub mod backend;
+pub mod capture;
 pub mod config;
 pub mod consts;
 pub mod device;

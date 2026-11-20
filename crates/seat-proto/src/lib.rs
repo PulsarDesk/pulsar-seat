@@ -254,6 +254,7 @@ mod tests {
             RequestBody::RestartTermService { confirm: true },
             RequestBody::RestoreUsbInput { confirm: true },
             RequestBody::HostDriveBroker { seat: SeatNumber::new(2).unwrap() },
+            RequestBody::HostCaptureRing { seat: SeatNumber::new(2).unwrap() },
         ] {
             assert_eq!(r.min_protocol(), 3, "parity-round request {r:?}");
         }
@@ -292,6 +293,7 @@ mod tests {
             RequestBody::SwitchSeat { seat: two },
             RequestBody::HostGetAssignment { seat: two },
             RequestBody::HostTakeCredentials { seat: two },
+            RequestBody::HostCaptureRing { seat: two },
             RequestBody::CredprovSwitch { seat: two },
             RequestBody::AgentSwitch { seat: two },
         ] {

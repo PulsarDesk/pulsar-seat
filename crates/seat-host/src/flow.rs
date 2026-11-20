@@ -234,6 +234,7 @@ mod tests {
             listener_cert_sha1: vec![],
             input: Default::default(),
             redirection: Default::default(),
+            frame_source: Default::default(),
         };
         assert_eq!(window_rect(&asg), Some(Rect { x: 1920, y: 0, width: 3840, height: 1080 }));
     }

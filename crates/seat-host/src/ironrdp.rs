@@ -116,16 +116,17 @@ pub fn params_from(asg: &HostAssignment, user: &str, domain: &str, pin: CertPin,
         relative_mouse: true,
         redirect: redirect_policy(asg),
         pin,
-        graphics: graphics_mode(),
+        graphics: crate::capture::graphics_for(
+            asg.frame_source,
+            std::env::var("PULSAR_SEAT_GFX").ok().as_deref(),
+        ),
     })
 }
 
-/// Graphics pipeline offer: EGFX with H.264 by default; `PULSAR_SEAT_GFX=bitmap` (or
-/// `off`) keeps the classic bitmap updates, `no-h264` offers EGFX without H.264
-/// (troubleshooting). `PULSAR_SEAT_H264_DECODER=software` skips GPU decoding.
-pub fn graphics_mode() -> seat_rdp::GraphicsMode {
-    seat_rdp::GraphicsMode::from_setting(std::env::var("PULSAR_SEAT_GFX").ok().as_deref())
-}
+// Graphics pipeline offer (`crate::capture::graphics_for`): EGFX with H.264 by default,
+// classic bitmap updates for `session_capture` seats; `PULSAR_SEAT_GFX=bitmap` (or `off`)
+// keeps the bitmap updates, `no-h264` offers EGFX without H.264 (troubleshooting).
+// `PULSAR_SEAT_H264_DECODER=software` skips GPU decoding.
 
 /// Index into `SeatOutputs::outputs` of every RDP monitor (layout index): clone outputs
 /// are no RDP monitors (`SeatOutputs::layout_outputs`), but the presenter numbers outputs
@@ -159,16 +160,44 @@ pub fn input_rects(outputs: &SeatOutputs, geo: &[FbRect]) -> Vec<seat_core::devi
 /// Presenter shared between the engine (frames) and the event thread (reconfigure,
 /// blank). While blanked, frames are dropped so the idle text stays. Frames come by RDP
 /// monitor (layout index) and go out by seat output index ([`output_map`]).
+///
+/// In-session capture (OSMS-parity G1): while the [`crate::capture::CaptureGate`] covers
+/// an RDP monitor, the engine's frames for it are dropped (the RDP picture is discarded,
+/// not shown) and the capture reader presents through [`Self::present_captured`]; the same
+/// for the pointer ([`Self::captured_cursor`]).
 #[derive(Clone)]
 pub struct SharedSink {
     inner: Arc<Mutex<Box<dyn FrameSink>>>,
     blanked: Arc<AtomicBool>,
     map: Arc<Mutex<Vec<usize>>>,
+    gate: crate::capture::CaptureGate,
 }
 
 impl SharedSink {
     pub fn new(sink: Box<dyn FrameSink>, outputs: &SeatOutputs) -> Self {
-        Self { inner: Arc::new(Mutex::new(sink)), blanked: Arc::new(AtomicBool::new(false)), map: Arc::new(Mutex::new(output_map(outputs))) }
+        Self {
+            inner: Arc::new(Mutex::new(sink)),
+            blanked: Arc::new(AtomicBool::new(false)),
+            map: Arc::new(Mutex::new(output_map(outputs))),
+            gate: crate::capture::CaptureGate::new(),
+        }
+    }
+    /// The capture gate of this presenter (shared by clones).
+    pub fn gate(&self) -> &crate::capture::CaptureGate {
+        &self.gate
+    }
+    /// A captured GPU frame (RDP monitor = `frame.output`), past the gate.
+    pub fn present_captured(&self, frame: &GpuFrameRef<'_>) -> BackendResult<()> {
+        if self.is_blanked() {
+            return Ok(());
+        }
+        let f = GpuFrameRef { output: self.seat_output(frame.output), ..*frame };
+        self.lock().present_gpu(&f)
+    }
+    /// The captured pointer (RDP monitor = `cursor.output`), past the gate.
+    pub fn captured_cursor(&self, cursor: &CursorState) -> BackendResult<()> {
+        let c = CursorState { output: self.seat_output(cursor.output), ..cursor.clone() };
+        self.lock().cursor(&c)
     }
     fn seat_output(&self, layout_index: usize) -> usize {
         self.map.lock().unwrap_or_else(|p| p.into_inner()).get(layout_index).copied().unwrap_or(layout_index)
@@ -200,13 +229,16 @@ impl FrameSink for SharedSink {
         self.lock().configure(outputs)
     }
     fn present(&mut self, frame: &FrameRef<'_>) -> BackendResult<()> {
-        if self.is_blanked() {
+        if self.is_blanked() || self.gate.covers(frame.output) {
             return Ok(());
         }
         let f = FrameRef { output: self.seat_output(frame.output), ..*frame };
         self.lock().present(&f)
     }
     fn cursor(&mut self, cursor: &CursorState) -> BackendResult<()> {
+        if self.gate.owns_cursor() {
+            return Ok(());
+        }
         let c = CursorState { output: self.seat_output(cursor.output), ..cursor.clone() };
         self.lock().cursor(&c)
     }
@@ -220,7 +252,7 @@ impl FrameSink for SharedSink {
         self.lock().gpu_ready(self.seat_output(output))
     }
     fn present_gpu(&mut self, frame: &GpuFrameRef<'_>) -> BackendResult<()> {
-        if self.is_blanked() {
+        if self.is_blanked() || self.gate.covers(frame.output) {
             // The idle frame stays; the frame counts as shown.
             return Ok(());
         }
@@ -767,6 +799,19 @@ mod win {
             }
         };
         let mut sink = SharedSink::new(display.sink, &asg.outputs);
+        // In-session capture (OSMS-parity G1): the agent's frames replace the RDP picture
+        // while they are live; the reader ends with the engine.
+        let stop_capture = Arc::new(AtomicBool::new(false));
+        if asg.frame_source == seat_core::config::LocalFrameSource::SessionCapture {
+            crate::capture::host_win::spawn(
+                ctl.clone(),
+                args.seat,
+                sink.clone(),
+                outputs.clone(),
+                handle.clone(),
+                stop_capture.clone(),
+            );
+        }
 
         // Audio bridge on the seat's endpoints (by id).
         let bridge = Arc::new(AudioBridge::wasapi(asg.audio.clone()));
@@ -1001,6 +1046,7 @@ mod win {
         let policy = reconnect_policy(password.is_some());
         let end = seat_rdp::run(&params, password, &media, &mut sink, &mut hooks, &handle, &rx, policy);
         eprintln!("seat host: engine stopped: {end:?}");
+        stop_capture.store(true, Ordering::SeqCst);
         stop_audio.store(true, Ordering::SeqCst);
         bridge.stop_playback();
         bridge.stop_capture();
@@ -1058,6 +1104,7 @@ mod tests {
             listener_cert_sha1: vec![],
             input: Default::default(),
             redirection: Default::default(),
+            frame_source: Default::default(),
         }
     }
 
@@ -1301,6 +1348,64 @@ mod tests {
         s.set_blank(Some("x")).unwrap();
         s.present_gpu(&f).unwrap();
         assert_eq!(*rec.0.lock().unwrap(), vec![2]);
+    }
+
+    /// OSMS-parity G1: while the capture covers an RDP monitor, the engine's frames and
+    /// pointer updates for it are dropped and only the capture's frames reach the presenter.
+    #[test]
+    fn capture_gate_discards_the_rdp_picture() {
+        let seat = SeatNumber::new(2).unwrap();
+        let outs = SeatOutputs {
+            seat,
+            outputs: vec![
+                placement(0, None),
+                placement(0, Some(0)),
+                placement(1920, None),
+            ],
+        };
+        let rec = Gpu::default();
+        let mut s = SharedSink::new(Box::new(rec.clone()), &outs);
+        let src = seat_core::device::Rect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        let rdp = GpuFrameRef {
+            output: 1,
+            handle: 4,
+            generation: 1,
+            width: 1,
+            height: 1,
+            src,
+            dirty: &[],
+        };
+        assert!(s.clone().gate().set(&[1]));
+        s.present_gpu(&rdp).unwrap();
+        assert!(
+            rec.0.lock().unwrap().is_empty(),
+            "RDP frame dropped while captured"
+        );
+        s.present_captured(&GpuFrameRef { handle: 8, ..rdp })
+            .unwrap();
+        assert_eq!(
+            *rec.0.lock().unwrap(),
+            vec![2],
+            "captured frame on seat output 2"
+        );
+        assert!(s.gate().clear());
+        s.present_gpu(&rdp).unwrap();
+        assert_eq!(*rec.0.lock().unwrap(), vec![2, 2], "RDP picture back");
+    }
+
+    #[test]
+    fn capture_seat_connects_without_egfx() {
+        let mut a = asg();
+        a.frame_source = seat_core::config::LocalFrameSource::SessionCapture;
+        let p = params_from(&a, "u", "", Default::default(), 0, vec![]).unwrap();
+        if std::env::var("PULSAR_SEAT_GFX").is_err() {
+            assert_eq!(p.graphics, seat_rdp::GraphicsMode::Bitmap);
+        }
     }
 
     #[test]

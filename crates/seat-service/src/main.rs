@@ -23,6 +23,8 @@
 
 mod auth;
 mod backends;
+// In-session capture offers and the handle-broker mapping (OSMS-parity G1).
+mod capture;
 mod cli;
 mod compat;
 mod console_guard;

@@ -55,6 +55,7 @@
     setSoftwareCursor,
     setVirtualPads,
     setPadMode,
+    setFrameSource,
     type CanvasItem,
     type DropTarget
   } from '#lib/model.ts';
@@ -316,6 +317,14 @@
       { label: t.seatMenu.compat, disabled: !store.isAdmin, action: () => (dialog = { kind: 'compat', seat: n }) },
       { label: pads ? t.settingsPage.padsOff : t.settingsPage.padsOn, action: () => store.edit((c) => setVirtualPads(c, n, !pads)) }
     );
+    if (n !== 1 && (s.kind ?? 'local') === 'local') {
+      // OSMS-parity G1: picture from the session's own capture instead of the RDP codec.
+      const capture = localOf(s).frame_source === 'session_capture';
+      out.push({
+        label: capture ? t.settingsPage.captureOff : t.settingsPage.captureOn,
+        action: () => store.edit((c) => setFrameSource(c, n, capture ? 'rdp_decode' : 'session_capture'))
+      });
+    }
     if (n !== 1) {
       const shared = localOf(s).pad_mode === 'shared';
       out.push({

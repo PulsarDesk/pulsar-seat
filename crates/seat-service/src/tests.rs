@@ -3873,6 +3873,130 @@ fn drive_broker_links_the_host_with_the_seat_agent() {
     assert_eq!(h.s.host_drive_broker(s(2)).unwrap_err().reason.as_deref(), Some("no_acl_drives"));
 }
 
+/// OSMS-parity G1: a `session_capture` seat gets the capture task at sign-in, the agent's
+/// offer is checked and kept, the host gets it with handles duplicated from the agent into
+/// the host (mailbox read-only, event wait-only), and the offer dies with the agent.
+#[test]
+fn session_capture_offer_reaches_the_host_through_the_handle_broker() {
+    use crate::platform::HandleAccess;
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().frame_source = seat_core::config::LocalFrameSource::SessionCapture;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let sid = seat_session_id(&h, s(2));
+    // The assignment tells the host to use the capture.
+    let ResponseBody::HostAssignment(asg) = h.s.host_assignment(s(2)).unwrap() else { panic!() };
+    assert_eq!(asg.frame_source, seat_core::config::LocalFrameSource::SessionCapture);
+    h.p.sign_in(sid, "koltuk2");
+    h.s.on_session_change(SessionChange::Logon, sid);
+    let tasks = h.s.lock().agent_tasks.get(&sid).cloned().unwrap_or_default();
+    assert!(tasks.iter().any(|t| t.task == AgentTaskKind::StartCapture), "{tasks:?}");
+    let e = h.s.host_capture_ring(s(2)).unwrap_err();
+    assert_eq!(e.reason.as_deref(), Some("not_ready"), "nothing offered yet");
+
+    let agent_pid = h.s.lock().seats.get(&s(2)).unwrap().agent_pid.unwrap();
+    let mut agent = Caller { pid: agent_pid, ..user(sid) };
+    call(&h, &mut agent, hello_body(ClientKind::Agent)).unwrap();
+    let out = seat_proto::CaptureOutput {
+        device: r"\\.\DISPLAY1".into(),
+        adapter_luid: 9,
+        rect: seat_core::device::Rect { x: 0, y: 0, width: 1920, height: 1080 },
+        width: 1920,
+        height: 1080,
+        ring: vec![0x30, 0x34, 0x38],
+    };
+    let bad = seat_proto::CaptureOffer { generation: 1, mailbox: 0x20, event: 0x24, outputs: vec![] };
+    let report = |offer| seat_proto::AgentReport { session_id: sid, event: seat_proto::AgentEvent::CaptureReady { offer } };
+    call(&h, &mut agent, RequestBody::AgentReport { report: report(bad) }).unwrap();
+    assert!(h.s.host_capture_ring(s(2)).is_err(), "an offer without outputs is refused");
+    let offer = seat_proto::CaptureOffer { generation: 2, mailbox: 0x20, event: 0x24, outputs: vec![out] };
+    call(&h, &mut agent, RequestBody::AgentReport { report: report(offer) }).unwrap();
+    let ResponseBody::CaptureRing(got) = h.s.host_capture_ring(s(2)).unwrap() else { panic!() };
+    assert_eq!((got.generation, got.mailbox, got.event), (2, 0x1020, 0x1024));
+    assert_eq!(got.outputs[0].ring, vec![0x1030, 0x1034, 0x1038]);
+    let host_pid = h.s.lock().seats.get(&s(2)).and_then(|x| x.host.as_ref().map(|h| h.pid)).unwrap();
+    let dup = h.p.duplicated.lock().unwrap().clone();
+    assert_eq!((dup[0].0, dup[0].1), (agent_pid, host_pid), "from the agent into the host");
+    assert_eq!(&dup[0].2[..2], &[(0x20, HandleAccess::MapRead), (0x24, HandleAccess::Synchronize)]);
+    // The agent ends its capture: nothing to hand out any more.
+    let stopped = seat_proto::AgentReport { session_id: sid, event: seat_proto::AgentEvent::CaptureStopped { reason: "stopped".into() } };
+    call(&h, &mut agent, RequestBody::AgentReport { report: stopped }).unwrap();
+    assert!(h.s.host_capture_ring(s(2)).is_err());
+}
+
+/// OSMS-parity G1: switching a running seat back to `rdp_decode` asks for a restart (the
+/// host offers EGFX only at connect), stops the agent's capture and drops its offer.
+#[test]
+fn switching_the_frame_source_restarts_the_seat_and_stops_the_capture() {
+    use seat_core::config::LocalFrameSource;
+    let mut c = two_seat_config();
+    c.seats[1].local_mut().unwrap().frame_source = LocalFrameSource::SessionCapture;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(
+        &h,
+        &mut a,
+        RequestBody::StartSeats {
+            seats: Some(vec![s(2)]),
+        },
+    )
+    .unwrap();
+    let sid = seat_session_id(&h, s(2));
+    h.p.sign_in(sid, "koltuk2");
+    h.s.on_session_change(SessionChange::Logon, sid);
+    let starts = |h: &Harness| {
+        h.s.lock().agent_tasks.get(&sid).map_or(0, |q| {
+            q.iter()
+                .filter(|t| t.task == AgentTaskKind::StartCapture)
+                .count()
+        })
+    };
+    assert_eq!(starts(&h), 1);
+    // A second logon report of the same session does not queue it twice.
+    h.s.on_session_change(SessionChange::Logon, sid);
+    assert_eq!(starts(&h), 1);
+    h.s.lock().seats.get_mut(&s(2)).unwrap().capture = Some(seat_proto::CaptureOffer {
+        generation: 1,
+        mailbox: 1,
+        event: 2,
+        outputs: vec![],
+    });
+
+    let base = h.s.status().config_revision;
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else {
+        panic!()
+    };
+    let mut cfg = view.config.clone();
+    cfg.seats[1].local_mut().unwrap().frame_source = LocalFrameSource::RdpDecode;
+    let ResponseBody::Applied(res) = call(
+        &h,
+        &mut a,
+        RequestBody::ApplyConfig {
+            config: Box::new(cfg),
+            base_revision: base,
+            force: false,
+        },
+    )
+    .unwrap() else {
+        panic!()
+    };
+    assert!(res.restart_seats.contains(&s(2)), "{:?}", res.restart_seats);
+    let tasks =
+        h.s.lock()
+            .agent_tasks
+            .get(&sid)
+            .cloned()
+            .unwrap_or_default();
+    assert!(
+        tasks.iter().any(|t| t.task == AgentTaskKind::StopCapture),
+        "{tasks:?}"
+    );
+    assert!(h.s.lock().seats.get(&s(2)).unwrap().capture.is_none());
+}
+
 /// rdp-listener 2026-11-17: the operator restart stops the seats first, then restarts
 /// Remote Desktop Services; it needs the confirmation and an RDP session backend.
 #[test]

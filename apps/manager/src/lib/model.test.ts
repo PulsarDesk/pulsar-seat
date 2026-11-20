@@ -35,6 +35,7 @@ import {
   setStartupApps,
   setVirtualPads,
   setPadMode,
+  setFrameSource,
   setGpuPreference,
   setDisplayOption,
   gpuPrefAppValid,
@@ -326,6 +327,15 @@ describe('virtual pads', () => {
     expect(shared.seats.find((s) => s.number === 2)!.local?.pad_mode).toBe('shared');
     const back = setPadMode(shared, 2, 'passthrough');
     expect(back.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('pad_mode');
+  });
+});
+
+describe('frame source', () => {
+  it('stores session capture and removes the field for the default', () => {
+    const on = setFrameSource(demoConfig(), 2, 'session_capture');
+    expect(on.seats.find((s) => s.number === 2)!.local?.frame_source).toBe('session_capture');
+    const off = setFrameSource(on, 2, 'rdp_decode');
+    expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('frame_source');
   });
 });
 

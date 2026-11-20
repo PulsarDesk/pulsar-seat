@@ -13,6 +13,10 @@
 //! own thread), log-off after a deny notice (`ExitWindowsEx`), the per-user palm-check
 //! value (`HKCU\...\PrecisionTouchPad\AAPThreshold`). **Untested on hardware.**
 //!
+//! In-session capture (`start_capture` / `stop_capture`, OSMS-parity G1): Desktop
+//! Duplication of this session into shared textures for the seat host
+//! (`capture/agent_win.rs`). **Untested on hardware.**
+//!
 //! Seat switch (`fast_user_switch`, spec 35 §5.5(a)): a notification-area icon with
 //! "N. koltuğa geç" entries (`agent_switch_targets` / `agent_switch`); the agent locks its
 //! session before asking. **Untested on hardware.**
@@ -26,6 +30,11 @@
 #[path = "pipe.rs"]
 #[allow(dead_code)]
 mod pipe;
+
+// In-session capture (OSMS-parity G1, `local.frame_source = session_capture`).
+#[cfg(windows)]
+#[path = "capture/agent_win.rs"]
+mod capture;
 
 use seat_proto::{AgentEvent, AgentReport, AgentTask, AgentTaskKind};
 
@@ -195,7 +204,26 @@ mod win {
             // The read-back itself is sent by the task loop (`AgentEvent::Dpi`).
             AgentTaskKind::ReportDpi => Ok(()),
             AgentTaskKind::DriveBroker { read, write, drives } => start_drive_broker(*read, *write, drives),
+            // The capture runs on threads of its own and reports `capture_ready` /
+            // `capture_stopped` itself.
+            AgentTaskKind::StartCapture => match session_id() {
+                Some(sid) => capture::start(capture_reporter(sid)),
+                None => Err(("session_unknown".into(), None)),
+            },
+            AgentTaskKind::StopCapture => {
+                capture::stop();
+                Ok(())
+            }
         }
+    }
+
+    /// The capture's reports go out on a connection of their own (the task loop may be
+    /// waiting on its pipe).
+    fn capture_reporter(sid: u32) -> capture::Report {
+        std::sync::Arc::new(move |event: AgentEvent| match connect().and_then(|mut c| report(&mut c, sid, event)) {
+            Ok(_) => {}
+            Err(e) => eprintln!("pulsar-seat-agent: capture report failed: {e}"),
+        })
     }
 
     /// `WM_SETTINGCHANGE("Environment")` to every top-level window of this session, so

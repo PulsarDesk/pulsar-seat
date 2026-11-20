@@ -21,7 +21,7 @@ use seat_core::backend::session::{
     HostLaunch, KnownSession, SeatCredentials, SeatStartRequest, SessionInfo, SessionState, StartStep,
 };
 use seat_core::backend::{BackendError, ErrorKind};
-use seat_core::config::{SameAccountPolicy, SeatAccount};
+use seat_core::config::{LocalFrameSource, SameAccountPolicy, SeatAccount};
 use seat_core::consts::{AGENT_EXE, HOST_EXE, RDP_CLIENT_NAME_PREFIX};
 
 /// Launcher request limits (`start_seat_app`): argument count and command-line length
@@ -83,6 +83,9 @@ pub struct Slot {
     pub crashes: Vec<u64>,
     pub retry_at: Option<u64>,
     pub agent_pid: Option<u32>,
+    /// In-session capture the agent offered (`capture_ready`; handle values valid in the
+    /// agent, OSMS-parity G1). Dropped with the agent.
+    pub capture: Option<seat_proto::CaptureOffer>,
     /// Session whose startup apps were started (once per logon session).
     pub apps_started: Option<u32>,
     pub logon: Option<SessionUser>,
@@ -106,6 +109,7 @@ impl Slot {
             crashes: Vec::new(),
             retry_at: None,
             agent_pid: None,
+            capture: None,
             apps_started: None,
             logon: None,
             deadline_ms: None,
@@ -858,6 +862,7 @@ impl Service {
             }
             let host = slot.host.take().map(|h| h.pid);
             let agent = slot.agent_pid.take();
+            slot.capture = None;
             slot.apps_started = None;
             self.drop_credprov_seat(&mut st, seat);
             let Some(slot) = st.seats.get_mut(&seat) else { return };
@@ -1169,9 +1174,27 @@ impl Service {
                 Ok(pid) => {
                     if let Some(s) = self.lock().seats.get_mut(&seat) {
                         s.agent_pid = Some(pid);
+                        // An offer of the previous agent is gone with it.
+                        s.capture = None;
                     }
                 }
                 Err(e) => log::warn(&format!("seat {seat}: agent not started: {e}")),
+            }
+        }
+        // In-session capture for the seat host (OSMS-parity G1, opt-in per seat): asked of
+        // every new agent, and of a running one that offers nothing yet.
+        {
+            let mut st = self.lock();
+            let wanted = st.config.seat(seat).is_some_and(|c| {
+                c.local_settings().frame_source == LocalFrameSource::SessionCapture
+            });
+            let offered = st.seats.get(&seat).is_some_and(|s| s.capture.is_some());
+            let queued = st
+                .agent_tasks
+                .get(&session_id)
+                .is_some_and(|q| q.iter().any(|t| t.task == AgentTaskKind::StartCapture));
+            if wanted && (agent_needed || !offered) && !queued {
+                self.queue_agent_task(&mut st, session_id, AgentTaskKind::StartCapture);
             }
         }
         let sdl = self.pad_sdl_env(seat);

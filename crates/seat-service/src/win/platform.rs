@@ -587,6 +587,10 @@ impl Platform for WinPlatform {
         })
     }
 
+    fn duplicate_handles(&self, from_pid: u32, to_pid: u32, handles: &[(u64, crate::platform::HandleAccess)]) -> BackendResult<Vec<u64>> {
+        crate::win::handle_broker::duplicate(from_pid, to_pid, handles)
+    }
+
     fn hyperv(&self, action: &seat_proto::hyperv::HyperVAction) -> BackendResult<seat_proto::hyperv::HyperVStatus> {
         use seat_compat::hyperv as hv;
         use seat_proto::hyperv::HyperVAction as A;

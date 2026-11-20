@@ -2709,3 +2709,75 @@ on both architectures; the only arch-specific value is the PE machine HidHide mu
   SDL hints and the shim's XInput seat map.
 - **Cost.** Discovery runs on the 1 s pad tick only while the switch is on and a second
   session exists (three class lists plus SetupAPI reads per node). Not measured.
+
+## In-session capture for local seats (OSMS-parity G1, 2026-11-20)
+
+Opt-in per local seat: `local.frame_source = "session_capture"` (default `rdp_decode`;
+additive, absent = default, not written when default). The seat's picture comes from DXGI
+Desktop Duplication inside the seat's own RDP session instead of the RDP codec, so the
+local display path has no H.264 encode / decode and no RDP flow control. Clean room: written
+from the Microsoft Learn pages on Desktop Duplication, `IDXGIKeyedMutex`,
+`IDXGIResource1::CreateSharedHandle`, `DuplicateHandle`, `CreateFileMappingW`; no code of
+another multi-seat product was copied (no third-party notice needed). **Everything below is
+a HYPOTHESIS on hardware** (spec/remote/40-display-hdr.md §6.5 is the deciding experiment;
+our spec still cites "unavailable on RDP indirect displays"); the default stays
+`rdp_decode` until that test passes on x64 and Adreno ARM64.
+
+- **Pure contract (`seat_core::capture`).** A mailbox of `u64` words in an unnamed section:
+  header (magic, generation, state `starting / live / lost / stopped`, output count, QPC
+  heartbeat, QPC frequency), one seqlocked record per output (frame count, ring slot,
+  `LastPresentTime`, publish QPC, size) and one seqlocked pointer record (output, visible,
+  position, hotspot, shape up to 128x128 straight BGRA). Single writer (the agent); readers
+  check `live` (valid, state live, heartbeat at most 2 s old). Also: `RingCursor` (never
+  reuse the published slot, oldest first), `shape_to_bgra` (monochrome / colour / masked
+  colour pointer shapes), `choose_output` / `map_outputs` (RDP monitor to captured output by
+  normalized rectangle, never "the first attached output"), `output_usable` (same adapter
+  LUID as the presenter, else fall back), `Fallback` reasons.
+- **Agent (`pulsar-seat-agent`, user token, `crates/seat-host/src/capture/agent_win.rs`).**
+  Task `start_capture` (queued by the service for every new agent of a `session_capture`
+  seat, and for a running agent that offers nothing): a coordinator thread enumerates up to
+  four attached, unrotated outputs, creates mailbox + auto-reset event, starts one worker per
+  output (own D3D11 device on the output's adapter, `SetGPUThreadPriority(7)` best effort,
+  `DuplicateOutput`, three `SHARED_NTHANDLE | SHARED_KEYEDMUTEX` BGRA textures) and a
+  pointer poller (`GetCursorPos` on a 2 ms high-resolution waitable timer). Per frame: take
+  a slot with key 0 (or key 1 = a frame the presenter never took), `CopyResource`, release
+  key 1, publish, set the event. Every capture thread switches to the input desktop first. A
+  lost duplication marks the mailbox `lost`, tears the ring down and rebuilds every 250 ms
+  (new generation `pid << 32 | n`); `DXGI_ERROR_UNSUPPORTED` 8 times in a row ends the
+  capture (`capture_stopped {reason: dxgi_unavailable}`). Reports go to the service only
+  (`agent_report capture_ready {offer}`), never to the host. `stop_capture` ends it.
+- **Service (`crates/seat-service/src/capture.rs`, `win/handle_broker.rs`).** Accepts an
+  offer only from the seat's launched agent PID in the reporting session, checks its shape
+  (`offer_ok`: 1-4 outputs, full rings, sizes, non-zero handles) and keeps it on the slot
+  (dropped when the agent is relaunched, the seat stops, or `capture_stopped`).
+  `host_capture_ring {seat}` (protocol 3, host access) duplicates the handles from the agent
+  into the seat host (`OpenProcess(PROCESS_DUP_HANDLE)` + `DuplicateHandle`; textures same
+  access, mailbox `FILE_MAP_READ`, event `SYNCHRONIZE`; all or nothing) and answers
+  `capture_ring` with values valid in the host. Nothing on the system changes, so nothing is
+  journaled: the handles die with the processes. Switching a running seat's `frame_source`
+  is reported in `restart_seats` (the EGFX offer is fixed at connect); switching it off also
+  queues `stop_capture`.
+- **Seat host (`crates/seat-host/src/capture/`).** `HostAssignment.frame_source` (additive).
+  A `session_capture` seat connects without EGFX (`graphics_for`: bitmap updates only;
+  `PULSAR_SEAT_GFX` still wins). A reader thread fetches the ring, maps the mailbox
+  read-only, waits on the event (100 ms), routes RDP monitors onto captured outputs every
+  2 s (rectangle + presenter adapter LUID) and, while live, sets the `CaptureGate`:
+  `SharedSink` then drops the engine's frames and pointer updates for covered monitors and
+  the reader presents the slots as `GpuFrameRef` (generation `1 << 63 | fetch`) and the
+  pointer as `CursorState`. Presenter (`present_gpu`, `flip.rs` keyed mutex) unchanged. Not
+  live / stale / stopped: gate cleared, engine asked for a full redraw, the RDP picture
+  shows; a new ring is fetched at most once a second. Per-span QPC latency (present ->
+  publish -> present) is logged every 600 frames.
+- **Fallbacks.** Before sign-in (no agent), lock / UAC / Winlogon desktop (a user-token
+  agent cannot duplicate the secure desktop), adapter mismatch, no GPU presenter on a
+  monitor, rotated outputs, Desktop Duplication unsupported: the RDP picture (bitmap
+  updates).
+- **Manager.** Seat menu toggle (`settingsPage.captureOn` / `captureOff`, "restarts the
+  seat") and the seat fact `captureFact`; en / tr.
+- **x64 / ARM64.** Same code on both (windows / windows-sys DXGI, D3D11, Win32 only).
+  HYPOTHESIS: Desktop Duplication works on RdpIdd outputs on Adreno drivers.
+- **Not built.** A SYSTEM agent for lock-screen capture (wider attack surface, would need its
+  own opt-in and a pipe ACL of SYSTEM + PID check), discarding bitmap updates before IronRDP
+  decodes them (they are decoded, then dropped at the presenter), `TS_SUPPRESS_OUTPUT_PDU`
+  (a second, measured experiment: it may starve Desktop Duplication), reusing the agent for
+  the split-screen console path.

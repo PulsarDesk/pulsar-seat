@@ -24,6 +24,7 @@ export function seatFacts(c: Config, s: SeatConfig, passwordFailing: boolean): s
   if (l.gpu_preference && l.gpu_preference.mode !== 'off') out.push(t.settingsPage.gpuFact);
   if (l.virtual_pads) out.push(t.settingsPage.padsFact);
   if (l.pad_mode === 'shared') out.push(t.settingsPage.padsSharedFact);
+  if (l.frame_source === 'session_capture') out.push(t.settingsPage.captureFact);
   if (s.number !== 1 && redirectOn(seatRedirect(c, s.number))) out.push(t.settingsPage.redirectFact);
   return out;
 }
