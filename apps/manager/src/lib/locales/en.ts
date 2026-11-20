@@ -926,6 +926,26 @@ const t = {
     backends: 'Methods',
     session: 'Session method',
     topology: 'Where seat hosts run',
+    /** Host console preset (OSMS parity G6): shown under `dedicated_host`. */
+    hostAutologon: 'Sign the host console in automatically',
+    hostAutologonHelp:
+      'At every start, Windows signs a Pulsar account in at the physical console. That session only runs the seat hosts, so every seat, seat 1 too, is a session of its own.',
+    hostTradeoffs: [
+      'Seat 1 loses the native graphics speed of the console: its picture goes through capture, like the other seats.',
+      'Windows keeps the password of that account for the automatic sign-in as a protected system secret (LSA). It is never written to the registry.',
+      'Ctrl+Alt+Del and the secure desktop at the physical console belong to the host account, not to a person.'
+    ],
+    hostConsentTitle: 'Sign the host console in automatically?',
+    hostConsentBody:
+      'Pulsar Seat creates a standard account named PulsarSeatConsole and turns on the Windows automatic sign-in for it. The old sign-in settings are saved and come back when you turn this off or uninstall.',
+    hostConsentConfirm: 'Turn on',
+    hostState: {
+      on: 'The host account signs in automatically.',
+      refused: 'Not turned on: another automatic sign-in is set up on this PC. Turn it off first.',
+      failed: 'Could not be turned on; details in the service log.',
+      drifted: 'The automatic sign-in settings were changed outside Pulsar Seat; they are left as they are.',
+      pending_removal: 'Turned off. The host account is removed after it signs out (at the next restart at the latest).'
+    } as Record<string, string>,
     display: 'Display method',
     input: 'Input method',
     audio: 'Sound method',
@@ -1544,6 +1564,10 @@ const t = {
     all_seats: 'Each seat has its own keyboard and mouse: identify all seats (seat 1 too) in turn',
     keep_seat_one: 'Keep seat 1’s current devices: identify only seats 2 and later',
     quick_two_seats: 'Quick two seats: seat 1’s devices on seat 1, everything else on seat 2',
+    host_console: 'All seats equal: every seat is a session of its own, and a Pulsar account owns the console',
+    /** Consent step of the `host_console` variant (the trade-offs are `advanced.hostTradeoffs`). */
+    hostConsentHead: 'Before you choose “All seats equal”',
+    hostConsentAccept: 'I understand: create the console account and turn on its automatic sign-in',
     seatOneDevices: 'Devices to use for seat 1',
     extend: 'Extend the desktop to all monitors (recommended)',
     start: 'Start the wizard',
@@ -1597,7 +1621,11 @@ const t = {
     variantOptions: {
       all_seats: { label: 'Each seat has its own keyboard and mouse', help: 'Identify all seats (seat 1 too) in turn.' },
       keep_seat_one: { label: 'Keep seat 1’s current devices', help: 'Identify only seats 2 and later.' },
-      quick_two_seats: { label: 'Quick two seats', help: 'Seat 1’s devices stay on seat 1, everything else goes to seat 2.' }
+      quick_two_seats: { label: 'Quick two seats', help: 'Seat 1’s devices stay on seat 1, everything else goes to seat 2.' },
+      host_console: {
+        label: 'All seats equal',
+        help: 'Identify all seats in turn. Every seat, seat 1 too, becomes a session of its own; a Pulsar account signs in at the console and only runs the seats.'
+      }
     },
     mainDevices: 'Main keyboard and mouse',
     findByTouch: 'Find by touch',
@@ -2063,7 +2091,8 @@ const noticeText: Record<string, string> = {
   credprov_failed: 'The seat sign-in component could not be registered or removed; details in the service log.',
   credprov_logon_failed: 'A seat’s automatic sign-in failed with the saved password; enter the password again.',
   switch_refused: 'Could not switch to the seat; details in the service log.',
-  dpi_mismatch: 'The seat’s display scale differs from its setting (Windows chose another scale).'
+  dpi_mismatch: 'The seat’s display scale differs from its setting (Windows chose another scale).',
+  host_console: 'The automatic sign-in of the host console could not be turned on or was changed; see Advanced settings.'
 };
 
 /** Text per state / reason of the passwordless-seat listener (`loopback_listener:<state>[:<x>]`). */

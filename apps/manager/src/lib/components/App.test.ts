@@ -179,6 +179,19 @@ describe('App shell', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: t.advanced.topology }), 'dedicated_host');
     expect(store.draft?.settings.backends.host_topology).toBe('dedicated_host');
     expect(screen.queryByTestId('input-not-isolated')).toBeNull();
+    // Host console preset (OSMS parity G6): trade-offs shown, the auto-logon asks first.
+    expect(screen.getByTestId('host-tradeoffs')).toHaveTextContent(t.advanced.hostTradeoffs[0]);
+    const auto = screen.getByRole('switch', { name: t.advanced.hostAutologon });
+    await user.click(auto);
+    const ask = await screen.findByRole('alertdialog', { name: t.advanced.hostConsentTitle });
+    await user.click(within(ask).getByRole('button', { name: t.cancel }));
+    expect(store.draft?.settings.backends.host_autologon).toBeFalsy();
+    expect(screen.getByRole('switch', { name: t.advanced.hostAutologon })).toHaveAttribute('aria-checked', 'false');
+    await user.click(screen.getByRole('switch', { name: t.advanced.hostAutologon }));
+    await user.click(within(await screen.findByRole('alertdialog', { name: t.advanced.hostConsentTitle })).getByRole('button', { name: t.advanced.hostConsentConfirm }));
+    expect(store.draft?.settings.backends.host_autologon).toBe(true);
+    await user.click(screen.getByRole('switch', { name: t.advanced.hostAutologon }));
+    expect(store.draft?.settings.backends.host_autologon).toBe(false);
   });
 
   it('advanced view: TermService restart only while Remote Desktop Services is in use', async () => {

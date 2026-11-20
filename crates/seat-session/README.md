@@ -133,6 +133,11 @@ Backend tests use `fake::FakeWorld` (fake clock, WTS, launcher, registry). The `
 read-only probes (session enumeration, local users, edition, a session-local event, a private
 desktop that is never switched to).
 
+`console_account` (OSMS parity G6, 2026-11-18): the pure policy of the host console preset's
+`PulsarSeatConsole` account (name, comment, logon rights, Winlogon value names, per-user
+kiosk values, `check_engage` refusals of somebody else's auto-logon). No Windows calls; the
+service applies it. Its Windows behaviour is untested on hardware (HYPOTHESIS).
+
 ## Untested on hardware (needs a Server + RDSH box / the maintainer)
 
 - Every Windows path that changes state: registry writes of `prepare_host`, `WTSLogoffSession`,

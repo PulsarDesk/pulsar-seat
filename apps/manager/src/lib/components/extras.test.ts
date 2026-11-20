@@ -245,6 +245,32 @@ describe('wizard (main window)', () => {
     await user.click(screen.getByRole('button', { name: t.wizard.confirmSeat }));
     await vi.waitFor(() => expect(api.calls.filter((c) => c === 'wizard_command').length).toBeGreaterThanOrEqual(3));
   });
+
+  it('"All seats equal" needs the auto-logon consent and saves the dedicated host topology', async () => {
+    localStorage.clear();
+    const api = createDemoApi();
+    const store = new ManagerStore(api);
+    await store.init();
+    render(Wizard, { store, onClose: vi.fn() });
+    const user = userEvent.setup();
+    expect(screen.queryByTestId('wizard-host-consent')).toBeNull();
+    await user.click(screen.getByRole('radio', { name: new RegExp(t.wizard.variantOptions.host_console.label) }));
+    const consent = screen.getByTestId('wizard-host-consent');
+    for (const line of t.advanced.hostTradeoffs) expect(consent).toHaveTextContent(line);
+    const start = screen.getByRole('button', { name: t.wizard.start });
+    expect(start).toHaveAttribute('aria-disabled', 'true');
+    await user.click(within(consent).getByRole('checkbox', { name: t.wizard.hostConsentAccept }));
+    expect(start).not.toHaveAttribute('aria-disabled', 'true');
+    await user.click(start);
+    await vi.waitFor(() => expect(api.calls).toContain('wizard_start'));
+    await api.wizardStop(true);
+    expect(api.state.config.settings.backends.host_topology).toBe('dedicated_host');
+    expect(api.state.config.settings.backends.host_autologon).toBe(true);
+    // The demo reports the preset like the service: only while the product is enabled.
+    expect((await api.status()).host_console ?? null).toBeNull();
+    api.state.config.settings.enabled = true;
+    expect((await api.status()).host_console?.state).toBe('on');
+  });
 });
 
 describe('enable dialog (redesign P8)', () => {

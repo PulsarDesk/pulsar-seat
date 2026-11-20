@@ -13,7 +13,7 @@
   import * as M from '#lib/mask.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { DeviceKey, DeviceKind, WizardCommand, WizardVariant } from '#lib/types.ts';
-  import { Button, ChoiceList, Disclosure, Group, Icon, Kbd, Mark, Notice, Row, Section, Switch, type IconName } from '#lib/ui/index.ts';
+  import { Button, Checkbox, ChoiceList, Disclosure, Group, Icon, Kbd, Mark, Notice, Row, Section, Switch, type IconName } from '#lib/ui/index.ts';
   import { DIGIT_MONITORS, FKEY_SEATS, gatherStep, keyAction, MIN_HEIGHT, MIN_WIDTH, pageSpecs, resolutionCheck } from '#lib/wizard.ts';
 
   interface Props {
@@ -31,7 +31,9 @@
   let pagesOpen = false;
   let stopping = false;
 
-  const VARIANTS: WizardVariant[] = ['all_seats', 'keep_seat_one', 'quick_two_seats'];
+  /** `host_console` ("All seats equal", OSMS parity G6): needs the consent box below. */
+  let hostConsent = $state(false);
+  const VARIANTS: WizardVariant[] = ['all_seats', 'keep_seat_one', 'quick_two_seats', 'host_console'];
   const variantOptions = VARIANTS.map((v) => ({ value: v, label: t.wizard.variantOptions[v].label, help: t.wizard.variantOptions[v].help }));
   const KIND_ICON: Partial<Record<DeviceKind, IconName>> = {
     monitor: 'monitor',
@@ -72,7 +74,7 @@
       (v) => v.device.present && ['monitor', 'keyboard', 'mouse'].includes(v.device.kind) && M.single(eff.get(v.device.key)!.mask) === 1
     );
   });
-  const canStart = $derived(missing.length === 0 && resolution === 'ok' && !store.busy);
+  const canStart = $derived(missing.length === 0 && resolution === 'ok' && !store.busy && (variant !== 'host_console' || hostConsent));
   const blocked = $derived(missing.length > 0 || resolution !== 'ok');
 
   /** Seats in this run: one per monitor in the wizard's order. */
@@ -183,7 +185,7 @@
     started = true;
     gathering = false;
     const main = [gathered.keyboard, gathered.mouse].filter((k): k is DeviceKey => !!k);
-    if (main.length && variant !== 'all_seats') await store.run(() => store.api.wizardCommand({ cmd: 'set_main_devices', keys: main }));
+    if (main.length && variant !== 'all_seats' && variant !== 'host_console') await store.run(() => store.api.wizardCommand({ cmd: 'set_main_devices', keys: main }));
     // Extending the desktop needs the running wizard; the user consented with the switch. A
     // failure is reported (toast) and the wizard goes on without it.
     if (extend) await store.run(() => store.api.wizardCommand({ cmd: 'extend_desktop' }));
@@ -271,6 +273,17 @@
       <Section title={t.wizard.variants}>
         <ChoiceList name="wizard-variant" label={t.wizard.variantsLabel} options={variantOptions} bind:value={variant} />
       </Section>
+      {#if variant === 'host_console'}
+        <Section title={t.wizard.hostConsentHead}>
+          <div class="consent" data-testid="wizard-host-consent">
+            <p class="help">{t.advanced.hostConsentBody}</p>
+            <ul class="tradeoffs">
+              {#each t.advanced.hostTradeoffs as line (line)}<li>{line}</li>{/each}
+            </ul>
+            <Checkbox label={t.wizard.hostConsentAccept} bind:checked={hostConsent} />
+          </div>
+        </Section>
+      {/if}
       <Section title={t.wizard.seatOneDevices}>
         <Group>
           <Row label={t.wizard.mainDevices} help={gathering ? undefined : t.wizard.gatherHint}>
@@ -544,6 +557,16 @@
   .issues {
     padding-left: var(--sp-6);
     color: var(--text);
+  }
+  .consent {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .tradeoffs {
+    padding-left: var(--sp-6);
+    color: var(--text);
+    font-size: var(--fs-help);
   }
     .keys {
     display: flex;

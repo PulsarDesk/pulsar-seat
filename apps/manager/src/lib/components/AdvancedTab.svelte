@@ -197,6 +197,9 @@
     });
   }
 
+  /** Host console preset (OSMS parity G6): consent dialog before the auto-logon goes on. */
+  let hostConsentAsk = $state(false);
+  const hostState = $derived(store.status?.host_console ?? null);
   const notIsolated = $derived(draft?.settings.backends.input === 'raw_input_host' && draft?.settings.backends.host_topology === 'seat_one_console');
   const logChoice = $derived(logLevelOf(draft?.settings.log));
   const logOptions = $derived<SelectOption<LogLevelChoice>[]>([
@@ -285,6 +288,20 @@
                   />
                 {/snippet}
               </Row>
+              {#if draft.settings.backends.host_topology === 'dedicated_host'}
+                <Row label={t.advanced.hostAutologon} help={t.advanced.hostAutologonHelp}>
+                  {#snippet control()}
+                    <!-- Re-created when the consent dialog closes: a cancelled "on" must not stay on. -->
+                    {#key hostConsentAsk}
+                      <Switch
+                        checked={!!draft.settings.backends.host_autologon}
+                        label={t.advanced.hostAutologon}
+                        onchange={(on) => (on ? (hostConsentAsk = true) : settings((c) => (c.settings.backends.host_autologon = false)))}
+                      />
+                    {/key}
+                  {/snippet}
+                </Row>
+              {/if}
               {#each others as { cat, label } (cat)}
                 <Row {label} help={selectedHelp(cat)}>
                   {#snippet control()}
@@ -295,6 +312,16 @@
             </Group>
             {#if notIsolated}
               <div class="after" data-testid="input-not-isolated"><Notice kind="warn" text={t.advanced.inputNotIsolated} /></div>
+            {/if}
+            {#if draft.settings.backends.host_topology === 'dedicated_host'}
+              <ul class="after tradeoffs" data-testid="host-tradeoffs">
+                {#each t.advanced.hostTradeoffs as line (line)}<li>{line}</li>{/each}
+              </ul>
+            {/if}
+            {#if hostState && hostState.state !== 'off'}
+              <div class="after" data-testid="host-console-state">
+                <Notice kind={hostState.state === 'on' || hostState.state === 'pending_removal' ? 'info' : 'warn'} text={t.advanced.hostState[hostState.state] ?? hostState.state} />
+              </div>
             {/if}
 
             <SubLabel text={t.advancedPage.gates} />
@@ -505,6 +532,20 @@
   />
 {/if}
 
+{#if hostConsentAsk}
+  <ConfirmDialog
+    title={t.advanced.hostConsentTitle}
+    body={t.advanced.hostConsentBody}
+    warning={t.advanced.hostTradeoffs[1]}
+    confirmLabel={t.advanced.hostConsentConfirm}
+    onConfirm={() => {
+      hostConsentAsk = false;
+      settings((c) => (c.settings.backends.host_autologon = true));
+    }}
+    onCancel={() => (hostConsentAsk = false)}
+  />
+{/if}
+
 {#if restartAsk}
   <ConfirmDialog
     title={t.advanced.restartTsTitle}
@@ -543,6 +584,11 @@
 {/if}
 
 <style>
+  .tradeoffs {
+    padding-left: var(--sp-6);
+    color: var(--text-muted);
+    font-size: var(--fs-help);
+  }
   .sections {
     min-width: 0;
   }

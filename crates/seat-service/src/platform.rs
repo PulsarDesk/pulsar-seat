@@ -336,6 +336,13 @@ pub trait Platform: Send + Sync {
         let _ = want;
         Ok(false)
     }
+    /// Host console preset (`crate::host_console::sync` with the real system and the
+    /// journal in the data folder): auto-logon of Pulsar's console account on (`want`) or
+    /// restored. Default: never applied (`failed` / `unsupported` when wanted).
+    fn sync_host_console(&self, want: bool) -> seat_proto::HostConsoleReport {
+        use seat_proto::{HostConsoleReport, HostConsoleState};
+        if want { HostConsoleReport::new(HostConsoleState::Failed, Some("unsupported")) } else { HostConsoleReport::new(HostConsoleState::Off, None) }
+    }
     /// The user's default-terminal setting (`DelegationConsole`, `DelegationTerminal`;
     /// `None` = absent) in their loaded hive (`crate::kiosk_console`). Err when the hive is
     /// not loaded. Default: unsupported.
@@ -554,6 +561,8 @@ pub mod mock {
         pub sleep_off: Mutex<Option<bool>>,
         /// `steam_proxy` actions.
         pub steam_actions: Mutex<Vec<seat_proto::steam::SteamProxyAction>>,
+        /// `sync_host_console` calls (the `want` flag), in order.
+        pub host_console_calls: Mutex<Vec<bool>>,
         next_pid: AtomicU32,
     }
 
@@ -822,6 +831,11 @@ pub mod mock {
             let e = d.get_mut(sid).ok_or_else(|| format!("hive of {sid} not loaded"))?;
             *e = (console.map(str::to_string), terminal.map(str::to_string));
             Ok(())
+        }
+        fn sync_host_console(&self, want: bool) -> seat_proto::HostConsoleReport {
+            use seat_proto::{HostConsoleReport, HostConsoleState};
+            lock(&self.host_console_calls).push(want);
+            HostConsoleReport::new(if want { HostConsoleState::On } else { HostConsoleState::Off }, None)
         }
         fn sync_credential_provider(&self, want: bool) -> Result<bool, String> {
             if self.credprov_fail.load(Ordering::SeqCst) {

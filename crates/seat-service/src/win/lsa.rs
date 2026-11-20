@@ -107,6 +107,13 @@ pub fn get_named(name: &str) -> Result<Option<Secret>, StoreError> {
     with_named(name, |v| v.map(|s| Secret::new(String::from_utf16_lossy(s))))
 }
 
+/// Whether the secret `name` exists. Presence only: the LSA buffer is wiped and freed
+/// without building a [`Secret`] (the host console preset checks Winlogon's
+/// `DefaultPassword` this way and never keeps a human's password).
+pub fn has_named(name: &str) -> Result<bool, StoreError> {
+    with_named(name, |v| v.is_some())
+}
+
 /// Store (`Some`) or delete (`None`; a missing secret is fine) the local secret `name`.
 pub fn set_named(secret: &str, value: Option<&Secret>) -> Result<(), StoreError> {
     let p = open(POLICY_CREATE_SECRET)?;

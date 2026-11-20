@@ -925,6 +925,25 @@ const t = {
     backends: 'Çalışma yöntemleri',
     session: 'Oturum yöntemi',
     topology: 'Koltuk sunucularının yeri',
+    hostAutologon: 'Ana konsolda otomatik oturum aç',
+    hostAutologonHelp:
+      'Her açılışta Windows, fiziksel konsolda bir Pulsar hesabıyla oturum açar. Bu oturum yalnızca koltuk sunucularını çalıştırır; böylece 1. koltuk dahil her koltuk kendi oturumu olur.',
+    hostTradeoffs: [
+      '1. koltuk konsolun yerel grafik hızını kaybeder: görüntüsü diğer koltuklar gibi yakalama üzerinden gider.',
+      'Windows, otomatik oturum açma için bu hesabın parolasını korumalı bir sistem sırrı (LSA) olarak saklar. Parola hiçbir zaman kayıt defterine yazılmaz.',
+      'Fiziksel konsoldaki Ctrl+Alt+Del ve güvenli masaüstü bir kişiye değil, ana hesaba aittir.'
+    ],
+    hostConsentTitle: 'Ana konsolda otomatik oturum açılsın mı?',
+    hostConsentBody:
+      'Pulsar Seat, PulsarSeatConsole adlı standart bir hesap oluşturur ve bu hesap için Windows otomatik oturum açmasını açar. Eski oturum açma ayarları kaydedilir; bunu kapattığınızda veya kaldırdığınızda geri gelir.',
+    hostConsentConfirm: 'Aç',
+    hostState: {
+      on: 'Ana hesap otomatik olarak oturum açıyor.',
+      refused: 'Açılmadı: bu bilgisayarda başka bir otomatik oturum açma ayarlı. Önce onu kapatın.',
+      failed: 'Açılamadı; ayrıntı hizmet günlüğünde.',
+      drifted: 'Otomatik oturum açma ayarları Pulsar Seat dışında değiştirildi; olduğu gibi bırakıldı.',
+      pending_removal: 'Kapatıldı. Ana hesap oturumu kapandıktan sonra (en geç bir sonraki yeniden başlatmada) silinir.'
+    } as Record<string, string>,
     display: 'Ekran yöntemi',
     input: 'Giriş yöntemi',
     audio: 'Ses yöntemi',
@@ -1544,6 +1563,9 @@ const t = {
     all_seats: 'Her koltukta ayrı klavye ve fare var: bütün koltukları (1. dahil) sırayla tanıt',
     keep_seat_one: '1. koltuğun şu anki aygıtları kalsın: yalnızca 2. ve sonraki koltukları tanıt',
     quick_two_seats: 'Hızlı iki koltuk: 1. koltuğun aygıtları 1. koltukta, geri kalan her şey 2. koltukta',
+    host_console: 'Tüm koltuklar eşit: her koltuk kendi oturumu olur, konsolu bir Pulsar hesabı tutar',
+    hostConsentHead: '“Tüm koltuklar eşit” seçmeden önce',
+    hostConsentAccept: 'Anladım: konsol hesabını oluştur ve otomatik oturum açmasını aç',
     seatOneDevices: '1. koltuk için kullanılacak aygıtlar',
     extend: 'Masaüstünü bütün ekranlara genişlet (önerilir)',
     start: 'Sihirbazı başlat',
@@ -1596,7 +1618,11 @@ const t = {
     variantOptions: {
       all_seats: { label: 'Her koltukta ayrı klavye ve fare var', help: 'Bütün koltukları (1. dahil) sırayla tanıtın.' },
       keep_seat_one: { label: '1. koltuğun şu anki aygıtları kalsın', help: 'Yalnızca 2. ve sonraki koltukları tanıtın.' },
-      quick_two_seats: { label: 'Hızlı iki koltuk', help: '1. koltuğun aygıtları 1. koltukta kalır, geri kalan her şey 2. koltuğa gider.' }
+      quick_two_seats: { label: 'Hızlı iki koltuk', help: '1. koltuğun aygıtları 1. koltukta kalır, geri kalan her şey 2. koltuğa gider.' },
+      host_console: {
+        label: 'Tüm koltuklar eşit',
+        help: 'Tüm koltukları sırayla tanıtın. 1. koltuk dahil her koltuk kendi oturumu olur; konsolda bir Pulsar hesabı oturum açar ve yalnızca koltukları çalıştırır.'
+      }
     },
     mainDevices: 'Ana klavye ve fare',
     findByTouch: 'Dokunarak bul',
@@ -2059,7 +2085,8 @@ const noticeText: Record<string, string> = {
   credprov_failed: 'Koltuk oturum açma bileşeni kaydedilemedi ya da kaldırılamadı; ayrıntı hizmet günlüğünde.',
   credprov_logon_failed: 'Bir koltuğun kendiliğinden oturum açması kayıtlı parolayla başarısız oldu; parolayı yeniden girin.',
   switch_refused: 'Koltuğa geçilemedi; ayrıntı hizmet günlüğünde.',
-  dpi_mismatch: 'Koltuğun ekran ölçeği ayarından farklı (Windows başka bir ölçek seçti).'
+  dpi_mismatch: 'Koltuğun ekran ölçeği ayarından farklı (Windows başka bir ölçek seçti).',
+  host_console: 'Ana konsolun otomatik oturum açması açılamadı ya da değiştirildi; Gelişmiş ayarlara bakın.'
 };
 
 /** Text per state / reason of the passwordless-seat listener (`loopback_listener:<state>[:<x>]`). */

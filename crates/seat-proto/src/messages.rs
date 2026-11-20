@@ -765,6 +765,10 @@ pub struct ServiceStatus {
     pub wizard_running: bool,
     /// Last event `seq` (for `poll_events`).
     pub last_event_seq: u64,
+    /// Host console preset (OSMS parity G6, 2026-11-18, additive); `None` = off (and from
+    /// older services).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_console: Option<HostConsoleReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -939,6 +943,44 @@ pub enum WizardVariant {
     KeepSeatOne,
     /// Seat-1 devices on seat 1, everything else on seat 2, no capture.
     QuickTwoSeats,
+    /// "All seats equal" (OSMS parity G6, 2026-11-18, additive): captures seats 1..N like
+    /// `all_seats`, and the saved result also sets `host_topology = dedicated_host` and
+    /// `host_autologon = true` (the manager shows the consent step before it starts this).
+    HostConsole,
+}
+
+/// State of the host console preset (`settings.backends.host_autologon`, OSMS parity G6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostConsoleState {
+    /// Not wanted and nothing of it left.
+    Off,
+    /// The console account signs in automatically.
+    On,
+    /// Not applied: an auto-logon of somebody else is configured (`reason` says which).
+    Refused,
+    /// A step failed; what was done is rolled back (or retried at the next sync).
+    Failed,
+    /// Applied earlier, but the Winlogon values were changed since; left alone.
+    Drifted,
+    /// Turned off; the console account is still signed in and is removed once it is not.
+    PendingRemoval,
+}
+
+/// Last result of the host console sync (`ServiceStatus::host_console`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostConsoleReport {
+    pub state: HostConsoleState,
+    /// Snake_case code (`other_autologon`, `registry_password`, `default_password_present`,
+    /// `auto_logon_count`, `account`, `winlogon`, `lsa`, `journal`, `sleep_off`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl HostConsoleReport {
+    pub fn new(state: HostConsoleState, reason: Option<&str>) -> Self {
+        Self { state, reason: reason.map(str::to_string) }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -198,6 +198,8 @@ Seat sessions 2..N (RDP sessions on RDSH / wrapped TermService)
   the documented auto-logon of that host account (maintainer decision, spec 30 §6.2.1).
   The console account gets lock and screen saver off (`console_guard.host_lock_off`, default
   on) and the preflight asks for `sleep_off` ("Console lock guard").
+  The opt-in `settings.backends.host_autologon` ("host console" preset, OSMS parity G6,
+  2026-11-18) does that sign-in; see "Host console preset" at the end of this file.
 
 ## 4. Backends
 
@@ -2471,3 +2473,74 @@ the value a seat monitor shows about 30 fps.
   under the wrapper, that a reconnect is enough (no TermService restart), and that the
   floor interval is smooth without `smooth`. If `WinStations` is not enough, add
   `RDP-Tcp\DWMFRAMEINTERVAL` behind its own HYPOTHESIS note.
+
+## Host console preset (OSMS parity G6, 2026-11-18)
+
+"All seats equal": the physical console belongs to a Pulsar account that only runs the seat
+hosts, and every seat, seat 1 included, is a session of its own (OSMS's recommended "host
+console user with autologon", `docs/puestos-locales.md` there). Opt-in, with a visible
+consent step. **Everything here is untested on hardware (HYPOTHESIS).**
+
+- **Config.** `settings.backends.host_autologon: bool` (additive, default `false`, omitted
+  when false). Wanted = product enabled + `host_topology = dedicated_host` + this flag
+  (`Service::host_console_wanted`). Ignored under `seat_one_console`.
+- **Wizard.** `WizardVariant::HostConsole` (`host_console`) captures seats 1..N like
+  `all_seats`; its saved result also sets `dedicated_host` and `host_autologon = true`. The
+  manager shows the trade-offs and needs a ticked consent box before it starts this variant.
+  Advanced settings: under `dedicated_host` a switch "Sign the host console in automatically"
+  that asks the same consent in a dialog, the trade-off list, and the last sync state.
+- **Account.** `PulsarSeatConsole` (`seat_session::console_account`), not `PulsarSeatHost`.
+  Deviation from the plan's "autologon of PulsarSeatHost": that account is batch-logon only
+  and explicitly denied interactive logon (contained host token, `host_account::DENY_RIGHTS`),
+  and Winlogon's auto-logon needs exactly interactive logon. Giving it that right would widen
+  the contained seat-host account. The console account is a standard user (`Users` only,
+  never `Administrators`, so no UAC prompt), hidden from the logon screen, marked by its
+  comment (a same-named account with another comment is never taken over or deleted),
+  granted `SeInteractiveLogonRight` only, denied RDP / network / batch / service logon.
+- **Winlogon.** `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon` (64-bit view on
+  x64 and ARM64 alike): `DefaultDomainName = "."`, `DefaultUserName = PulsarSeatConsole`,
+  `AutoAdminLogon = "1"` last. The password goes only into the LSA private data
+  `DefaultPassword` (`LsaStorePrivateData`), never into the registry; the same freshly
+  generated password is in SAM and in Pulsar's `L$PulsarSeat.ConsoleAccount`, written in one
+  step so they never differ. It is rotated each time the preset is switched on, not per boot.
+- **Refusals.** Somebody else's auto-logon is never replaced or read: `AutoAdminLogon = 1`
+  for another user, a clear-text registry `DefaultPassword` (presence checked by size only),
+  an LSA `DefaultPassword` Pulsar did not write (presence only, buffer wiped), or
+  `AutoLogonCount` give the state `refused` with a reason code.
+- **Kiosk values.** `sleep_off` (the existing journaled compat tweak: display / sleep
+  time-outs 0 on the active plan) while the preset is on, reverted only when the preset
+  changed something. In the console account's own hive while it is loaded:
+  `DisableLockWorkstation = 1`, screen saver off (policy keys). `PromptOnSecureDesktop` is
+  **not** turned off machine-wide (that would weaken the human seats too).
+- **Journal.** `journal\host-console.json` (previous Winlogon values, no password, phase
+  `engaging` / `on` / `pending_removal`, whether `sleep_off` was ours). Written before the
+  first change. A failure mid-engage rolls back; a crash mid-engage (phase `engaging`) is
+  rolled back by the next sync before anything else.
+- **Restore.** When the preset, `dedicated_host` or the product goes off, and at uninstall:
+  Winlogon values back (only while they still name our account; values someone changed since
+  are left alone), LSA `DefaultPassword` deleted, `sleep_off` reverted, the account deleted
+  with its profile and secret. If the account is the signed-in console user at that moment it
+  is disabled and its secret forgotten; it is deleted at a later sync (next boot at the
+  latest; auto-logon is already off). Not restored at seat stop or service stop on purpose:
+  the service stops at every shutdown and the preset must sign the console in at the next
+  boot. Not touched in any safe mode (a power loss must not take the auto-logon away).
+  The console keyboard and mouse keep working: the host session is an ordinary interactive
+  session, and an administrator can always use "Other user" at the logon screen.
+- **When it syncs.** Service start (with the tweaks), product enable / disable, a change of
+  `host_topology` or `host_autologon`, every console logon under `dedicated_host`.
+- **Status.** `ServiceStatus.host_console: Option<HostConsoleReport>` (additive; `None` =
+  off): `on`, `refused`, `failed`, `drifted` (values changed outside Pulsar, left alone),
+  `pending_removal`, plus a reason code. `refused` / `failed` / `drifted` also raise the
+  notice `host_console`.
+- **Not in the preset.** G4 (guard) and G2 (WinUSB capture) are separate items; under
+  `dedicated_host` `raw_input_host` already isolates input fully in user mode, so G2 is extra
+  hardening. Unlike OSMS, a full primary monitor may still be a seat (our console presents
+  seat 1 like seats 2..N).
+- **Open.** The maintainer's OK for spec 30 §6.2.1 (auto-logon of a service-owned account) is
+  needed before shipping. The VM guest writer (`win/vm_guest.rs`) keeps its own Winlogon code:
+  it runs inside a guest with a guest-side user and different restore rules; sharing it was
+  not worth coupling the two paths.
+- **Code.** Pure policy `seat_session::console_account`; order and restore
+  `seat_service::host_console` (mock-tested: order, refusals, rollback, crash, drift, signed-in
+  account, `sleep_off` ownership); Windows calls `seat_service::win::host_console`; uninstall
+  in `win::setup::uninstall`.

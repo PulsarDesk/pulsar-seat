@@ -656,6 +656,13 @@ impl Wizard {
         for (k, seat) in &placed {
             set(&mut cfg, k, *seat);
         }
+        if self.variant == WizardVariant::HostConsole {
+            // "All seats equal" (OSMS parity G6): every seat, seat 1 included, is a session
+            // of its own and Pulsar's console account owns the console (the manager showed
+            // the consent step for the auto-logon before starting this variant).
+            cfg.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+            cfg.settings.backends.host_autologon = true;
+        }
         cfg
     }
 }
@@ -768,6 +775,30 @@ mod tests {
         assert_eq!(mask("mou;a"), s1.mask());
         assert_eq!(mask("mon;2"), s2.mask());
         assert_eq!(mask("aout;2"), s2.mask());
+    }
+
+    /// "All seats equal" (OSMS parity G6): captures seat 1 too and turns on the dedicated
+    /// host topology with the console auto-logon; the other variants leave both alone.
+    #[test]
+    fn host_console_variant_sets_dedicated_host_and_autologon() {
+        use seat_core::backend::session::HostTopology;
+        let inv = inv();
+        let mut w = started(WizardVariant::HostConsole, &inv);
+        assert!(!w.keep_seat_one);
+        assert_eq!(w.progress().seat, Some(SeatNumber::CONSOLE), "seat 1 is captured like the others");
+        w.on_activity(&key("kbd;a", 0x3b), &inv, 0);
+        w.on_activity(&key("kbd;a", 0x3b), &inv, 0);
+        w.on_activity(&click("mou;a"), &inv, 0);
+        w.on_activity(&click("mou;a"), &inv, 0);
+        let c = w.result(&Config::default(), &inv);
+        assert_eq!(c.settings.backends.host_topology, HostTopology::DedicatedHost);
+        assert!(c.settings.backends.host_autologon);
+        assert_eq!(c.devices.iter().find(|a| a.key.as_str() == "kbd;a").unwrap().mask, SeatNumber::CONSOLE.mask());
+        for v in [WizardVariant::AllSeats, WizardVariant::KeepSeatOne] {
+            let c = started(v, &inv).result(&Config::default(), &inv);
+            assert_eq!(c.settings.backends.host_topology, HostTopology::SeatOneConsole, "{v:?}");
+            assert!(!c.settings.backends.host_autologon, "{v:?}");
+        }
     }
 
     #[test]

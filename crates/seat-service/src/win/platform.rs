@@ -1112,6 +1112,18 @@ impl Platform for WinPlatform {
         crate::win::console_delegation::set(sid, console, terminal)
     }
 
+    fn sync_host_console(&self, want: bool) -> seat_proto::HostConsoleReport {
+        // Only the real service in session 0 (`--console` dev runs never touch Winlogon).
+        if !crate::win::console_runner::in_session_zero() {
+            return seat_proto::HostConsoleReport::new(
+                if want { seat_proto::HostConsoleState::Failed } else { seat_proto::HostConsoleState::Off },
+                want.then_some("not_session_zero"),
+            );
+        }
+        let user = self.console_session().and_then(|s| self.session_user(s)).map(|u| u.name);
+        super::host_console::sync(&self.data_dir, user, want)
+    }
+
     fn sync_credential_provider(&self, want: bool) -> Result<bool, String> {
         use seat_session::credprov::{self, Registration};
         use seat_session::win::registry::WinRegistry;
@@ -1192,7 +1204,7 @@ impl Platform for WinPlatform {
                     for u in std::slice::from_raw_parts(buf as *const USER_INFO_20, read as usize) {
                         let name = from_wide_ptr(u.usri20_name);
                         // The seat hosts' own accounts are never offered as seat users.
-                        if seat_session::host_account::is_host_account_name(&name) {
+                        if seat_session::host_account::is_host_account_name(&name) || seat_session::console_account::is_console_account_name(&name) {
                             continue;
                         }
                         let sid = account_sid(&name).unwrap_or_default();

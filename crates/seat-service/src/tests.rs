@@ -1063,6 +1063,44 @@ fn tweaks_follow_config_and_product_switch() {
     assert!(crate::images::lock_image_path(&h.dir).is_file());
 }
 
+/// Host console preset (OSMS parity G6): wanted only with the product enabled,
+/// `dedicated_host` and `host_autologon`; never touched in a safe mode (a power loss must
+/// not take the auto-logon away); the status reports it.
+#[test]
+fn host_console_follows_topology_preset_and_product_switch() {
+    use seat_core::backend::session::HostTopology;
+    let h = harness();
+    h.s.lock().config.settings.enabled = true;
+    h.s.sync_host_console();
+    assert_eq!(h.p.host_console_calls.lock().unwrap().last(), Some(&false), "off by default");
+    assert!(h.s.status().host_console.is_none());
+    // The preset without dedicated_host does nothing.
+    h.s.lock().config.settings.backends.host_autologon = true;
+    h.s.sync_host_console();
+    assert_eq!(h.p.host_console_calls.lock().unwrap().last(), Some(&false));
+    h.s.lock().config.settings.backends.host_topology = HostTopology::DedicatedHost;
+    h.s.sync_host_console();
+    assert_eq!(h.p.host_console_calls.lock().unwrap().last(), Some(&true));
+    assert_eq!(h.s.status().host_console.map(|r| r.state), Some(seat_proto::HostConsoleState::On));
+    // Any safe mode: not touched at all (even with the product disabled).
+    h.s.lock().config.settings.enabled = false;
+    for r in [
+        seat_core::state::SafeModeReason::UncleanShutdown,
+        seat_core::state::SafeModeReason::CrashLoop,
+        seat_core::state::SafeModeReason::WindowsSafeMode,
+    ] {
+        let n = h.p.host_console_calls.lock().unwrap().len();
+        h.s.lock().safe_reason = Some(r);
+        h.s.sync_host_console();
+        assert_eq!(h.p.host_console_calls.lock().unwrap().len(), n, "{r:?}");
+    }
+    // A disabled product restores it.
+    h.s.lock().safe_reason = None;
+    h.s.sync_host_console();
+    assert_eq!(h.p.host_console_calls.lock().unwrap().last(), Some(&false));
+    assert!(h.s.status().host_console.is_none());
+}
+
 #[test]
 fn cpu_issues_map_to_config_issues() {
     use seat_proto::CpuSetInfo;

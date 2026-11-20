@@ -102,6 +102,8 @@ pub(crate) struct State {
     pub waiting_seat_one_logon: bool,
     pub last_session_poll_ms: u64,
     pub reboot_pending: bool,
+    /// Last host console preset sync (`host_console`); `None` = off.
+    pub host_console: Option<seat_proto::HostConsoleReport>,
     pub backend_errors: Vec<String>,
     /// Boot phase 1 result ([`Service::boot_prepare`]); `None` until it ran.
     pub boot_decision: Option<runstate::BootDecision>,
@@ -242,6 +244,7 @@ impl Service {
                 waiting_seat_one_logon: false,
                 last_session_poll_ms: now,
                 reboot_pending: false,
+                host_console: None,
                 backend_errors: Vec::new(),
                 boot_decision: None,
                 deny_logoff: BTreeMap::new(),
@@ -1301,6 +1304,8 @@ impl Service {
         self.update_console_guard();
         // The credential provider follows the same switch (and the active backend).
         self.sync_credprov();
+        // So does the host console preset's auto-logon (OSMS parity G6).
+        self.sync_host_console();
         for o in out {
             match o.result {
                 Ok(()) => log::debug(&format!("tweak {} in line with the config", o.tweak)),

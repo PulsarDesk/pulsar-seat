@@ -214,8 +214,37 @@ pub fn ensure_kiosk(ops: &dyn AccountOps, seat: SeatNumber) -> Result<HostAccoun
     ensure_account_as(ops, &kiosk_account_name(seat), &kiosk_password_secret(seat), None, &KIOSK_PROFILE)
 }
 
+/// The console account of the host console preset (`seat_session::console_account`:
+/// interactive logon only, never batch / RDP / network / service).
+pub const CONSOLE_PROFILE: AccountProfile = AccountProfile {
+    full_name: &seat_session::console_account::CONSOLE_FULL_NAME,
+    comment: &seat_session::console_account::CONSOLE_COMMENT,
+    grant: seat_session::console_account::CONSOLE_GRANT_RIGHTS,
+    deny: seat_session::console_account::CONSOLE_DENY_RIGHTS,
+};
+
+/// Pulsar's console account (`PulsarSeatConsole`, created or maintained, password rotated,
+/// `Users` only). Returns the new password too: the caller hands the same value to the
+/// Winlogon auto-logon secret, so the two never differ (seat-service `host_console`).
+pub fn ensure_console(ops: &dyn AccountOps) -> Result<(HostAccount, Secret), String> {
+    use seat_session::console_account::{CONSOLE_ACCOUNT_NAME, CONSOLE_PASSWORD_SECRET};
+    ensure_account_keep(ops, CONSOLE_ACCOUNT_NAME, CONSOLE_PASSWORD_SECRET, None, &CONSOLE_PROFILE)
+}
+
+/// Remove Pulsar's console account with its profile and stored password (preset off,
+/// uninstall). A name Pulsar did not create is left alone. Returns the errors.
+pub fn remove_console_account(ops: &dyn AccountOps) -> Vec<String> {
+    use seat_session::console_account::{CONSOLE_ACCOUNT_NAME, CONSOLE_PASSWORD_SECRET};
+    remove_named_with(ops, CONSOLE_ACCOUNT_NAME, CONSOLE_PASSWORD_SECRET, true)
+}
+
 /// [`ensure_account`] for any [`AccountProfile`].
 pub fn ensure_account_as(ops: &dyn AccountOps, name: &str, secret: &str, group_sid: Option<&str>, profile: &AccountProfile) -> Result<HostAccount, String> {
+    ensure_account_keep(ops, name, secret, group_sid, profile).map(|(a, _)| a)
+}
+
+/// [`ensure_account_as`] that also returns the password it set (and stored in `secret`).
+fn ensure_account_keep(ops: &dyn AccountOps, name: &str, secret: &str, group_sid: Option<&str>, profile: &AccountProfile) -> Result<(HostAccount, Secret), String> {
     let bytes = ops.random32()?;
     let password = Secret::new(password_from_random(&bytes).to_string());
     drop(bytes);
@@ -275,7 +304,7 @@ pub fn ensure_account_as(ops: &dyn AccountOps, name: &str, secret: &str, group_s
         }
         return Err(e);
     }
-    Ok(HostAccount { name: name.into(), sid })
+    Ok((HostAccount { name: name.into(), sid }, password))
 }
 
 /// Console copy of the uninstall steps (English default, Turkish locale; `seat_core::i18n`).
@@ -467,6 +496,11 @@ pub fn remove_all(ops: &dyn AccountOps, remove_user_data: bool) -> Vec<String> {
         }
     }
     errors.extend(prune_kiosk(ops, &[], remove_user_data));
+    // The host console preset's account (its Winlogon values are restored before this, by
+    // the preset's own journal; a leftover account is only ever ours by its comment).
+    if let Ok(Lookup::User(_)) = ops.lookup(seat_session::console_account::CONSOLE_ACCOUNT_NAME) {
+        errors.extend(remove_console_account(ops));
+    }
     match ops.group_lookup(GROUP_NAME) {
         Ok(GroupLookup::Ours(_)) => {
             if let Err(e) = ops.delete_group(GROUP_NAME) {
@@ -525,7 +559,12 @@ mod tests {
             Ok(if l.len() > 1 { l.remove(0) } else { l[0].clone() })
         }
         fn create(&self, n: &str, p: &Secret, full: &str, _c: &str) -> Result<(), String> {
-            assert!(seat_session::host_account::is_host_account_name(n) || seat_session::kiosk_account::is_kiosk_account_name(n), "{n}");
+            assert!(
+                seat_session::host_account::is_host_account_name(n)
+                    || seat_session::kiosk_account::is_kiosk_account_name(n)
+                    || seat_session::console_account::is_console_account_name(n),
+                "{n}"
+            );
             assert!(!full.is_empty());
             self.passwords.lock().unwrap().push(p.expose().to_string());
             self.call("create")

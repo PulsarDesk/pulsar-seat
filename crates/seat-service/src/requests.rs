@@ -544,6 +544,7 @@ impl Service {
             os_build_changed: st.os_build_changed,
             wizard_running: st.wizard.is_some(),
             last_event_seq: self.events.last_seq(),
+            host_console: st.host_console.clone(),
         }
     }
 
@@ -650,6 +651,11 @@ impl Service {
         let prepared = old.settings.backends != cfg.settings.backends && self.reselect_backends();
         if crate::compat::compat_changed(&old, &cfg) {
             self.spawn(|s| s.sync_tweaks());
+        } else if (old.settings.backends.host_topology, old.settings.backends.host_autologon)
+            != (cfg.settings.backends.host_topology, cfg.settings.backends.host_autologon)
+        {
+            // Host console preset (OSMS parity G6): auto-logon on / restored.
+            self.spawn(|s| s.sync_host_console());
         }
         if old.seats.len() != cfg.seats.len() {
             self.spawn(|s| s.ensure_images());

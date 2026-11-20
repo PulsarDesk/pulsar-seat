@@ -73,13 +73,17 @@ mod copy {
     pub const UPDATES_DIR: Text = Text::new("Warning: the update folder could not be deleted: {0}", "Uyarı: güncelleme klasörü silinemedi: {0}");
     pub const DATA_DIR: Text = Text::new("Warning: the data folder could not be deleted: {0}", "Uyarı: veri klasörü silinemedi: {0}");
     pub const LEGACY_DIR: Text = Text::new("Warning: the old data folder ({0}) could not be deleted: {1}", "Uyarı: eski veri klasörü ({0}) silinemedi: {1}");
+    pub const HOST_CONSOLE: Text = Text::new(
+        "Warning: the host console auto-logon could not be fully undone ({0}); check AutoAdminLogon under HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon.",
+        "Uyarı: ana konsol otomatik oturum açması tam geri alınamadı ({0}); HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon altındaki AutoAdminLogon değerini denetleyin.",
+    );
 
     #[cfg(test)]
     pub const ALL: &[(&str, &Text)] = seat_core::text_table![
         BLOCKED, WARNING, ERROR, WARNING_LINE, JOURNAL_OPEN_FAILED, JOURNAL_FAILED, SETUP_LOG_FAILED, INSTALLED, UNINSTALLED,
         GATE_DEVICE_SECURITY, GATE_PRINTER_ACL, GATE_CAMERA_CONSENT, GATE_DRIVE_LETTERS, GATE_MINIFILTER, RDS_SETTINGS,
         REMOTE_PARTIAL, REVERT_FAILED_IN, REVERT_FAILED_SEQ, FIREWALL_RULE_KEPT, KIOSK_TERMINAL, CREDPROV, WRDS, SEAT_PASSWORD,
-        REMOTE_SECRET, DESKTOP_ACE, NOT_STOPPED, STATE_UNKNOWN, UPDATES_DIR, DATA_DIR, LEGACY_DIR
+        REMOTE_SECRET, DESKTOP_ACE, NOT_STOPPED, STATE_UNKNOWN, UPDATES_DIR, DATA_DIR, LEGACY_DIR, HOST_CONSOLE
     ];
 }
 
@@ -328,6 +332,16 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
             for e in super::containment::revoke_all_at_uninstall(&run) {
                 eprintln!("{}", copy::DESKTOP_ACE.fmt(&[&e]));
                 code = code.max(setup::EXIT_PARTIAL);
+            }
+            // Host console preset (OSMS parity G6): Winlogon auto-logon values back, the
+            // LSA DefaultPassword and the console account gone (from its journal).
+            if crate::host_console::journal_path(data_dir).exists() {
+                let r = super::host_console::sync(data_dir, None, false);
+                if r.state != seat_proto::HostConsoleState::Off {
+                    let why = format!("{:?} {}", r.state, r.reason.as_deref().unwrap_or("")).trim().to_lowercase();
+                    eprintln!("{}", copy::HOST_CONSOLE.fmt(&[&why]));
+                    code = code.max(setup::EXIT_PARTIAL);
+                }
             }
             for e in super::host_account::remove(opts.remove_user_data) {
                 eprintln!("{}", copy::WARNING_LINE.fmt(&[&e]));

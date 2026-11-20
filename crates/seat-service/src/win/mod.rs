@@ -6,6 +6,7 @@ pub mod console_runner;
 pub mod containment;
 pub mod eventlog;
 pub mod host_account;
+pub mod host_console;
 pub mod kiosk_logon;
 pub mod lsa;
 pub mod pipe;
