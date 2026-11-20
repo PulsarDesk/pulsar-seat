@@ -58,6 +58,9 @@ mod flow;
 mod host;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod ironrdp;
+// In-session capture reader (`local.frame_source = session_capture`, OSMS-parity G1).
+#[cfg_attr(not(windows), allow(dead_code))]
+mod capture;
 mod pipe;
 
 // Input forwarding (input package).

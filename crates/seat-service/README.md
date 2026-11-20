@@ -122,6 +122,11 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
 
 ## Untested on hardware
 
+- In-session capture broker (OSMS-parity G1, `capture.rs`, `win/handle_broker.rs`): the
+  agent's capture offer, `host_capture_ring` and `DuplicateHandle` from the agent into the
+  contained seat host (HYPOTHESIS: a low-integrity host can use the duplicated texture,
+  section and event handles). Unit-tested with the mock platform only.
+
 Everything that needs LocalSystem or elevation: running under the SCM, install /
 uninstall, folder take-over as SYSTEM (owner `BA`, rename aside), LSA private data,
 `WTSQueryUserToken` / `CreateProcessAsUserW` launch of agents, SYSTEM-token launch of

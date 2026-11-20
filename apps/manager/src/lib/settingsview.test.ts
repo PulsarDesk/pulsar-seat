@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { demoConfig } from './demo.ts';
 import { t } from './i18n.ts';
-import { normalize, setGpuPreference, setStartupApps, setVirtualPads } from './model.ts';
+import { normalize, setFrameSource, setGpuPreference, setStartupApps, setVirtualPads } from './model.ts';
 import { logLevelOf, logSettingsFor, seatDisplayName, seatFacts } from './settingsview.ts';
 
 describe('settings view helpers (redesign P4)', () => {
@@ -24,6 +24,9 @@ describe('settings view helpers (redesign P4)', () => {
     expect(facts).toContain(t.basic.appsCount(1).toLowerCase());
     expect(facts).toContain(t.settingsPage.padsFact);
     expect(facts).toContain(t.settingsPage.gpuFact);
+    expect(facts).not.toContain(t.settingsPage.captureFact);
+    c = setFrameSource(c, 2, 'session_capture');
+    expect(seatFacts(c, two(), false)).toContain(t.settingsPage.captureFact);
   });
 
   it('maps the three log switches to one choice and back without losing a custom mix', () => {

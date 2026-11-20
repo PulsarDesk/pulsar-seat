@@ -34,6 +34,7 @@ import {
   formatArgs,
   setStartupApps,
   setVirtualPads,
+  setFrameSource,
   setGpuPreference,
   setDisplayOption,
   gpuPrefAppValid,
@@ -318,6 +319,15 @@ describe('virtual pads', () => {
     const off = setVirtualPads(on, 2, false);
     expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('virtual_pads');
     expect(demoConfig().seats.find((s) => s.number === 2)!.local?.virtual_pads).toBeUndefined();
+  });
+});
+
+describe('frame source', () => {
+  it('stores session capture and removes the field for the default', () => {
+    const on = setFrameSource(demoConfig(), 2, 'session_capture');
+    expect(on.seats.find((s) => s.number === 2)!.local?.frame_source).toBe('session_capture');
+    const off = setFrameSource(on, 2, 'rdp_decode');
+    expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('frame_source');
   });
 });
 

@@ -32,6 +32,7 @@ import {
   type KioskShell,
   type KioskShellApp,
   type GpuPreference,
+  type LocalFrameSource,
   type LocalSeat,
   MAX_KIOSK_APPS,
   type MaskSource,
@@ -316,6 +317,17 @@ export function setVirtualPads(c: Config, n: SeatNumber, on: boolean): Config {
     if (!l) return;
     if (on) l.virtual_pads = true;
     else delete l.virtual_pads;
+  });
+}
+
+/** Picture source of a local seat (OSMS-parity G1; `rdp_decode` = field removed, as the
+ *  service writes it). */
+export function setFrameSource(c: Config, n: SeatNumber, source: LocalFrameSource): Config {
+  return editSeat(c, n, (s) => {
+    const l = localMut(s);
+    if (!l) return;
+    if (source === 'session_capture') l.frame_source = source;
+    else delete l.frame_source;
   });
 }
 

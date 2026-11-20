@@ -263,6 +263,7 @@ mod tests {
             listener_cert_sha1: vec![],
             input: Default::default(),
             redirection: Default::default(),
+            frame_source: Default::default(),
         }
     }
 

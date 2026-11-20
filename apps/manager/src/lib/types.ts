@@ -249,7 +249,13 @@ export interface LocalSeat {
   /** Programs that prefer a GPU (`UserGpuPreferences` of the seat user, spec 40 §6.4).
    *  Absent = off. Added 2026-11-17. */
   gpu_preference?: GpuPreference;
+  /** Where the seat host gets the seat's picture (`seat_core::config::LocalFrameSource`,
+   *  OSMS-parity G1). Absent = `rdp_decode`. `session_capture` is a HYPOTHESIS on
+   *  hardware; changing it restarts a running seat. Added 2026-11-18. */
+  frame_source?: LocalFrameSource;
 }
+
+export type LocalFrameSource = 'rdp_decode' | 'session_capture';
 
 export type GpuPreferenceMode = 'off' | 'seat_gpu' | 'high_performance' | 'power_saving';
 

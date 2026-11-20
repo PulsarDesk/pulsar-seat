@@ -157,6 +157,9 @@ own driver interfaces, VDD settings path); it changes nothing.
   on every version.
 - The whole own-driver path end to end (see `drivers/seat-idd/README.md`, remote role).
 - Remote-session capture with the RDP display (spec 40 §6.5) — stream package / test VM.
+  Local seats now have an opt-in user of it (`local.frame_source = session_capture`,
+  OSMS-parity G1, `crates/seat-host/src/capture/`): the presenter takes those frames through
+  the unchanged `present_gpu` / `FlipChain::take_shared` path. HYPOTHESIS on hardware.
 
 Third-party: interoperates with Virtual-Display-Driver (MIT) through its documented pipe
 and settings file only; no code or binary of it is included.

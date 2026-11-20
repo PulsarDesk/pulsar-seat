@@ -9,13 +9,13 @@ use crate::service::{SERVICE_VERSION, Service};
 use crate::wizard::Wizard;
 use crate::{diag, log};
 use seat_core::backend::DriverId;
-use seat_core::config::{AssignmentOptions, Config, DeviceAssignment, SeatKind};
+use seat_core::config::{AssignmentOptions, Config, DeviceAssignment, LocalFrameSource, SeatKind};
 use seat_core::device::{Device, DeviceKind};
 use seat_core::state::SeatState;
 use seat_core::validate::{IssueCode, Severity, has_conflicts, has_errors, validate};
 use seat_core::{DeviceKey, SeatMask, SeatNumber};
 use seat_proto::{
-    AgentEvent, ApplyResult, CallerInfo, ClientKind, ConfigView, Credentials, DriverReport, ErrorCode, EventFrame,
+    AgentEvent, AgentTaskKind, ApplyResult, CallerInfo, ClientKind, ConfigView, Credentials, DriverReport, ErrorCode, EventFrame,
     Hello, HelloReply, HostAssignment, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, ProtoError, Request, RequestBody,
     Response, ResponseBody, ServiceStatus, Topic,
 };
@@ -331,6 +331,7 @@ impl Service {
                 Ok(ResponseBody::Ack)
             }
             B::HostDriveBroker { seat } => self.host_drive_broker(seat),
+            B::HostCaptureRing { seat } => self.host_capture_ring(seat),
             B::ConsoleInputReport { events } => self.console_input_report(caller.pid, events),
             B::CredprovQuery { scenario } => self.credprov_query(caller, scenario),
             B::CredprovTakeCredentials => self.credprov_take(caller),
@@ -397,6 +398,31 @@ impl Service {
                         drop(st);
                         self.on_dpi_report(report.session_id, &monitors);
                         st = self.lock();
+                    }
+                    AgentEvent::CaptureReady { offer } => {
+                        let slot = st.seats.values_mut().find(|s| s.agent_pid == Some(caller.pid) && s.rt.session_id == Some(report.session_id));
+                        match (slot, crate::capture::offer_ok(offer)) {
+                            (Some(slot), Ok(())) => {
+                                log::info(&format!(
+                                    "seat {}: in-session capture offered (generation {}, {} output(s))",
+                                    slot.seat,
+                                    offer.generation,
+                                    offer.outputs.len()
+                                ));
+                                slot.capture = Some(offer.clone());
+                            }
+                            (Some(slot), Err(why)) => {
+                                log::warn(&format!("seat {}: capture offer refused: {why}", slot.seat));
+                                slot.capture = None;
+                            }
+                            (None, _) => log::warn(&format!("capture offer from pid {} matches no seat agent", caller.pid)),
+                        }
+                    }
+                    AgentEvent::CaptureStopped { reason } => {
+                        if let Some(slot) = st.seats.values_mut().find(|s| s.agent_pid == Some(caller.pid) && s.rt.session_id == Some(report.session_id)) {
+                            log::info(&format!("seat {}: in-session capture stopped: {reason}", slot.seat));
+                            slot.capture = None;
+                        }
                     }
                 }
                 let tasks = st.agent_tasks.get(&report.session_id).cloned().unwrap_or_default();
@@ -607,19 +633,36 @@ impl Service {
             if st.config.revision != base {
                 return Err(err(ErrorCode::RevisionConflict, "config changed meanwhile"));
             }
-            // Running seats whose monitors change must restart (spec 10 §8.2).
-            let before: Vec<(SeatNumber, Vec<DeviceKey>)> = st
+            // Running seats whose monitors change must restart (spec 10 §8.2); so must those
+            // whose picture source changes (the host offers EGFX or not at connect, OSMS-parity
+            // G1).
+            let source = |st: &crate::service::State, s: SeatNumber| st.config.seat(s).map(|c| c.local_settings().frame_source);
+            let before: Vec<(SeatNumber, Vec<DeviceKey>, Option<LocalFrameSource>)> = st
                 .seats
                 .values()
                 .filter(|s| Service::managed(&st, s.seat) && s.is_active())
-                .map(|s| (s.seat, Service::seat_monitors(&st, s.seat)))
+                .map(|s| (s.seat, Service::seat_monitors(&st, s.seat), source(&st, s.seat)))
                 .collect();
             let rev = self.commit_config(&mut st, cfg.clone()).map_err(store_err)?;
             let restart: Vec<SeatNumber> = before
                 .iter()
-                .filter(|(s, mons)| st.config.seat(*s).is_some() && Service::seat_monitors(&st, *s) != *mons)
-                .map(|(s, _)| *s)
+                .filter(|(s, mons, src)| {
+                    st.config.seat(*s).is_some() && (Service::seat_monitors(&st, *s) != *mons || source(&st, *s) != *src)
+                })
+                .map(|(s, ..)| *s)
                 .collect();
+            // Capture switched off: the running agent stops capturing now.
+            for (seat, _, src) in &before {
+                if *src == Some(LocalFrameSource::SessionCapture) && source(&st, *seat) == Some(LocalFrameSource::RdpDecode) {
+                    let sid = st.seats.get_mut(seat).and_then(|s| {
+                        s.capture = None;
+                        s.agent_pid.and(s.rt.session_id)
+                    });
+                    if let Some(sid) = sid {
+                        self.queue_agent_task(&mut st, sid, AgentTaskKind::StopCapture);
+                    }
+                }
+            }
             let removed: Vec<SeatNumber> =
                 st.seats.keys().copied().filter(|s| st.config.seat(*s).is_none() && Service::managed(&st, *s)).collect();
             st.ownership_dirty = true;
@@ -951,7 +994,7 @@ impl Service {
         }
     }
 
-    fn host_assignment(&self, seat: SeatNumber) -> R {
+    pub(crate) fn host_assignment(&self, seat: SeatNumber) -> R {
         let b = self.backends();
         let mut st = self.lock();
         let slot = st.seats.get(&seat).ok_or_else(|| err(ErrorCode::NotFound, "no such seat"))?;
@@ -981,6 +1024,7 @@ impl Service {
         // Clipboard / drive / smart-card redirection for the host's IronRDP client: the
         // seat's policy narrowed to the devices it owns (spec 70).
         let redirection = Self::seat_redirection(&st, seat);
+        let frame_source = st.config.seat(seat).map(|c| c.local_settings().frame_source).unwrap_or_default();
         // The manager shows the notes next to the seat.
         if let Some(slot) = st.seats.get_mut(&seat)
             && slot.rt.redirect_notes != redirection.notes
@@ -998,6 +1042,7 @@ impl Service {
             listener_cert_sha1,
             input,
             redirection: Box::new(redirection),
+            frame_source,
         }))
     }
 
@@ -1084,6 +1129,25 @@ impl Service {
         log::info(&format!("seat {seat}: drive broker linked (agent pid {agent_pid}, {} volume(s))", drives.len()));
         self.queue_agent_task(&mut st, session_id, seat_proto::AgentTaskKind::DriveBroker { read: pipes.agent_read, write: pipes.agent_write, drives });
         Ok(ResponseBody::DriveBroker { read: pipes.host_read, write: pipes.host_write })
+    }
+
+    /// `host_capture_ring` (OSMS-parity G1): the agent's capture handles, duplicated from the
+    /// agent into the seat host (textures as they are, the mailbox read-only, the event
+    /// wait-only). Fresh handles per call; the host closes the ones it replaces.
+    pub(crate) fn host_capture_ring(&self, seat: SeatNumber) -> R {
+        let (host_pid, agent_pid, offer) = {
+            let st = self.lock();
+            let slot = st.seats.get(&seat).ok_or_else(|| err(ErrorCode::NotFound, "no such seat"))?;
+            let host_pid = slot.host.as_ref().map(|h| h.pid).ok_or_else(|| err(ErrorCode::SeatNotRunning, "no host"))?;
+            let not_ready = || err(ErrorCode::NotReady, "no in-session capture offered").with_reason("not_ready");
+            let agent_pid = slot.agent_pid.ok_or_else(not_ready)?;
+            (host_pid, agent_pid, slot.capture.clone().ok_or_else(not_ready)?)
+        };
+        let handles = crate::capture::offer_handles(&offer);
+        let moved = self.platform.duplicate_handles(agent_pid, host_pid, &handles).map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
+        let out = crate::capture::with_handles(&offer, &moved).ok_or_else(|| err(ErrorCode::Internal, "handle count mismatch"))?;
+        log::info(&format!("seat {seat}: capture ring handed to the host (generation {})", offer.generation));
+        Ok(ResponseBody::CaptureRing(out))
     }
 
     fn host_credentials(&self, seat: SeatNumber) -> R {

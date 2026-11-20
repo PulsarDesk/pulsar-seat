@@ -274,6 +274,13 @@ pub enum RequestBody {
     /// agent, `no_acl_drives` when the seat has no ACL'd volume to share.
     /// Added 2026-11-17 (rdp-listener, additive).
     HostDriveBroker { seat: SeatNumber },
+    /// The seat host asks for the seat's in-session capture (`local.frame_source =
+    /// session_capture`, OSMS-parity G1): the service duplicates the texture ring, mailbox
+    /// section and frame event the seat's agent offered (`agent_report capture_ready`) from
+    /// the agent process into the host and answers [`ResponseBody::CaptureRing`] with
+    /// handle values valid in the host. Refused (`not_ready`) while no capture is offered.
+    /// The host closes the handles it no longer uses. Added 2026-11-18 (additive).
+    HostCaptureRing { seat: SeatNumber },
 
     // ---- session agent only ----
     AgentReport { report: AgentReport },
@@ -432,7 +439,8 @@ impl RequestBody {
             | R::HostReport { seat, .. }
             | R::HostRedirectRefusal { seat, .. }
             | R::HostAudioReport { seat, .. }
-            | R::HostDriveBroker { seat } => {
+            | R::HostDriveBroker { seat }
+            | R::HostCaptureRing { seat } => {
                 Access::Host(*seat)
             }
             R::AgentReport { .. } | R::AgentSwitchTargets | R::AgentSwitch { .. } => Access::Agent,
@@ -522,6 +530,7 @@ impl RequestBody {
             | R::HostRedirectRefusal { seat, .. }
             | R::HostAudioReport { seat, .. }
             | R::HostDriveBroker { seat }
+            | R::HostCaptureRing { seat }
             | R::CredprovSwitch { seat }
             | R::AgentSwitch { seat } => Some((*seat, SeatKind::Local)),
             R::GetRemoteRuntime { seat }
@@ -561,7 +570,8 @@ impl RequestBody {
             | R::VmSeats { .. }
             | R::RestartTermService { .. }
             | R::HostAudioReport { .. }
-            | R::HostDriveBroker { .. } => 3,
+            | R::HostDriveBroker { .. }
+            | R::HostCaptureRing { .. } => 3,
             _ => crate::MIN_PROTOCOL_VERSION,
         }
     }
@@ -708,6 +718,9 @@ pub enum ResponseBody {
     /// valid in the host process: `read` from the broker, `write` to it). Added
     /// 2026-11-17, additive.
     DriveBroker { read: u64, write: u64 },
+    /// Answer of `host_capture_ring`: the seat's capture with handle values valid in the
+    /// host process. Added 2026-11-18 (OSMS-parity G1, additive).
+    CaptureRing(CaptureOffer),
     /// Answer of `set_seat_display_mode`: `seat_display::remote::ModeResult` (`status`,
     /// applied and render size, format). Added 2026-11-17 (additive).
     ModeResult(serde_json::Value),
@@ -999,6 +1012,11 @@ pub struct HostAssignment {
     /// frame small.
     #[serde(default)]
     pub redirection: Box<seat_core::backend::session::HostRedirection>,
+    /// Picture source of the seat (`local.frame_source`). `session_capture`: connect without
+    /// EGFX and take the picture from `host_capture_ring` while it is live. Added
+    /// 2026-11-18 (OSMS-parity G1, additive); `rdp_decode` from an older service.
+    #[serde(default, skip_serializing_if = "seat_core::config::LocalFrameSource::is_default")]
+    pub frame_source: seat_core::config::LocalFrameSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1075,6 +1093,46 @@ pub enum AgentEvent {
     /// (`GetDpiForMonitor`, `MDT_EFFECTIVE_DPI`) after a `report_dpi` task. Added
     /// 2026-11-17 (compat-tweaks, additive).
     Dpi { monitors: Vec<MonitorDpi> },
+    /// The agent captures the session's outputs (task `start_capture`): handle values
+    /// valid in the **agent** process; the service duplicates them into the seat host on
+    /// `host_capture_ring`. A newer offer replaces the older one. Added 2026-11-18
+    /// (OSMS-parity G1, additive).
+    CaptureReady { offer: CaptureOffer },
+    /// The agent's capture ended for good (`reason`: `dxgi_unavailable`, `no_output`,
+    /// `stopped`, ...). Added 2026-11-18 (OSMS-parity G1, additive).
+    CaptureStopped { reason: String },
+}
+
+/// One in-session capture (`seat_core::capture`): the mailbox section, the frame event and
+/// one texture ring per captured output. Handle values are valid in one process only (the
+/// agent in `capture_ready`, the seat host in `CaptureRing`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureOffer {
+    /// Changes whenever the agent re-created its textures.
+    pub generation: u64,
+    /// Section handle of the mailbox (`seat_core::capture::MAILBOX_BYTES`, read/write
+    /// for the agent, read-only for the host).
+    pub mailbox: u64,
+    /// Auto-reset event the agent sets after each publish.
+    pub event: u64,
+    pub outputs: Vec<CaptureOutput>,
+}
+
+/// One captured output of a session (index = position in [`CaptureOffer::outputs`] =
+/// mailbox output index).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureOutput {
+    /// GDI device name inside the session (`DISPLAYn` with the usual `\\.\` prefix).
+    pub device: String,
+    /// Adapter the session renders this output on (`HighPart << 32 | LowPart`).
+    pub adapter_luid: u64,
+    /// Virtual-desktop rectangle of the output in the session.
+    pub rect: seat_core::device::Rect,
+    /// Texture size (= output mode size).
+    pub width: u32,
+    pub height: u32,
+    /// NT handles of the shared textures (`seat_core::capture::RING_SLOTS`).
+    pub ring: Vec<u64>,
 }
 
 /// One monitor of a session as the agent sees it.
@@ -1205,6 +1263,13 @@ pub enum AgentTaskKind {
     /// session (`seat_rdp::channels::broker`). A newer task starts a new link; the old one
     /// ends when its host end closes. Added 2026-11-17 (rdp-listener, additive).
     DriveBroker { read: u64, write: u64, drives: Vec<crate::DriveBrokerDrive> },
+    /// Capture this session's outputs for the seat host (`local.frame_source =
+    /// session_capture`, `seat_core::capture`) and answer `capture_ready`; again after a
+    /// desktop switch or mode change by itself. Replaces a running capture. Added
+    /// 2026-11-18 (OSMS-parity G1, additive).
+    StartCapture,
+    /// Stop the capture (frame source changed back). Added 2026-11-18 (additive).
+    StopCapture,
 }
 
 /// One volume the drive broker may serve: the service's allowlist. The host names the
@@ -1421,4 +1486,39 @@ pub struct UpdateStatus {
     /// English detail for logs.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn capture_messages_roundtrip() {
+        let offer = CaptureOffer {
+            generation: 3,
+            mailbox: 0x40,
+            event: 0x44,
+            outputs: vec![CaptureOutput {
+                device: r"\\.\DISPLAY2".into(),
+                adapter_luid: 0x1_0000_0002,
+                rect: seat_core::device::Rect { x: 0, y: 0, width: 1920, height: 1080 },
+                width: 1920,
+                height: 1080,
+                ring: vec![1, 2, 3],
+            }],
+        };
+        let ev = AgentEvent::CaptureReady { offer: offer.clone() };
+        let j = serde_json::to_value(&ev).unwrap();
+        assert_eq!(j["type"], "capture_ready");
+        assert_eq!(serde_json::from_value::<AgentEvent>(j).unwrap(), ev);
+        let t = serde_json::to_value(AgentTaskKind::StartCapture).unwrap();
+        assert_eq!(t["type"], "start_capture");
+        let r = serde_json::to_value(ResponseBody::CaptureRing(offer.clone())).unwrap();
+        assert_eq!(serde_json::from_value::<ResponseBody>(r).unwrap(), ResponseBody::CaptureRing(offer));
+        let seat = SeatNumber::new(2).unwrap();
+        let req = RequestBody::HostCaptureRing { seat };
+        assert_eq!(req.access(), Access::Host(seat));
+        assert_eq!(req.min_protocol(), 3);
+        assert_eq!(serde_json::to_value(&req).unwrap()["type"], "host_capture_ring");
+    }
 }

@@ -286,6 +286,37 @@ pub struct LocalSeat {
     /// apps still see every GPU.
     #[serde(skip_serializing_if = "GpuPreference::is_default")]
     pub gpu_preference: GpuPreference,
+    /// Where the seat host gets the seat's picture (OSMS-parity G1, added 2026-11-18,
+    /// additive): decoded from the RDP connection (default) or captured inside the seat's
+    /// session by the session agent (DXGI Desktop Duplication into shared textures, no RDP
+    /// codec on the local display path; `seat_core::capture`). **HYPOTHESIS** on hardware:
+    /// the default stays [`LocalFrameSource::RdpDecode`] until the capture path is measured
+    /// on x64 and ARM64 (spec/remote/40-display-hdr.md §6.5).
+    #[serde(skip_serializing_if = "LocalFrameSource::is_default")]
+    pub frame_source: LocalFrameSource,
+}
+
+/// Picture source of a local seat (see [`LocalSeat::frame_source`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalFrameSource {
+    /// The seat host decodes the RDP connection's graphics (EGFX / H.264 or bitmap
+    /// updates). Default, also for configs written before 2026-11-18.
+    #[default]
+    RdpDecode,
+    /// The session agent captures the session's displays (Desktop Duplication) into
+    /// textures shared with the seat host; the RDP connection then carries no graphics
+    /// codec (bitmap updates only, discarded while the capture is live). The seat host
+    /// falls back to the RDP picture by itself whenever the capture is not live: before
+    /// sign-in, on the lock / UAC desktop, when the session renders on another GPU than
+    /// the seat's monitors, or when Desktop Duplication fails.
+    SessionCapture,
+}
+
+impl LocalFrameSource {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Per-seat GPU preference (see [`LocalSeat::gpu_preference`]).
@@ -1292,6 +1323,19 @@ pub const SEAT_LIMIT: u8 = MAX_SEATS;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OSMS-parity G1: `frame_source` is additive (absent = `rdp_decode`, not written when
+    /// default) and round-trips `session_capture`.
+    #[test]
+    fn frame_source_is_additive() {
+        let old: LocalSeat = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.frame_source, LocalFrameSource::RdpDecode);
+        assert!(serde_json::to_value(&old).unwrap().get("frame_source").is_none());
+        let on = LocalSeat { frame_source: LocalFrameSource::SessionCapture, ..Default::default() };
+        let j = serde_json::to_value(&on).unwrap();
+        assert_eq!(j["frame_source"], "session_capture");
+        assert_eq!(serde_json::from_value::<LocalSeat>(j).unwrap(), on);
+    }
 
     #[test]
     fn seat_redirect_is_additive_and_off_by_default() {
