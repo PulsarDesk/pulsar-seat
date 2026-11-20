@@ -110,6 +110,9 @@ pub(crate) struct State {
     pub deny_logoff: BTreeMap<u32, (u64, String)>,
     /// The keep-awake power request is held (an extra seat is in use).
     pub keep_awake: bool,
+    /// What the console lock guard was last synced to in this run (`None` = not yet: the
+    /// next tick syncs, which also undoes what a crash left behind). OSMS parity G4.
+    pub console_guard: Option<crate::console_guard::GuardState>,
     /// Last input per seat (activity events), for the monitor idle saver.
     pub last_input_ms: BTreeMap<SeatNumber, u64>,
     /// Seats whose monitors the idle saver switched off.
@@ -243,6 +246,7 @@ impl Service {
                 boot_decision: None,
                 deny_logoff: BTreeMap::new(),
                 keep_awake: false,
+                console_guard: None,
                 last_input_ms: BTreeMap::new(),
                 idle_blanked: Default::default(),
                 input_overrides: BTreeMap::new(),
@@ -1146,6 +1150,7 @@ impl Service {
         self.enforce_deny_logoffs(now);
         self.cover_seat_sessions();
         self.update_keep_awake();
+        self.update_console_guard();
         self.idle_saver(now);
         self.ensure_console_listener(now);
         self.update_tick();
@@ -1284,6 +1289,9 @@ impl Service {
             }
             self.platform.revert_tweaks()
         };
+        // The console lock guard follows the config again from the next sync.
+        self.lock().console_guard = None;
+        self.update_console_guard();
         // The credential provider follows the same switch (and the active backend).
         self.sync_credprov();
         for o in out {
@@ -1327,6 +1335,9 @@ impl Service {
         self.remote_shutdown();
         // Release the keep-awake power request (is_stopping is set).
         self.update_keep_awake();
+        // Release seat 1's console lock guard (is_stopping is set); the host account's
+        // guard stays (it is permanent while `dedicated_host` is on).
+        self.update_console_guard();
         let mut st = self.lock();
         st.run.running = false;
         st.run.unstable_starts = 0;

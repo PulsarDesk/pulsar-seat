@@ -21,6 +21,7 @@
 //! | [`apps`] | known single-instance / profile-locking apps, `Local\` object names |
 //! | [`defender`] | opt-in Microsoft Defender exclusions for our folders / processes (`MSFT_MpPreference`), journaled |
 //! | [`rights`] | opt-in "Deny log on locally" for RDP-signed-in seat accounts (`LsaAddAccountRights`), journaled |
+//! | [`console_guard`] | console lock guard (per-user `DisableLockWorkstation`, screen saver), per-seat `NoClose`, opt-in `BUILTIN\Users` shutdown-right removal, journaled |
 //! | [`user_env`] | per-seat environment variables in the seat user's `Environment` key, journaled |
 //! | [`steam`] | Steam folders, legacy proxy-DLL report, journaled quarantine / restore |
 //! | [`certs`] | opt-in import of the package's own publisher certificate at install (visible choice), journaled |
@@ -39,6 +40,7 @@
 pub mod apps;
 pub mod certs;
 pub mod coexist;
+pub mod console_guard;
 pub mod cpu;
 pub mod defender;
 pub mod drivers;

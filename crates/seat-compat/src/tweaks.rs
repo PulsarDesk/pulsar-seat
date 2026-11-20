@@ -52,10 +52,13 @@ pub enum TweakId {
     /// Device Installation Restrictions: deny new devices of chosen setup classes (added
     /// 2026-11-17).
     DeviceInstallDeny,
+    /// `InactivityTimeoutSecs` = 0: no machine inactivity lock of the console (OSMS parity
+    /// G4, added 2026-11-18).
+    InactivityLockOff,
 }
 
 impl TweakId {
-    pub const ALL: [TweakId; 9] = [
+    pub const ALL: [TweakId; 10] = [
         Self::LockScreenImage,
         Self::HideFastUserSwitching,
         Self::ExcludeDriverUpdates,
@@ -65,6 +68,7 @@ impl TweakId {
         Self::SmallCrashDumps,
         Self::WindowsUpdate,
         Self::DeviceInstallDeny,
+        Self::InactivityLockOff,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -78,6 +82,7 @@ impl TweakId {
             Self::SmallCrashDumps => "small_crash_dumps",
             Self::WindowsUpdate => "windows_update",
             Self::DeviceInstallDeny => "device_install_deny",
+            Self::InactivityLockOff => "inactivity_lock_off",
         }
     }
 
@@ -154,6 +159,13 @@ impl TweakId {
                 const T: Text = Text::new(
                     "Stops Windows from installing new devices of the chosen kinds (for example printers or cameras that no seat uses). Devices already installed keep working.",
                     "Windows'un seçilen türlerde yeni aygıt kurmasını engeller (ör. hiçbir koltuğun kullanmadığı yazıcı veya kameralar). Kurulu aygıtlar çalışmaya devam eder.",
+                );
+                &T
+            }
+            Self::InactivityLockOff => {
+                const T: Text = Text::new(
+                    "Turns off the machine inactivity limit, so Windows does not lock the console (and hide every local seat) after an idle time set by policy. Affects the whole PC.",
+                    "Makine etkinlik dışı kalma sınırını kapatır; Windows ilkeyle belirlenen boşta kalma süresinden sonra konsolu kilitlemez (ve tüm yerel koltukları gizlemez). Bilgisayarın tamamını etkiler.",
                 );
                 &T
             }
@@ -325,6 +337,12 @@ fn static_plan(t: TweakId, p: &TweakParams, ops: &dyn SystemOps) -> Result<Vec<A
                 },
             ]
         }
+        TweakId::InactivityLockOff => vec![Reg {
+            hive: Hive::Hklm,
+            key: POLICIES_SYSTEM.into(),
+            name: "InactivityTimeoutSecs".into(),
+            data: RegData::Dword(0),
+        }],
         TweakId::HideFastUserSwitching => vec![Reg {
             hive: Hive::Hklm,
             key: POLICIES_SYSTEM.into(),
@@ -401,6 +419,20 @@ pub fn is_relevant(t: TweakId, ops: &dyn SystemOps) -> bool {
             .unwrap_or(false),
         _ => true,
     }
+}
+
+/// Whether the active power plan keeps the PC and its displays on while on mains power
+/// (`STANDBY_IDLE` and `VIDEO_IDLE` AC = 0, what [`TweakId::SleepOff`] writes). `None` when
+/// the plan or a setting cannot be read. Used by the `dedicated_host` preflight check (OSMS
+/// parity G4): the host console must never sleep or blank.
+pub fn sleep_off_state(ops: &dyn SystemOps) -> Option<bool> {
+    let scheme = ops.power_active_scheme().ok()?;
+    let read = |sub: &str, set: &str| {
+        ops.power_read_ac(&PowerSetting { scheme: scheme.clone(), subgroup: sub.into(), setting: set.into() }).ok().flatten()
+    };
+    let standby = read(SUB_SLEEP, STANDBY_IDLE)?;
+    let video = read(SUB_VIDEO, VIDEO_IDLE)?;
+    Some(standby == 0 && video == 0)
 }
 
 /// What [`apply`] did.
@@ -488,7 +520,7 @@ pub fn apply(
 
 /// Every registry value a tweak can write (the journal restores only these; plus the
 /// numbered entries of [`DENY_CLASSES_LIST`], see [`is_tweak_target`]).
-pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 18] = [
+pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 19] = [
     (WU_POLICY, "DeferFeatureUpdates"),
     (WU_POLICY, "DeferFeatureUpdatesPeriodInDays"),
     (WU_POLICY, "DeferQualityUpdates"),
@@ -503,6 +535,7 @@ pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 18] = [
     (PERSONALIZATION_CSP, "LockScreenImageUrl"),
     (PERSONALIZATION_CSP, "LockScreenImageStatus"),
     (POLICIES_SYSTEM, "HideFastUserSwitching"),
+    (POLICIES_SYSTEM, "InactivityTimeoutSecs"),
     (WU_POLICY, "ExcludeWUDriversInQualityUpdate"),
     (PRECISION_TOUCHPAD, "AAPThreshold"),
     (SESSION_POWER, "HiberbootEnabled"),
@@ -547,6 +580,7 @@ pub fn sync_config(
         (TweakId::FastStartupOff, tw.fast_startup_off),
         (TweakId::WindowsUpdate, tw.windows_update.enabled),
         (TweakId::DeviceInstallDeny, !tw.device_install_deny.classes.is_empty()),
+        (TweakId::InactivityLockOff, tw.inactivity_lock_off),
     ];
     let params = TweakParams {
         lock_screen_image: lock_image_path.map(str::to_string),
@@ -944,6 +978,33 @@ mod tests {
         tw.fast_startup_off = false;
         sync_config(&j, &ops, &tw, None);
         assert_eq!(ops.get(Hive::Hklm, SESSION_POWER, "HiberbootEnabled"), Some(RegData::Dword(1)));
+    }
+
+    #[test]
+    fn inactivity_lock_off_from_config_restores_policy() {
+        let ops = MemoryOps::new();
+        let j = Journal::memory();
+        ops.set(Hive::Hklm, POLICIES_SYSTEM, "InactivityTimeoutSecs", RegData::Dword(900));
+        let mut tw = Tweaks { inactivity_lock_off: true, ..Default::default() };
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, POLICIES_SYSTEM, "InactivityTimeoutSecs"), Some(RegData::Dword(0)));
+        tw.inactivity_lock_off = false;
+        sync_config(&j, &ops, &tw, None);
+        assert_eq!(ops.get(Hive::Hklm, POLICIES_SYSTEM, "InactivityTimeoutSecs"), Some(RegData::Dword(900)));
+    }
+
+    #[test]
+    fn sleep_off_state_reads_the_active_plan() {
+        let ops = MemoryOps::new();
+        assert_eq!(sleep_off_state(&ops), None, "settings missing");
+        let scheme = ops.power_active_scheme().unwrap();
+        let ps = |sub: &str, set: &str| PowerSetting { scheme: scheme.clone(), subgroup: sub.into(), setting: set.into() };
+        ops.power.lock().unwrap().insert(ps(SUB_SLEEP, STANDBY_IDLE), 0);
+        ops.power.lock().unwrap().insert(ps(SUB_VIDEO, VIDEO_IDLE), 600);
+        assert_eq!(sleep_off_state(&ops), Some(false));
+        let j = Journal::memory();
+        apply(&j, &ops, TweakId::SleepOff, &TweakParams::default()).unwrap();
+        assert_eq!(sleep_off_state(&ops), Some(true));
     }
 
     #[test]

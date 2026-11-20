@@ -128,6 +128,22 @@ pub enum Change {
     /// before; added 2026-11-17, `crate::features`). Informational: uninstall keeps the
     /// feature (other software may rely on it by then).
     OptionalFeature { name: String },
+    /// A fixed per-user policy value (console lock guard, `NoClose`) we wrote in user
+    /// `sid`'s hive (added 2026-11-18, `crate::console_guard`). Undone through
+    /// `HKEY_USERS\<sid>` (hive loaded from `NTUSER.DAT` when the user is not logged on).
+    /// `created_keys` are relative to the user's hive root.
+    UserPolicy {
+        sid: String,
+        policy: crate::console_guard::UserPolicy,
+        previous: Option<RegData>,
+        written: RegData,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        created_keys: Vec<String>,
+    },
+    /// A right we **removed** from an account that held it (added 2026-11-18,
+    /// `crate::console_guard::sync_users_shutdown`). Undone by adding it back; only
+    /// `SeShutdownPrivilege` of `BUILTIN\Users` is ever given back.
+    AccountRightRemoved { sid: String, right: String },
 }
 
 impl Change {
@@ -173,6 +189,8 @@ impl Change {
             Self::QuarantinedFile { original, .. } => format!("quarantine:{}", original.to_ascii_lowercase()),
             Self::Certificate { store, thumbprint } => format!("cert:{store:?}:{}", thumbprint.to_ascii_uppercase()),
             Self::OptionalFeature { name } => format!("feature:{}", name.to_ascii_lowercase()),
+            Self::UserPolicy { sid, policy, .. } => format!("userpolicy:{}:{}", sid.to_ascii_uppercase(), policy.as_str()),
+            Self::AccountRightRemoved { sid, right } => format!("rightremoved:{}:{right}", sid.to_ascii_uppercase()),
         }
     }
 }
@@ -680,6 +698,15 @@ fn inherit_previous(new: &mut Change, old: &Change) {
             Change::UserEnvironment { previous, .. },
             Change::UserEnvironment { previous: p, .. },
         ) => *previous = p.clone(),
+        (
+            Change::UserPolicy { previous, created_keys, .. },
+            Change::UserPolicy { previous: p, created_keys: c, .. },
+        ) => {
+            *previous = p.clone();
+            if created_keys.is_empty() {
+                *created_keys = c.clone();
+            }
+        }
         _ => {}
     }
 }
@@ -850,6 +877,10 @@ fn revert_one(
         }
         // Kept on purpose (see `crate::features`).
         Change::OptionalFeature { .. } => Ok(RevertOutcome::Closed),
+        Change::UserPolicy { sid, policy, previous, written, created_keys } => {
+            crate::console_guard::revert_value(ops, sid, *policy, previous.as_ref(), written, created_keys, force)
+        }
+        Change::AccountRightRemoved { sid, right } => crate::console_guard::revert_removed_right(ops, sid, right),
     }
 
 }
