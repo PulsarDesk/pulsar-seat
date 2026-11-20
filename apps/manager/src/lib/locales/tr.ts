@@ -208,7 +208,33 @@ const t = {
     outputFor: (name: string) => `Çıkış: ${name}`,
     cloneOutputs: 'Çıkışlar (klonlama)',
     perMonitor: 'Bu ekranın seçenekleri',
-    machineWide: 'Bütün ekranlar'
+    machineWide: 'Bütün ekranlar',
+    split: {
+      title: 'Bölünmüş ekran',
+      groupFor: (name: string) => `Bölünmüş ekran: ${name}`,
+      cells: ['sol üst', 'sağ üst', 'sol alt', 'sağ alt'],
+      cellFor: (name: string, cell: string) => `${name}, ${cell} çeyrek`,
+      nobody: 'Kimse',
+      seat: (n: number) => `${n}. koltuk`,
+      off: 'Bölünmemiş: ekranın tamamı tek bir koltuğun.',
+      on: (n: number) => `${n} koltuk arasında bölünmüş.`,
+      shape: 'Her koltuğa ekranın bir yarısı ya da bir çeyreği verilmeli.',
+      consoleHalf: '1. koltuk bir ekranı yalnızca başka bir koltukla yarı yarıya paylaşabilir.',
+      invalid: 'Bölünmüş ekran geçerli değil. Her koltuğa bir yarı ya da bir çeyrek verin; 1. koltuk yalnızca başka bir koltuğun yarısının yanında bir yarı alabilir.',
+      outputFixed: 'Bölünmüş bir ekran şu anki çıkışında kalır.',
+      note: 'Bölünmüş ekran: en fazla dört koltuk bir ekranı paylaşır, her biri bir yarıda ya da bir çeyrekte. Koltuklar ekranın çözünürlük, HDR ve yenileme ayarlarını paylaşır; görüntüleri yaklaşık bir kare geç gelebilir. 1. koltuk bir ekranı paylaştığında Windows onun pencerelerini 1. koltuğun yarısında tutar. Bir sonraki koltuk başlatılışında uygulanır.',
+      areaName: {
+        full: 'ekranın tamamı',
+        left: 'sol yarı',
+        right: 'sağ yarı',
+        top: 'üst yarı',
+        bottom: 'alt yarı',
+        top_left: 'sol üst çeyrek',
+        top_right: 'sağ üst çeyrek',
+        bottom_left: 'sol alt çeyrek',
+        bottom_right: 'sağ alt çeyrek'
+      } as Record<string, string>
+    }
   },
 
   camera: {
@@ -1984,6 +2010,9 @@ const issueText: Record<string, string> = {
   link_local_ip_address: '169.254 ile başlayan adresi Windows kendisi verir ve değişebilir; sabit bir adres seçin.',
   ip_binding_shared_session: 'Bu kiosk koltuğu oturumunu başka koltuklarla paylaşıyor; IP adresi sürücüyle zorlanamaz, yalnızca destekleyen programlar kullanır.',
   clone_not_allowed: 'Bir ekrana birden fazla çıkış seçilmiş ama klonlamaya izin verilmemiş.',
+  invalid_screen_area: 'Bu ekranın bölünmesi geçerli değil: üzerindeki her koltuğun tam bir parçası olmalı, en fazla dört koltuk olabilir ve klonlama kullanılamaz.',
+  screen_area_overlap: 'Bu bölünmüş ekranda iki koltuğun parçaları üst üste biniyor.',
+  console_share_not_half: '1. koltuk bir ekranı yalnızca başka bir koltukla yarı yarıya paylaşabilir.',
   same_account_fast_user_switch: 'Hızlı kullanıcı geçişinde her koltuğun ayrı bir hesabı olmalı.',
   invalid_gpu_preference: 'Ekran kartı tercihindeki programlar geçersiz (en çok 64 program, her biri tam bir .exe yolu).',
   invalid_kiosk_shell: 'Kiosk koltuğunun ayarları geçersiz (en çok 16 uygulama, adı ve yolu dolu, boşta sıfırlama 0–1440 dakika).',

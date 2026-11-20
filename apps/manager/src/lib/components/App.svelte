@@ -43,9 +43,11 @@
     setDisplayOption,
     setIpBinding,
     setMonitorOutputs,
+    setMonitorSplit,
     setOutputSettings,
     setSoftwareCursor
   } from '#lib/model.ts';
+  import { gridOf } from '#lib/area.ts';
   import type { Tab } from '#lib/prefs.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import type { IpBinding, Issue, SeatNumber, ServiceAction } from '#lib/types.ts';
@@ -648,6 +650,7 @@
           if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
           if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
           if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
+          if (JSON.stringify(gridOf(o?.areas)) !== JSON.stringify(m.split)) n = setMonitorSplit(n, m.device, m.split, mask);
         }
         return n;
       });

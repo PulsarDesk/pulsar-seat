@@ -49,6 +49,7 @@
     setKeyMask,
     setKioskShell,
     setMonitorOutputs,
+    setMonitorSplit,
     setOutputSettings,
     setPicture,
     setSeatCompat,
@@ -57,6 +58,7 @@
     type CanvasItem,
     type DropTarget
   } from '#lib/model.ts';
+  import { gridOf, seatAreaOf } from '#lib/area.ts';
   import { builtinsFor, categoryOf, parsePicture, userPictureUrl } from '#lib/pictures.ts';
   import type { ManagerStore } from '#lib/store.svelte.ts';
   import { SHARED_MASK, type ConfigDiff, type DeviceKey, type Panel, type SeatConfig, type SeatNumber } from '#lib/types.ts';
@@ -181,6 +183,12 @@
       if (r.type === 'user' && cat && !store.userPictures[cat]) void store.loadUserPictures(cat);
     }
   });
+
+  /** Split screen (G8): this seat's part of a monitor in the draft, if it is split. */
+  function areaOf(key: DeviceKey, seat: SeatNumber) {
+    const a = draft?.devices.find((x) => x.key === key);
+    return a ? seatAreaOf(a.kind, a.mask, a.options, seat) : null;
+  }
 
   function pictureOf(key: DeviceKey): string | undefined {
     return draft?.devices.find((a) => a.key === key)?.options?.picture;
@@ -509,6 +517,7 @@
                 attention={issueDevices.has(k)}
                 showIds={store.prefs.showIds}
                 expanded={isExpanded(k)}
+                area={areaOf(k, s.number)}
                 onOpen={openMove}
               />
             {/each}
@@ -768,6 +777,7 @@
           if ((o?.software_cursor ?? false) !== m.software_cursor) n = setSoftwareCursor(n, m.device, m.software_cursor, mask);
           if ((o?.hdr ?? false) !== m.hdr) n = setDisplayOption(n, m.device, 'hdr', m.hdr, mask);
           if ((o?.vrr ?? false) !== m.vrr) n = setDisplayOption(n, m.device, 'vrr', m.vrr, mask);
+          if (JSON.stringify(gridOf(o?.areas)) !== JSON.stringify(m.split)) n = setMonitorSplit(n, m.device, m.split, mask);
         }
         return n;
       });

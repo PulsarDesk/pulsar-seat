@@ -7,10 +7,13 @@
 <script lang="ts">
   import { Button, Checkbox, Group, Modal, Notice, Row, Select, SubLabel, Switch } from '#lib/ui/index.ts';
   import { outputTechLabel, t } from '#lib/i18n.ts';
+  import { gridOf, splitFromGrid, type SplitGrid } from '#lib/area.ts';
   import type { Config, Device, DisplayInfo, OutputSettings } from '#lib/types.ts';
+  import SplitPicker from './SplitPicker.svelte';
 
   export interface OutputsResult {
-    monitors: { device: Device; outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean }[];
+    /** `split` = the 2x2 split-screen grid (seat per cell, 0 = nobody; G8). */
+    monitors: { device: Device; outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean; split: SplitGrid }[];
     settings: OutputSettings;
   }
 
@@ -29,10 +32,16 @@
   const adapters = $derived([...new Set(monitors.map((m) => m.info.adapter_luid))]);
 
   function initial() {
-    const rows: Record<string, { outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean }> = {};
+    const rows: Record<string, { outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean; split: SplitGrid }> = {};
     for (const d of devices.filter((x) => x.kind === 'monitor')) {
       const o = config.devices.find((a) => a.key === d.key)?.options;
-      rows[d.key] = { outputs: [...(o?.outputs ?? [])], software_cursor: o?.software_cursor ?? false, hdr: o?.hdr ?? false, vrr: o?.vrr ?? false };
+      rows[d.key] = {
+        outputs: [...(o?.outputs ?? [])],
+        software_cursor: o?.software_cursor ?? false,
+        hdr: o?.hdr ?? false,
+        vrr: o?.vrr ?? false,
+        split: gridOf(o?.areas)
+      };
     }
     return rows;
   }
@@ -42,6 +51,11 @@
   let settings = $state<OutputSettings>({ ...(config.settings.outputs ?? { force_assign_at_start: false, allow_clone: false }) });
   // svelte-ignore state_referenced_locally
   let follow = $state<'auto' | 'on' | 'off'>(settings.follow_session_mode === true ? 'on' : settings.follow_session_mode === false ? 'off' : 'auto');
+
+  // Local seats a monitor part can go to (split screen, G8).
+  const localSeats = $derived(config.seats.filter((s) => (s.kind ?? 'local') === 'local').map((s) => s.number));
+  const splitBad = $derived(Object.values(rows).some((r) => splitFromGrid(r.split).kind === 'invalid'));
+  const isSplit = (key: string) => splitFromGrid(rows[key]?.split ?? [0, 0, 0, 0]).kind === 'split';
 
   const cloneBlocked = $derived(!settings.allow_clone && Object.values(rows).some((r) => r.outputs.length > 1));
 
@@ -72,14 +86,16 @@
   }
 
   function save() {
-    if (cloneBlocked) return;
+    if (cloneBlocked || splitBad) return;
     onSave({
       monitors: monitors.map((m) => ({
         device: m.device,
-        outputs: rows[m.device.key]?.outputs ?? [],
+        // A split monitor keeps its own output (clone outputs and a split exclude each other).
+        outputs: isSplit(m.device.key) ? [] : (rows[m.device.key]?.outputs ?? []),
         software_cursor: rows[m.device.key]?.software_cursor ?? false,
         hdr: rows[m.device.key]?.hdr ?? false,
-        vrr: rows[m.device.key]?.vrr ?? false
+        vrr: rows[m.device.key]?.vrr ?? false,
+        split: rows[m.device.key]?.split ?? [0, 0, 0, 0]
       })),
       settings: followSettings({ ...settings }, follow)
     });
@@ -105,10 +121,13 @@
                 <Checkbox tight label={t.outputs.hdr} bind:checked={r.hdr} />
                 <Checkbox tight label={t.outputs.vrr} bind:checked={r.vrr} />
               </div>
+              <SplitPicker name={nameOf(m)} seats={localSeats} bind:grid={r.split} />
             {/if}
           </div>
           <div class="control">
-            {#if settings.allow_clone}
+            {#if isSplit(m.device.key)}
+              <p class="help">{t.outputs.split.outputFixed}</p>
+            {:else if settings.allow_clone}
               <div class="clone" role="group" aria-label={`${t.outputs.cloneOutputs}: ${nameOf(m)}`}>
                 {#each mons as out (out.device.key)}
                   <Checkbox
@@ -147,9 +166,11 @@
     </Row>
   </Group>
   <p class="help" data-testid="hdr-note">{t.outputs.hdrVrrHint}</p>
+  <p class="help" data-testid="split-note">{t.outputs.split.note}</p>
   {#if cloneBlocked}<Notice kind="danger" text={t.outputs.cloneNeeded} />{/if}
+  {#if splitBad}<Notice kind="danger" text={t.outputs.split.invalid} />{/if}
   {#snippet foot()}
-    <Button kind="primary" label={t.save} disabled={cloneBlocked} onclick={save} />
+    <Button kind="primary" label={t.save} disabled={cloneBlocked || splitBad} onclick={save} />
     <Button label={t.cancel} onclick={onCancel} />
   {/snippet}
 </Modal>

@@ -437,6 +437,17 @@ export interface AssignmentOptions {
   hdr?: boolean;
   /** Monitors of seats 2..N: variable refresh through the presenter. Added 2026-11-17. */
   vrr?: boolean;
+  /** Monitors: split screen (OSMS-parity G8, seat-core `area`). When the mask names two to
+   *  four seats, each seat's part of the monitor (2x2 grid). Added 2026-11-20. */
+  areas?: SeatArea[];
+}
+
+/** Part of a monitor made of 2x2 grid cells (seat-core `ScreenArea`). */
+export type ScreenArea = 'full' | 'left' | 'right' | 'top' | 'bottom' | 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+
+export interface SeatArea {
+  seat: SeatNumber;
+  area: ScreenArea;
 }
 
 export interface DeviceAssignment {
@@ -749,6 +760,8 @@ export interface DeviceView {
   port_key?: DeviceKey;
   /** Assignable key of the whole physical device (container). */
   container_key?: DeviceKey;
+  /** Split monitor (G8): each seat's part when the saved assignment is a valid split. */
+  areas?: SeatArea[];
 }
 
 export type Severity = 'error' | 'conflict' | 'warning';

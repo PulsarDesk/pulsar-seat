@@ -174,6 +174,12 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
   targets list; compat-tweaks (2026-11-17): the Compatibility section, the class-level
   default descriptors switch (was greyed out), the seat environment / deny-logon dialog,
   the USB dock wizard (spec 10 §8.8; ours is generic, not vendor-specific).
+- Split screen (OSMS-parity G8, 2026-11-20): `OutputsDialog` has a 2x2 picker per monitor
+  (`SplitPicker.svelte`, one seat per cell; `src/lib/area.ts` mirrors `seat_core::area`:
+  shapes, `check_split`, validation codes `invalid_screen_area` / `screen_area_overlap` /
+  `console_share_not_half`). `setMonitorSplit` writes `options.areas` and the seats' mask;
+  moving a split monitor to one seat ends the split. `MonitorFace` shades the seat's part.
+  The dialog says that the seats share mode / HDR / VRR and lose about one frame.
 
 ## Untested on hardware
 
@@ -201,6 +207,10 @@ Compatibility options (2026-11-17): every effect on Windows (policies, Defender,
 rights, environment, the DPI read-back, the USB dock detection against real docks) is
 HYPOTHESIS until run on hardware; the manager side is covered by `compat.test.ts` and the
 App flow test.
+
+Split screen (2026-11-20): the picker and validation are covered by `area.test.ts` and
+`extras.test.ts`; the split itself (presenter windows, console-share AppBar) is
+HYPOTHESIS until run on hardware.
 
 ## Language
 

@@ -208,7 +208,33 @@ const t = {
       assigned: 'Connected to this output when the seat starts',
       forced: 'Will be forced onto the output',
       unassigned: 'Not assigned'
-    } as Record<string, string>
+    } as Record<string, string>,
+    split: {
+      title: 'Split screen',
+      groupFor: (name: string) => `Split screen: ${name}`,
+      cells: ['top left', 'top right', 'bottom left', 'bottom right'],
+      cellFor: (name: string, cell: string) => `${name}, ${cell} quarter`,
+      nobody: 'Nobody',
+      seat: (n: number) => `Seat ${n}`,
+      off: 'Not split: the whole monitor belongs to one seat.',
+      on: (n: number) => `Split between ${n} seats.`,
+      shape: 'Each seat needs one half or one quarter of the monitor.',
+      consoleHalf: 'Seat 1 can share a monitor only half and half with one other seat.',
+      invalid: 'A split screen is not valid. Give each seat one half or one quarter; seat 1 can only take a half next to one other seat’s half.',
+      outputFixed: 'A split monitor keeps its current output.',
+      note: 'Split screen: up to four seats share one monitor, each in a half or a quarter. The seats share the monitor’s resolution, HDR and refresh settings, and their pictures may arrive about one frame later. When seat 1 shares a monitor, Windows keeps its windows in seat 1’s half. Applies at the next seat start.',
+      areaName: {
+        full: 'whole monitor',
+        left: 'left half',
+        right: 'right half',
+        top: 'top half',
+        bottom: 'bottom half',
+        top_left: 'top left quarter',
+        top_right: 'top right quarter',
+        bottom_left: 'bottom left quarter',
+        bottom_right: 'bottom right quarter'
+      } as Record<string, string>
+    }
   },
 
   camera: {
@@ -1988,6 +2014,9 @@ const issueText: Record<string, string> = {
   link_local_ip_address: 'Windows assigns addresses starting with 169.254 itself and they can change; choose a static address.',
   ip_binding_shared_session: 'This kiosk seat shares its session with other seats; the IP address cannot be enforced by the driver, only programs that support it use it.',
   clone_not_allowed: 'Several outputs are chosen for a monitor but cloning is not allowed.',
+  invalid_screen_area: 'The split screen of this monitor is not valid: every seat on it needs exactly one part, for at most four seats, without cloning.',
+  screen_area_overlap: 'Two seats’ parts of this split monitor overlap.',
+  console_share_not_half: 'Seat 1 can share a monitor only half and half with one other seat.',
   same_account_fast_user_switch: 'With fast user switching, each seat must have its own account.',
   invalid_gpu_preference: 'The programs in the graphics card preference are invalid (at most 64 programs, each a full .exe path).',
   invalid_kiosk_shell: 'The kiosk seat settings are invalid (at most 16 apps, name and path filled, idle reset 0–1440 minutes).',
