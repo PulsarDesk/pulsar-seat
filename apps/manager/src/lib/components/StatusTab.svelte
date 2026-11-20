@@ -104,7 +104,11 @@
     return 'ok';
   }
   function seatNotes(r: SeatRuntime): string[] {
-    return [...(r.degraded ?? []), ...(r.audio_notes ?? []), ...(r.redirect_notes ?? [])].map(noteLabel);
+    const notes = [...(r.degraded ?? []), ...(r.audio_notes ?? []), ...(r.redirect_notes ?? [])].map(noteLabel);
+    // Sound buffer counters (G7): only once a gap or a delay reset happened.
+    const p = r.audio_playback;
+    if (p && ((p.underruns ?? 0) > 0 || (p.drops ?? 0) > 0)) notes.push(t.statusPage.audioBuffer(p.underruns ?? 0, p.drops ?? 0));
+    return notes;
   }
 
   // ---- methods section

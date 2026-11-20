@@ -256,7 +256,9 @@ pub enum RequestBody {
     /// stream is open and its snake_case notes (`render_absent`, `render_open_failed`,
     /// `render_lost`, `capture_absent`, ...). Stored in `SeatRuntime.audio_notes` for the
     /// manager. Answered with `Ack`. Added 2026-11-17 (rdp-listener, additive): an older
-    /// service answers an error the host ignores.
+    /// service answers an error the host ignores. `playback` (added 2026-11-20, OSMS parity
+    /// G7, additive): the playback jitter-buffer counters, stored in
+    /// `SeatRuntime.audio_playback`; absent from older hosts and while no playback runs.
     HostAudioReport {
         seat: SeatNumber,
         #[serde(default)]
@@ -265,6 +267,8 @@ pub enum RequestBody {
         capture_open: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        playback: Option<seat_core::state::AudioPlaybackStats>,
     },
     /// The seat host asks for its link to the seat's drive broker (ACL'd volumes served as
     /// the seat user by the seat's agent, architecture §"Drive broker"). The service makes

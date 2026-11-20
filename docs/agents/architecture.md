@@ -1170,6 +1170,35 @@ monitor's same-container hub keeps a seat the monitor is not on.
 - **Audio:** rdpsnd (PCM) to `AudioBridge::start_playback/play`. `AUDIO_INPUT` from
   `AudioBridge::start_capture`. `rebind_audio` maps to `AudioBridge::set_route`. Dead
   streams are reopened every second.
+- **Seat audio jitter buffer (2026-11-20, OSMS parity G7):** the playback FIFO
+  `seat_media::bridge::PcmRing` is also the jitter buffer. Its policy is
+  `JitterConfig` (`AudioBridge::jitter`, default `JitterConfig::SEAT`: target 30 ms,
+  cap 100 ms, fade 5 ms, drift on; `PcmRing::new` stays a plain FIFO for the
+  identification tone). The ring is pure Rust and unit-tested in `bridge.rs`.
+  - `push`: over the cap it drops the oldest audio back to the target in one jump (whole
+    frames), counted in `drops` and `dropped_bytes`.
+  - `fill` (render side) always writes the whole device buffer. It writes silence until
+    the target is queued, then plays with a fade-in. A short read while playing is an
+    underrun: it fades out the tail, writes silence for the rest, counts `underruns` and
+    prebuffers again. The fades handle 8/16/24/32-bit integer PCM (rdpsnd negotiates
+    16-bit), not only float as in OSMS.
+  - Drift: over each 100 ms window, if the queue depth stays more than 10 ms above the
+    target, one frame is skipped; if it stays more than 10 ms below, one frame is
+    repeated (`drift_skipped_frames` / `drift_repeated_frames`). At most one frame per
+    window, so about 200 ppm at 48 kHz. OSMS has no drift correction.
+  - WASAPI render (`win/wasapi.rs`): shared mode, `AUDCLNT_STREAMFLAGS_EVENTCALLBACK` +
+    `SetEventHandle`, 20 ms engine buffer, one buffer of silence pre-rolled. Every wake
+    fills the whole free space from `fill`. If the endpoint refuses event mode it falls
+    back to 5 ms polling with a 40 ms buffer. Same code on x64 and ARM64.
+  - Reporting: the host sends `host_audio_report.playback` (`AudioPlaybackStats`,
+    additive optional field) at most every 10 s and only when a counter moved or the
+    stream appeared or went away. The service stores it in `SeatRuntime.audio_playback`
+    (cleared on seat stop) and logs new underruns / drops. The manager status page shows
+    "Sound dropouts" on the seat row once a counter is above 0.
+  - HYPOTHESIS: about 60 ms playback latency (30 ms ring + 20 ms buffer + engine
+    period) against about 70 ms in OSMS, and a 30 ms target that covers rdpsnd's packet
+    cadence over loopback. Nothing here has run on hardware with an audio endpoint.
+  - No device state changes: nothing to journal or restore.
 - **Reports:** `connecting`, `connected`, `signed_in {session_id}` (from the server's logon
   info). The final report follows the ActiveX classification: the errorInfo code is
   used as the extended reason. `failed {logon_failed | cert_mismatch | cert_unpinned |
@@ -2040,7 +2069,9 @@ nothing ran on hardware; HYPOTHESIS where it depends on Windows behaviour):
   `LoopbackListener::operator_restart`, journaled, no "no user session" rule) and the
   second listener re-checked; answer `term_service_restart {stopped_seats, restarted,
   reason}`). Host requests (Access::Host, additive): `host_audio_report {seat,
-  render_open, capture_open, notes}` (the bridge notes go to `SeatRuntime.audio_notes`;
+  render_open, capture_open, notes, playback?}` (the bridge notes go to
+  `SeatRuntime.audio_notes`; `playback` (2026-11-20, G7) is the jitter-buffer counters,
+  stored in `SeatRuntime.audio_playback`;
   seat runtime `degraded` now says `audio_no_endpoint` / `audio_not_bound` /
   `audio_service_not_running` for an RDP-bridge seat without a playback endpoint instead of
   `audio_console_shared`), `host_drive_broker {seat}` (above). The credential test

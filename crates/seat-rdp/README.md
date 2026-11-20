@@ -94,7 +94,12 @@ does not work against a real Server build (untested, see below).
   goes out as `TS_FP_RELPOINTER_EVENT`. Touch and pen go out as MS-RDPEI frames. Pen contacts carry the optional `RDPINPUT_PEN_CONTACT` fields when the pen reports them (2026-11-17): `penFlags` (barrel, eraser, inverted), `rotation` (0..359), `tiltX` / `tiltY` (-90..90, each on its own), `pressure` (0..1024). HYPOTHESIS: never sent to a real RDP server.
 - `audio`: PCM only. rdpsnd goes to a `PlaybackSink`. `AUDIO_INPUT` comes from a
   `CaptureSource`. The host connects both to `seat_media::bridge::AudioBridge`, by
-  endpoint id.
+  endpoint id. Playback goes through the bridge's jitter buffer (`PcmRing`, 2026-11-20,
+  OSMS parity G7): 30 ms prebuffer, 100 ms cap with a drop back to 30 ms, 5 ms fades on
+  an underrun, one-frame drift correction, event-driven WASAPI render with a 20 ms
+  buffer. Counters go to the service in `host_audio_report.playback`. HYPOTHESIS: about
+  60 ms playback latency and no audible clicks; never run on hardware with an audio
+  endpoint (architecture.md, "Seat audio jitter buffer").
 - `session`: one engine thread owns the socket. A `Handle` (also the seat's
   `RdpInputChannel`) sends commands over a channel. Layout changes go through display
   control. Deactivation-reactivation is handled. The engine reconnects in the host only

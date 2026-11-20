@@ -330,8 +330,8 @@ impl Service {
                 self.on_redirect_refusal(seat, channel, reason, detail, suppressed);
                 Ok(ResponseBody::Ack)
             }
-            B::HostAudioReport { seat, render_open, capture_open, notes } => {
-                self.on_host_audio_report(seat, render_open, capture_open, notes);
+            B::HostAudioReport { seat, render_open, capture_open, notes, playback } => {
+                self.on_host_audio_report(seat, render_open, capture_open, notes, playback);
                 Ok(ResponseBody::Ack)
             }
             B::HostDriveBroker { seat } => self.host_drive_broker(seat),
@@ -1036,20 +1036,41 @@ impl Service {
     }
 
     /// `host_audio_report`: the seat host's audio bridge notes, kept for the manager. A seat
-    /// without a playback endpoint (`render_absent`) is also logged once per change.
-    pub(crate) fn on_host_audio_report(&self, seat: SeatNumber, render_open: bool, capture_open: bool, notes: Vec<String>) {
+    /// without a playback endpoint (`render_absent`) is also logged once per change. The
+    /// playback jitter-buffer counters (G7) go to `SeatRuntime.audio_playback`; a new
+    /// underrun or drop is logged.
+    pub(crate) fn on_host_audio_report(
+        &self,
+        seat: SeatNumber,
+        render_open: bool,
+        capture_open: bool,
+        notes: Vec<String>,
+        playback: Option<seat_core::state::AudioPlaybackStats>,
+    ) {
         let notes = audio_report_notes(render_open, capture_open, notes);
         let mut st = self.lock();
         let Some(slot) = st.seats.get_mut(&seat) else { return };
-        if slot.rt.audio_notes == notes {
+        if slot.rt.audio_notes == notes && slot.rt.audio_playback.as_deref() == playback.as_ref() {
             return;
         }
-        if notes.is_empty() {
-            log::info(&format!("seat {seat}: sound works again"));
-        } else {
-            log::warn(&format!("seat {seat}: audio: {notes:?}"));
+        if slot.rt.audio_notes != notes {
+            if notes.is_empty() {
+                log::info(&format!("seat {seat}: sound works again"));
+            } else {
+                log::warn(&format!("seat {seat}: audio: {notes:?}"));
+            }
+        }
+        if let Some(p) = &playback {
+            let (u0, d0) = slot.rt.audio_playback.as_deref().map_or((0, 0), |o| (o.underruns, o.drops));
+            if p.underruns > u0 || p.drops > d0 {
+                log::info(&format!(
+                    "seat {seat}: audio buffer {} ms (target {} ms): {} underruns, {} drops ({} bytes), drift -{} / +{} frames",
+                    p.queued_ms, p.target_ms, p.underruns, p.drops, p.dropped_bytes, p.drift_skipped_frames, p.drift_repeated_frames
+                ));
+            }
         }
         slot.rt.audio_notes = notes;
+        slot.rt.audio_playback = playback.map(Box::new);
         let rt = slot.rt.clone();
         drop(st);
         self.events.publish(seat_proto::Event::SeatState { runtime: rt });
