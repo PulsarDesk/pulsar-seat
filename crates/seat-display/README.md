@@ -41,6 +41,17 @@ client's shared keyed-mutex BGRA texture on the same adapter; `win/flip.rs`
 keyed-mutex sharing on the target drivers. A failed GPU frame drops the flip chain (GDI
 fallback); the RDP client then sees no GPU adapter for the output and sends CPU frames.
 
+**Split screen (OSMS-parity G8, 2026-11-20, local):** up to four seats on one monitor, each
+in a half or a quarter (`seat_core::area`). `Binding` binds a split monitor once per seat
+(cells may not overlap, released per seat), always as a `Fallback` console-desktop output
+whose `rect` is the seat's part; the presenter (`win/presenter.rs`) keeps its window, cursor
+clip and guard home to that part (`model::{console_clip, console_home}`). A seat half next
+to seat 1's half gets a hidden AppBar (`win/appbar.rs`, `SHAppBarMessage`, documented
+shell32 API, no driver, nothing persistent) so the console work area stays in its half.
+Clean-room: written from the OSMS gap description and Microsoft Learn, no OSMS code ported.
+Same code on x64 and ARM64. HYPOTHESIS until a hardware run: all of it, in particular the
+AppBar cleanup after a killed seat host and the area-sized `pulsar_idd` mode.
+
 Both kinds' `pulsar_idd` share a wire name and the driver binary, not the control interface. They never meet in one config
 field: local seats read `settings.backends.display`, remote seats
 `settings.remote.display_backend`.

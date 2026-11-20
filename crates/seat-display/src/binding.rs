@@ -32,6 +32,14 @@
 //!   one extra placement per further target on the same adapter, marked `clone_of`, after
 //!   all non-clone placements (RDP monitor order is unchanged). The presenter shows the
 //!   surface's frames on each of them.
+//! - Split screen (OSMS-parity G8, 2026-11-18): a monitor may be bound by up to four seats
+//!   at once, each with a [`ScreenArea`] ([`SeatDisplayOptions::areas`]) whose cells do not
+//!   overlap the cells already bound there. The binding keeps one entry per seat, so the
+//!   monitor stays bound until its last seat is released (reference count by seat). A
+//!   split output must be a console-desktop target (`fallback`: one window per seat on the
+//!   shared monitor, no independent flip, about one frame more latency); its `rect` is the
+//!   area's part of the monitor, its mode never follows the session, and its `pulsar_idd`
+//!   virtual monitor gets the area size as its only mode.
 
 use crate::console::{Console, ConsoleCommand, IdentifyItem};
 use crate::model::{build_monitors, diff_devices, resolve_key, virtual_rects, LiveMonitor, Resolution};
@@ -40,6 +48,7 @@ use seat_core::backend::display::{
     DisplayBackendKind, DisplayBinding, DisplayCaps, OutputPlacement, SeatDisplayPrefs, SeatOutputs, TopologyPlan, TopologyReport,
 };
 use seat_core::backend::{Availability, BackendError, BackendResult, DriverId, ErrorKind, HotplugEvent, HotplugSink};
+use seat_core::area::ScreenArea;
 use seat_core::device::{Device, DeviceDetails, DisplayMode, EdidId, Presentation, Rect};
 use seat_core::ids::{DeviceKey, SeatNumber};
 use seat_core::pnp::PnpTree;
@@ -106,6 +115,10 @@ pub struct SeatDisplayOptions {
     /// Monitors whose assignment asks for variable refresh through the presenter
     /// (`AssignmentOptions::vrr`). Added 2026-11-17.
     pub vrr: HashSet<DeviceKey>,
+    /// Split monitors: this seat's part (`AssignmentOptions::areas`). Added 2026-11-18 (G8).
+    pub areas: HashMap<DeviceKey, ScreenArea>,
+    /// Split monitors shared with the console (seat 1). Added 2026-11-18 (G8).
+    pub console_share: HashSet<DeviceKey>,
 }
 
 /// Command for the seat host that presents a target the console cannot reach (presenter
@@ -594,16 +607,34 @@ impl DisplayBinding for Binding {
         let _bind = lock(&inner.bind);
         let live = inner.live()?;
         let resolved = inner.resolve_all(targets, &live);
-        let (busy, opts): (HashMap<DeviceKey, SeatNumber>, SeatDisplayOptions) = {
+        type BoundBy = HashMap<DeviceKey, Vec<(SeatNumber, Option<ScreenArea>)>>;
+        let (bound_by, opts): (BoundBy, SeatDisplayOptions) = {
             let st = lock(&inner.state);
-            let busy = st
-                .bound
-                .iter()
-                .filter(|(s, _)| **s != seat)
-                .flat_map(|(s, o)| o.iter().map(move |p| (p.key.clone(), *s)))
-                .collect();
-            (busy, st.options.get(&seat).cloned().unwrap_or_default())
+            let mut bound_by: BoundBy = HashMap::new();
+            for (s, o) in st.bound.iter().filter(|(s, _)| **s != seat) {
+                for p in o {
+                    bound_by.entry(p.key.clone()).or_default().push((*s, p.area));
+                }
+            }
+            (bound_by, st.options.get(&seat).cloned().unwrap_or_default())
         };
+        // Whole-monitor users of a target block it; split users block only their cells.
+        let busy: HashMap<DeviceKey, SeatNumber> = bound_by.iter().map(|(k, v)| (k.clone(), v[0].0)).collect();
+        let conflict = |key: &DeviceKey, mine: Option<ScreenArea>| -> Option<SeatNumber> {
+            bound_by
+                .get(key)?
+                .iter()
+                .find(|(_, other)| match (mine, other) {
+                    (Some(a), Some(b)) => a.overlaps(*b),
+                    _ => true,
+                })
+                .map(|(s, _)| *s)
+        };
+        let resolved_key = |k: &DeviceKey, m: &Option<&LiveMonitor>| m.map_or_else(|| k.clone(), |m| m.device.key.clone());
+        let areas: HashMap<DeviceKey, ScreenArea> =
+            resolved.iter().filter_map(|(k, m)| opts.areas.get(k).map(|a| (resolved_key(k, m), *a))).collect();
+        let share: HashSet<DeviceKey> =
+            resolved.iter().filter(|(k, _)| opts.console_share.contains(k)).map(|(k, m)| resolved_key(k, m)).collect();
 
         // Software-cursor option by configured key, mapped to the resolved monitor.
         let sw: HashSet<DeviceKey> = resolved
@@ -627,8 +658,22 @@ impl DisplayBinding for Binding {
                 log::warn!("display: seat {seat}: monitor {k} not present");
                 continue;
             };
-            if let Some(other) = busy.get(&m.device.key) {
+            let area = areas.get(&m.device.key).copied();
+            if let Some(other) = conflict(&m.device.key, area) {
                 return Err(err(ErrorKind::NotReady, "target_busy", format!("{} is bound to seat {other}", m.device.key)));
+            }
+            if area.is_some() {
+                // A split monitor is shown by several seat hosts at once: only windows on a
+                // console-desktop target can share it (one owner per scan-out otherwise).
+                if !m.target.active || m.target.desktop_rect.is_none() {
+                    return Err(err(
+                        ErrorKind::NotReady,
+                        "split_needs_desktop",
+                        format!("{} is split between seats but not part of the console desktop", m.device.key),
+                    ));
+                }
+                chosen.push((m, Presentation::Fallback));
+                continue;
             }
             match inner.presentation_for(m) {
                 Some(p) => chosen.push((m, p)),
@@ -706,10 +751,12 @@ impl DisplayBinding for Binding {
         let mut outputs = Vec::new();
         for (m, p) in &chosen {
             let t = &m.target;
+            let area = areas.get(&m.device.key).copied();
             let rect = if *p == Presentation::Presenter {
                 vrects.next().unwrap_or_default()
             } else {
-                t.desktop_rect.unwrap_or_default()
+                let r = t.desktop_rect.unwrap_or_default();
+                area.map_or(r, |a| a.rect_in(&r))
             };
             outputs.push(OutputPlacement {
                 key: m.device.key.clone(),
@@ -720,9 +767,12 @@ impl DisplayBinding for Binding {
                 presentation: *p,
                 software_cursor: sw.contains(&m.device.key),
                 clone_of: None,
-                follow_mode: follow(*p),
+                // A shared monitor keeps its mode (the other seats use it too).
+                follow_mode: area.is_none() && follow(*p),
                 hdr: !seat.is_console() && hdr.contains(&m.device.key),
                 vrr: !seat.is_console() && vrr.contains(&m.device.key),
+                area,
+                console_share: area.is_some_and(|a| a.edge().is_some()) && share.contains(&m.device.key),
             });
         }
         for (m, p, master) in &clones {
@@ -748,6 +798,8 @@ impl DisplayBinding for Binding {
                 // A clone shows its surface's frames: same colour mode; its own VRR choice.
                 hdr: outputs[*master].hdr,
                 vrr: !seat.is_console() && (vrr.contains(&m.device.key) || outputs[*master].vrr),
+                area: None,
+                console_share: false,
             });
         }
 
@@ -774,7 +826,14 @@ impl DisplayBinding for Binding {
                 }
             }
             for (i, ((m, _), o)) in chosen.iter().zip(&outputs).enumerate() {
-                let modes: Vec<DisplayMode> = [m.target.preferred, m.target.mode].into_iter().flatten().collect();
+                let mut modes: Vec<DisplayMode> = [m.target.preferred, m.target.mode].into_iter().flatten().collect();
+                if o.area.is_some() {
+                    // Split monitor: the virtual monitor is the size of the seat's part.
+                    // HYPOTHESIS: Windows picks this mode although the EDID's preferred
+                    // timing is the full panel (untested on hardware).
+                    let refresh_mhz = modes.first().map_or(60_000, |md| md.refresh_mhz);
+                    modes = vec![DisplayMode { width: o.rect.width, height: o.rect.height, refresh_mhz, rotation: 0 }];
+                }
                 let edid = m.edid_blob.clone().unwrap_or_default();
                 let req = IddMonitor {
                     seat,
@@ -906,6 +965,8 @@ impl DisplayBinding for Binding {
         o.frame_reader_sid = prefs.frame_reader_sid.clone();
         o.hdr = prefs.hdr.iter().cloned().collect();
         o.vrr = prefs.vrr.iter().cloned().collect();
+        o.areas = prefs.areas.iter().cloned().collect();
+        o.console_share = prefs.console_share.iter().cloned().collect();
 
     }
 
@@ -1045,6 +1106,43 @@ mod tests {
 
     fn s(n: u8) -> SeatNumber {
         SeatNumber::new(n).unwrap()
+    }
+
+    #[test]
+    fn split_monitor_is_shared_by_cells_and_released_per_seat() {
+        let (b, _c) = setup(DisplayBackendKind::WindowPresenter, vec![target(5, 1, true, 0), target(5, 2, true, 1920), target(5, 3, false, 0)]);
+        let devs = b.enumerate().unwrap();
+        let k = devs[1].key.clone();
+        let monitor = Rect { x: 1920, y: 0, width: 1920, height: 1080 };
+        let prefs = |a: ScreenArea| SeatDisplayPrefs { areas: vec![(k.clone(), a)], follow_session_mode: Some(true), ..Default::default() };
+        b.configure_seat(s(2), &prefs(ScreenArea::Left));
+        b.configure_seat(s(3), &prefs(ScreenArea::TopRight));
+        b.configure_seat(s(4), &prefs(ScreenArea::Right));
+        let o2 = b.bind_seat(s(2), std::slice::from_ref(&k)).unwrap();
+        assert_eq!(o2.outputs[0].area, Some(ScreenArea::Left));
+        assert_eq!(o2.outputs[0].rect, ScreenArea::Left.rect_in(&monitor));
+        assert_eq!(o2.outputs[0].presentation, Presentation::Fallback);
+        assert!(!o2.outputs[0].follow_mode, "a shared monitor keeps its mode");
+        let o3 = b.bind_seat(s(3), std::slice::from_ref(&k)).unwrap();
+        assert_eq!(o3.outputs[0].rect, Rect { x: 2880, y: 0, width: 960, height: 540 });
+        // Right overlaps seat 3's top-right quarter.
+        assert_eq!(b.bind_seat(s(4), std::slice::from_ref(&k)).unwrap_err().reason, "target_busy");
+        // A whole-monitor seat cannot join a split monitor, nor split a whole one.
+        assert_eq!(b.bind_seat(s(5), std::slice::from_ref(&k)).unwrap_err().reason, "target_busy");
+        // Releasing seat 3 frees its cells only; the monitor stays bound for seat 2.
+        b.release_seat(s(3)).unwrap();
+        assert!(b.seat_outputs(s(2)).is_some());
+        assert_eq!(b.bind_seat(s(4), std::slice::from_ref(&k)).unwrap().outputs[0].rect, ScreenArea::Right.rect_in(&monitor));
+        b.release_seat(s(2)).unwrap();
+        b.release_seat(s(4)).unwrap();
+        assert!(b.bind_seat(s(5), std::slice::from_ref(&k)).is_ok(), "free again after the last seat");
+        // A split needs a console-desktop target.
+        b.configure_seat(s(6), &SeatDisplayPrefs { areas: vec![(devs[2].key.clone(), ScreenArea::Left)], ..Default::default() });
+        assert_eq!(b.bind_seat(s(6), &[devs[2].key.clone()]).unwrap_err().reason, "split_needs_desktop");
+        // Console share is set only for halves the console shares.
+        b.release_seat(s(5)).unwrap();
+        b.configure_seat(s(2), &SeatDisplayPrefs { areas: vec![(k.clone(), ScreenArea::Right)], console_share: vec![k.clone()], ..Default::default() });
+        assert!(b.bind_seat(s(2), std::slice::from_ref(&k)).unwrap().outputs[0].console_share);
     }
 
     #[test]

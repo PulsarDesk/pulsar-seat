@@ -918,6 +918,43 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   max over the last 512 samples): the IddCx frame header carries QPC stamps (acquired,
   OS present, written) and `win::idd::pump` logs driver-copy and to-presented latency
   every 600 frames; `GfxStats` carries H.264 decode and change-to-present latency.
+- *Split screen (OSMS-parity G8, 2026-11-20).* Up to four local seats share one physical
+  monitor, each in a half or a quarter of a 2x2 grid (`seat_core::area`). Config:
+  `AssignmentOptions::areas: Vec<SeatArea {seat, area: ScreenArea}>` on a monitor whose
+  explicit mask names two to four seats (additive; old configs load unchanged; ignored for
+  one seat). Validation (`area::check_split`): `invalid_screen_area` (not a monitor, shared
+  mask, more than four seats, a seat of the mask without exactly one area, clone outputs on
+  a split), `screen_area_overlap`, `console_share_not_half` (seat 1 only half and half with
+  one other seat); a valid split is exempt from `exclusive_on_several_seats`. HDR, VRR, mode
+  and software cursor stay per monitor, so the seats of a split share them.
+  Topology: a split monitor is reserved for nobody (`Service::display_plan` puts it in no
+  seat list), so it stays in the console desktop and is never specialized; with seat 1 in
+  the mask it is a console monitor. Binding: `SeatDisplayPrefs::{areas, console_share}`
+  -> `Binding` keeps one bound entry per seat, so a split target is "reference counted by
+  seat" (released when its last seat stops); `bind_seat` refuses overlapping cells and
+  whole-monitor users (`target_busy`) and a split target outside the console desktop
+  (`split_needs_desktop`). A split output is always `Fallback` (one top-most presenter
+  window per seat on a shared monitor: no independent flip, about one frame more latency,
+  shown in the manager), `rect` = the area's part of the desktop rect, `follow_mode` off
+  (the other seats use the mode), `pulsar_idd` gets the area size as the only mode
+  (HYPOTHESIS: Windows picks it although the EDID's preferred timing is the full panel).
+  The RDP monitor layout uses `rect`, so the seat session is the size of its part.
+  Presenter: `relayout` cuts the live desktop rect with `area.rect_in`; `console_clip` and
+  the guard home (`model::console_home`) use `area::free_part` (the console part of a
+  monitor next to seat surfaces when it is a rectangle). Console share: an output with
+  `console_share` (seat 1 shares that monitor) makes the seat host register a hidden
+  AppBar (`seat_display::win::appbar`, `SHAppBarMessage` `ABM_NEW` / `ABM_QUERYPOS` /
+  `ABM_SETPOS` / `ABM_REMOVE`, shell32, documented API) docked to the seat half's edge, so
+  the console work area shrinks to its half; the cursor clip keeps the console pointer
+  there. Halves only (an AppBar docks to one edge). No persistent state: the reservation
+  lives with the AppBar window; `ABM_REMOVE` on presenter reconfigure / drop, and a killed
+  seat host takes its window with it (HYPOTHESIS: Explorer drops the reservation of a dead
+  AppBar window on its next work-area check). Kiosk shell seats: `DeviceView::areas` (valid
+  splits only, `area::split_areas`) and `kiosk::seat_devices` give the seat its part as
+  its monitor rect. The idle saver never powers off a split monitor
+  (`Service::idle_monitors` = the seat's own monitors only). No driver, no SudoVDA, no
+  virtual console display yet: our `pulsar_idd` as the console's virtual display stays a
+  later step once it is signed. Same code on x64 and ARM64. Untested on hardware: all of it.
 
 ### 4.3 Input (`InputRouter` service-side, `InputSink` host-side; seat-input)
 

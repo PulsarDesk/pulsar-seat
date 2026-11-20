@@ -122,7 +122,7 @@ describe('dialogs', () => {
     const user = userEvent.setup();
     const row = screen.getAllByTestId('outputs-row')[0];
     // Without cloning each monitor gets one output, chosen in a list.
-    const pick = within(row).getByRole('combobox');
+    const pick = within(row).getByRole('combobox', { name: (n) => n.startsWith(t.outputs.outputFor('')) });
     const first = within(pick).getAllByRole('option')[1] as HTMLOptionElement;
     await user.selectOptions(pick, first.value);
     await user.click(screen.getByRole('switch', { name: t.outputs.forceAtStart }));
@@ -131,6 +131,7 @@ describe('dialogs', () => {
     expect(r.settings.force_assign_at_start).toBe(true);
     expect(r.monitors[0].outputs).toHaveLength(1);
     expect(r.settings.session_frame_rate, 'the default is not written').toBeUndefined();
+    expect(r.monitors[0].split).toEqual([0, 0, 0, 0]);
   });
 
   it('outputs dialog stores the machine-wide session frame rate', async () => {
@@ -148,6 +149,30 @@ describe('dialogs', () => {
     await user.selectOptions(pick, 'off');
     await user.click(screen.getByRole('button', { name: t.save }));
     expect(onSave.mock.calls[1][0].settings.session_frame_rate).toEqual({ mode: 'off', fps: 85 });
+  });
+
+  it('outputs dialog: split screen picker (G8) checks the shape and blocks an invalid grid', async () => {
+    const onSave = vi.fn();
+    render(OutputsDialog, { config: normalize(demoConfig()), devices: demoInventory(), onSave, onCancel: vi.fn() });
+    const user = userEvent.setup();
+    const picker = within(screen.getAllByTestId('outputs-row')[0]).getByTestId('split-picker');
+    const cells = within(picker).getAllByRole('combobox');
+    expect(cells).toHaveLength(4);
+    expect(within(picker).getByTestId('split-state')).toHaveTextContent(t.outputs.split.off);
+    // Seat 1 left half, seat 2 top right only: seat 1 may share only half and half.
+    await user.selectOptions(cells[0], '1');
+    await user.selectOptions(cells[2], '1');
+    await user.selectOptions(cells[1], '2');
+    expect(within(picker).getByTestId('split-state')).toHaveTextContent(t.outputs.split.consoleHalf);
+    expect(screen.getByRole('button', { name: t.save })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText(t.outputs.split.invalid)).toBeInTheDocument();
+    // Seat 2 takes the whole right half: a valid console share.
+    await user.selectOptions(cells[3], '2');
+    expect(within(picker).getByTestId('split-state')).toHaveTextContent(t.outputs.split.on(2));
+    await user.click(screen.getByRole('button', { name: t.save }));
+    const r = onSave.mock.calls[0][0];
+    expect(r.monitors[0].split).toEqual([1, 2, 1, 2]);
+    expect(r.monitors[0].outputs).toEqual([]);
   });
 
   it('picture dialog offers built-in and user pictures', async () => {

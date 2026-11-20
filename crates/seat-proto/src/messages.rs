@@ -944,6 +944,11 @@ pub struct DeviceView {
     /// groups more than one live device (spec 70 §5.1). Added 2026-11-13.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_key: Option<DeviceKey>,
+    /// Split monitor (OSMS-parity G8, 2026-11-20): each seat's part of this monitor when
+    /// its explicit assignment is a valid split ([`seat_core::area::split_areas`]); empty
+    /// otherwise. The kiosk shell places a seat's windows in its part. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<seat_core::area::SeatArea>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -10,7 +10,7 @@
   import { t } from '#lib/i18n.ts';
   import type { CanvasItem, DropTarget } from '#lib/model.ts';
   import { Icon, PulseRings } from '#lib/ui/index.ts';
-  import type { DeviceView, SeatNumber } from '#lib/types.ts';
+  import type { DeviceView, ScreenArea, SeatNumber } from '#lib/types.ts';
   import { DRAG_TYPE } from './drag.svelte.ts';
 
   interface Props {
@@ -22,9 +22,11 @@
     attention?: boolean;
     showIds?: boolean;
     expanded?: boolean;
+    /** Split screen (G8): this seat's part of the monitor; null = the whole monitor. */
+    area?: ScreenArea | null;
     onOpen: (el: HTMLElement, item: CanvasItem, from: DropTarget) => void;
   }
-  let { item, seat, all, moved = false, highlight = false, attention = false, showIds = false, expanded = false, onOpen }: Props = $props();
+  let { item, seat, all, moved = false, highlight = false, attention = false, showIds = false, expanded = false, area = null, onOpen }: Props = $props();
 
   let el: HTMLButtonElement | undefined = $state();
   let dragging = $state(false);
@@ -71,12 +73,15 @@
   }}
   ondragend={() => (dragging = false)}
 >
-  <span class="screen"><PulseRings number={seat} size={48} /></span>
+  <span class="screen" class:split={!!area}>
+    {#if area}<span class="part {area}"><PulseRings number={seat} size={28} /></span>{:else}<PulseRings number={seat} size={48} />{/if}
+  </span>
   <span class="cap" id="{uid}-cap">
     <b>{d.name}</b>
     {#if id}<span class="mono">{id}</span>{/if}
     {#if highlight}<span class="moved-word">{t.device.found}</span>{/if}
     {#if moved}<span class="moved-word">{t.device.moved}</span>{/if}
+    {#if area}<span class="part-word">{t.outputs.split.areaName[area]}</span>{/if}
     {#if !d.present}<span class="state" title={t.device.unplugged}><Icon name="unplug" size={14} /><span class="sr-only">, {t.device.unplugged}</span></span>{/if}
     {#if warn}<span class="state" title={t.canvas.attention}><Icon name="alert" size={14} tone="warn" /><span class="sr-only">, {t.canvas.attention}</span></span>{/if}
   </span>
@@ -118,6 +123,41 @@
     background: var(--accent-soft);
     outline: 2px dashed var(--accent-ink);
     outline-offset: -2px;
+  }
+  /* Split screen (G8): the seat's part of the monitor, the rest stays surface-3. */
+  .screen.split {
+    position: relative;
+    overflow: hidden;
+  }
+  .part {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: var(--border);
+  }
+  .part.left,
+  .part.top_left,
+  .part.bottom_left {
+    right: 50%;
+  }
+  .part.right,
+  .part.top_right,
+  .part.bottom_right {
+    left: 50%;
+  }
+  .part.top,
+  .part.top_left,
+  .part.top_right {
+    bottom: 50%;
+  }
+  .part.bottom,
+  .part.bottom_left,
+  .part.bottom_right {
+    top: 50%;
+  }
+  .part-word {
+    color: var(--text-muted);
   }
   .face.off .screen {
     color: var(--text-faint);

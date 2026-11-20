@@ -775,7 +775,10 @@ impl Service {
     /// Apply input routes, console topology and gate plans for the current config
     /// (idempotent; boot, config apply, hot-plug, every seat logon / logoff).
     /// The console topology of the effective monitor masks: console monitors stay in the
-    /// desktop, single-seat monitors are reserved for their seat.
+    /// desktop, single-seat monitors are reserved for their seat. Split monitors (several
+    /// seats with areas, G8) are reserved for nobody: they stay in the console desktop,
+    /// where each seat's window presenter covers its part, and Pulsar never takes them out
+    /// of it (several seat hosts cannot share one specialized scan-out).
     pub(crate) fn display_plan(eff: &[seat_core::assign::Effective], dedicated: bool) -> TopologyPlan {
         let mut plan = TopologyPlan { console: Vec::new(), seats: Vec::new() };
         let mut per_seat: BTreeMap<SeatNumber, Vec<DeviceKey>> = BTreeMap::new();
@@ -1225,7 +1228,7 @@ impl Service {
             });
             let Some(seat) = mask.and_then(|m| m.single()) else { return };
             st.last_input_ms.insert(seat, now);
-            st.idle_blanked.remove(&seat).then(|| Self::seat_monitors(&st, seat))
+            st.idle_blanked.remove(&seat).then(|| Self::idle_monitors(&st, seat))
         };
         if let Some(monitors) = wake {
             let d = self.backends().display;
@@ -1249,7 +1252,7 @@ impl Service {
                 st.seats.values().filter(|s| !s.seat.is_console() && Self::managed(&st, s.seat) && s.is_active()).map(|s| s.seat).collect();
             if timeout_ms == 0 || !st.config.settings.enabled {
                 let wake: Vec<DeviceKey> =
-                    std::mem::take(&mut st.idle_blanked).into_iter().flat_map(|s| Self::seat_monitors(&st, s)).collect();
+                    std::mem::take(&mut st.idle_blanked).into_iter().flat_map(|s| Self::idle_monitors(&st, s)).collect();
                 (Vec::new(), wake)
             } else {
                 let mut blank = Vec::new();
@@ -1257,7 +1260,7 @@ impl Service {
                     let last = *st.last_input_ms.entry(seat).or_insert(now);
                     if now.saturating_sub(last) >= timeout_ms && st.idle_blanked.insert(seat) {
                         log::info(&format!("seat {seat}: idle, monitors off"));
-                        blank.extend(Self::seat_monitors(&st, seat));
+                        blank.extend(Self::idle_monitors(&st, seat));
                     }
                 }
                 (blank, Vec::new())
@@ -1562,6 +1565,20 @@ mod kiosk_map_tests {
         // Not in the console session (switching) or dedicated host: nothing.
         assert!(kiosk_map_entries(&logons, &kiosk, None, false, &devs, inst).is_empty());
         assert!(kiosk_map_entries(&logons, &kiosk, Some(1), true, &devs, inst).is_empty());
+    }
+
+    /// Split screen (G8): a monitor split between seats is reserved for nobody (it stays in
+    /// the console desktop), one shared with the console is a console monitor.
+    #[test]
+    fn split_monitors_stay_in_the_console_desktop() {
+        let devs = vec![
+            eff("mon2", DeviceKind::Monitor, SeatMask::from_seats([s(2)])),
+            eff("split23", DeviceKind::Monitor, SeatMask::from_seats([s(2), s(3)])),
+            eff("split12", DeviceKind::Monitor, SeatMask::from_seats([s(1), s(2)])),
+        ];
+        let p = Service::display_plan(&devs, false);
+        assert_eq!(p.console, vec![DeviceKey::new("split12").unwrap()]);
+        assert_eq!(p.seats, vec![(s(2), vec![DeviceKey::new("mon2").unwrap()])]);
     }
 }
 

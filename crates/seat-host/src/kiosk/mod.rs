@@ -228,7 +228,19 @@ pub struct SeatDevices {
 pub fn seat_devices(views: &[DeviceView], seat: SeatNumber) -> SeatDevices {
     let mut out = SeatDevices::default();
     let mut audio = Vec::new();
-    for v in views.iter().filter(|v| v.device.present && v.effective.single() == Some(seat)) {
+    for v in views.iter().filter(|v| v.device.present && v.effective.contains(seat) && !v.effective.is_shared()) {
+        if v.effective.single() != Some(seat) {
+            // Several seats (G8): only a split monitor that gives this seat a part; the
+            // seat's windows stay in that part.
+            let area = v.areas.iter().find(|a| a.seat == seat).map(|a| a.area);
+            if let (Some(a), DeviceDetails::Display(d)) = (area, &v.device.details)
+                && d.in_console_desktop
+                && let Some(r) = d.desktop_rect.filter(|r| r.width > 0 && r.height > 0)
+            {
+                out.monitors.push(a.rect_in(&r));
+            }
+            continue;
+        }
         match &v.device.details {
             DeviceDetails::Input(i) if !i.interface_path.is_empty() => out.units.push(i.interface_path.clone()),
             DeviceDetails::Audio(a) => {
@@ -531,7 +543,24 @@ mod tests {
             warnings: vec![],
             details,
         };
-        DeviceView { device, effective: mask, source: MaskSource::Explicit, isolation: None, arrived_ms: 0, port_key: None, container_key: None }
+        DeviceView { device, effective: mask, source: MaskSource::Explicit, isolation: None, arrived_ms: 0, port_key: None, container_key: None, areas: vec![] }
+    }
+
+    /// Split screen (G8): a kiosk seat's windows go to its part of a shared monitor.
+    #[test]
+    fn split_monitor_gives_the_seat_its_part() {
+        use seat_core::area::{ScreenArea, SeatArea};
+        let disp = |x: i32, on: bool| {
+            DeviceDetails::Display(DisplayInfo { desktop_rect: Some(Rect { x, y: 0, width: 1920, height: 1080 }), in_console_desktop: on, ..Default::default() })
+        };
+        let both = SeatMask::from_seats([seat(2), seat(3)]);
+        let mut split = view("split", DeviceKind::Monitor, disp(1920, true), both, true);
+        split.areas = vec![SeatArea { seat: seat(2), area: ScreenArea::Left }, SeatArea { seat: seat(3), area: ScreenArea::Right }];
+        let plain = view("plain", DeviceKind::Monitor, disp(0, true), both, true);
+        let views = vec![split, plain];
+        assert_eq!(seat_devices(&views, seat(2)).monitors, vec![Rect { x: 1920, y: 0, width: 960, height: 1080 }]);
+        assert_eq!(seat_devices(&views, seat(3)).monitors, vec![Rect { x: 2880, y: 0, width: 960, height: 1080 }]);
+        assert!(seat_devices(&views, seat(4)).monitors.is_empty());
     }
 
     #[test]

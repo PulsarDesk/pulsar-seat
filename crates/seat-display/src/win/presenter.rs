@@ -219,6 +219,8 @@ pub struct WindowPresenter {
     thread: Option<JoinHandle<()>>,
     tid: u32,
     options: PresenterOptions,
+    /// Console share AppBars (G8) and what they reserve.
+    share: Option<(Vec<(Rect, seat_core::area::Edge)>, super::appbar::ConsoleShare)>,
 }
 
 static SHARED: OnceLock<Mutex<Option<Arc<Mutex<Shared>>>>> = OnceLock::new();
@@ -239,7 +241,7 @@ impl WindowPresenter {
     }
 
     pub fn with_options(options: PresenterOptions) -> Self {
-        Self { shared: Arc::new(Mutex::new(Shared::default())), thread: None, tid: 0, options }
+        Self { shared: Arc::new(Mutex::new(Shared::default())), thread: None, tid: 0, options, share: None }
     }
 
     /// Get layout changes (display change, DPI change, output lost / back).
@@ -296,7 +298,26 @@ impl WindowPresenter {
             PostThreadMessageW(self.tid, WM_APP_RECONFIGURE, WPARAM(0), LPARAM(0))
                 .map_err(|e| super::win_err("presenter", "PostThreadMessageW", &e))?;
         }
+        self.update_console_share(outputs);
         Ok(())
+    }
+
+    /// Console share (G8): keep the console's work area out of this seat's half of a
+    /// monitor it shares with seat 1 (AppBar per half, removed when no longer needed).
+    /// Also for `guard_only` (the RDP host window covers the half instead of a presenter).
+    fn update_console_share(&mut self, outputs: &SeatOutputs) {
+        let want = crate::model::console_share_reservations(outputs);
+        if self.share.as_ref().is_some_and(|(r, _)| *r == want) {
+            return;
+        }
+        self.share = None; // ABM_REMOVE of the old reservations first
+        if want.is_empty() || !self.options.clip_cursor {
+            return;
+        }
+        match super::appbar::ConsoleShare::start(want.clone()) {
+            Ok(s) => self.share = Some((want, s)),
+            Err(e) => log::warn!("presenter: console share AppBar failed: {e}"),
+        }
     }
 
     fn ensure_thread(&mut self) -> BackendResult<()> {
@@ -1023,7 +1044,9 @@ fn relayout(shared: &Arc<Mutex<Shared>>) {
             let by_both = targets.iter().find(|t| t.adapter_luid == p.adapter_luid && t.target_id == p.target_id);
             let by_id: Vec<_> = targets.iter().filter(|t| t.target_id == p.target_id).collect();
             let t = by_both.or_else(|| (by_id.len() == 1).then(|| by_id[0]));
-            match t.and_then(|t| t.active.then_some(t.desktop_rect).flatten()) {
+            // Split monitor (G8): only the seat's part of the monitor.
+            let area = p.area;
+            match t.and_then(|t| t.active.then_some(t.desktop_rect).flatten()).map(|r| area.map_or(r, |a| a.rect_in(&r))) {
                 Some(r) => {
                     let was_lost = o.lost;
                     o.lost = false;
@@ -1121,12 +1144,7 @@ fn guard_tick(shared: &Arc<Mutex<Shared>>, opt: &PresenterOptions, reassert_topm
     let mons = gdi::monitors();
     let primary = mons.iter().find(|m| m.primary).map(|m| m.rect);
     let rects: Vec<Rect> = mons.iter().map(|m| m.rect).collect();
-    let home = mons
-        .iter()
-        .filter(|m| !seats.iter().any(|s| crate::model::intersects(&m.rect, s)))
-        .find(|m| m.primary)
-        .or_else(|| mons.iter().find(|m| !seats.iter().any(|s| crate::model::intersects(&m.rect, s))))
-        .map(|m| m.work);
+    let home = crate::model::console_home(&mons.iter().map(|m| (m.rect, m.work, m.primary)).collect::<Vec<_>>(), &seats);
     {
         let mut g = guard_state().lock().unwrap_or_else(|p| p.into_inner());
         g.seat_rects = seats.clone();

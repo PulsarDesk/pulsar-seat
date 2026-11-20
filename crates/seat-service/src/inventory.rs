@@ -239,6 +239,7 @@ impl Inventory {
                 None => (e.device.kind.default_mask(), MaskSource::Default),
             },
         };
+        let areas = if d.kind == DeviceKind::Monitor { seat_core::area::split_areas(config, &d.key, effective) } else { Vec::new() };
         DeviceView {
             device: e.device.clone(),
             effective,
@@ -247,6 +248,7 @@ impl Inventory {
             arrived_ms: e.arrived_ms,
             port_key: port,
             container_key: container,
+            areas,
         }
     }
 

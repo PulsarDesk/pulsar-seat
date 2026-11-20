@@ -6,6 +6,7 @@
 
 import * as M from './mask.ts';
 import { compatIssues } from './compat.ts';
+import { checkSplit, splitFromGrid, splitIssueCode, type SplitGrid } from './area.ts';
 import {
   DEFAULT_LOOPBACK_LISTENER_PORT,
   EXPERIMENTAL_WARNING_VERSION,
@@ -426,6 +427,11 @@ export function setDeviceMask(c: Config, d: Device, mask: SeatMask): Config {
   const m = coerceMask(d.kind, mask);
   const existing = out.devices.find((x) => x.key === d.key);
   if (existing) {
+    // Moving a split monitor (G8) to one seat ends the split.
+    if (existing.mask !== m && existing.options?.areas) {
+      delete existing.options.areas;
+      if (Object.keys(existing.options).length === 0) delete existing.options;
+    }
     existing.mask = m;
     existing.name = d.name;
     if (d.label) existing.label = d.label;
@@ -502,6 +508,32 @@ export function clearAllPictures(c: Config): Config {
 export function setMonitorOutputs(c: Config, d: Device, targets: number[], currentMask: SeatMask): Config {
   const uniq = [...new Set(targets)].sort((a, b) => a - b);
   return setOption(c, d, currentMask, 'outputs', uniq);
+}
+
+/**
+ * Split screen (OSMS-parity G8): give a monitor to the seats of a 2x2 grid. Two to four
+ * seats = a split (mask = those seats, one area each); fewer = the split ends and the monitor
+ * keeps its seat (or goes to the grid's only seat). An invalid grid leaves the config as is.
+ */
+export function setMonitorSplit(c: Config, d: Device, grid: SplitGrid, currentMask: SeatMask): Config {
+  const s = splitFromGrid(grid);
+  if (s.kind === 'invalid') return c;
+  if (s.kind === 'none') {
+    const only = grid.find((x) => x > 0);
+    const a = assignmentOf(c, d.key);
+    if (only) return setDeviceMask(c, d, M.bit(only));
+    if (!a?.options?.areas) return c;
+    // Grid emptied: the lowest seat of the split keeps the monitor.
+    return setDeviceMask(c, d, a.mask);
+  }
+  const out = assignmentOf(c, d.key) ? clone(c) : setDeviceMask(c, d, currentMask);
+  const next = clone(out);
+  const a = next.devices.find((x) => x.key === d.key)!;
+  a.mask = s.mask;
+  a.options = { ...(a.options ?? {}), areas: s.areas };
+  // Clone outputs and a split exclude each other (seat-core `clone_on_split`).
+  delete a.options.outputs;
+  return normalize(next);
 }
 
 export function setOutputSettings(c: Config, s: OutputSettings): Config {
@@ -997,7 +1029,11 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
     if (keys.has(d.key)) out.push(issue('error', 'duplicate_device', { device: d.key }));
     keys.add(d.key);
     if (M.beyond(d.mask, count)) out.push(issue('error', 'mask_beyond_seats', { device: d.key }));
-    if (policyOf(d.kind) === 'exclusive' && (M.isShared(d.mask) || M.count(d.mask) > 1)) {
+    // Split screen (G8): a valid split monitor may name several seats; a broken split is
+    // reported once, on its areas.
+    const split = checkSplit(d.kind, d.mask, d.options);
+    if (typeof split === 'string') out.push(issue('error', splitIssueCode(split), { device: d.key, field: 'options.areas', reason: split }));
+    if (split === false && policyOf(d.kind) === 'exclusive' && (M.isShared(d.mask) || M.count(d.mask) > 1)) {
       out.push(issue('error', 'exclusive_on_several_seats', { device: d.key }));
     }
   }

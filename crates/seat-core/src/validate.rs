@@ -158,6 +158,16 @@ pub enum IssueCode {
     /// A named-object rule (`settings.apps.object_rules`) is not valid or there are more
     /// than [`crate::config::MAX_OBJECT_RULES`]. Added 2026-11-17 (compat-tweaks), error.
     InvalidObjectRule,
+    /// Split screen (OSMS-parity G8, 2026-11-18): areas on a device that is not a monitor,
+    /// on a shared monitor, for more than four seats, a seat of the mask without an area
+    /// (or an area for a seat outside the mask, or twice), or clone outputs on a split
+    /// monitor. `reason` = [`crate::area::SplitIssue`]. Error.
+    InvalidScreenArea,
+    /// Split screen: two seats' areas of one monitor overlap. Error.
+    ScreenAreaOverlap,
+    /// Split screen with the console (seat 1): only half and half with exactly one other
+    /// seat (the console part is kept free with an AppBar, which docks to an edge). Error.
+    ConsoleShareNotHalf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,7 +249,21 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
         if d.mask.beyond(count) {
             out.push(Issue::new(Severity::Error, IssueCode::MaskBeyondSeats).device(&d.key));
         }
-        if d.kind.policy() == SharePolicy::Exclusive && (d.mask.is_shared() || d.mask.count() > 1) {
+        let split = match crate::area::check_split(d.kind, d.mask, &d.options) {
+            Ok(split) => split,
+            Err(why) => {
+                let code = match why {
+                    crate::area::SplitIssue::Overlap => IssueCode::ScreenAreaOverlap,
+                    crate::area::SplitIssue::ConsoleShareNotHalf => IssueCode::ConsoleShareNotHalf,
+                    _ => IssueCode::InvalidScreenArea,
+                };
+                let reason = serde_json::to_value(why).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+                out.push(Issue::new(Severity::Error, code).device(&d.key).field("options.areas").reason(&reason));
+                // Reported once: the areas are the problem, not the seat list.
+                true
+            }
+        };
+        if !split && d.kind.policy() == SharePolicy::Exclusive && (d.mask.is_shared() || d.mask.count() > 1) {
             out.push(Issue::new(Severity::Error, IssueCode::ExclusiveOnSeveralSeats).device(&d.key));
         }
     }
@@ -707,6 +731,37 @@ mod tests {
         assert_eq!(codes(&validate(&c, None)), vec![IssueCode::CloneNotAllowed]);
         c.settings.outputs.allow_clone = true;
         assert!(validate(&c, None).is_empty());
+    }
+
+    #[test]
+    fn split_monitor_checks() {
+        use crate::area::{ScreenArea, SeatArea};
+        let mut c = Config::default();
+        c.seats.push(crate::config::SeatConfig::new(s(2)));
+        c.seats.push(crate::config::SeatConfig::new(s(3)));
+        let mut a = assign("mon;1", DeviceKind::Monitor, SeatMask::from_seats([s(2), s(3)]));
+        c.devices.push(a.clone());
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::ExclusiveOnSeveralSeats], "two seats without areas");
+        a.options.areas = vec![SeatArea { seat: s(2), area: ScreenArea::Left }, SeatArea { seat: s(3), area: ScreenArea::Right }];
+        c.devices[0] = a.clone();
+        assert_eq!(codes(&validate(&c, None)), vec![]);
+        c.devices[0].options.areas[1].area = ScreenArea::BottomLeft;
+        let got = validate(&c, None);
+        assert_eq!(codes(&got), vec![IssueCode::ScreenAreaOverlap]);
+        assert_eq!(got[0].reason.as_deref(), Some("overlap"));
+        c.devices[0].options.areas.pop();
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::InvalidScreenArea]);
+        // Console share: halves only.
+        c.devices[0] = assign("mon;1", DeviceKind::Monitor, SeatMask::from_seats([s(1), s(2)]));
+        c.devices[0].options.areas = vec![SeatArea { seat: s(1), area: ScreenArea::Top }, SeatArea { seat: s(2), area: ScreenArea::BottomLeft }];
+        assert_eq!(codes(&validate(&c, None)), vec![IssueCode::ConsoleShareNotHalf]);
+        c.devices[0].options.areas[1].area = ScreenArea::Bottom;
+        assert_eq!(codes(&validate(&c, None)), vec![]);
+        // Old configs (no `areas`) still load; the field is not written when empty.
+        let j = serde_json::to_string(&assign("mon;2", DeviceKind::Monitor, s(2).mask())).unwrap();
+        assert!(!j.contains("areas"), "{j}");
+        let back: DeviceAssignment = serde_json::from_str(&serde_json::to_string(&c.devices[0]).unwrap()).unwrap();
+        assert_eq!(back, c.devices[0]);
     }
 
     #[test]
