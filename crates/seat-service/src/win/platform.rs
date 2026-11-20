@@ -1321,6 +1321,11 @@ impl Platform for WinPlatform {
             None => Ok(()),
         });
         out.push(TweakOutcome { tweak: "defender_exclusions".into(), result: r });
+        // "Shut down the system" for BUILTIN\Users (OSMS parity G4, 2026-11-18).
+        let r = seat_compat::console_guard::sync_users_shutdown(&j, &seat_compat::WinOps, tweaks.users_shutdown_right_off)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+        out.push(TweakOutcome { tweak: "users_shutdown_right_off".into(), result: r });
         out
     }
 
@@ -1338,6 +1343,7 @@ impl Platform for WinPlatform {
                 TweakId::FastStartupOff,
                 TweakId::WindowsUpdate,
                 TweakId::DeviceInstallDeny,
+                TweakId::InactivityLockOff,
             ]
             .into_iter()
             .map(|t| (t, revert(&j, &seat_compat::WinOps, t).map(|_| ()).map_err(|e| e.to_string())))
@@ -1345,7 +1351,36 @@ impl Platform for WinPlatform {
         );
         let r = seat_compat::defender::sync(&j, &seat_compat::WinOps, None).map(|_| ()).map_err(|e| e.to_string());
         out.push(TweakOutcome { tweak: "defender_exclusions".into(), result: r });
+        let r = seat_compat::console_guard::sync_users_shutdown(&j, &seat_compat::WinOps, false).map(|_| ()).map_err(|e| e.to_string());
+        out.push(TweakOutcome { tweak: "users_shutdown_right_off".into(), result: r });
         out
+    }
+
+    fn sync_console_guard(&self, owner: crate::platform::GuardOwner, sid: Option<&str>) -> Result<String, String> {
+        use seat_compat::console_guard as cg;
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = match owner {
+            crate::platform::GuardOwner::Host => cg::sync_host(&j, &seat_compat::WinOps, sid),
+            crate::platform::GuardOwner::SeatOne => cg::sync_seat_one(&j, &seat_compat::WinOps, sid),
+        }
+        .map_err(|e| e.to_string())?;
+        if let Some((who, e)) = r.failed.first() {
+            return Err(format!("{who}: {e}"));
+        }
+        Ok(r.summary())
+    }
+
+    fn sync_no_power_menu(&self, sids: &[String]) -> Result<String, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = seat_compat::console_guard::sync_no_close(&j, &seat_compat::WinOps, sids).map_err(|e| e.to_string())?;
+        if let Some((who, e)) = r.failed.first() {
+            return Err(format!("{who}: {e}"));
+        }
+        Ok(r.summary())
+    }
+
+    fn sleep_off_state(&self) -> Option<bool> {
+        seat_compat::tweaks::sleep_off_state(&seat_compat::WinOps)
     }
 
     fn publish_object_rules(&self, rules: &[seat_shim_core::objects::ObjectRule]) -> Result<(), String> {

@@ -246,6 +246,12 @@ pub struct SeatConfig {
     /// `deny_local_logon_unsupported`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deny_local_logon: bool,
+    /// No shut down / restart / sleep in the seat user's Start menu, Ctrl+Alt+Del screen
+    /// and Alt+F4 dialog (the documented per-user `NoClose` policy in the seat account's
+    /// hive, journaled; OSMS parity G4, 2026-11-18, additive). Needs the seat's account.
+    /// The privilege itself is the machine-wide [`Tweaks::users_shutdown_right_off`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_power_menu: bool,
     /// Physical-seat part; set iff `kind == local`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSeat>,
@@ -642,6 +648,7 @@ impl SeatConfig {
             pad_ignore_devices: Vec::new(),
             environment: Vec::new(),
             deny_local_logon: false,
+            no_power_menu: false,
             local: Some(LocalSeat::default()),
             remote: None,
         }
@@ -1008,6 +1015,43 @@ pub struct Tweaks {
     /// `MSFT_MpPreference` WMI class. Added 2026-11-17 (compat-tweaks, additive).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub defender_exclusions: bool,
+    /// Machine inactivity limit off (`InactivityTimeoutSecs` = 0 under
+    /// `HKLM\...\Policies\System`): Windows does not lock the console after an idle time
+    /// set by policy. OSMS parity G4 (2026-11-18, additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inactivity_lock_off: bool,
+    /// Remove "Shut down the system" (`SeShutdownPrivilege`) from `BUILTIN\Users`, only
+    /// while `BUILTIN\Administrators` holds it: standard users (seat users) can no longer
+    /// shut down or restart the PC; administrators still can. Journaled, given back when
+    /// off. OSMS parity G4 (2026-11-18, additive).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub users_shutdown_right_off: bool,
+}
+
+/// Console lock guard (OSMS parity G4, 2026-11-18, additive): keeps the console, whose
+/// desktop shows the local seats, from locking. Per-user policy values, journaled
+/// (`seat_compat::console_guard`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConsoleGuard {
+    /// `dedicated_host`: lock (`DisableLockWorkstation`) and screen saver off for the
+    /// account signed in at the console (the host account). Default on.
+    pub host_lock_off: bool,
+    /// `seat_one_console`: lock off for seat 1's user while other seats run (released on
+    /// the last seat stop). Default off: seat 1 is a person's own account.
+    pub seat_one_lock_off: bool,
+}
+
+impl Default for ConsoleGuard {
+    fn default() -> Self {
+        Self { host_lock_off: true, seat_one_lock_off: false }
+    }
+}
+
+impl ConsoleGuard {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Windows Update for Business policies Pulsar Seat may write (all off by default).
@@ -1214,6 +1258,9 @@ pub struct GlobalSettings {
     /// 2026-11-17, additive).
     #[serde(skip_serializing_if = "AppCompatSettings::is_default")]
     pub apps: AppCompatSettings,
+    /// Console lock guard (OSMS parity G4, 2026-11-18, additive).
+    #[serde(skip_serializing_if = "ConsoleGuard::is_default")]
+    pub console_guard: ConsoleGuard,
     /// Remote seat machine settings (Pulsar Split's old global settings; schema 2). Boxed
     /// (schema 3): keeps the protocol's response frame within clippy's enum size limit.
     pub remote: Box<crate::remote::RemoteSettings>,
@@ -1332,6 +1379,7 @@ impl Default for GlobalSettings {
             outputs: OutputSettings::default(),
             kiosk: KioskSettings::default(),
             apps: AppCompatSettings::default(),
+            console_guard: ConsoleGuard::default(),
             remote: Box::default(),
         }
     }
@@ -1343,6 +1391,22 @@ pub const SEAT_LIMIT: u8 = MAX_SEATS;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_guard_is_additive() {
+        let g = GlobalSettings::default();
+        let j = serde_json::to_value(&g).unwrap();
+        assert!(j.get("console_guard").is_none(), "default is not written");
+        assert!(j["tweaks"].get("inactivity_lock_off").is_none());
+        let back: GlobalSettings = serde_json::from_value(j).unwrap();
+        assert!(back.console_guard.host_lock_off);
+        assert!(!back.console_guard.seat_one_lock_off);
+        let old: GlobalSettings = serde_json::from_str(r#"{"console_guard":{"seat_one_lock_off":true}}"#).unwrap();
+        assert!(old.console_guard.host_lock_off, "missing field keeps its default");
+        assert!(old.console_guard.seat_one_lock_off);
+        let s: SeatConfig = serde_json::from_value(serde_json::to_value(SeatConfig::new(SeatNumber::new(2).unwrap())).unwrap()).unwrap();
+        assert!(!s.no_power_menu);
+    }
 
     #[test]
     fn seat_redirect_is_additive_and_off_by_default() {

@@ -101,6 +101,13 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   contains a password or token. `get_config` never decrypts secrets ("password set" is
   cached per seat; `has` wipes the LSA buffer without copying it). Passwords are limited
   to 256 characters. CLI output is localized (English default, Turkish locale; `cli::copy`).
+- Console lock guard (OSMS parity G4, `src/console_guard.rs`): decides whose per-user
+  `DisableLockWorkstation` / `ScreenSaveActive` values `seat_compat::console_guard` writes
+  (the `dedicated_host` console account; seat 1's user only with the opt-in, while other
+  seats run), syncs `NoClose` for seats with `no_power_menu` and adds the `host_sleep_off` /
+  `console_lock` checks to `Preflight`. All writes are compat-journal entries, undone on
+  off, disable, the first sync after a crash (seat 1) and uninstall. Details in
+  docs/agents/architecture.md "Console lock guard".
 - Boot waits for services with `NotifyServiceStatusChangeW` and alertable waits (no
   polling). A service that does not exist is reported at once (`PlugPlay` does not exist
   on Windows build 28000, the dev box: the boot logs `services not running after wait`).
@@ -131,3 +138,6 @@ without privileges on the console desktop), `WTSLogoffSession`, reboot, Event Lo
 messages (message DLL path, ARM64 `FrameworkArm64` is a HYPOTHESIS), required-privilege
 list completeness (HYPOTHESIS), pre-shutdown ordering and checkpoints, resume handling,
 session-change mapping on real RDP sessions, every package backend.
+Console lock guard (HYPOTHESIS): `DisableLockWorkstation` stops Win+L for an auto-logon
+account, the per-user screen-saver policy, `NoClose` in a running Explorer, the removed
+`BUILTIN\Users` shutdown right from the next sign-in.

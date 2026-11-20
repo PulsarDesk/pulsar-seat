@@ -19,6 +19,15 @@ pub struct BrokerPipes {
     pub agent_write: u64,
 }
 
+/// Which console lock guard a [`Platform::sync_console_guard`] call is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardOwner {
+    /// `dedicated_host`: the account signed in at the console.
+    Host,
+    /// `seat_one_console` opt-in: seat 1's user while other seats run.
+    SeatOne,
+}
+
 /// A signed-in session user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionUser {
@@ -377,6 +386,24 @@ pub trait Platform: Send + Sync {
     fn revert_user_environments(&self) -> Result<usize, String> {
         Ok(0)
     }
+    /// Console lock guard (OSMS parity G4): make `owner`'s per-user policy values follow
+    /// `sid` (`Some` = this account, `None` = undo), journaled
+    /// (`seat_compat::console_guard`). Returns a one-line summary. Default: nothing.
+    fn sync_console_guard(&self, owner: GuardOwner, sid: Option<&str>) -> Result<String, String> {
+        let _ = (owner, sid);
+        Ok(String::new())
+    }
+    /// `NoClose` for exactly these seat accounts (`seat_compat::console_guard::sync_no_close`,
+    /// journaled; empty = undo ours). Default: nothing.
+    fn sync_no_power_menu(&self, sids: &[String]) -> Result<String, String> {
+        let _ = sids;
+        Ok(String::new())
+    }
+    /// The active power plan keeps the PC and its displays on (mains power):
+    /// `seat_compat::tweaks::sleep_off_state`. Default: unknown.
+    fn sleep_off_state(&self) -> Option<bool> {
+        None
+    }
     /// Steam legacy proxy-DLL report / quarantine / restore (`seat_compat::steam`).
     fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
         let _ = action;
@@ -519,6 +546,12 @@ pub mod mock {
         /// `sync_user_environment` calls: (sid, variables).
         pub user_env: Mutex<Vec<(String, Vec<seat_core::config::EnvVar>)>>,
         pub user_env_reverts: AtomicU32,
+        /// `sync_console_guard` calls: (owner, sid).
+        pub console_guard: Mutex<Vec<(super::GuardOwner, Option<String>)>>,
+        /// `sync_no_power_menu` calls.
+        pub no_power_menu: Mutex<Vec<Vec<String>>>,
+        /// `sleep_off_state` answer.
+        pub sleep_off: Mutex<Option<bool>>,
         /// `steam_proxy` actions.
         pub steam_actions: Mutex<Vec<seat_proto::steam::SteamProxyAction>>,
         next_pid: AtomicU32,
@@ -823,6 +856,17 @@ pub mod mock {
         fn revert_user_environments(&self) -> Result<usize, String> {
             self.user_env_reverts.fetch_add(1, Ordering::SeqCst);
             Ok(0)
+        }
+        fn sync_console_guard(&self, owner: super::GuardOwner, sid: Option<&str>) -> Result<String, String> {
+            lock(&self.console_guard).push((owner, sid.map(str::to_string)));
+            Ok(String::new())
+        }
+        fn sync_no_power_menu(&self, sids: &[String]) -> Result<String, String> {
+            lock(&self.no_power_menu).push(sids.to_vec());
+            Ok(String::new())
+        }
+        fn sleep_off_state(&self) -> Option<bool> {
+            *lock(&self.sleep_off)
         }
         fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
             lock(&self.steam_actions).push(action.clone());

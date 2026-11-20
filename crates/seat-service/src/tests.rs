@@ -3720,3 +3720,113 @@ fn host_audio_notes_reach_the_seat_runtime() {
     h.s.on_host_audio_report(s(2), true, true, vec![]);
     assert!(h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap().audio_notes.is_empty());
 }
+
+/// OSMS parity G4 (2026-11-18): under `dedicated_host` the account signed in at the console
+/// gets the lock guard; nothing is undone while nobody is signed in; the service stop keeps
+/// it.
+#[test]
+fn console_guard_follows_the_host_account() {
+    use crate::platform::GuardOwner;
+    let mut c = two_seat_config();
+    c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+    let h = harness_with(c, None);
+    // Nobody at the console yet: the host guard is left alone.
+    let console = h.p.console.lock().unwrap().take();
+    h.s.boot();
+    h.s.tick();
+    assert!(!h.p.console_guard.lock().unwrap().iter().any(|(o, _)| *o == GuardOwner::Host), "{:?}", h.p.console_guard.lock().unwrap());
+    *h.p.console.lock().unwrap() = console;
+    h.p.sign_in(1, "host");
+    h.s.tick();
+    assert_eq!(h.p.console_guard.lock().unwrap().last().cloned(), Some((GuardOwner::Host, Some("S-1-5-21-9-host".to_string()))));
+    let n = h.p.console_guard.lock().unwrap().len();
+    h.s.tick();
+    assert_eq!(h.p.console_guard.lock().unwrap().len(), n, "no call without a change");
+    h.s.shutdown();
+    assert!(!h.p.console_guard.lock().unwrap()[n..].iter().any(|(o, _)| *o == GuardOwner::Host));
+}
+
+#[test]
+fn console_guard_host_is_undone_when_the_topology_changes() {
+    use crate::platform::GuardOwner;
+    let mut c = two_seat_config();
+    c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.p.sign_in(1, "host");
+    h.s.tick();
+    let mut a = admin();
+    let base = h.s.status().config_revision;
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let mut cfg = view.config.clone();
+    cfg.settings.backends.host_topology = seat_core::backend::session::HostTopology::SeatOneConsole;
+    call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: base, force: false }).unwrap();
+    assert!(h.p.console_guard.lock().unwrap().contains(&(GuardOwner::Host, None)), "{:?}", h.p.console_guard.lock().unwrap());
+}
+
+/// Seat 1's opt-in guard: engaged while seat 2 runs, released when it stops and on service
+/// stop; never without the opt-in.
+#[test]
+fn console_guard_seat_one_engages_while_seats_run() {
+    use crate::platform::GuardOwner;
+    let seat1 = |h: &Harness| {
+        h.p.console_guard.lock().unwrap().iter().filter(|(o, _)| *o == GuardOwner::SeatOne).cloned().collect::<Vec<_>>()
+    };
+    // Without the opt-in: only releases.
+    let h = harness();
+    h.p.sign_in(1, "mehmet");
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.s.tick();
+    assert!(seat1(&h).iter().all(|(_, s)| s.is_none()), "{:?}", seat1(&h));
+    // With the opt-in.
+    let mut c = two_seat_config();
+    c.settings.console_guard.seat_one_lock_off = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.p.sign_in(1, "mehmet");
+    h.s.tick();
+    assert_eq!(seat1(&h).last().cloned(), Some((GuardOwner::SeatOne, None)), "first sync releases a crash leftover");
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.s.tick();
+    assert_eq!(seat1(&h).last().cloned(), Some((GuardOwner::SeatOne, Some("S-1-5-21-9-mehmet".to_string()))));
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(2) }).unwrap();
+    h.s.tick();
+    assert_eq!(seat1(&h).last().cloned(), Some((GuardOwner::SeatOne, None)));
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.s.tick();
+    assert_eq!(seat1(&h).last().cloned().unwrap().1.as_deref(), Some("S-1-5-21-9-mehmet"));
+    h.s.shutdown();
+    assert_eq!(seat1(&h).last().cloned(), Some((GuardOwner::SeatOne, None)), "service stop releases");
+}
+
+/// Per-seat `no_power_menu` follows the config and the product switch.
+#[test]
+fn no_power_menu_follows_config() {
+    let mut c = two_seat_config();
+    c.seats[1].no_power_menu = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.s.sync_tweaks();
+    assert_eq!(h.p.no_power_menu.lock().unwrap().last().cloned(), Some(vec!["S-1-5-21-9-ali".to_string()]));
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetEnabled { enabled: false }).unwrap();
+    h.s.sync_tweaks();
+    assert_eq!(h.p.no_power_menu.lock().unwrap().last().cloned(), Some(Vec::new()));
+}
+
+/// The preflight list carries the console checks of the topology.
+#[test]
+fn preflight_adds_console_checks() {
+    let mut c = two_seat_config();
+    c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+    let h = harness_with(c, None);
+    h.s.boot();
+    *h.p.sleep_off.lock().unwrap() = Some(false);
+    let mut a = admin();
+    let ResponseBody::Checks(checks) = call(&h, &mut a, RequestBody::Preflight).unwrap() else { panic!() };
+    let x = checks.iter().find(|c| c.id == "host_sleep_off").expect("host_sleep_off");
+    assert_eq!(x.outcome, seat_proto::messages::CheckOutcome::Warn);
+    assert!(checks.iter().any(|c| c.id == "console_lock"));
+}

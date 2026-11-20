@@ -238,6 +238,15 @@ describe('App shell', () => {
     expect(store.draft?.settings.tweaks.windows_update?.enabled).toBe(true);
     await user.click(screen.getByRole('switch', { name: t.compat.defender }));
     expect(store.draft?.settings.tweaks.defender_exclusions).toBe(true);
+    // Console lock guard (OSMS parity G4): seat_one_console shows the notice and the opt-in.
+    expect(screen.getByTestId('seat-one-lock-notice')).toBeInTheDocument();
+    await user.click(screen.getByRole('switch', { name: t.compat.seatOneLockOff }));
+    expect(store.draft?.settings.console_guard).toEqual({ host_lock_off: true, seat_one_lock_off: true });
+    expect(screen.queryByTestId('seat-one-lock-notice')).toBeNull();
+    await user.click(screen.getByRole('switch', { name: t.compat.inactivityLock }));
+    expect(store.draft?.settings.tweaks.inactivity_lock_off).toBe(true);
+    await user.click(screen.getByRole('switch', { name: t.compat.usersShutdown }));
+    expect(store.draft?.settings.tweaks.users_shutdown_right_off).toBe(true);
     await user.click(screen.getByRole('switch', { name: t.compat.steamPerSeat }));
     expect(store.draft?.settings.apps?.steam_per_seat).toBe(true);
     await user.click(within(box).getByLabelText(t.compat.installClasses.wpd));

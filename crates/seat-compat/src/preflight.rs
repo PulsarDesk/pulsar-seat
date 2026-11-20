@@ -256,6 +256,49 @@ pub fn evaluate(env: &Environment) -> Vec<Check> {
     v
 }
 
+/// Config-dependent console checks the service adds to the preflight list (OSMS parity
+/// G4, 2026-11-18). Local seats are presenter windows on the console's desktop, so a
+/// console that locks, blanks or sleeps hides them.
+///
+/// - `dedicated_host`: `host_sleep_off` (the active plan must keep the PC and its displays
+///   on: `sleep_off`, `crate::tweaks::sleep_off_state`) and `console_lock` (the host
+///   account's lock guard, `settings.console_guard.host_lock_off`).
+/// - `seat_one_console` with other local seats: `console_lock` reports whether seat 1's
+///   lock hides the other seats (opt-in guard `seat_one_lock_off`).
+pub fn console_checks(
+    dedicated: bool,
+    host_lock_off: bool,
+    seat_one_lock_off: bool,
+    other_local_seats: bool,
+    sleep_off: Option<bool>,
+) -> Vec<Check> {
+    use CheckOutcome::*;
+    let mut v = Vec::new();
+    if dedicated {
+        v.push(match sleep_off {
+            Some(true) => chk("host_sleep_off", Pass, "active plan: sleep and display off disabled on mains power"),
+            Some(false) => chk(
+                "host_sleep_off",
+                Warn,
+                "the active power plan lets the PC sleep or the display turn off; turn on the sleep_off tweak",
+            ),
+            None => chk("host_sleep_off", Info, "power plan settings could not be read"),
+        });
+        v.push(if host_lock_off {
+            chk("console_lock", Pass, "lock and screen saver are off for the host account")
+        } else {
+            chk("console_lock", Warn, "the host account can lock the console; every local seat then shows the lock screen")
+        });
+    } else if other_local_seats {
+        v.push(if seat_one_lock_off {
+            chk("console_lock", Pass, "seat 1 cannot lock while other seats run")
+        } else {
+            chk("console_lock", Info, "locking seat 1 hides every local seat until seat 1 unlocks")
+        });
+    }
+    v
+}
+
 /// The installer stops on any `fail`.
 pub fn blocks_install(checks: &[Check]) -> bool {
     checks.iter().any(|c| c.outcome == CheckOutcome::Fail)
@@ -289,6 +332,8 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
     const TERMSERVICE_STOCK: Text = Text::new("Remote Desktop service is stock", "Uzak Masaüstü hizmeti özgün");
     const FOREIGN_INPUT_FILTERS: Text = Text::new("Other input filter drivers", "Başka giriş süzgeç sürücüleri");
     const STEAM_PROXY_DLL: Text = Text::new("Old Steam add-on DLL", "Eski Steam eklenti DLL'si");
+    const HOST_SLEEP_OFF: Text = Text::new("Host console stays awake", "Ana konsol uyanık kalır");
+    const CONSOLE_LOCK: Text = Text::new("Console lock", "Konsol kilidi");
     const OTHER: Text = Text::new("Check", "Denetim");
     match id {
         "admin" => &ADMIN,
@@ -306,6 +351,8 @@ pub fn title_text(id: &str) -> &'static seat_core::i18n::Text {
         "termservice_stock" => &TERMSERVICE_STOCK,
         "foreign_input_filters" => &FOREIGN_INPUT_FILTERS,
         "steam_proxy_dll" => &STEAM_PROXY_DLL,
+        "host_sleep_off" => &HOST_SLEEP_OFF,
+        "console_lock" => &CONSOLE_LOCK,
         _ => &OTHER,
     }
 }
@@ -399,6 +446,27 @@ mod tests {
             let t = title_text(&x.id);
             assert!(seat_core::i18n::check_table(&[(x.id.as_str(), t)]).is_empty(), "{}", x.id);
             assert_ne!(t.tr, "Denetim", "missing Turkish title for {}", x.id);
+        }
+    }
+
+    #[test]
+    fn console_checks_follow_topology() {
+        let ids = |v: &[Check]| v.iter().map(|c| (c.id.clone(), c.outcome)).collect::<Vec<_>>();
+        use CheckOutcome::*;
+        assert_eq!(
+            ids(&console_checks(true, true, false, true, Some(false))),
+            vec![("host_sleep_off".into(), Warn), ("console_lock".into(), Pass)]
+        );
+        assert_eq!(
+            ids(&console_checks(true, false, false, true, Some(true))),
+            vec![("host_sleep_off".into(), Pass), ("console_lock".into(), Warn)]
+        );
+        assert_eq!(ids(&console_checks(false, true, false, true, None)), vec![("console_lock".into(), Info)]);
+        assert_eq!(ids(&console_checks(false, true, true, true, None)), vec![("console_lock".into(), Pass)]);
+        assert!(console_checks(false, true, false, false, None).is_empty(), "seat 1 alone");
+        for c in console_checks(true, true, true, true, None) {
+            assert!(!blocks_install(std::slice::from_ref(&c)));
+            assert_ne!(title_text(&c.id).tr, "Denetim", "{}", c.id);
         }
     }
 

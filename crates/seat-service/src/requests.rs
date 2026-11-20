@@ -138,7 +138,11 @@ impl Service {
                 r.source_ip = self.lock().source_ip.clone();
                 Ok(ResponseBody::Backends(r))
             }
-            B::Preflight => Ok(ResponseBody::Checks(self.platform.preflight())),
+            B::Preflight => {
+                let mut checks = self.platform.preflight();
+                checks.extend(self.console_checks());
+                Ok(ResponseBody::Checks(checks))
+            }
             B::GetConfig => Ok(ResponseBody::Config(self.config_view())),
             B::ValidateConfig { config } => {
                 let mut c = *config;

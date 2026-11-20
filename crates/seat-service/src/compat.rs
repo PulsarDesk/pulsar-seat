@@ -20,10 +20,12 @@ pub(crate) const DPI_TOLERANCE: u32 = 12;
 /// ran the sync, so turning on `deny_local_logon` or adding an object rule on its own
 /// changed nothing until the next tweak change or service start.
 pub(crate) fn compat_changed(old: &Config, new: &Config) -> bool {
-    let deny = |c: &Config| -> Vec<(SeatNumber, bool, seat_core::config::SeatAccount, SeatKind)> {
-        c.seats.iter().map(|s| (s.number, s.deny_local_logon, s.account.clone(), s.kind)).collect()
+    let deny = |c: &Config| -> Vec<(SeatNumber, bool, bool, seat_core::config::SeatAccount, SeatKind)> {
+        c.seats.iter().map(|s| (s.number, s.deny_local_logon, s.no_power_menu, s.account.clone(), s.kind)).collect()
     };
     old.settings.tweaks != new.settings.tweaks
+        || old.settings.console_guard != new.settings.console_guard
+        || old.settings.backends.host_topology != new.settings.backends.host_topology
         || old.settings.apps != new.settings.apps
         || old.settings.backends.session != new.settings.backends.session
         || deny(old) != deny(new)
@@ -91,9 +93,33 @@ impl Service {
             .collect()
     }
 
+    /// Accounts of the seats with `no_power_menu` (OSMS parity G4).
+    pub(crate) fn no_power_menu_sids(&self, c: &Config) -> Vec<String> {
+        c.seats
+            .iter()
+            .filter(|s| s.no_power_menu)
+            .filter_map(|s| s.account.domain_user())
+            .filter_map(|(d, u)| self.platform.account_sid(d, u))
+            .collect()
+    }
+
+    /// `NoClose` for the seats that ask for it (`enabled`) or undone.
+    pub(crate) fn sync_no_power_menu(&self, c: &Config, enabled: bool) {
+        let sids = if enabled { self.no_power_menu_sids(c) } else { Vec::new() };
+        match self.platform.sync_no_power_menu(&sids) {
+            Ok(s) if !s.is_empty() => log::info(&format!("no power menu: {s}")),
+            Ok(_) => {}
+            Err(e) => {
+                log::warn(&format!("no power menu: {e}"));
+                self.notice("tweak_failed", None, format!("no_power_menu: {e}"));
+            }
+        }
+    }
+
     /// Machine-level compat options in line with the config (`enabled`) or all undone.
     pub(crate) fn sync_compat(&self, enabled: bool) {
         let c = self.lock().config.clone();
+        self.sync_no_power_menu(&c, enabled);
         let (rules, sids) = if enabled { (object_rules(&c), self.deny_logon_sids(&c)) } else { (Vec::new(), Vec::new()) };
         if let Err(e) = self.platform.publish_object_rules(&rules) {
             log::warn(&format!("object rules not published: {e}"));
@@ -118,7 +144,13 @@ impl Service {
     /// A seat user signed in: write the seat's variables into their environment and ask
     /// the agent to announce it; ask the agent for the DPI read-back.
     pub(crate) fn sync_seat_environment(&self, seat: SeatNumber, session_id: u32, sid: &str) {
-        let vars = self.lock().config.seat(seat).map(|c| c.environment.clone()).unwrap_or_default();
+        let (vars, no_power_menu) =
+            self.lock().config.seat(seat).map(|c| (c.environment.clone(), c.no_power_menu)).unwrap_or_default();
+        if no_power_menu {
+            // A profile made at this first sign-in exists only now (OSMS parity G4).
+            let c = self.lock().config.clone();
+            self.sync_no_power_menu(&c, c.settings.enabled);
+        }
         match self.platform.sync_user_environment(sid, &vars) {
             Ok(s) if !s.is_empty() => log::info(&format!("seat {seat}: environment: {s}")),
             Ok(_) => {}
