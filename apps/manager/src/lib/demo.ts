@@ -301,7 +301,12 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     reboot_pending: false,
     os_build_changed: false,
     wizard_running: false,
-    last_event_seq: seq
+    last_event_seq: seq,
+    // Host console preset (OSMS parity G6): the demo "applies" it at once.
+    host_console:
+      state.config.settings.enabled && state.config.settings.backends.host_topology === 'dedicated_host' && state.config.settings.backends.host_autologon
+        ? { state: 'on' }
+        : null
   });
 
   // Wizard (demo: no capture; the pick step and the seat order are simulated).
@@ -648,6 +653,14 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
     },
     wizardStop: async (save) => {
       await step('wizard_stop');
+      if (save && wiz.variant === 'host_console') {
+        // Like the service's wizard result: dedicated host topology + the console auto-logon.
+        state.config.settings.backends.host_topology = 'dedicated_host';
+        state.config.settings.backends.host_autologon = true;
+        state.config.revision += 1;
+        saved = clone(state.config);
+        emit({ type: 'config_changed', data: { revision: state.config.revision } });
+      }
       emit({ type: 'wizard_progress', data: { ...wizProgress(), step: save ? 'done' : 'cancelled', seat: null } });
     },
     pollEvents: async (after, waitMs, topics) => {

@@ -133,6 +133,17 @@ export interface ServiceStatus {
   os_build_changed: boolean;
   wizard_running: boolean;
   last_event_seq: number;
+  /** Host console preset (OSMS parity G6, 2026-11-18); absent = off (and from older services). */
+  host_console?: HostConsoleReport | null;
+}
+
+/** State of the host console preset's auto-logon (`settings.backends.host_autologon`). */
+export type HostConsoleState = 'off' | 'on' | 'refused' | 'failed' | 'drifted' | 'pending_removal';
+
+export interface HostConsoleReport {
+  state: HostConsoleState;
+  /** Snake_case code (`other_autologon`, `registry_password`, `winlogon`, ...). */
+  reason?: string | null;
 }
 
 export type DriverId = 'kbd_mou_filter' | 'hid_filter' | 'idd' | 'storage_minifilter' | 'source_ip_callout';
@@ -479,6 +490,10 @@ export interface BackendSelection {
   experimental_ack: number;
   /** Added 2026-11-13 (second listener); older services omit it (normalize fills the default). */
   loopback_listener?: LoopbackListenerSettings;
+  /** Host console preset (OSMS parity G6, 2026-11-18, additive): under `dedicated_host` the
+   *  service signs its own console account in at the console (Winlogon auto-logon, password
+   *  only as LSA private data). Older services omit it (= off). */
+  host_autologon?: boolean;
 }
 
 /** Port of the loopback-only, NLA-off listener for passwordless seats (seat-core default). */
@@ -815,7 +830,9 @@ export interface HelloReply {
   caller: CallerInfo;
 }
 
-export type WizardVariant = 'all_seats' | 'keep_seat_one' | 'quick_two_seats';
+/** `host_console` (OSMS parity G6, 2026-11-18): like `all_seats`, and the saved result also
+ *  sets `dedicated_host` and the console auto-logon (the start screen asks for consent). */
+export type WizardVariant = 'all_seats' | 'keep_seat_one' | 'quick_two_seats' | 'host_console';
 
 export type WizardCommand =
   | { cmd: 'pick_console_monitor'; key: DeviceKey }
