@@ -6,7 +6,9 @@
 //! cancel", spec 10 §3.4); warnings are informational.
 
 use crate::assign::effective_masks;
-use crate::config::{Config, EXPERIMENTAL_WARNING_VERSION, SEAT_LIMIT, SameAccountPolicy};
+use crate::config::{
+    Config, EXPERIMENTAL_WARNING_VERSION, MAX_SESSION_FPS, MIN_SESSION_FPS, SEAT_LIMIT, SameAccountPolicy, SessionFrameRateMode,
+};
 use crate::device::{Device, DeviceKind, SharePolicy};
 use crate::ids::{DeviceKey, SeatNumber};
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,9 @@ pub enum IssueCode {
     DuplicateDevice,
     TimeoutOutOfRange,
     InvalidHotkey,
+    /// `settings.outputs.session_frame_rate.fps` outside 30..=500 while the mode is `fixed`.
+    /// Added 2026-11-18 (OSMS parity G3), error.
+    FrameRateOutOfRange,
     /// Experimental backend selected without the current warning acknowledged.
     ExperimentalNotAcknowledged,
     /// Seat set to start but without a monitor: waits for a display (spec 10 §3.3).
@@ -253,6 +258,10 @@ pub fn validate(config: &Config, inventory: Option<&[Device]>) -> Vec<Issue> {
         if sc == 0 || sc > 0x7f || sc == 0x1d {
             out.push(Issue::new(Severity::Error, IssueCode::InvalidHotkey).field("settings.input.switch_hotkey_scan"));
         }
+    }
+    let fr = &config.settings.outputs.session_frame_rate;
+    if fr.mode == SessionFrameRateMode::Fixed && !(MIN_SESSION_FPS..=MAX_SESSION_FPS).contains(&fr.fps) {
+        out.push(Issue::new(Severity::Error, IssueCode::FrameRateOutOfRange).field("settings.outputs.session_frame_rate.fps"));
     }
     let b = &config.settings.backends;
     if b.session.is_experimental() && b.experimental_ack != EXPERIMENTAL_WARNING_VERSION {

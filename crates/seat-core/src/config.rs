@@ -1248,6 +1248,57 @@ pub struct OutputSettings {
     /// console desktop. Added 2026-11-13 (additive).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub follow_session_mode: Option<bool>,
+    /// Composition rate of the RDP seat sessions (`WinStations\DWMFRAMEINTERVAL`,
+    /// machine-wide: one value for every RDP-based seat). Only RDP-based local backends
+    /// (`rds_loopback`, `termsrv_wrapper`) write it; it applies to sessions that connect
+    /// after the change. Added 2026-11-18 (OSMS parity G3, additive: a missing field
+    /// reads as [`SessionFrameRateMode::Auto`]).
+    #[serde(skip_serializing_if = "SessionFrameRate::is_default")]
+    pub session_frame_rate: SessionFrameRate,
+}
+
+/// How the composition interval of RDP seat sessions is chosen (see
+/// [`crate::frame_rate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionFrameRateMode {
+    /// From the highest refresh rate among the monitors of the RDP seats (60 Hz when none
+    /// is known): `floor(1000 / Hz)` ms.
+    #[default]
+    Auto,
+    /// 4 ms (250 compositions per second): for presenter judder. More GPU / CPU work in
+    /// every seat session.
+    Smooth,
+    /// [`SessionFrameRate::fps`].
+    Fixed,
+    /// Nothing written; Windows' default (about 30 frames per second).
+    Off,
+}
+
+/// Session frame rate setting (see [`OutputSettings::session_frame_rate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionFrameRate {
+    pub mode: SessionFrameRateMode,
+    /// Frames per second for [`SessionFrameRateMode::Fixed`],
+    /// [`MIN_SESSION_FPS`]..=[`MAX_SESSION_FPS`].
+    pub fps: u16,
+}
+
+/// Lowest / highest [`SessionFrameRate::fps`].
+pub const MIN_SESSION_FPS: u16 = 30;
+pub const MAX_SESSION_FPS: u16 = 500;
+
+impl Default for SessionFrameRate {
+    fn default() -> Self {
+        Self { mode: SessionFrameRateMode::Auto, fps: 60 }
+    }
+}
+
+impl SessionFrameRate {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Update check (opt-in; both off by default: no network access unless the admin turns

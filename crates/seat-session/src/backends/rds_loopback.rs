@@ -308,6 +308,24 @@ impl RdsLoopbackBackend {
     }
 }
 
+/// `DWMFRAMEINTERVAL` for both RDP backends (OSMS parity G3): remembered in the shared
+/// claims, written at once while the local claim is held. Errors are logged, not fatal: a
+/// seat still works at Windows' default rate.
+pub(crate) fn frame_interval(d: &SessionDeps, ms: Option<u32>) -> Vec<String> {
+    match d.rds_applier().set_frame_interval(ms) {
+        Ok(rep) => {
+            for w in &rep.policy_overrides {
+                log::warn!("rds: {w} holds someone else's value; left as it is");
+            }
+            rep.notes
+        }
+        Err(e) => {
+            log::warn!("rds: composition interval not written: {e}");
+            vec!["dwm_frame_interval_failed".into()]
+        }
+    }
+}
+
 impl SessionBackend for RdsLoopbackBackend {
     fn kind(&self) -> SessionBackendKind {
         SessionBackendKind::RdsLoopback
@@ -408,6 +426,10 @@ impl SessionBackend for RdsLoopbackBackend {
         if changed && self.second.prepared.load(Ordering::SeqCst) {
             self.ensure_listener();
         }
+    }
+
+    fn set_frame_interval(&self, ms: Option<u32>) -> Vec<String> {
+        frame_interval(&self.d, ms)
     }
 
     fn retry_deferred(&self) -> Vec<String> {

@@ -211,6 +211,35 @@ fn boot_enabled_manual_and_status() {
 }
 
 #[test]
+fn frame_interval_reaches_the_session_backend_before_prepare_and_follows_monitors() {
+    use seat_core::device::{DeviceDetails, DisplayInfo, DisplayMode};
+    let h = harness();
+    // Boot: sent with the listener plan, before prepare_host. No mode known = 60 Hz.
+    assert_eq!(h.f.session.frame_intervals.lock().unwrap().last(), Some(&Some(16)));
+    assert!(h.f.session.rec.calls().contains(&"prepare_host".to_string()));
+    // Seat 2's monitor reports 144 Hz: the interval follows (seat 1's console monitor does not count).
+    let mon = |key: &str, mhz: u32| {
+        let mut d = device(key, DeviceKind::Monitor);
+        d.details = DeviceDetails::Display(DisplayInfo {
+            mode: Some(DisplayMode { width: 2560, height: 1440, refresh_mhz: mhz, rotation: 0 }),
+            ..Default::default()
+        });
+        d
+    };
+    *h.f.display.devices.lock().unwrap() = vec![mon("mon;1", 240_000), mon("mon;2", 144_000)];
+    h.s.refresh_inventory();
+    assert_eq!(h.f.session.frame_intervals.lock().unwrap().last(), Some(&Some(6)));
+    // Turned off in the config: `None` goes out with the next plan.
+    let mut a = admin();
+    let base = h.s.status().config_revision;
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let mut cfg = view.config.clone();
+    cfg.settings.outputs.session_frame_rate.mode = seat_core::config::SessionFrameRateMode::Off;
+    call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: base, force: false }).unwrap();
+    assert_eq!(h.f.session.frame_intervals.lock().unwrap().last(), Some(&None));
+}
+
+#[test]
 fn start_seat_full_flow_with_host_handshake() {
     let h = harness();
     h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();

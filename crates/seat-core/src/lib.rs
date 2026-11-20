@@ -28,6 +28,7 @@ pub mod config;
 pub mod consts;
 pub mod device;
 pub mod error;
+pub mod frame_rate;
 pub mod i18n;
 pub mod ids;
 pub mod latency;

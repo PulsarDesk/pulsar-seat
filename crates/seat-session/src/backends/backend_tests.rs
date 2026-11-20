@@ -98,6 +98,30 @@ fn rds_prepare_and_restore_are_exact() {
 }
 
 #[test]
+fn rds_frame_interval_is_written_with_the_host_rows_and_restored() {
+    use crate::rds::{DWM_FRAME_INTERVAL, TS_WINSTATIONS};
+    let w = FakeWorld::server();
+    let before = w.registry.snapshot();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    // Before prepare_host (service order): remembered only.
+    assert!(b.set_frame_interval(Some(16)).is_empty());
+    assert_eq!(w.registry.get(TS_WINSTATIONS, DWM_FRAME_INTERVAL).unwrap(), RegValue::Absent);
+    let notes = b.prepare_host(&GlobalSettings::default()).unwrap();
+    assert!(notes.contains(&"dwm_frame_interval_set".to_string()), "{notes:?}");
+    assert_eq!(w.registry.get(TS_WINSTATIONS, DWM_FRAME_INTERVAL).unwrap(), RegValue::Dword(16));
+    assert_eq!(w.registry.get(POL, "bEnumerateHWBeforeSW").unwrap(), RegValue::Dword(1), "local seats get the GPU policy too");
+    // A config change while prepared: written at once, the manager is told to reconnect.
+    let notes = b.set_frame_interval(Some(6));
+    assert!(notes.contains(&"session_reconnect_for_frame_rate".to_string()), "{notes:?}");
+    assert_eq!(w.registry.get(TS_WINSTATIONS, DWM_FRAME_INTERVAL).unwrap(), RegValue::Dword(6));
+    b.restore_host().unwrap();
+    assert_eq!(w.registry.snapshot(), before);
+    // Other backends ignore it.
+    let k = create_backend(SessionBackendKind::Desktops, w.deps());
+    assert!(k.set_frame_interval(Some(16)).is_empty());
+}
+
+#[test]
 fn rds_seat_start_wait_query_logoff() {
     let w = FakeWorld::server();
     let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());

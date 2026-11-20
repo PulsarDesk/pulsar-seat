@@ -73,6 +73,9 @@ impl Service {
             cached.unwrap_or_else(|| self.secrets.has(s))
         });
         self.backends().session.set_listener_plan(&plan);
+        // The composition interval travels with the listener plan, so it too reaches the
+        // backend before every `prepare_host` and after every config apply (OSMS parity G3).
+        self.sync_frame_interval();
     }
 }
 
