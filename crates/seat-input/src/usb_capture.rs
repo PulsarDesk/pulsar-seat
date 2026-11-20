@@ -913,11 +913,35 @@ impl WorkerCtx {
                 h.activity(k);
             }
         }
+        // Hotkey and emergency run off this reader thread: their handlers re-plan the routes,
+        // and a release of this very node stops (joins) this thread and reinstalls the
+        // driver, which must not happen while this thread still holds the WinUSB handle.
         if hotkey && let Some(k) = kbd {
-            h.hotkey(k, self.seat);
+            let (h, k, seat) = (h.clone(), k.clone(), self.seat);
+            Self::off_thread("seat-input-usb-hotkey", move || h.hotkey(&k, seat));
         }
         if emergency {
-            h.emergency();
+            let h = h.clone();
+            Self::off_thread("seat-input-usb-emergency", move || h.emergency());
+        }
+    }
+
+    /// Run `f` on its own thread; inline when no thread can be started (never dropped).
+    fn off_thread(name: &str, f: impl FnOnce() + Send + 'static) {
+        let slot = Arc::new(Mutex::new(Some(f)));
+        let theirs = slot.clone();
+        let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
+            let f = lock(&theirs).take();
+            if let Some(f) = f {
+                f();
+            }
+        });
+        if let Err(e) = spawned {
+            log::error!("USB capture: {name} thread not started ({e}); running it inline");
+            let f = lock(&slot).take();
+            if let Some(f) = f {
+                f();
+            }
         }
     }
 }
@@ -1398,6 +1422,45 @@ mod tests {
         wait_for(|| lock(&e.h.packets).len() == 3);
         assert_eq!(lock(&e.h.packets)[2].1, vec![InputPacket::Key { sc: 0x30, f: 0 }]);
         e.c.release_all();
+    }
+
+    /// A hotkey handler that re-plans at once (the service moves the unit and applies the
+    /// routes, which releases this node) does not run on the node's own reader thread: the
+    /// release joins that thread without waiting for [`STOP_TIMEOUT`].
+    #[test]
+    fn hotkey_handler_may_release_the_node_it_came_from() {
+        struct Replan {
+            cap: Mutex<Option<Weak<UsbCapture>>>,
+            took: Mutex<Option<Duration>>,
+        }
+        impl CaptureHandler for Replan {
+            fn packets(&self, _: SeatNumber, _: &[InputPacket]) {}
+            fn hotkey(&self, _: &DeviceKey, _: SeatNumber) {
+                let cap = lock(&self.cap).as_ref().and_then(Weak::upgrade);
+                if let Some(c) = cap {
+                    let t = Instant::now();
+                    assert!(c.release_all().is_empty());
+                    *lock(&self.took) = Some(t.elapsed());
+                }
+            }
+            fn emergency(&self) {}
+            fn activity(&self, _: &DeviceKey) {}
+            fn options(&self) -> UnitOptions {
+                UnitOptions { hotkey: crate::convert::Hotkey::from_setting(Some(0x58)), allow_system_buttons: false }
+            }
+        }
+        let e = env();
+        let h = Arc::new(Replan { cap: Mutex::new(Some(Arc::downgrade(&e.c))), took: Mutex::new(None) });
+        let weak: Weak<dyn CaptureHandler> = Arc::downgrade(&(h.clone() as Arc<dyn CaptureHandler>));
+        e.c.set_handler(weak);
+        let dev = e.src.plug(KBD_NODE, Some(KEYBOARD_DESC));
+        assert!(e.c.sync(&want(KBD_NODE, 2, DeviceKind::Keyboard)).is_empty());
+        // Ctrl + F12 = the configured hotkey.
+        dev.push(&[0x01, 0, 0x45, 0, 0, 0, 0, 0]);
+        wait_for(|| lock(&h.took).is_some());
+        let took = lock(&h.took).unwrap();
+        assert!(took < STOP_TIMEOUT / 2, "release waited for its own reader thread: {took:?}");
+        assert!(!e.swap.is_captured(KBD_NODE));
     }
 
     #[test]
