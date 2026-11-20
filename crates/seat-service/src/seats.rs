@@ -964,6 +964,11 @@ impl Service {
                 s.reselect_after_fallback();
             });
         }
+        if console_event && change == SessionChange::Logon && dedicated {
+            // Host console preset: the console account's kiosk values go into its hive now
+            // that it is loaded (and the state is checked again).
+            self.spawn(|s| s.sync_host_console());
+        }
         if console_event && change == SessionChange::Logon && self.take_seat_one_wait() {
             // `after_seat_one_logon`: somebody signed in at the console (the host account
             // under `dedicated_host`).

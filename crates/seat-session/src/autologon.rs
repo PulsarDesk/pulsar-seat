@@ -3,8 +3,11 @@
 //!
 //! Under the RDP backends a seat logs on by handing the stored credentials to its seat
 //! host's RDP connection (`host_take_credentials`, once). No credential provider, no
-//! Winlogon change: Pulsar Seat never writes `AutoAdminLogon` / `DefaultPassword` for user
-//! accounts. This module is the pure policy the service and the host share:
+//! Winlogon change for seats: Pulsar Seat never writes `AutoAdminLogon` / `DefaultPassword`
+//! for user accounts; only for the service-owned console account under `dedicated_host`
+//! with the opt-in `host_autologon` preset ([`crate::console_account`], OSMS parity G6,
+//! pending the maintainer's OK for spec 30 §6.2.1). This module is the pure policy the
+//! service and the host share:
 //!
 //! - which credentials (if any) a start uses ([`credentials_for`]);
 //! - how a seat host's disconnect is classified ([`classify_disconnect`]);

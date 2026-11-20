@@ -859,6 +859,13 @@ pub struct BackendSelection {
     /// Second RDP listener for seats without a stored password (`rds_loopback`,
     /// architecture §4.1 design (a)). Added 2026-11-13 (additive).
     pub loopback_listener: LoopbackListenerSettings,
+    /// "Host console" preset (OSMS parity G6, 2026-11-18, additive): under
+    /// [`HostTopology::DedicatedHost`] the service signs its own console account
+    /// (`seat_session::console_account`) in at the physical console through the documented
+    /// Winlogon auto-logon (password only as LSA private data), journaled and restored when
+    /// this goes off. Ignored under `seat_one_console`. Opt-in with a visible consent step.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub host_autologon: bool,
 }
 
 /// Default port of the loopback-only, NLA-off listener for passwordless seats.
@@ -897,6 +904,7 @@ impl Default for BackendSelection {
             gates: vec![GateBackendKind::DeviceSecurity, GateBackendKind::SessionDriveLetters],
             experimental_ack: 0,
             loopback_listener: LoopbackListenerSettings::default(),
+            host_autologon: false,
         }
     }
 }

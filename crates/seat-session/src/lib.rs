@@ -32,6 +32,7 @@ pub mod accounts;
 pub mod acl;
 pub mod autologon;
 pub mod backends;
+pub mod console_account;
 pub mod credprov;
 pub mod edition;
 pub mod error;

@@ -104,6 +104,12 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
 - Boot waits for services with `NotifyServiceStatusChangeW` and alertable waits (no
   polling). A service that does not exist is reported at once (`PlugPlay` does not exist
   on Windows build 28000, the dev box: the boot logs `services not running after wait`).
+- Host console preset (`host_console`, `win::host_console`; OSMS parity G6, 2026-11-18):
+  under `dedicated_host` with the opt-in `settings.backends.host_autologon`, the service
+  creates `PulsarSeatConsole` and turns on the documented Winlogon auto-logon for it
+  (password only as LSA `DefaultPassword`), journaled in `journal\host-console.json` and
+  restored when the preset, the topology or the product goes off and at uninstall. Someone
+  else's auto-logon is refused untouched. Design: architecture.md "Host console preset".
 
 ## Gaps
 
@@ -131,3 +137,8 @@ without privileges on the console desktop), `WTSLogoffSession`, reboot, Event Lo
 messages (message DLL path, ARM64 `FrameworkArm64` is a HYPOTHESIS), required-privilege
 list completeness (HYPOTHESIS), pre-shutdown ordering and checkpoints, resume handling,
 session-change mapping on real RDP sessions, every package backend.
+Host console preset (HYPOTHESIS, all of it): Winlogon signs the hidden `PulsarSeatConsole`
+in automatically with the password only in LSA `DefaultPassword`; `DisableLockWorkstation`
+in the user's own policy key blocks Win+L under auto-logon; the screen-saver policy is read
+at logon; the console account's session is enough for the seat hosts after every boot; the
+uninstall restore and the "signed in, removed later" path.

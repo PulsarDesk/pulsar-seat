@@ -30,6 +30,7 @@ mod diag;
 mod eventid;
 mod events;
 mod host_account;
+mod host_console;
 mod guest_link;
 mod vm_guest_rq;
 mod images;
