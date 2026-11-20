@@ -126,7 +126,14 @@ fn store(path: &Path, s: &Saved) -> Result<(), String> {
             std::fs::create_dir_all(d)?;
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(s).map_err(std::io::Error::other)?)?;
+        {
+            // Flushed before the rename: after a power loss the journal is the old or the
+            // new one, never an empty file (a lost journal would leave the auto-logon on).
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(&serde_json::to_vec(s).map_err(std::io::Error::other)?)?;
+            f.sync_all()?;
+        }
         std::fs::rename(&tmp, path)
     };
     w().map_err(|e| e.to_string())
@@ -235,7 +242,7 @@ fn engage(ops: &dyn ConsoleOps, acct: &dyn AccountOps, path: &Path) -> HostConso
     }
     let mut saved = Saved {
         phase: Phase::Engaging,
-        previous: cur,
+        previous: previous_values(cur),
         sleep_off_ours: false,
     };
     if let Err(e) = store(path, &saved) {
@@ -294,6 +301,22 @@ fn engage(ops: &dyn ConsoleOps, acct: &dyn AccountOps, path: &Path) -> HostConso
     }
     log::info("host console: the console account now signs in automatically at the console");
     report(HostConsoleState::On, reason)
+}
+
+/// The values to journal as "before the preset". When Winlogon already names the console
+/// account (a journal lost after an earlier engage, which `check_engage` allows), those
+/// values are ours, not the machine's: journaling them would make the release write our own
+/// auto-logon back. The release then turns the auto-logon off and removes the names.
+fn previous_values(cur: WinlogonValues) -> WinlogonValues {
+    if !cur.user_is_ours() {
+        return cur;
+    }
+    WinlogonValues {
+        auto_admin_logon: Some("0".into()),
+        default_user_name: None,
+        default_domain_name: None,
+        ..cur
+    }
 }
 
 /// Undo (see module doc). Keeps the journal while anything may still be in place.
@@ -691,6 +714,27 @@ mod tests {
         assert!(load(&path).is_none());
         // Nothing to do any more.
         assert_eq!(sync(&sys, &sam, &path, false).state, HostConsoleState::Off);
+    }
+
+    /// The journal was lost while the preset was on (Winlogon names the console account):
+    /// engage again journals "no auto-logon" as the previous state, never our own values,
+    /// so turning the preset off leaves no auto-logon behind.
+    #[test]
+    fn a_lost_journal_never_restores_our_own_auto_logon() {
+        let (_d, path) = dir();
+        let sys = Sys::with(&[(DEFAULT_USER_NAME, "ali"), (AUTO_ADMIN_LOGON, "0")]);
+        let sam = Sam::default();
+        assert_eq!(sync(&sys, &sam, &path, true).state, HostConsoleState::On);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(sync(&sys, &sam, &path, true).state, HostConsoleState::On);
+        let j = load(&path).unwrap();
+        assert_eq!(j.previous.auto_admin_logon.as_deref(), Some("0"));
+        assert_eq!(j.previous.default_user_name, None);
+        let r = sync(&sys, &sam, &path, false);
+        assert_eq!(r.state, HostConsoleState::Off, "{r:?}");
+        assert_eq!(sys.get(AUTO_ADMIN_LOGON).as_deref(), Some("0"));
+        assert_eq!(sys.get(DEFAULT_USER_NAME), None);
+        assert!(sys.lsa.borrow().is_none());
     }
 
     #[test]
