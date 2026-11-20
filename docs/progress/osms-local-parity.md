@@ -2,6 +2,8 @@
 
 Goal: bring OpenStreamMS (MIT, clone at target/ref/OpenStreamMultiSeat, commit 3b3392c) local-seat quality to Pulsar Seat local seats. Source: workflow wf_23b355d1-951 (read, synthesize, adversarial verify).
 
+**Round status (2026-11-20):** G1-G8 are built in code and merged into main (order G3, G4, G6, G7, G2, G5, G1, G8; merge 23508ed is the last). Nothing ran on hardware or in the VM, on x64 or ARM64: every Windows effect is HYPOTHESIS. Each gap's `Status` line below says what is built and what is not. No OSMS code was ported (no MIT notice needed), no driver of ours, no injection, no termsrv change. Next: the VM / hardware tests per gap (G2 first in the VM with USB passthrough, never first on the maintainer's PC), then delete this file once status.md carries the results.
+
 ## Summary
 
 Neither OSMS nor Pulsar Seat has native ASTER-style ownership of a monitor by a session. An OSMS local seat is a loopback RDP session to 127.0.0.2. The RDP client (wfreerdp or mstsc) runs hidden in session 0 with `+disable-output` and no `/gfx` or `/rfx` (RdpSessionCreator.cs:510-535, spot-checked). A SeatAgent inside the session captures the desktop with DDA into a ring of 3 shared NT-handle textures with keyed mutexes. The service duplicates those handles into a console-session presenter, which shows them in a topmost flip-model window on the seat monitor. That monitor stays part of the console desktop, which belongs to a dedicated host user.
@@ -18,7 +20,7 @@ The real gaps are these:
 - An audio jitter buffer.
 - Split screen (halves or quarters per monitor).
 
-None of these needs termsrv patching, code injection or a kernel driver of ours. HidHide is an optional third-party kernel filter and can stay optional. Reader disagreement resolved: a local seat's display is the stock RdpIdd. It is RemoteIdd only when the optional OSMS protocol provider is installed. SeatAgent takes whichever AttachedToDesktop output exists (SeatAgent.cs:71), and RemoteIdd mainly serves Sunshine. Paths in osms_files are relative to `C:\Users\ahmet\Projects\pulsar\pulsar-seat\target\ref\OpenStreamMultiSeat`. Paths in ours_files are relative to `C:\Users\ahmet\Projects\pulsar\pulsar-seat`.
+None of these needs termsrv patching, code injection or a kernel driver of ours. HidHide is an optional third-party kernel filter and can stay optional. Reader disagreement resolved: a local seat's display is the stock RdpIdd. It is RemoteIdd only when the optional OSMS protocol provider is installed. SeatAgent takes whichever AttachedToDesktop output exists (SeatAgent.cs:71), and RemoteIdd mainly serves Sunshine. Paths in osms_files are relative to the OSMS clone at `target/ref/OpenStreamMultiSeat` in this repository. Paths in ours_files are relative to the repository root.
 
 ## Multi-session note
 
@@ -97,7 +99,7 @@ Ours is clearly weaker. A local seat today pays for server-side encode plus clie
 
 (g) Clean room: implement from the Microsoft DXGI Desktop Duplication and DuplicateHandle docs only. OSMS is MIT, so copied code would need attribution, but none is needed.
 - Rules / risk: No conflict: documented DXGI, WTS, CreateProcessAsUser and DuplicateHandle; no injection and no driver. Two points to watch. A SYSTEM process in a user session widens attack surface: keep it optional, restricted to the secure-desktop case, with a pipe ACL of SYSTEM plus the service PID check and a no-command surface. Clean room: reimplement from the Microsoft DXGI docs, not OSMS source (MIT, so attribution is required if any code is reused). Still needs a Server RDSH machine, or the operator's wrapper, to test.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g1 fb60971, merged in 3f927eb). `LocalSeat.frame_source` (`rdp_decode` default, `session_capture` opt-in per seat, restarts the seat). Agent producer `seat-host/src/capture/agent_win.rs` (Desktop Duplication per attached unrotated output, 3 shared keyed-mutex textures, seqlocked mailbox, pointer poller, input-desktop switch, 250 ms rebuild), service handle broker `seat-service/src/win/handle_broker.rs` (agent pipe to the service only), host reader `capture/host_win.rs` with rectangle + adapter-LUID routing and RDP fallback; capture seats connect without EGFX. Not built: SYSTEM agent for the secure desktop, skipping the bitmap decode (needs seat-rdp), TS_SUPPRESS_OUTPUT_PDU experiment, the split-screen reuse, rotated outputs. HYPOTHESIS: everything on hardware (DDA inside an RDP session on x64 and Adreno, cross-process keyed-mutex sharing into the low-IL host). The default flips only after spec/remote 40 §6.5 passes.
 
 ### G2 [P0/M] Keyboard/mouse isolation by swapping the USB node to inbox winusb.inf, with a user-mode HID reader
 
@@ -182,7 +184,7 @@ Priority P0 and size M are right. Size grows to M/L once the shared post-process
 - PnP restart of about 1 s per capture.
 - Clean room: write from the MS WinUSB/HID docs and the USB HID spec, not from OSMS source.
 Prefer this over raw_input_host as the default isolation for USB devices.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g2 23e40c8, merged in 4c896e5). `InputBackendKind::WinusbCapture`: USB keyboard / mouse interface nodes of seats 2..N moved to inbox `winusb.inf`, read in the service by `seat_input::win::winusb_reader` (HID descriptor parser, HID-to-set-1 table) and fed into the existing packet sink. Journal `<data>\journal\usb-capture.json`, restored at boot (also in Safe Mode), at service stop, when the backend is deselected, by the admin request `restore_usb_input` (manager button) and at MSI uninstall. Not built: keyboard LEDs (P1), Bluetooth / non-USB capture (stay on raw input with `input_not_isolated_non_usb`), the shared `packet_router` extraction, a dedicated hot-plug arrival path, the boot scheduled task. HYPOTHESIS: every SetupAPI / newdev / WinUSB call, the phantom-node removal and ARM64 `DiInstallDevice`. Test in the VM with USB passthrough before any run on the maintainer's PC.
 
 ### G3 [P0/S] RDP session composition at 60+ Hz (DWMFRAMEINTERVAL) and per-seat mode/Hz
 
@@ -224,7 +226,7 @@ Two corrections to the claim:
 6. Manager (OutputsDialog): show one 'session frame rate (machine-wide)' setting with a warning that it applies to every seat. VRR on the seat monitor (G1 flip-model presenter) absorbs the mismatch.
 7. Do the hardware tests on both x64 and ARM64 before shipping.
 - Rules / risk: None. These are documented RDS registry values, journaled and reversible. Do not copy the undocumented 'BetterRDP' TermDD FlowControl values unless Microsoft documents them.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g3 cd2138e, merged in 43da460). `settings.outputs.session_frame_rate` (auto / smooth / fixed 30..=500 / off), `seat_core::frame_rate` (`floor(1000/Hz)` clamped 2..=33 ms; deliberately floor, not the round() above, documented in architecture.md "Session frame rate"), journaled `WinStations\DWMFRAMEINTERVAL` row (only while absent or ours; a foreign value is a `PolicyOverride`), `bEnumerateHWBeforeSW` moved to Common scope, OutputsDialog select. HYPOTHESIS: that the `WinStations` value alone lifts the cap for loopback / wrapper sessions and that a reconnect is enough; `RDP-Tcp\DWMFRAMEINTERVAL` not added.
 
 ### G4 [P1/S] Lock guard for the console host user (console Win+L or secure desktop blanks every seat)
 
@@ -280,7 +282,7 @@ Still missing: per-user DisableLockWorkstation, the per-user screen saver settin
    - whether DisableLockWorkstation also blocks the Win+L path under auto-logon;
    - whether the UAC secure desktop still blanks the presenters. That needs PromptOnSecureDesktop=0, which is a security trade-off and must stay opt-in with the maintainer's OK.
 - Rules / risk: None: documented per-user policy values, journaled. UX risk: the console user cannot lock, so make the choice visible in the manager.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g4 1a00fe0, merged in c41dc91). Compat-journal entries (`Change::UserPolicy`, `Change::AccountRightRemoved`): per-user `DisableLockWorkstation` + `ScreenSaveActive` for the `dedicated_host` console account (`settings.console_guard.host_lock_off`, default on), opt-in seat-1 guard with engage / release, per-seat `no_power_menu` (`NoClose`), opt-in `BUILTIN\Users` shutdown-right removal, tweak `inactivity_lock_off`, preflight `host_sleep_off` / `console_lock`. `PromptOnSecureDesktop` is never written (needs the maintainer's OK). HYPOTHESIS: Win+L blocked under auto-logon, the per-user screen-saver policy, `NoClose` in a running Explorer, the shutdown right from the next sign-in. With G6 on, both G4 and G6 write the same values for `PulsarSeatConsole`; G4 does not record a value already present, so G6 owns them in that case (see status.md).
 
 ### G5 [P1/M] Physical gamepad pass-through per seat session (ACL plus node restart; optional HidHide jail) and Guide button guard
 
@@ -352,7 +354,7 @@ Status: every piece of ours is HYPOTHESIS, never run on hardware. OSMS has a har
 
 P1, size M (most of the plumbing exists). Everything is HYPOTHESIS until it is run in the VM.
 - Rules / risk: The ACL path needs no driver. HidHide is a third-party kernel filter (Nefarius, MIT upstream, separately signed). Rules allow only operator-installed, pinned, signature-checked third-party drivers, so keep it detect-only and optional. HYPOTHESIS: an ARM64 HidHide build exists; verify the PE machine. GameInput and Windows.Gaming.Input are brokered by a system service and are not isolated by any ACL; document this.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g5 bc8428a, merged in 0d175ca). `seat_input::pad_scope` discovers XUSB / GIP / `HID_DEVICE_SYSTEM_GAME` pads with their whole subtree (console keyboards / mice excluded), `LocalSeat::pad_mode` (`passthrough` default, `shared`), logon SID when one user has two sessions, cosmetic `DEVPKEY_Device_SessionId` re-applied on arrival, Guide guard `seat_compat::guide_guard` (`UseNexusForGameBarEnabled=0` per user, `ControllerToVKMapping\Enabled=0`, journaled, restored on seat stop / service stop / after a crash), coexist row knows our own value, HidHide detect only. `input.pad_device_scope` stays the kill switch, default off. HYPOTHESIS: ACL + restart isolation, the restart closing other sessions' handles, logon-SID behaviour, Game Bar / VK-mapping effect, the class walk on real device trees. spec/remote/90-install.md:626 not edited (analyst-owned).
 
 ### G6 [P1/S] Recommended 'host console' preset: technical autologon host user, every human seat a session
 
@@ -410,7 +412,7 @@ Neither project uses termsrv patching or a kernel driver for this part. Autologo
 
 Size: M, not S, because of the journaled Winlogon and power changes and the restore path. Priority P1.
 - Rules / risk: Autologon stores a secret in LSA. That is documented (Winlogon DefaultPassword through LsaStorePrivateData) but needs a visible opt-in.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g6 08094f9, merged in 9ce2144). `settings.backends.host_autologon` + wizard variant `host_console` ("All seats equal", consent box): hidden standard account `PulsarSeatConsole` (interactive logon only; deliberate deviation from `PulsarSeatHost`, which is denied interactive logon), Winlogon values journaled in `journal\host-console.json`, password only in LSA `DefaultPassword`, refuses anyone else's auto-logon, rollback on failure and after a crash, `drifted` state leaves foreign changes alone, `sleep_off` tweak, restore when the preset / topology / product goes off and at uninstall (not at seat or service stop, on purpose). G2 and G4 are not switched on by the preset. Open: the maintainer's OK for spec 30 §6.2.1 before shipping. HYPOTHESIS: all Windows behaviour (auto-logon of a hidden account with an LSA-only password, Win+L block, uninstall restore).
 
 ### G7 [P2/S] Audio jitter buffer and drift handling for the seat output
 
@@ -447,7 +449,7 @@ Neither side has a resampler or real drift correction. OSMS handles clock drift 
 
 Keep the fake-backend tests in bridge.rs and add ring tests for prebuffer, underrun-then-refill and drop-to-target. Mark the latency figures as HYPOTHESIS until they are measured on hardware with an audio endpoint.
 - Rules / risk: None.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g7 3de9bd1, merged in ef63376). `seat_media::bridge::PcmRing` jitter buffer (`JitterConfig::SEAT`: target 30 ms, cap 100 ms, 5 ms fades, drift skip / repeat), event-driven WASAPI render with a 20 ms buffer (5 ms polling fallback), counters in the additive `host_audio_report.playback`, status page "Sound dropouts" line. Not configurable per seat; capture still polls. HYPOTHESIS: ~60 ms latency, click-free fades, the 30 ms target against rdpsnd cadence, event-mode behaviour.
 
 ### G8 [P2/M] Split screen: up to 4 seats per physical monitor (halves/quarters), plus a console share on the primary monitor
 
@@ -483,7 +485,7 @@ OSMS side, the claim is confirmed.
 6. Manager: a 2x2 picker in MonitorFace, and a spec/local/40-display.md update. The spec says one seat per monitor today, and the analyst should amend it under the clean-room rules.
 Priority P2, size M-L. The refcounted bind/release and the console-desktop topology change are larger than they look.
 - Rules / risk: Do not adopt SudoVDA, a third-party driver whose licence is not in OSMS notices. pulsar_idd is ours but unsigned, so ship the AppBar fallback first.
-- Status: TODO
+- Status: BUILT, NOT ON HARDWARE (2026-11-20, branch osms-g8 c8255ab, merged in 23508ed). `seat_core::area` 2x2 cell masks on `AssignmentOptions::areas` (validation `invalid_screen_area`, `screen_area_overlap`, `console_share_not_half`), seat-display binding reference-counted per seat, presenter / cursor clip / kiosk place cut to the area, console share as a documented AppBar (halves only), idle saver keeps a shared monitor on, manager SplitPicker in OutputsDialog. Not built: the virtual console display (waits on driver signing), quarter splits with seat 1 (refused by design). spec/local/40-display.md still says one seat per monitor (analyst-owned). HYPOTHESIS: presenter windows sharing a monitor, the AppBar work-area shrink and its cleanup after a killed host, Windows honouring the area-sized pulsar_idd mode, `dedicated_host` with a split that includes seat 1.
 
 ## Refuted
 

@@ -3282,3 +3282,67 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     carries the same change as 5599a16. Left for the maintainer to remove. The scratchpad
     preview worktree (f814116, on main) was removed.
   - No test deleted; no driver source touched.
+- 2026-11-20 (OSMS local-seat parity round, integration on main). The eight gaps of
+  `docs/progress/osms-local-parity.md` were built in worktree branches (each resumed from a
+  crashed run's WIP commit, reviewed and squashed) and merged with `--no-ff` in the order
+  G3 (43da460), G4 (c41dc91), G6 (9ce2144), G7 (ef63376), G2 (4c896e5), G5 (0d175ca),
+  G1 (3f927eb), G8 (23508ed). Conflicts were text-only (journal lines, architecture
+  sections, adjacent fields / menu entries / locale keys / tests); both sides kept.
+  - **Built (code + unit / mock tests, manager UI, en + tr strings, docs):**
+    - G1: per-seat `frame_source = session_capture` (opt-in, default `rdp_decode`): session
+      agent captures with Desktop Duplication into shared keyed-mutex textures, the service
+      brokers the handles, the seat host presents them and falls back to the RDP picture.
+    - G2: input backend `winusb_capture`: USB keyboards / mice of seats 2..N moved to the
+      inbox `winusb.inf` and read in the service; journaled, restored at boot (also Safe
+      Mode), service stop, deselect, manager button, uninstall.
+    - G3: machine-wide `session_frame_rate` → journaled `WinStations\DWMFRAMEINTERVAL`
+      (`floor(1000/Hz)`, never fights a foreign value); `bEnumerateHWBeforeSW` now Common.
+    - G4: console lock guard as compat-journal entries (host account lock / screen saver
+      off, opt-in seat-1 guard, per-seat `NoClose`, opt-in Users shutdown-right removal,
+      `inactivity_lock_off` tweak, preflight checks).
+    - G5: physical pad pass-through (`pad_mode`, XUSB / GIP / game-HID subtree, logon SID),
+      Guide-button guard (Game Bar + `ControllerToVKMapping`, journaled), HidHide detect
+      only. `input.pad_device_scope` stays the kill switch, default off.
+    - G6: "All seats equal" preset (`host_autologon`, wizard `host_console`): hidden
+      `PulsarSeatConsole` auto-logon, password only in LSA, journaled Winlogon values,
+      refuses foreign auto-logon. Needs the maintainer's OK for spec 30 §6.2.1 before
+      shipping.
+    - G7: seat playback jitter buffer (30 ms target, fades, drift), event-driven WASAPI,
+      dropout counters on the status page.
+    - G8: split screen (halves / quarters, up to four seats per monitor), AppBar console
+      share (halves only), SplitPicker in the outputs dialog.
+  - **HYPOTHESIS (nothing ran on hardware or in the VM, x64 or ARM64; same code paths on
+    both):** every Windows effect above. Highest risk: G2 driver swap and its restore (test
+    in the VM with USB passthrough first, never first on the maintainer's PC), G1 Desktop
+    Duplication inside an RDP session (decides whether `session_capture` can become the
+    default, spec/remote 40 §6.5), G6 auto-logon of a hidden account.
+  - **Multi-session note:** none of this makes several sessions possible on Home / Pro.
+    Separate-session local seats still need Windows Server with RDSH (`rds_loopback`) or an
+    operator-installed termsrv wrapper (`termsrv_wrapper`, experimental); Pulsar ships
+    none. Without either, Home / Pro keep FUS (one live seat) or kiosk seats. OSMS has the
+    same limit.
+  - **Rules kept:** no OSMS code ported (read as reference only, no MIT notice needed), no
+    driver of ours, no injection, no termsrv / LSM change, inbox `winusb.inf` / `input.inf`
+    only, HidHide never bundled. Config additive throughout.
+  - **Integration notes:** G4 and G6 both write `DisableLockWorkstation` / screen saver
+    off for `PulsarSeatConsole` when both are on; same data, G4 does not record a value
+    already present, G6 rewrites its own account's values at each console sync, so the
+    pair converges (turning `host_lock_off` off while the preset is on is undone by the
+    next G6 sync). Not tested beyond reading the code.
+  - **Not built (see each gap's Status line):** G1 SYSTEM agent for the secure desktop,
+    bitmap-decode skip, `TS_SUPPRESS_OUTPUT_PDU`; G2 keyboard LEDs, Bluetooth capture,
+    shared `packet_router`; G8 virtual console display; spec/local/40-display.md and
+    spec/remote/90-install.md:626 updates (analyst-owned).
+  - **Gates (CARGO_TARGET_DIR=target\wf-integ, ARM64 dev box):** `cargo clippy --workspace
+    --all-targets -D warnings` clean; `cargo test --workspace` 2087 passed / 6 ignored /
+    0 failed; manager `bun run check` 0 / 0 (497 files), `bun run test` 376 passed (46
+    files); `installer\scripts\ci-local.ps1` (default gates, both targets: build, test,
+    clippy with `seat-core/mock`, manager build, API helper, installer scripts 94, repo
+    scan, shim x64 / x86 / arm64) all passed. The repo scan first failed on home-folder
+    paths in `docs/progress/osms-local-parity.md` (from the planning commit 97587ca);
+    replaced by repository-relative paths. `cargo fmt --check` is not a gate (pre-existing
+    drift: 482 of 574 tracked `.rs` files differ; implementers formatted only new files).
+    Installer not touched. The first ci-local run stopped on a full C: drive; removing the
+    eight worktrees (their `target\wf-G*` build dirs) freed it.
+  - Worktrees `wf_1b078846-d81-1..8` and branches `osms-g1..g8` removed after the merge.
+    Nothing pushed.
