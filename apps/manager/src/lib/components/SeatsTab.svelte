@@ -54,6 +54,7 @@
     setSeatCompat,
     setSoftwareCursor,
     setVirtualPads,
+    setPadMode,
     type CanvasItem,
     type DropTarget
   } from '#lib/model.ts';
@@ -315,6 +316,13 @@
       { label: t.seatMenu.compat, disabled: !store.isAdmin, action: () => (dialog = { kind: 'compat', seat: n }) },
       { label: pads ? t.settingsPage.padsOff : t.settingsPage.padsOn, action: () => store.edit((c) => setVirtualPads(c, n, !pads)) }
     );
+    if (n !== 1) {
+      const shared = localOf(s).pad_mode === 'shared';
+      out.push({
+        label: shared ? t.settingsPage.padsPassthrough : t.settingsPage.padsShare,
+        action: () => store.edit((c) => setPadMode(c, n, shared ? 'passthrough' : 'shared'))
+      });
+    }
     if (n !== 1) {
       const kiosk = !!localOf(s).kiosk_shell;
       out.push(

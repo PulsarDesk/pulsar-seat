@@ -319,6 +319,16 @@ export function setVirtualPads(c: Config, n: SeatNumber, on: boolean): Config {
   });
 }
 
+/** Physical pad hand-over of a local seat (`passthrough` = default, field removed). */
+export function setPadMode(c: Config, n: SeatNumber, mode: 'passthrough' | 'shared'): Config {
+  return editSeat(c, n, (s) => {
+    const l = localMut(s);
+    if (!l) return;
+    if (mode === 'shared') l.pad_mode = 'shared';
+    else delete l.pad_mode;
+  });
+}
+
 /** `0xVVVV/0xPPPP` (also without `0x`, any case), as `seat_core::validate::is_vid_pid`. */
 export function isVidPid(s: string): boolean {
   const parts = s.trim().split('/');

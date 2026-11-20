@@ -34,6 +34,7 @@ import {
   formatArgs,
   setStartupApps,
   setVirtualPads,
+  setPadMode,
   setGpuPreference,
   setDisplayOption,
   gpuPrefAppValid,
@@ -318,6 +319,13 @@ describe('virtual pads', () => {
     const off = setVirtualPads(on, 2, false);
     expect(off.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('virtual_pads');
     expect(demoConfig().seats.find((s) => s.number === 2)!.local?.virtual_pads).toBeUndefined();
+  });
+
+  it('stores only the shared pad mode (passthrough is the default)', () => {
+    const shared = setPadMode(demoConfig(), 2, 'shared');
+    expect(shared.seats.find((s) => s.number === 2)!.local?.pad_mode).toBe('shared');
+    const back = setPadMode(shared, 2, 'passthrough');
+    expect(back.seats.find((s) => s.number === 2)!.local).not.toHaveProperty('pad_mode');
   });
 });
 
