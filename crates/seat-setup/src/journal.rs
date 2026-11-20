@@ -539,10 +539,63 @@ pub fn own_targets(files: &[(PathBuf, ParsedJournal)]) -> BTreeSet<String> {
     files.iter().flat_map(|(_, j)| j.records.iter()).map(|r| r.target.to_ascii_uppercase()).collect()
 }
 
+/// Machine registry values the service's own journal (`seat-compat`'s `changes.jsonl`,
+/// a foreign format here) holds as **active** changes, as `HKLM\<key>\<value>` upper-case,
+/// so the coexist check does not report our own writes as reference residue (OSMS parity
+/// G5: the Guide-button guard's `ControllerToVKMapping\Enabled` = 0). Read loosely: lines
+/// that do not parse are skipped; a missing file is an empty set.
+pub fn compat_registry_targets(dir: &Path) -> BTreeSet<String> {
+    let Ok(text) = std::fs::read_to_string(dir.join(crate::layout::FOREIGN_JOURNALS[0])) else { return BTreeSet::new() };
+    compat_registry_targets_in(&text)
+}
+
+/// [`compat_registry_targets`] over the file's text.
+pub fn compat_registry_targets_in(text: &str) -> BTreeSet<String> {
+    let mut active: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Some(seq) = v.get("seq").and_then(|s| s.as_u64()) else { continue };
+        match v.get("op").and_then(|o| o.as_str()) {
+            Some("apply") => {
+                let c = &v["change"];
+                if c["kind"] == "registry" && c["hive"] == "hklm"
+                    && let (Some(k), Some(n)) = (c["key"].as_str(), c["name"].as_str())
+                {
+                    active.insert(seq, format!(r"HKLM\{}\{n}", k.trim_matches('\\')).to_ascii_uppercase());
+                }
+            }
+            Some("revert") => {
+                active.remove(&seq);
+            }
+            _ => {}
+        }
+    }
+    active.into_values().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn compat_journal_active_machine_values() {
+        let key = r"SOFTWARE\Microsoft\Input\Settings\ControllerProcessor\ControllerToVKMapping";
+        let apply = |seq: u64, hive: &str, k: &str| {
+            serde_json::json!({"op":"apply","seq":seq,"at_ms":1,"owner":"guide_guard_vk","change":{"kind":"registry","hive":hive,"key":k,"name":"Enabled","previous":null,"written":{"type":"dword","value":0}}}).to_string()
+        };
+        let text = [
+            apply(1, "hklm", key),
+            apply(2, "users", r"S-1-5-21-1\Software\X"),
+            apply(3, "hklm", r"SOFTWARE\Gone"),
+            serde_json::json!({"op":"revert","seq":3,"at_ms":2,"outcome":"restored"}).to_string(),
+            "{torn".into(),
+        ]
+        .join("\n");
+        let own = compat_registry_targets_in(&text);
+        assert_eq!(own.into_iter().collect::<Vec<_>>(), vec![format!(r"HKLM\{key}\Enabled").to_ascii_uppercase()]);
+        assert!(compat_registry_targets(Path::new(r"C:\no\such\dir")).is_empty());
+    }
 
     fn rec(pkg: &str, seq: u64, time: &str, target: &str, prev: ValueState, new: ValueState, st: RecordStatus) -> JournalRecord {
         JournalRecord {

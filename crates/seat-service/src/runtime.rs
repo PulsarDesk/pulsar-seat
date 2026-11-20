@@ -385,7 +385,7 @@ impl Running {
         }
         // Physical pads back to their own security, our seat map entries gone.
         if let Some(mut p) = self.pad_rt.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            p.shutdown();
+            p.shutdown(&self.service);
         }
         self.service.shutdown_with(progress);
         self.stop.store(true, Ordering::SeqCst);

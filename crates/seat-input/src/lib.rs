@@ -43,6 +43,7 @@ pub mod kiosk;
 pub mod kmdf_router;
 #[cfg(feature = "local-pads")]
 pub mod local_pads;
+pub mod pad_jail;
 pub mod pad_scope;
 pub mod platform;
 pub mod raw_router;

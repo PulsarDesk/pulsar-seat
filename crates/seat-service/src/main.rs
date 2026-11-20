@@ -37,6 +37,7 @@ mod vm_guest_rq;
 mod images;
 mod inventory;
 mod listener;
+mod guide_guard;
 mod local_pads;
 mod log;
 #[cfg(windows)]

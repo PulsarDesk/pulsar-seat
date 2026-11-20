@@ -281,6 +281,9 @@ fn rows() -> Vec<Row> {
         r(r"SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services\Client", "fUsbRedirectionEnableMode", Absent, true),
         r(r"SOFTWARE\Microsoft\PolicyManager\default\Connectivity\DisableCrossDeviceResume", "value", Dword(0), true),
         r(r"SYSTEM\CurrentControlSet\Control\Session Manager\Power", "HiberbootEnabled", Dword(1), true),
+        // Also written by our own Guide-button guard (OSMS parity G5): while the service's
+        // journal holds it as an active change, `SetupCtx::own_targets` lists it and the row
+        // is neither reported nor repaired (test `our_guide_guard_vk_value_is_not_residue`).
         r(r"SOFTWARE\Microsoft\Input\Settings\ControllerProcessor\ControllerToVKMapping", "Enabled", Absent, true),
     ];
     for name in [
@@ -719,6 +722,19 @@ mod tests {
         .into();
         let r = evaluate_with_own(&p, &own);
         assert_eq!(r.mode, CoexistMode::Normal, "{:?}", r.findings);
+    }
+
+    #[test]
+    fn our_guide_guard_vk_value_is_not_residue() {
+        let key = r"SOFTWARE\Microsoft\Input\Settings\ControllerProcessor\ControllerToVKMapping";
+        let p = clean();
+        p.set(key, "Enabled", "0");
+        assert_eq!(evaluate(&p).mode, CoexistMode::ResidueOnly, "not ours: reported");
+        // The service journaled it (seat-compat changes.jsonl, `journal::compat_registry_targets`).
+        let own: BTreeSet<String> = [format!(r"HKLM\{key}\Enabled").to_ascii_uppercase()].into();
+        let r = evaluate_with_own(&p, &own);
+        assert_eq!(r.mode, CoexistMode::Normal, "{:?}", r.findings);
+        assert!(r.repairable.is_empty());
     }
 
     #[test]

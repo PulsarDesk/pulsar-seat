@@ -2905,8 +2905,7 @@ fn kiosk_seat_pads_belong_to_the_seat_user_not_the_console_user() {
     assert_eq!(t.len(), 1, "{t:?}");
     assert_eq!(t[0].owner_sid, "S-1-5-21-9-9-9-1002");
     assert_ne!(t[0].owner_sid, console_sid);
-    let parent = |id: &str| Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or("")));
-    let want = h.s.pad_scope_plan(true, &parent).unwrap();
+    let want = h.s.pad_scope_plan(true, &PadTreeFake::default()).unwrap();
     let seat2: Vec<_> = want.iter().filter(|w| w.owner.user_sid =="S-1-5-21-9-9-9-1002").collect();
     assert_eq!(seat2.len(), 2, "collection + parent scoped to the kiosk user: {want:?}");
     // Without a seat logon the session user stays the owner.
@@ -2932,24 +2931,24 @@ fn pad_scope_seat_map_and_sdl_hints_follow_routing() {
     h.s.lock().input_overrides.insert(k("pad;2"), s(2).mask());
     let parent = |id: &str| Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or("")));
     // Only the console session: nobody else could open the pads, nothing scoped.
-    assert_eq!(h.s.pad_scope_plan(false, &parent).unwrap(), vec![]);
+    assert_eq!(h.s.pad_scope_plan(false, &PadTreeFake::default()).unwrap(), vec![]);
     // Opt-in: the default config never scopes physical pads.
     assert!(!seat_core::config::InputSettings::default().pad_device_scope);
     let mut a = admin();
     call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
     h.p.sign_in(10, "ali");
     h.s.on_session_change(SessionChange::Logon, 10);
-    let want = h.s.pad_scope_plan(false, &parent).unwrap();
+    let want = h.s.pad_scope_plan(false, &PadTreeFake::default()).unwrap();
     let seat2: Vec<_> = want.iter().filter(|w| w.owner.session_id == 10).collect();
     assert_eq!(seat2.len(), 2, "the Switch Pad's collection and parent: {want:?}");
     assert!(seat2.iter().any(|w| w.instance_id.starts_with(r"USB\PARENT_OF_")));
     // Remote seats running: every pad has an owner (seat 2's, or seat 1 / the console).
-    let want = h.s.pad_scope_plan(true, &parent).unwrap();
+    let want = h.s.pad_scope_plan(true, &PadTreeFake::default()).unwrap();
     assert_eq!(want.len(), 4, "{want:?}");
     assert_eq!(want.iter().filter(|w| w.owner.session_id == 1).count(), 2);
     // Setting off: plan None (the runtime restores everything).
     h.s.lock().config.settings.input.pad_device_scope = false;
-    assert!(h.s.pad_scope_plan(true, &parent).is_none());
+    assert!(h.s.pad_scope_plan(true, &PadTreeFake::default()).is_none());
     // Shim seat map: seat 2 has its own session; its pad and the pad's parent are listed.
     let map = h.s.local_seat_map(&parent);
     assert_eq!(map.len(), 1, "{map:?}");
@@ -2965,6 +2964,155 @@ fn pad_scope_seat_map_and_sdl_hints_follow_routing() {
     let env1 = h.s.pad_sdl_env(s(1));
     assert!(env1.iter().any(|(_, v)| v == "0x057E/0x2009"));
 }
+
+/// Fake device tree for pad discovery: id -> (parent, class GUID, compatible ids). Ids not
+/// in the map have the parent `USB\PARENT_OF_<last segment>` (the fallback shape).
+#[derive(Default)]
+struct PadTreeFake(std::collections::BTreeMap<String, (Option<String>, &'static str, Vec<&'static str>)>);
+
+impl PadTreeFake {
+    fn add(mut self, id: &str, parent: Option<&str>, class: &'static str, compat: &[&'static str]) -> Self {
+        self.0.insert(id.into(), (parent.map(str::to_string), class, compat.to_vec()));
+        self
+    }
+}
+
+impl seat_input::pad_scope::PadTree for PadTreeFake {
+    fn class_nodes(&self) -> Vec<String> {
+        use seat_input::pad_scope::{GIP_CLASS, HID_CLASS, XUSB_CLASS};
+        self.0.iter().filter(|(_, v)| [XUSB_CLASS, GIP_CLASS, HID_CLASS].contains(&v.1)).map(|(k, _)| k.clone()).collect()
+    }
+    fn parent(&self, id: &str) -> Option<String> {
+        match self.0.get(id) {
+            Some(v) => v.0.clone(),
+            None => Some(format!(r"USB\PARENT_OF_{}", id.rsplit('\\').next().unwrap_or(""))),
+        }
+    }
+    fn children(&self, id: &str) -> Vec<String> {
+        self.0.iter().filter(|(_, v)| v.0.as_deref() == Some(id)).map(|(k, _)| k.clone()).collect()
+    }
+    fn class_guid(&self, id: &str) -> Option<String> {
+        self.0.get(id).map(|v| v.1.to_string())
+    }
+    fn compatible_ids(&self, id: &str) -> Vec<String> {
+        self.0.get(id).map(|v| v.2.iter().map(|s| s.to_string()).collect()).unwrap_or_default()
+    }
+}
+
+const PORT2: &str = r"USB\ROOT_HUB30\PORT2";
+const USB_CLASS: &str = "{36fc9e60-c465-11cf-8056-444553540000}";
+
+/// Seat 2 running with "ali" in session 10; a hub assigned to seat 2; a DualSense HID unit.
+fn g5_harness(pad_on_seat2: bool) -> Harness {
+    let mut c = two_seat_config();
+    c.settings.input.pad_device_scope = true;
+    c.devices.push(assign("hub;2", DeviceKind::UsbHub, s(2).mask()));
+    let h = harness_with(c, None);
+    let mut hub = device("hub;2", DeviceKind::UsbHub);
+    hub.instance_id = Some(PORT2.into());
+    *h.f.gate.devices.lock().unwrap() = vec![hub];
+    let mut ds = ds5_dev("pad;1", r"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}");
+    ds.instance_id = Some(r"HID\VID_054C&PID_0CE6&MI_03\DSHID".into());
+    *h.f.input.devices.lock().unwrap() = vec![input_dev("kbd;1", DeviceKind::Keyboard, KBD1), ds];
+    h.s.boot();
+    if pad_on_seat2 {
+        h.s.lock().input_overrides.insert(k("pad;1"), s(2).mask());
+    }
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    h
+}
+
+/// A wired Xbox One pad (GIP, no HID unit) on seat 2's port, the DualSense, an Xbox 360
+/// pad (XUSB only) on no seat.
+fn g5_tree() -> PadTreeFake {
+    use seat_input::pad_scope::{GIP_CLASS, HID_CLASS, XUSB_CLASS};
+    PadTreeFake::default()
+        .add(PORT2, None, USB_CLASS, &[])
+        .add(r"USB\VID_045E&PID_0B12\GIP1", Some(PORT2), GIP_CLASS, &[])
+        .add(r"GIP\VID_045E&PID_0B12\CHILD", Some(r"USB\VID_045E&PID_0B12\GIP1"), GIP_CLASS, &[])
+        .add(r"USB\VID_054C&PID_0CE6&MI_03\DS3", Some("USB_COMPOSITE"), HID_CLASS, &[])
+        .add("USB_COMPOSITE", None, USB_CLASS, &[])
+        .add(r"HID\VID_054C&PID_0CE6&MI_03\DSHID", Some(r"USB\VID_054C&PID_0CE6&MI_03\DS3"), HID_CLASS, &["HID_DEVICE_SYSTEM_GAME"])
+        .add(r"USB\VID_045E&PID_028E\X360", Some("OTHER_HUB"), XUSB_CLASS, &[])
+        .add("OTHER_HUB", None, USB_CLASS, &[])
+}
+
+#[test]
+fn g5_pad_groups_follow_units_ports_and_pad_mode() {
+    use seat_core::config::PadMode;
+    let h = g5_harness(true);
+    let tree = g5_tree();
+    let want = h.s.pad_scope_plan(false, &tree).unwrap();
+    let ids: Vec<&str> = want.iter().map(|w| w.instance_id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec![r"GIP\VID_045E&PID_0B12\CHILD", r"HID\VID_054C&PID_0CE6&MI_03\DSHID", r"USB\VID_045E&PID_0B12\GIP1", r"USB\VID_054C&PID_0CE6&MI_03\DS3"],
+        "GIP pad by its port, DualSense by its HID unit; the unrouted 360 pad untouched; the hub and composite parent never"
+    );
+    assert!(want.iter().all(|w| w.owner.session_id == 10 && w.owner.user_sid == "S-1-5-21-9-ali"), "{want:?}");
+    // Remote seats running: the unrouted XUSB pad goes to the console.
+    let want = h.s.pad_scope_plan(true, &tree).unwrap();
+    let x = want.iter().find(|w| w.instance_id.contains("028E")).unwrap();
+    assert_eq!(x.owner.session_id, 1);
+    // Seat 2 shares its pads: they are left out, not handed to the console.
+    h.s.lock().config.seats[1].local_mut().unwrap().pad_mode = PadMode::Shared;
+    let want = h.s.pad_scope_plan(true, &tree).unwrap();
+    assert_eq!(want.iter().map(|w| w.instance_id.as_str()).collect::<Vec<_>>(), vec![r"USB\VID_045E&PID_028E\X360"]);
+    // The kill switch still wins.
+    h.s.lock().config.settings.input.pad_device_scope = false;
+    assert!(h.s.pad_scope_plan(true, &tree).is_none());
+}
+
+#[test]
+fn g5_same_user_in_two_sessions_gets_logon_sids() {
+    let h = g5_harness(true);
+    // The console user signs in to seat 2's account too.
+    h.p.sign_in(1, "ali");
+    let want = h.s.pad_scope_plan(true, &g5_tree()).unwrap();
+    let seat2: Vec<_> = want.iter().filter(|w| w.owner.session_id == 10).collect();
+    assert!(!seat2.is_empty());
+    assert!(seat2.iter().all(|w| w.owner.user_sid == "S-1-5-5-0-10"), "{want:?}");
+    let console: Vec<_> = want.iter().filter(|w| w.owner.session_id == 1).collect();
+    assert!(!console.is_empty());
+    assert!(console.iter().all(|w| w.owner.user_sid == "S-1-5-5-0-1"), "{want:?}");
+}
+
+#[test]
+fn g5_guide_guard_follows_seats_and_restores_on_stop() {
+    use crate::guide_guard::{GuideGuard, RETRY};
+    use seat_core::config::PadMode;
+    let h = g5_harness(true);
+    let want = h.s.guide_guard_want(false);
+    assert_eq!(want.sids, vec!["S-1-5-21-9-ALI".to_string(), "S-1-5-21-9-KONSOL".to_string()]);
+    assert!(want.vk_mapping_off);
+    let mut g = GuideGuard::new();
+    let t0 = std::time::Instant::now();
+    assert!(g.tick(&h.s, false, t0), "first tick always syncs (crash leftovers)");
+    assert!(!g.tick(&h.s, false, t0), "unchanged: no platform call");
+    // Seat 2 stops scoping (shared): nothing wanted any more, ours reverted.
+    h.s.lock().config.seats[1].local_mut().unwrap().pad_mode = PadMode::Shared;
+    *h.p.guide_guard_fail.lock().unwrap() = Some("hive busy".into());
+    assert!(g.tick(&h.s, false, t0));
+    assert!(h.s.guide_guard_want(false).is_empty());
+    assert!(!g.tick(&h.s, false, t0 + RETRY / 2), "back-off after a failure");
+    assert!(g.tick(&h.s, false, t0 + RETRY), "retried after the back-off");
+    // Service stop: an empty want is synced.
+    h.s.lock().config.seats[1].local_mut().unwrap().pad_mode = PadMode::Passthrough;
+    g.tick(&h.s, false, t0 + RETRY);
+    g.shutdown(&h.s);
+    let calls = h.p.guide_guard.lock().unwrap().clone();
+    // Initial want, failed empty sync, its retry, the want again, the stop.
+    assert_eq!(calls.len(), 5, "{calls:?}");
+    assert!(!calls[3].is_empty());
+    assert!(calls[4].is_empty());
+    // Off switch: nothing wanted.
+    h.s.lock().config.settings.input.pad_device_scope = false;
+    assert!(h.s.guide_guard_want(true).is_empty());
+}
+
 #[test]
 fn pulsar_pairing_events_reach_admins_on_the_stream_topic_only() {
     use seat_proto::{Event, StreamEvent};

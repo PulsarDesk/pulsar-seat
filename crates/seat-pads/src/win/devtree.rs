@@ -183,6 +183,78 @@ pub fn parent_instance(instance_id: &str) -> Option<String> {
     locate(instance_id, false).ok().and_then(parent_of)
 }
 
+/// Present nodes of one setup class (`{guid}`), read only (OSMS parity G5 pad discovery).
+pub fn present_nodes_of_class(class_guid: &str) -> Result<Vec<String>, PadError> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{CM_GETIDLIST_FILTER_CLASS, CM_GETIDLIST_FILTER_PRESENT};
+    let filter = wide(class_guid);
+    let flags = CM_GETIDLIST_FILTER_CLASS | CM_GETIDLIST_FILTER_PRESENT;
+    for _ in 0..4 {
+        let mut len = 0u32;
+        // SAFETY: out pointer valid; filter is a NUL-terminated class GUID string.
+        cr("CM_Get_Device_ID_List_SizeW", unsafe { CM_Get_Device_ID_List_SizeW(&mut len, filter.as_ptr(), flags) })?;
+        let mut buf = vec![0u16; len as usize + 2];
+        // SAFETY: buffer of `len` characters.
+        let r = unsafe { CM_Get_Device_ID_ListW(filter.as_ptr(), buf.as_mut_ptr(), buf.len() as u32, flags) };
+        if r == CR_BUFFER_SMALL {
+            continue;
+        }
+        cr("CM_Get_Device_ID_ListW", r)?;
+        return Ok(split_multi_sz(&buf));
+    }
+    Err(PadError::os("CM_Get_Device_ID_ListW", CR_BUFFER_SMALL))
+}
+
+/// Instance ids of a present node's children (read only).
+pub fn child_instances(instance_id: &str) -> Vec<String> {
+    let Ok(dn) = locate(instance_id, false) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut c = 0u32;
+    // SAFETY: out pointer valid.
+    if unsafe { CM_Get_Child(&mut c, dn, 0) } != CR_SUCCESS {
+        return out;
+    }
+    for _ in 0..256 {
+        if let Ok(id) = device_id(c) {
+            out.push(id);
+        }
+        let mut n = 0u32;
+        // SAFETY: out pointer valid.
+        if unsafe { CM_Get_Sibling(&mut n, c, 0) } != CR_SUCCESS {
+            break;
+        }
+        c = n;
+    }
+    out
+}
+
+/// A string / multi-string SetupAPI registry property of a node (empty when unset).
+fn registry_strings(instance_id: &str, prop: u32) -> Vec<String> {
+    with_devinfo(instance_id, |set, data| {
+        let mut buf = vec![0u16; 2048];
+        let mut ty = 0u32;
+        let mut need = 0u32;
+        // SAFETY: buffer of the given byte size.
+        let ok = unsafe { SetupDiGetDeviceRegistryPropertyW(set, data, prop, &mut ty, buf.as_mut_ptr().cast(), (buf.len() * 2) as u32, &mut need) };
+        if ok == 0 {
+            return Ok(Vec::new());
+        }
+        Ok(split_multi_sz(&buf))
+    })
+    .unwrap_or_default()
+}
+
+/// Setup class GUID of a node (`{…}`), read only.
+pub fn class_guid_of(instance_id: &str) -> Option<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::SPDRP_CLASSGUID;
+    registry_strings(instance_id, SPDRP_CLASSGUID).into_iter().next().filter(|s| !s.is_empty())
+}
+
+/// Compatible ids of a node, read only.
+pub fn compatible_ids_of(instance_id: &str) -> Vec<String> {
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::SPDRP_COMPATIBLEIDS;
+    registry_strings(instance_id, SPDRP_COMPATIBLEIDS)
+}
+
 /// Opens one node in a fresh SetupAPI set and runs `f`; the set is destroyed afterwards.
 fn with_devinfo<T>(instance_id: &str, f: impl FnOnce(isize, &mut SP_DEVINFO_DATA) -> Result<T, PadError>) -> Result<T, PadError> {
     // SAFETY: SetupAPI calls with valid buffers; the set is destroyed on every path.
@@ -393,6 +465,21 @@ mod tests {
         assert!(parent_instance(id).is_none());
         assert!(session_id_of(id).is_err());
         assert!(security_sds(id).is_err());
+        assert!(child_instances(id).is_empty());
+        assert!(class_guid_of(id).is_none());
+        assert!(compatible_ids_of(id).is_empty());
+    }
+
+    /// Class listing is read only and every node it returns reports that class.
+    #[test]
+    fn class_listing_is_consistent() {
+        let hid = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
+        let nodes = present_nodes_of_class(hid).unwrap();
+        for n in nodes.iter().take(8) {
+            if let Some(c) = class_guid_of(n) {
+                assert!(c.eq_ignore_ascii_case(hid), "{n}: {c}");
+            }
+        }
     }
 
     /// Registers and unregisters a notification (no system state changes).

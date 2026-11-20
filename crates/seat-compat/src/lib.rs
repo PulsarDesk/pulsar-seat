@@ -46,6 +46,7 @@ pub mod defender;
 pub mod drivers;
 pub mod features;
 pub mod gpu_pref;
+pub mod guide_guard;
 pub mod hvsock;
 pub mod hyperv;
 pub mod hyperv_vm;

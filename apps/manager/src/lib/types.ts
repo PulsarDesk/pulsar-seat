@@ -275,10 +275,17 @@ export interface LocalSeat {
    *  Pro, Xbox and generic HID pads since 2026-11-17; `seat_input::local_pads`). Absent =
    *  off. Added 2026-11-14. */
   virtual_pads?: boolean;
+  /** How the physical pads routed to this seat are handed over (OSMS parity G5,
+   *  `seat_core::config::PadMode`). Absent = `passthrough` (the pad's device nodes are
+   *  scoped to the seat; only while `settings.input.pad_device_scope` is on). Added
+   *  2026-11-18. */
+  pad_mode?: PadMode;
   /** Programs that prefer a GPU (`UserGpuPreferences` of the seat user, spec 40 §6.4).
    *  Absent = off. Added 2026-11-17. */
   gpu_preference?: GpuPreference;
 }
+
+export type PadMode = 'passthrough' | 'shared';
 
 export type GpuPreferenceMode = 'off' | 'seat_gpu' | 'high_performance' | 'power_saving';
 

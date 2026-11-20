@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { demoConfig } from './demo.ts';
 import { t } from './i18n.ts';
-import { normalize, setGpuPreference, setStartupApps, setVirtualPads } from './model.ts';
+import { normalize, setGpuPreference, setPadMode, setStartupApps, setVirtualPads } from './model.ts';
 import { logLevelOf, logSettingsFor, seatDisplayName, seatFacts } from './settingsview.ts';
 
 describe('settings view helpers (redesign P4)', () => {
@@ -23,6 +23,9 @@ describe('settings view helpers (redesign P4)', () => {
     expect(facts).toContain(t.settingsPage.passwordFailingFact);
     expect(facts).toContain(t.basic.appsCount(1).toLowerCase());
     expect(facts).toContain(t.settingsPage.padsFact);
+    expect(facts).not.toContain(t.settingsPage.padsSharedFact);
+    const shared = setPadMode(c, 2, 'shared');
+    expect(seatFacts(shared, shared.seats.find((s) => s.number === 2)!, false)).toContain(t.settingsPage.padsSharedFact);
     expect(facts).toContain(t.settingsPage.gpuFact);
   });
 

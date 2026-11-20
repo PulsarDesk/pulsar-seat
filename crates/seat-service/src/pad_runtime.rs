@@ -5,7 +5,13 @@
 //! - **Pad scoping** (`seat_input::pad_scope`): a [`PadScoper`] over [`WinScoper`] (device
 //!   properties through `seat_pads::win::devtree`), journal `<data>\pads\scope.json`.
 //!   Every journaled node is restored when the service starts (after a crash), when it
-//!   stops, and when `input.pad_device_scope` is off.
+//!   stops, and when `input.pad_device_scope` is off. Pads are found by class through
+//!   [`WinPadTree`] (OSMS parity G5, 2026-11-18). After each device-interface arrival the
+//!   cosmetic `DEVPKEY_Device_SessionId` is re-applied to the scoped nodes
+//!   ([`PadScoper::reassert_session_ids`]).
+//! - **Guide-button guard** (`crate::guide_guard`, OSMS parity G5): Game Bar's controller
+//!   button and `ControllerToVKMapping`, journaled in the seat-compat journal.
+//! - **HidHide** (`seat_input::pad_jail`): detected once at start and logged; detect-only.
 //! - **Local seat map**: the shim seat map entries of local seats with their own session
 //!   (`crate::local_pads::local_seat_map`), written to the same volatile registry map as the
 //!   remote seats (`seat_shim_core::win::RegSeatMap`, keys by session id, so the two kinds
@@ -17,12 +23,14 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use seat_input::pad_scope::{DeviceScoper, FileScopeStore, PadScoper, ScopeNote};
+use seat_input::pad_scope::{DeviceScoper, FileScopeStore, GIP_CLASS, HID_CLASS, PadScoper, PadTree, ScopeNote, XUSB_CLASS};
 use seat_pads::win::devtree;
 use seat_shim_core::{SeatMapEntry, SeatMapWriter};
 
+use crate::guide_guard::GuideGuard;
 use crate::log;
 use crate::service::Service;
 
@@ -47,6 +55,27 @@ impl DeviceScoper for WinScoper {
     }
 }
 
+/// The live device tree, read only (pad discovery).
+pub struct WinPadTree;
+
+impl PadTree for WinPadTree {
+    fn class_nodes(&self) -> Vec<String> {
+        [XUSB_CLASS, GIP_CLASS, HID_CLASS].iter().flat_map(|c| devtree::present_nodes_of_class(c).unwrap_or_default()).collect()
+    }
+    fn parent(&self, id: &str) -> Option<String> {
+        devtree::parent_instance(id)
+    }
+    fn children(&self, id: &str) -> Vec<String> {
+        devtree::child_instances(id)
+    }
+    fn class_guid(&self, id: &str) -> Option<String> {
+        devtree::class_guid_of(id)
+    }
+    fn compatible_ids(&self, id: &str) -> Vec<String> {
+        devtree::compatible_ids_of(id)
+    }
+}
+
 fn parent_of(id: &str) -> Option<String> {
     devtree::parent_instance(id)
 }
@@ -61,7 +90,16 @@ pub struct PadRuntime {
     map_at: Option<Instant>,
     /// Monotonic origin of the scoper's retry clock.
     born: Instant,
+    guard: GuideGuard,
+    /// Device-interface arrivals (`None` when registration failed: the session ids are
+    /// then re-applied every [`REASSERT_FALLBACK`]).
+    arrivals: Option<devtree::DeviceArrivalWatch>,
+    arrivals_seen: u64,
+    reassert_at: Instant,
 }
+
+/// Re-apply session ids this often when no arrival watch could be registered.
+const REASSERT_FALLBACK: Duration = Duration::from_secs(10);
 
 fn log_notes(notes: Vec<ScopeNote>) {
     for n in notes {
@@ -79,19 +117,53 @@ impl PadRuntime {
         let store = FileScopeStore::new(data_dir.join("pads").join("scope.json"));
         let mut scoper = PadScoper::new(Arc::new(WinScoper), Box::new(store));
         log_notes(scoper.restore_all());
-        Self { scoper, map: BTreeMap::new(), map_at: None, born: Instant::now() }
+        let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+        log::info(&seat_input::pad_jail::detect(&root).describe());
+        let arrivals = devtree::DeviceArrivalWatch::start().map_err(|e| log::warn(&format!("pad scope: arrival watch: {e}"))).ok();
+        Self {
+            scoper,
+            map: BTreeMap::new(),
+            map_at: None,
+            born: Instant::now(),
+            guard: GuideGuard::new(),
+            arrivals,
+            arrivals_seen: 0,
+            reassert_at: Instant::now(),
+        }
     }
 
-    /// One tick: scoping, then the local seat map.
+    /// One tick: scoping, the Guide-button guard, then the local seat map.
     pub fn tick(&mut self, s: &Service, remote_seats_running: bool) {
         // Failed nodes (busy device, unplugged pad) are retried with back-off and a repeated
         // error is logged once (`PadScoper::sync_at`).
         let now = self.born.elapsed().as_millis() as u64;
-        match s.pad_scope_plan(remote_seats_running, &parent_of) {
+        match s.pad_scope_plan(remote_seats_running, &WinPadTree) {
             Some(want) => log_notes(self.scoper.sync_at(&want, now)),
             None => log_notes(self.scoper.restore_all_at(now)),
         }
+        self.reassert();
+        self.guard.tick(s, remote_seats_running, Instant::now());
         self.publish_map(s);
+    }
+
+    /// Session ids back on scoped nodes after a device start (arrival or fallback timer).
+    fn reassert(&mut self) {
+        let due = match &self.arrivals {
+            Some(w) => {
+                let n = w.counter().load(Ordering::SeqCst);
+                let changed = n != self.arrivals_seen;
+                self.arrivals_seen = n;
+                changed
+            }
+            None => self.reassert_at.elapsed() >= REASSERT_FALLBACK,
+        };
+        if !due {
+            return;
+        }
+        self.reassert_at = Instant::now();
+        for id in self.scoper.reassert_session_ids() {
+            log::info(&format!("pad scope: {id}: session id re-applied after a device start"));
+        }
     }
 
     fn publish_map(&mut self, s: &Service) {
@@ -115,9 +187,12 @@ impl PadRuntime {
         self.map_at = Some(Instant::now());
     }
 
-    /// Service stop: restore every pad node and drop our seat map entries.
-    pub fn shutdown(&mut self) {
+    /// Service stop: restore every pad node and the guarded values, drop our seat map
+    /// entries.
+    pub fn shutdown(&mut self, s: &Service) {
+        self.arrivals = None;
         log_notes(self.scoper.restore_all());
+        self.guard.shutdown(s);
         let w = seat_shim_core::win::RegSeatMap;
         for sid in std::mem::take(&mut self.map).into_keys() {
             let _ = w.remove(sid);

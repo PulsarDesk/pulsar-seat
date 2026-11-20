@@ -6,29 +6,46 @@
 //! nodes, the same way `seat-pads` scopes its virtual pads:
 //!
 //! - the device security descriptor (`SPDRP_SECURITY_SDS`) grants open access to SYSTEM,
-//!   Administrators and the **owning user's SID** only ([`scope_sddl`]);
-//! - `DEVPKEY_Device_SessionId` names the owning session;
+//!   Administrators and the **owning principal** only ([`scope_sddl`]): the seat user's
+//!   SID, or the seat session's logon SID (`S-1-5-5-X-Y`) when the same user is signed in
+//!   to two seats at once ([`principal`]);
+//! - `DEVPKEY_Device_SessionId` names the owning session (cosmetic only, see below);
 //! - the node is restarted with a property change (`DICS_PROPCHANGE`) so the new security
 //!   applies to the running device.
 //!
-//! Which nodes: the pad's HID collection and its parent (the USB interface / device or the
-//! Bluetooth HID device), because the XInput (XUSB) interface of Xbox pads lives on the
-//! parent. Who owns a pad ([`plan`]): the local seat it is routed to (a seat with its own
-//! session and a signed-in user); else, while remote seats run, the console session
-//! ("physical console pad scoping", spec/remote 60 §10 intent: remote seats must not take
-//! the console's controllers); else nobody (the original descriptor is restored).
+//! Which nodes (OSMS parity G5, 2026-11-18, [`discover`]): every present game controller
+//! node — class XUSB (`{d61ca365-…}`, Xbox 360 / XInput), class GIP / Xbox peripherals
+//! (`{05f5cfe2-…}`, wired Xbox One / Series pads on `xboxgip`) and HID collections whose
+//! compatible ids include `HID_DEVICE_SYSTEM_GAME` — is walked up to its pad root (the
+//! topmost ancestor that is still of one of the classes XUSB, GIP or HID: the USB device /
+//! interface or the Bluetooth HID device, never a hub or a USB composite parent), and the
+//! root plus every XUSB, GIP and HID node below it is scoped. So GIP and XUSB pads with no
+//! HID collection are covered too, and so are the vendor-defined HID collections an Xbox
+//! pad publishes next to its game collection. The older "HID collection and its parent"
+//! set stays as the fallback for an inventory pad that the class walk did not find.
+//!
+//! Who owns a pad ([`plan`]): the local seat it is routed to (a seat with its own session,
+//! a signed-in user and [`seat_core::config::PadMode::Passthrough`]); else, while remote
+//! seats run, the console session ("physical console pad scoping", spec/remote 60 §10
+//! intent: remote seats must not take the console's controllers); else nobody (the
+//! original descriptor is restored).
 //!
 //! Crash safety: the original descriptor and session id of every node are written to the
 //! [`ScopeStore`] **before** the node is changed; the service restores every journaled node
 //! at start (after a crash), at stop and when the setting is turned off. Nodes are never
 //! changed when their original state could not be read.
 //!
-//! HYPOTHESIS (untested on hardware): the property-change restart applies the new
-//! descriptor to HID collections and XUSB interfaces of physical pads; open handles from
-//! before the change keep working until they are closed (Windows checks access at open);
-//! `DEVPKEY_Device_SessionId` has no effect on its own (spec/remote 60 §13 #2). A user who
-//! is signed in to two seats at once gets the pad in both (the descriptor names a user,
-//! not a session).
+//! HYPOTHESIS (untested on hardware; measured by OSMS on its own test machine, their
+//! `docs/asignacion-dispositivos.md`, not by us): the descriptor change applies only after
+//! the property-change restart, and that restart closes the handles other sessions had open
+//! (so a game in another session loses the pad at once, it does not keep it until it
+//! closes the handle); the descriptor is checked per token, so a principal must name the
+//! user or the logon SID; `DEVPKEY_Device_SessionId` alone only hides the node from
+//! enumeration in other sessions (`CM_*` returns CR 13) while an open by path still works,
+//! and Windows clears it on every device start, so it is cosmetic and re-applied after each
+//! device arrival ([`PadScoper::reassert_session_ids`]). GameInput and
+//! Windows.Gaming.Input open pads from a system broker service, so no descriptor isolates
+//! them; the SDL hints ([`sdl_env`]) and the shim's XInput seat map are the only mitigation.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -40,7 +57,182 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScopeOwner {
     pub session_id: u32,
+    /// The SID the descriptor grants access to: the user's SID, or the session's logon
+    /// SID when the same user is signed in to two sessions ([`principal`]).
     pub user_sid: String,
+}
+
+/// The owner as it goes into the descriptor: `shared_user` = the same user SID owns
+/// another session too (two seats, or a seat and the console). Then the session's logon
+/// SID (`S-1-5-5-X-Y`) is used, so the pad opens in this session only; without a valid
+/// logon SID the user SID stays (the pad then opens in both of that user's sessions).
+pub fn principal(owner: ScopeOwner, shared_user: bool, logon_sid: Option<&str>) -> ScopeOwner {
+    match logon_sid {
+        Some(l) if shared_user && l.starts_with("S-1-5-5-") && valid_sid(l) => ScopeOwner { session_id: owner.session_id, user_sid: l.to_string() },
+        _ => owner,
+    }
+}
+
+// ---- pad node discovery (OSMS parity G5) ----
+
+/// Device setup class of XUSB nodes (Xbox 360 pads, the XInput interface).
+pub const XUSB_CLASS: &str = "{d61ca365-5af4-4486-998b-9db4734c6ca3}";
+/// Device setup class of GIP / Xbox peripheral nodes (wired Xbox One / Series pads).
+pub const GIP_CLASS: &str = "{05f5cfe2-4733-4950-a6bb-07aad01a3a84}";
+/// Device setup class `HIDClass`.
+pub const HID_CLASS: &str = "{745a17a0-74d3-11d0-b6fe-00a0c90f57da}";
+/// Compatible id of a HID game controller collection.
+pub const HID_GAME_ID: &str = "HID_DEVICE_SYSTEM_GAME";
+/// Deepest ancestor / descendant walk (a loop in a broken tree cannot hang the tick).
+const MAX_DEPTH: usize = 16;
+
+/// What the discovery needs from the device tree (Windows: `seat_service::pad_runtime`
+/// over `seat_pads::win::devtree`; tests: a fake).
+pub trait PadTree {
+    /// Present nodes of the classes [`XUSB_CLASS`], [`GIP_CLASS`] and [`HID_CLASS`].
+    fn class_nodes(&self) -> Vec<String>;
+    fn parent(&self, id: &str) -> Option<String>;
+    fn children(&self, id: &str) -> Vec<String>;
+    /// Setup class GUID in braces, any case.
+    fn class_guid(&self, id: &str) -> Option<String>;
+    fn compatible_ids(&self, id: &str) -> Vec<String>;
+}
+
+/// Class of a node as far as pad scoping cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeClass {
+    Xusb,
+    Gip,
+    /// HID collection with `HID_DEVICE_SYSTEM_GAME`.
+    HidGame,
+    /// Any other `HIDClass` node (USB / Bluetooth HID device, vendor collections).
+    Hid,
+    Other,
+}
+
+impl NodeClass {
+    /// A node that is a game controller by itself.
+    pub fn is_controller(self) -> bool {
+        matches!(self, Self::Xusb | Self::Gip | Self::HidGame)
+    }
+    /// A node of a class pad scoping touches (the classes HidHide also filters).
+    pub fn is_pad_class(self) -> bool {
+        self != Self::Other
+    }
+}
+
+pub fn classify(tree: &dyn PadTree, id: &str) -> NodeClass {
+    let Some(c) = tree.class_guid(id) else { return NodeClass::Other };
+    if c.eq_ignore_ascii_case(XUSB_CLASS) {
+        NodeClass::Xusb
+    } else if c.eq_ignore_ascii_case(GIP_CLASS) {
+        NodeClass::Gip
+    } else if c.eq_ignore_ascii_case(HID_CLASS) {
+        if tree.compatible_ids(id).iter().any(|x| x.eq_ignore_ascii_case(HID_GAME_ID)) { NodeClass::HidGame } else { NodeClass::Hid }
+    } else {
+        NodeClass::Other
+    }
+}
+
+/// The pad root above a controller node: the topmost ancestor that is still of a pad
+/// class (a USB hub, a USB composite parent or a Bluetooth radio stops the walk).
+pub fn pad_root(tree: &dyn PadTree, id: &str) -> String {
+    let mut cur = id.to_string();
+    for _ in 0..MAX_DEPTH {
+        match tree.parent(&cur) {
+            Some(p) if classify(tree, &p).is_pad_class() => cur = p,
+            _ => break,
+        }
+    }
+    cur
+}
+
+/// Setup classes `Keyboard` and `Mouse`.
+pub const KEYBOARD_CLASS: &str = "{4d36e96b-e325-11ce-bfc1-08002be10318}";
+pub const MOUSE_CLASS: &str = "{4d36e96f-e325-11ce-bfc1-08002be10318}";
+
+fn is_keyboard_or_mouse(tree: &dyn PadTree, id: &str) -> bool {
+    tree.class_guid(id).is_some_and(|c| c.eq_ignore_ascii_case(KEYBOARD_CLASS) || c.eq_ignore_ascii_case(MOUSE_CLASS))
+}
+
+/// `root` plus every node of a pad class below it (any depth), upper-case, root first.
+///
+/// Console-input safety: every node above a keyboard or mouse node (a combo device such
+/// as a pad that also publishes a keyboard collection) is left out, so a keyboard / mouse
+/// is never restarted or placed below a descriptor we narrowed.
+pub fn pad_subtree(tree: &dyn PadTree, root: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip: Vec<String> = Vec::new();
+    let mut up_of: BTreeMap<String, String> = BTreeMap::new();
+    let mut level = vec![root.to_string()];
+    let mut seen = vec![root.to_ascii_uppercase()];
+    out.push(root.to_ascii_uppercase());
+    for _ in 0..MAX_DEPTH {
+        let mut next = Vec::new();
+        for n in &level {
+            for c in tree.children(n) {
+                let up = c.to_ascii_uppercase();
+                if seen.contains(&up) {
+                    continue;
+                }
+                seen.push(up.clone());
+                up_of.insert(up.clone(), n.to_ascii_uppercase());
+                if is_keyboard_or_mouse(tree, &c) {
+                    let mut a = up_of.get(&up).cloned();
+                    while let Some(x) = a {
+                        a = up_of.get(&x).cloned();
+                        skip.push(x);
+                    }
+                } else if classify(tree, &c).is_pad_class() {
+                    out.push(up);
+                }
+                next.push(c);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        level = next;
+    }
+    out.retain(|n| !skip.contains(n));
+    out
+}
+
+/// One physical pad found by class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PadGroup {
+    /// Upper-case pad root.
+    pub root: String,
+    /// Root first, then every pad-class node below it (upper-case).
+    pub nodes: Vec<String>,
+    /// Ancestors of the root, nearest first (upper-case): the USB port / hub chain used
+    /// to route a pad that has no HID unit of its own.
+    pub ancestors: Vec<String>,
+}
+
+/// Every present game controller, grouped by pad root (sorted by root).
+pub fn discover(tree: &dyn PadTree) -> Vec<PadGroup> {
+    let mut roots: BTreeMap<String, String> = BTreeMap::new();
+    for id in tree.class_nodes() {
+        if !classify(tree, &id).is_controller() {
+            continue;
+        }
+        let root = pad_root(tree, &id);
+        roots.entry(root.to_ascii_uppercase()).or_insert(root);
+    }
+    roots
+        .into_iter()
+        .map(|(up, root)| {
+            let mut ancestors = Vec::new();
+            let mut cur = root.clone();
+            for _ in 0..MAX_DEPTH {
+                let Some(p) = tree.parent(&cur) else { break };
+                ancestors.push(p.to_ascii_uppercase());
+                cur = p;
+            }
+            PadGroup { root: up, nodes: pad_subtree(tree, &root), ancestors }
+        })
+        .collect()
 }
 
 /// One node the service wants scoped.
@@ -138,7 +330,8 @@ pub enum ScopeNote {
 /// One physical pad as the planner sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PadNodes {
-    /// HID collection instance id, then its parent (when known).
+    /// Its device nodes: a [`PadGroup`]'s nodes, or (fallback) the HID collection
+    /// instance id and its parent.
     pub nodes: Vec<String>,
     /// Owner from routing: the local seat the pad is routed to, if that seat has a
     /// session and a user.
@@ -245,6 +438,25 @@ impl PadScoper {
             notes.extend(self.track(&id, n, now_ms));
         }
         notes
+    }
+
+    /// Re-applies `DEVPKEY_Device_SessionId` on every scoped node that lost it (HYPOTHESIS
+    /// from OSMS's measurement: Windows clears it on every device start, so a replugged or
+    /// restarted pad comes back without it). Cosmetic only (it hides enumeration, the
+    /// descriptor does the isolation), so no restart and no journal change. Returns the
+    /// nodes it set again; read / write errors are skipped (the next arrival retries).
+    pub fn reassert_session_ids(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (id, r) in &self.applied {
+            if self.failed.contains_key(id) {
+                continue;
+            }
+            let want = r.owner.session_id;
+            if matches!(self.dev.session_id(id), Ok(cur) if cur != Some(want)) && self.dev.set_session_id(id, Some(want)).is_ok() {
+                out.push(id.clone());
+            }
+        }
+        out
     }
 
     /// Restores every journaled node (service start after a crash, service stop), without
@@ -575,6 +787,111 @@ mod tests {
         st.save(std::slice::from_ref(&row)).unwrap();
         assert_eq!(st.load(), vec![row]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Fake device tree: id -> (parent, class, compatible ids).
+    #[derive(Default)]
+    pub(crate) struct Tree(BTreeMap<String, (Option<String>, &'static str, Vec<&'static str>)>);
+
+    impl Tree {
+        fn add(&mut self, id: &str, parent: Option<&str>, class: &'static str, compat: &[&'static str]) {
+            self.0.insert(id.into(), (parent.map(str::to_string), class, compat.to_vec()));
+        }
+    }
+
+    impl PadTree for Tree {
+        fn class_nodes(&self) -> Vec<String> {
+            self.0.iter().filter(|(_, v)| [XUSB_CLASS, GIP_CLASS, HID_CLASS].contains(&v.1)).map(|(k, _)| k.clone()).collect()
+        }
+        fn parent(&self, id: &str) -> Option<String> {
+            self.0.get(id).and_then(|v| v.0.clone())
+        }
+        fn children(&self, id: &str) -> Vec<String> {
+            self.0.iter().filter(|(_, v)| v.0.as_deref() == Some(id)).map(|(k, _)| k.clone()).collect()
+        }
+        fn class_guid(&self, id: &str) -> Option<String> {
+            self.0.get(id).map(|v| v.1.to_ascii_uppercase())
+        }
+        fn compatible_ids(&self, id: &str) -> Vec<String> {
+            self.0.get(id).map(|v| v.2.iter().map(|s| s.to_string()).collect()).unwrap_or_default()
+        }
+    }
+
+    const USB_CLASS: &str = "{36fc9e60-c465-11cf-8056-444553540000}";
+
+    /// A PC with: a wired Xbox One pad (GIP, no HID game collection, one vendor HID
+    /// child), an Xbox 360 pad (XUSB only), a DualSense (USB HID device with a game
+    /// collection, composite with audio), a combo pad with a keyboard collection, and a
+    /// plain keyboard.
+    pub(crate) fn sample_tree() -> Tree {
+        let mut t = Tree::default();
+        t.add("ROOT_HUB", None, USB_CLASS, &[]);
+        t.add("PORT1", Some("ROOT_HUB"), USB_CLASS, &[]);
+        t.add(r"USB\VID_045E&PID_0B12\GIP1", Some("PORT1"), GIP_CLASS, &[]);
+        t.add(r"GIP\VID_045E&PID_0B12\GIPCHILD", Some(r"USB\VID_045E&PID_0B12\GIP1"), GIP_CLASS, &[]);
+        t.add(r"HID\VID_045E&PID_0B12&COL02\V", Some(r"GIP\VID_045E&PID_0B12\GIPCHILD"), HID_CLASS, &["HID_DEVICE_UP:FF00_U:0001"]);
+        t.add(r"USB\VID_045E&PID_028E\X360", Some("ROOT_HUB"), XUSB_CLASS, &[]);
+        t.add(r"USB\VID_054C&PID_0CE6\DS", Some("ROOT_HUB"), USB_CLASS, &[]);
+        t.add(r"USB\VID_054C&PID_0CE6&MI_03\DS3", Some(r"USB\VID_054C&PID_0CE6\DS"), HID_CLASS, &[]);
+        t.add(r"USB\VID_054C&PID_0CE6&MI_00\AUDIO", Some(r"USB\VID_054C&PID_0CE6\DS"), "{4d36e96c-e325-11ce-bfc1-08002be10318}", &[]);
+        t.add(r"HID\VID_054C&PID_0CE6&MI_03\DSHID", Some(r"USB\VID_054C&PID_0CE6&MI_03\DS3"), HID_CLASS, &["HID_DEVICE_SYSTEM_GAME", "HID_DEVICE"]);
+        t.add(r"USB\VID_28DE&PID_1102\COMBO", Some("ROOT_HUB"), HID_CLASS, &[]);
+        t.add(r"HID\VID_28DE&PID_1102&COL01\KB", Some(r"USB\VID_28DE&PID_1102\COMBO"), KEYBOARD_CLASS, &[]);
+        t.add(r"HID\VID_28DE&PID_1102&COL03\PAD", Some(r"USB\VID_28DE&PID_1102\COMBO"), HID_CLASS, &["HID_DEVICE_SYSTEM_GAME"]);
+        t.add(r"USB\VID_046D&PID_C31C\KBD", Some("ROOT_HUB"), HID_CLASS, &[]);
+        t.add(r"HID\VID_046D&PID_C31C\KBDCOL", Some(r"USB\VID_046D&PID_C31C\KBD"), KEYBOARD_CLASS, &[]);
+        t
+    }
+
+    #[test]
+    fn discovery_covers_gip_xusb_and_hid_game_pads() {
+        let t = sample_tree();
+        assert_eq!(classify(&t, r"USB\VID_045E&PID_0B12\GIP1"), NodeClass::Gip);
+        assert_eq!(classify(&t, r"HID\VID_045E&PID_0B12&COL02\V"), NodeClass::Hid);
+        assert_eq!(classify(&t, r"HID\VID_054C&PID_0CE6&MI_03\DSHID"), NodeClass::HidGame);
+        assert_eq!(classify(&t, "PORT1"), NodeClass::Other);
+        let g = discover(&t);
+        let roots: Vec<&str> = g.iter().map(|x| x.root.as_str()).collect();
+        assert_eq!(
+            roots,
+            vec![r"USB\VID_045E&PID_028E\X360", r"USB\VID_045E&PID_0B12\GIP1", r"USB\VID_054C&PID_0CE6&MI_03\DS3", r"USB\VID_28DE&PID_1102\COMBO"],
+            "the keyboard is no pad; the DualSense root stops below its USB composite parent"
+        );
+        let gip = &g[1];
+        assert_eq!(gip.nodes, vec![r"USB\VID_045E&PID_0B12\GIP1", r"GIP\VID_045E&PID_0B12\GIPCHILD", r"HID\VID_045E&PID_0B12&COL02\V"]);
+        assert_eq!(gip.ancestors, vec!["PORT1", "ROOT_HUB"]);
+        assert_eq!(g[0].nodes, vec![r"USB\VID_045E&PID_028E\X360"], "XUSB-only pad is covered");
+        assert!(!g[2].nodes.iter().any(|n| n.contains("AUDIO")), "the audio interface is never touched");
+        assert_eq!(g[2].nodes.len(), 2);
+        // Combo: the parent of the keyboard collection is left out, the game collection stays.
+        assert_eq!(g[3].nodes, vec![r"HID\VID_28DE&PID_1102&COL03\PAD"]);
+    }
+
+    #[test]
+    fn principal_uses_the_logon_sid_only_for_a_shared_user() {
+        let o = owner(3);
+        assert_eq!(principal(o.clone(), false, Some("S-1-5-5-0-1234")), o);
+        let p = principal(o.clone(), true, Some("S-1-5-5-0-1234"));
+        assert_eq!(p.user_sid, "S-1-5-5-0-1234");
+        assert_eq!(p.session_id, 3);
+        assert!(scope_sddl(&p.user_sid).unwrap().ends_with("(A;;GRGW;;;S-1-5-5-0-1234)"));
+        assert_eq!(principal(o.clone(), true, None), o, "no logon SID: user SID stays");
+        assert_eq!(principal(o.clone(), true, Some("S-1-5-21-9")), o, "not a logon SID");
+        assert_eq!(principal(o.clone(), true, Some("S-1-5-5-x")), o);
+    }
+
+    #[test]
+    fn session_ids_are_reasserted_after_a_device_start() {
+        let dev = Arc::new(Dev::default());
+        let mut s = PadScoper::new(dev.clone(), Box::new(Mem::default()));
+        s.sync(&[ScopeWant { instance_id: "A".into(), owner: owner(3) }, ScopeWant { instance_id: "B".into(), owner: owner(3) }]);
+        assert!(s.reassert_session_ids().is_empty(), "nothing lost");
+        // The pad restarted: Windows cleared the session id of A.
+        dev.session.lock().unwrap().insert("A".into(), None);
+        let restarts = dev.restarts.lock().unwrap().len();
+        assert_eq!(s.reassert_session_ids(), vec!["A".to_string()]);
+        assert_eq!(dev.session.lock().unwrap()["A"], Some(3));
+        assert_eq!(dev.restarts.lock().unwrap().len(), restarts, "cosmetic: no restart");
     }
 
     #[test]

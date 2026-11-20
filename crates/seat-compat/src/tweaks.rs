@@ -543,11 +543,13 @@ pub const TWEAK_REGISTRY_TARGETS: [(&str, &str); 19] = [
 ];
 
 /// Is `hive\key\name` a value some tweak writes? Machine hive only: per-user values go
-/// through [`Change::UserPalmCheck`](crate::journal::Change::UserPalmCheck).
+/// through [`Change::UserPalmCheck`](crate::journal::Change::UserPalmCheck). Also the one
+/// machine value the Guide-button guard writes ([`crate::guide_guard::is_machine_target`]).
 pub fn is_tweak_target(hive: Hive, key: &str, name: &str) -> bool {
     let key = key.trim_matches('\\');
     hive == Hive::Hklm
         && (TWEAK_REGISTRY_TARGETS.iter().any(|(k, n)| k.eq_ignore_ascii_case(key) && n.eq_ignore_ascii_case(name))
+            || crate::guide_guard::is_machine_target(key, name)
             || (DENY_CLASSES_LIST.eq_ignore_ascii_case(key)
                 && !name.is_empty()
                 && name.len() <= 3

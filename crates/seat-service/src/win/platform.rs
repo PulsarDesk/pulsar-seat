@@ -1439,6 +1439,20 @@ impl Platform for WinPlatform {
         }
     }
 
+    fn sync_guide_guard(&self, want: &seat_compat::guide_guard::GuardWant) -> Result<String, String> {
+        let j = seat_compat::Journal::in_data_dir(&self.data_dir).map_err(|e| e.to_string())?;
+        let r = seat_compat::guide_guard::sync(&j, &seat_compat::WinOps, want).map_err(|e| e.to_string())?;
+        if let Some((who, e)) = r.failed.first() {
+            return Err(format!("{who}: {e}"));
+        }
+        // A seat user whose profile hive is not loaded yet (sign-in still running): an
+        // error makes `crate::guide_guard` retry after its back-off.
+        if !r.not_loaded.is_empty() {
+            return Err(format!("profile hive not loaded yet for {}", r.not_loaded.join(", ")));
+        }
+        Ok(r.summary())
+    }
+
     fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
         use seat_proto::steam::{QuarantinedFile, SteamProxyAction as A, SteamProxyStatus};
         let fail = |reason: &str, e: String| BackendError::new(ErrorKind::Os, reason, e);

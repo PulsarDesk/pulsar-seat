@@ -411,6 +411,13 @@ pub trait Platform: Send + Sync {
     fn sleep_off_state(&self) -> Option<bool> {
         None
     }
+    /// Make the Guide-button guard match `want` (`seat_compat::guide_guard::sync`,
+    /// journaled; an empty want reverts everything ours). Returns a one-line summary.
+    /// Default: nothing.
+    fn sync_guide_guard(&self, want: &seat_compat::guide_guard::GuardWant) -> Result<String, String> {
+        let _ = want;
+        Ok(String::new())
+    }
     /// Steam legacy proxy-DLL report / quarantine / restore (`seat_compat::steam`).
     fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
         let _ = action;
@@ -559,6 +566,10 @@ pub mod mock {
         pub no_power_menu: Mutex<Vec<Vec<String>>>,
         /// `sleep_off_state` answer.
         pub sleep_off: Mutex<Option<bool>>,
+        /// `sync_guide_guard` calls.
+        pub guide_guard: Mutex<Vec<seat_compat::guide_guard::GuardWant>>,
+        /// Next `sync_guide_guard` fails with this error.
+        pub guide_guard_fail: Mutex<Option<String>>,
         /// `steam_proxy` actions.
         pub steam_actions: Mutex<Vec<seat_proto::steam::SteamProxyAction>>,
         /// `sync_host_console` calls (the `want` flag), in order.
@@ -881,6 +892,13 @@ pub mod mock {
         }
         fn sleep_off_state(&self) -> Option<bool> {
             *lock(&self.sleep_off)
+        }
+        fn sync_guide_guard(&self, want: &seat_compat::guide_guard::GuardWant) -> Result<String, String> {
+            lock(&self.guide_guard).push(want.clone());
+            match lock(&self.guide_guard_fail).take() {
+                Some(e) => Err(e),
+                None => Ok(String::new()),
+            }
         }
         fn steam_proxy(&self, action: &seat_proto::steam::SteamProxyAction) -> BackendResult<seat_proto::steam::SteamProxyStatus> {
             lock(&self.steam_actions).push(action.clone());
