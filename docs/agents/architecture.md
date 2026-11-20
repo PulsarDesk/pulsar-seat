@@ -1744,8 +1744,10 @@ or the experimental `termsrv_wrapper` kind (off by default;
   Created seat accounts are journaled there too (kind `account`, never replayed).
   Rows: common `fDenyTSConnections=0`, `RDP-Tcp\UserAuthentication=1`, `RDP-Tcp\Shadow=0`;
   local `fSingleSessionPerUser=0`; remote `SetGpuRealtimePriority=1` (optional),
-  `RDP-Tcp\SecurityLayer=2`, `IgnoreRemoteKeyboardLayout=1`, policy
-  `bEnumerateHWBeforeSW=1` / `Shadow=0` (only while absent). Split's `Originals` key is gone.
+  `RDP-Tcp\SecurityLayer=2`, `IgnoreRemoteKeyboardLayout=1`, policy `Shadow=0` (only
+  while absent); common policy `bEnumerateHWBeforeSW=1` (only while absent; was remote only
+  before OSMS parity G3); local computed `WinStations\DWMFRAMEINTERVAL` (see "Session frame
+  rate" below). Split's `Originals` key is gone.
 - **Fixed order** of the three Terminal Server writers: (1) these rows, (2) the second NLA-off
   listener `PulsarSeat-Loopback` (local passwordless seats; sets its own
   `UserAuthentication` / `SecurityLayer` / `Shadow`), (3) the termsrv wrapper (owns
@@ -2375,3 +2377,53 @@ Rules:
   release; `uninstall` removes our two keys.
 - **Not on this path.** RDP virtual channels (audio redirection, microphone hold, clipboard,
   drives): a provider session has none. Open item in status.md.
+
+## Session frame rate (OSMS parity G3, 2026-11-18)
+
+Windows composes a Remote Desktop session at about 30 frames per second unless
+`HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\DWMFRAMEINTERVAL`
+(DWORD, ms; Microsoft Learn "Remote Desktop frame rate is limited to 30 FPS", 15 = 60 fps)
+says otherwise. Every local seat except a console seat 1 runs in such a session, so without
+the value a seat monitor shows about 30 fps.
+
+- **Config** (additive): `settings.outputs.session_frame_rate = { mode, fps }`, mode
+  `auto` (default, not written) / `smooth` (4 ms) / `fixed` (`fps` 30..=500, else
+  `frame_rate_out_of_range` error in seat-core `validate` and the manager) / `off`
+  (nothing written, Windows' default).
+- **Interval** (`seat_core::frame_rate`): `auto` uses the highest refresh rate among live
+  monitors whose effective seat is a local RDP seat (every local seat except seat 1 under
+  `SeatOneConsole`), 60 Hz when none reports a mode. `ms = floor(1000 / Hz)` clamped to
+  2..=33: 60 Hz gives 16 ms, 144 Hz 6 ms. This deliberately differs from the plan's
+  `round()` (17 ms for 60 Hz, 58.8 compositions per second): rounding down keeps the session
+  at or above the monitor's rate, and Microsoft's own 60-fps example (15) is also below
+  16.7. Never slower than Windows' default.
+- **Flow**: the service computes the interval (`Service::sync_frame_interval`,
+  `seat-service/src/frame_plan.rs`) with every listener plan (so before each
+  `prepare_host` and after each config apply) and after an inventory change that touches a
+  monitor, and hands it to `SessionBackend::set_frame_interval` (default no-op; both RDP
+  backends implement it). The RDS writer (`seat_session::rds`, row scope `LocalFrame`, data
+  filled in by `rows_for`) remembers it in `TsClaims` and writes it only while the local
+  claim is held; a remote claim alone never writes it.
+- **Ownership**: written only while absent or still holding our own last journaled value;
+  any other value (an admin, a tuning tool) is reported as `PolicyOverride` and left alone.
+  Turning it off restores only that row; release (`restore_host`: product disabled, backend
+  deselected), uninstall (`restore_all`) restore it with the other rows, guarded (a value
+  changed after us stays). Like the other host rows it stays across a plain service stop and
+  is re-claimed (or trimmed, if turned off meanwhile) at the next boot from the journal. It
+  never touches console input devices.
+- **Also**: policy `bEnumerateHWBeforeSW=1` moved from remote-only to common, so local seat
+  sessions use the hardware GPU too (only while absent, like before).
+- **Not written** (not Microsoft-documented, unlike in OpenStreamMultiSeat): `MaxFrameRate`,
+  the `Policies` / `SOFTWARE\Microsoft` copies of `DWMFRAMEINTERVAL`, `VRefresh` on RDP
+  adapters, TermDD `FlowControl*`, `SystemResponsiveness`.
+- **Takes effect** when a seat's session next connects (stop and start the seat); the
+  manager says so. Mode changes stay on the DisplayControl channel (no reconnect).
+- **Manager**: Display outputs dialog, machine-wide group: one select (automatic, smooth,
+  fixed 60/75/90/100/120/144/165/240 plus a saved custom rate, Windows default) with a
+  note that it applies to the whole PC. Keys `outputs.sessionFps*`,
+  `issueText.frame_rate_out_of_range` (en + tr).
+- **HYPOTHESIS** (not run on hardware, x64 or ARM64; same code path on both): that the
+  `WinStations` value alone lifts the cap for our loopback sessions on Server + RDSH and
+  under the wrapper, that a reconnect is enough (no TermService restart), and that the
+  floor interval is smooth without `smooth`. If `WinStations` is not enough, add
+  `RDP-Tcp\DWMFRAMEINTERVAL` behind its own HYPOTHESIS note.

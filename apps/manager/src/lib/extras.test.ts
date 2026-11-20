@@ -111,6 +111,15 @@ describe('outputs and log levels', () => {
     expect(setLogLevels(c, { info: true, debug: true, trace: false }).settings.log?.debug).toBe(true);
   });
 
+  it('checks the fixed session frame rate like the service', () => {
+    const codes = (fps: number, mode: 'fixed' | 'auto' = 'fixed') =>
+      localIssues(setOutputSettings(normalize(demoConfig()), { allow_clone: false, force_assign_at_start: false, session_frame_rate: { mode, fps } }), null).map((i) => i.code);
+    expect(codes(120)).not.toContain('frame_rate_out_of_range');
+    expect(codes(10)).toContain('frame_rate_out_of_range');
+    expect(codes(501)).toContain('frame_rate_out_of_range');
+    expect(codes(10, 'auto'), 'auto ignores fps').not.toContain('frame_rate_out_of_range');
+  });
+
   it('stores the mode-follow choice', () => {
     const c = setOutputSettings(normalize(demoConfig()), { allow_clone: false, force_assign_at_start: false, follow_session_mode: true });
     expect(c.settings.outputs?.follow_session_mode).toBe(true);

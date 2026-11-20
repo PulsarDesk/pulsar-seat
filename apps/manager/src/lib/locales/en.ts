@@ -202,6 +202,15 @@ const t = {
     cloneOutputs: 'Outputs (cloning)',
     perMonitor: 'Options for this monitor',
     machineWide: 'All monitors',
+    sessionFps: 'Session frame rate (whole PC)',
+    sessionFpsChoice: {
+      auto: 'Automatic (fastest seat monitor)',
+      smooth: 'Smooth (250 per second; more GPU work)',
+      off: 'Windows default (about 30 per second)'
+    } as Record<string, string>,
+    sessionFpsFixed: (fps: number) => `${fps} frames per second`,
+    sessionFpsNote:
+      'How often Windows draws the picture of every seat that runs in its own session. This is one setting for the whole PC, not per seat. A change reaches a seat when its session next connects (stop and start the seat). Variable refresh on the seat monitor smooths out a small mismatch.',
     forceNote: 'The outputs you choose are already applied every time a seat starts. With this option on, the service re-applies the split of monitors across seats to Windows each time a seat starts (if Windows changed the outputs on its own).',
     none: 'No monitor found.',
     status: {
@@ -1964,6 +1973,7 @@ const issueText: Record<string, string> = {
     'This seat opens at the sign-in screen; it cannot start while the port for seats without a password is off. Turn the port on, or give the seat an account with a password.',
   loopback_account_invalid: 'One of the extra accounts is invalid (write user or DOMAIN\\user, do not use @); it is ignored.',
   invalid_hotkey: 'The switch shortcut is invalid.',
+  frame_rate_out_of_range: 'The session frame rate must be from 30 to 500 frames per second.',
   experimental_not_acknowledged: 'The warning for the experimental session method was not acknowledged.',
   seat_without_display: 'The seat has no monitor; it waits until one is plugged in.',
   seat_without_keyboard: 'The seat has no keyboard.',

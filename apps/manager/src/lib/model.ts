@@ -13,6 +13,8 @@ import {
   SHARED_MASK,
   MAX_IP_PROGRAMS,
   MAX_PAD_IGNORE_DEVICES,
+  MAX_SESSION_FPS,
+  MIN_SESSION_FPS,
   DEFAULT_SEAT_REDIRECT,
   type AssignmentOptions,
   type Config,
@@ -988,6 +990,10 @@ export function localIssues(c: Config, inventory: Device[] | null): Issue[] {
   const sc = c.settings.input.switch_hotkey_scan;
   if (sc !== null && (sc === 0 || sc > 0x7f || sc === 0x1d)) {
     out.push(issue('error', 'invalid_hotkey', { field: 'settings.input.switch_hotkey_scan' }));
+  }
+  const fr = c.settings.outputs?.session_frame_rate;
+  if (fr?.mode === 'fixed' && !(fr.fps >= MIN_SESSION_FPS && fr.fps <= MAX_SESSION_FPS)) {
+    out.push(issue('error', 'frame_rate_out_of_range', { field: 'settings.outputs.session_frame_rate.fps' }));
   }
   const b = c.settings.backends;
   if (b.session === 'termsrv_wrapper' && b.experimental_ack !== EXPERIMENTAL_WARNING_VERSION) {

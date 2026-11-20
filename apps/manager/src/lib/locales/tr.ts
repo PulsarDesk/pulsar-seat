@@ -208,7 +208,16 @@ const t = {
     outputFor: (name: string) => `Çıkış: ${name}`,
     cloneOutputs: 'Çıkışlar (klonlama)',
     perMonitor: 'Bu ekranın seçenekleri',
-    machineWide: 'Bütün ekranlar'
+    machineWide: 'Bütün ekranlar',
+    sessionFps: 'Oturum kare hızı (bütün bilgisayar)',
+    sessionFpsChoice: {
+      auto: 'Otomatik (koltukların en hızlı ekranı)',
+      smooth: 'Akıcı (saniyede 250; GPU daha çok çalışır)',
+      off: 'Windows varsayılanı (saniyede yaklaşık 30)'
+    } as Record<string, string>,
+    sessionFpsFixed: (fps: number) => `Saniyede ${fps} kare`,
+    sessionFpsNote:
+      'Windows’un kendi oturumunda çalışan her koltuğun görüntüsünü ne sıklıkta çizdiği. Bu ayar koltuk başına değil, bütün bilgisayar için tektir. Değişiklik bir koltuğa, oturumu yeniden bağlandığında ulaşır (koltuğu durdurup yeniden başlatın). Koltuk ekranındaki değişken yenileme küçük bir farkı yumuşatır.'
   },
 
   camera: {
@@ -1960,6 +1969,7 @@ const issueText: Record<string, string> = {
     'Bu koltuk oturum açma ekranında açılıyor; parolasız koltuk bağlantı noktası kapalıyken başlatılamaz. Bağlantı noktasını açın ya da koltuğa parolalı bir hesap verin.',
   loopback_account_invalid: 'Ek hesaplardan biri geçersiz (kullanici ya da ETKİ_ALANI\\kullanici yazın, @ kullanmayın); yok sayılır.',
   invalid_hotkey: 'Geçiş kısayolu geçersiz.',
+  frame_rate_out_of_range: 'Oturum kare hızı saniyede 30 ile 500 kare arasında olmalı.',
   experimental_not_acknowledged: 'Deneysel oturum yöntemi için uyarı onaylanmadı.',
   seat_without_display: 'Koltuğun ekranı yok; ekran takılana kadar bekler.',
   seat_without_keyboard: 'Koltuğun klavyesi yok.',

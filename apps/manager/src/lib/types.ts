@@ -389,7 +389,24 @@ export interface OutputSettings {
    *  console desktop, false = never, absent / null = only monitors outside the desktop.
    *  Added 2026-11-13; older services omit it. */
   follow_session_mode?: boolean | null;
+  /** Composition rate of the RDP seat sessions (machine-wide `DWMFRAMEINTERVAL`).
+   *  Absent = `{ mode: 'auto', fps: 60 }`. Added 2026-11-18 (OSMS parity G3); older
+   *  services omit it. */
+  session_frame_rate?: SessionFrameRate;
 }
+
+/** Same as seat-core `SessionFrameRateMode`. */
+export type SessionFrameRateMode = 'auto' | 'smooth' | 'fixed' | 'off';
+
+/** Same as seat-core `SessionFrameRate`: `fps` counts only for `fixed`. */
+export interface SessionFrameRate {
+  mode: SessionFrameRateMode;
+  fps: number;
+}
+
+/** Same as seat-core `MIN_SESSION_FPS` / `MAX_SESSION_FPS`. */
+export const MIN_SESSION_FPS = 30;
+export const MAX_SESSION_FPS = 500;
 
 /** A program found by the IP program picker (a shortcut's target or an .exe). */
 export interface PickedProgram {
