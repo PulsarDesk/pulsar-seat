@@ -2,6 +2,7 @@
 //! Windows implementations. Everything here needs a real Windows session; the logic it
 //! feeds is in [`crate::model`] and is unit tested.
 
+pub mod appbar;
 pub mod ccd;
 pub mod dcore;
 pub mod flip;

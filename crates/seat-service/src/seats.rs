@@ -431,6 +431,18 @@ impl Service {
         st.inventory
             .effective(&st.config)
             .into_iter()
+            // The seat's own monitors plus split monitors that give it an area (G8).
+            .filter(|e| e.kind == DeviceKind::Monitor && seat_core::area::monitor_shows_seat(&st.config, &e.key, e.mask, seat))
+            .map(|e| e.key)
+            .collect()
+    }
+
+    /// Monitors the idle saver may switch off for this seat: only the seat's own, never a
+    /// split monitor (G8) another seat or the console still shows its part on.
+    pub(crate) fn idle_monitors(st: &State, seat: SeatNumber) -> Vec<DeviceKey> {
+        st.inventory
+            .effective(&st.config)
+            .into_iter()
             .filter(|e| e.kind == DeviceKind::Monitor && e.mask.single() == Some(seat))
             .map(|e| e.key)
             .collect()

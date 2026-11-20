@@ -5,6 +5,7 @@
 //! - [`device`]: device kinds, share policies, the live inventory record [`device::Device`].
 //! - [`config`]: the versioned configuration document (`%ProgramData%\Pulsar Seat\config.json`).
 //! - [`validate`]: config validation and save-time conflict detection.
+//! - [`area`]: split screen (seat areas of a shared monitor, 2x2 grid).
 //! - [`assign`]: effective seat of a device (explicit, inherited from a hub, default).
 //! - [`state`]: product and per-seat run-time states, failure reasons.
 //! - [`store`]: [`store::ConfigStore`] and [`store::SecretStore`] traits + file/memory impls.
@@ -22,6 +23,7 @@
 //! crate builds and tests on any host. Contract summary:
 //! `docs/agents/architecture.md`.
 
+pub mod area;
 pub mod assign;
 pub mod backend;
 pub mod config;

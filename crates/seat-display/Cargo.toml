@@ -63,6 +63,8 @@ features = [
     "Win32_System_WinRT_Display",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
+    # Console share AppBar (SHAppBarMessage, split screen G8).
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     # Remote kind (own IddCx driver IOCTLs, D3DKMT adapter queries).
     "Wdk_Foundation",

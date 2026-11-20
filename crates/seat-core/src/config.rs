@@ -764,6 +764,13 @@ pub struct AssignmentOptions {
     /// vblank (spec 40 §6.6). Added 2026-11-17 (additive).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vrr: bool,
+    /// Monitors: split screen (OSMS-parity G8, 2026-11-18, additive). When the mask names
+    /// two to four seats, each seat's part of the monitor (a half or a quarter of a 2x2
+    /// grid, [`crate::area`]). Ignored for a single seat. Overlapping parts are refused
+    /// (validation `screen_area_overlap`); seat 1 may only share a monitor half and half
+    /// (console share). Applied at the next seat start.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<crate::area::SeatArea>,
 }
 
 impl AssignmentOptions {

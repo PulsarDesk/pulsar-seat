@@ -119,6 +119,17 @@ pub struct OutputPlacement {
     /// they arrive with tearing allowed instead of on a fixed vblank. Added 2026-11-17.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub vrr: bool,
+    /// Split screen (OSMS-parity G8, 2026-11-18): this seat shows only this part of the
+    /// monitor; `rect` is already that part (console-desktop coordinates), so the RDP
+    /// monitor layout and the presenter window use the area size. Other seats (or the
+    /// console) use the rest. `None` = the whole monitor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::area::ScreenArea>,
+    /// Split screen with the console (seat 1) on the same monitor: the seat host keeps the
+    /// console desktop out of this output's part with an AppBar on the area's edge plus
+    /// the console cursor clip (halves only). Added 2026-11-18.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub console_share: bool,
 }
 
 impl SeatOutputs {
@@ -151,6 +162,11 @@ pub struct SeatDisplayPrefs {
     pub hdr: Vec<DeviceKey>,
     /// Monitors with `AssignmentOptions::vrr`. Added 2026-11-17.
     pub vrr: Vec<DeviceKey>,
+    /// Split monitors: this seat's part of each (`AssignmentOptions::areas`, valid splits
+    /// only, [`crate::area::seat_area`]). Added 2026-11-18 (G8).
+    pub areas: Vec<(DeviceKey, crate::area::ScreenArea)>,
+    /// Split monitors this seat shares with the console (seat 1). Added 2026-11-18 (G8).
+    pub console_share: Vec<DeviceKey>,
 }
 
 impl SeatDisplayPrefs {
@@ -173,8 +189,19 @@ impl SeatDisplayPrefs {
             if !d.options.outputs.is_empty() && (d.options.outputs.len() == 1 || config.settings.outputs.allow_clone) {
                 p.outputs.push((d.key.clone(), d.options.outputs.clone()));
             }
+            if let Some(area) = crate::area::seat_area(d.kind, d.mask, &d.options, seat) {
+                p.areas.push((d.key.clone(), area));
+                if !seat.is_console() && d.mask.contains(SeatNumber::CONSOLE) {
+                    p.console_share.push(d.key.clone());
+                }
+            }
         }
         p
+    }
+
+    /// This seat's area of `key`, if that monitor is split.
+    pub fn area_of(&self, key: &DeviceKey) -> Option<crate::area::ScreenArea> {
+        self.areas.iter().find(|(k, _)| k == key).map(|(_, a)| *a)
     }
 }
 
@@ -348,5 +375,37 @@ mod tests {
         assert!(SeatDisplayPrefs::from_config(&c, SeatNumber::new(3).unwrap()).software_cursor.is_empty());
         let o = SeatOutputs { seat: s2, outputs: vec![] };
         assert_eq!(o.layout_outputs().count(), 0);
+    }
+
+    #[test]
+    fn prefs_from_config_carry_split_areas() {
+        use crate::area::{ScreenArea, SeatArea};
+        let (s1, s2, s3) = (SeatNumber::CONSOLE, SeatNumber::new(2).unwrap(), SeatNumber::new(3).unwrap());
+        let k = DeviceKey::new("mon;loc=PCIROOT(0);sub=t1").unwrap();
+        let mut c = Config::default();
+        c.devices.push(DeviceAssignment {
+            key: k.clone(),
+            kind: crate::device::DeviceKind::Monitor,
+            mask: SeatMask::from_seats([s2, s3]),
+            name: String::new(),
+            label: None,
+            hardware_id: None,
+            serial: None,
+            container_id: None,
+            options: AssignmentOptions {
+                areas: vec![SeatArea { seat: s2, area: ScreenArea::Top }, SeatArea { seat: s3, area: ScreenArea::Bottom }],
+                ..Default::default()
+            },
+        });
+        assert_eq!(SeatDisplayPrefs::from_config(&c, s3).area_of(&k), Some(ScreenArea::Bottom));
+        assert!(SeatDisplayPrefs::from_config(&c, s3).console_share.is_empty());
+        // Console share: the other seat is told to keep the console out of its half.
+        c.devices[0].mask = SeatMask::from_seats([s1, s2]);
+        c.devices[0].options.areas = vec![SeatArea { seat: s1, area: ScreenArea::Left }, SeatArea { seat: s2, area: ScreenArea::Right }];
+        let p = SeatDisplayPrefs::from_config(&c, s2);
+        assert_eq!((p.area_of(&k), p.console_share.clone()), (Some(ScreenArea::Right), vec![k.clone()]));
+        // An invalid split gives no areas.
+        c.devices[0].options.areas[1].area = ScreenArea::Left;
+        assert!(SeatDisplayPrefs::from_config(&c, s2).areas.is_empty());
     }
 }

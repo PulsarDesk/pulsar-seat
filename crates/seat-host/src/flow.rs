@@ -212,6 +212,8 @@ mod tests {
             follow_mode: false,
             hdr: false,
             vrr: false,
+            area: None,
+            console_share: false,
         };
         let asg = HostAssignment {
             seat,

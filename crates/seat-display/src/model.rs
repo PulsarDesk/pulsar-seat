@@ -523,26 +523,78 @@ fn bounding(rects: &[Rect]) -> Option<Rect> {
     Some(Rect { x: l, y: t, width: (r - l) as u32, height: (b - t) as u32 })
 }
 
-/// Cursor clip for the console user (spec 40 §6.3.7): the console monitors are every
-/// monitor not covered by a seat presenter. When their bounding box does not touch a seat
-/// monitor it is used whole; otherwise the console monitor holding the cursor (or the
-/// primary one) is used. `None` = nothing to clip (no seat monitors, or no console left).
+/// Cursor clip for the console user (spec 40 §6.3.7): the console part of each monitor
+/// is the monitor when no seat presenter covers it, or the free half of a split monitor
+/// a seat shares with the console (G8, [`seat_core::area::free_part`]). When the bounding
+/// box of the console parts does not touch a seat surface it is used whole; otherwise the
+/// console part holding the cursor (or the primary monitor's) is used. `None` = nothing
+/// to clip (no seat monitors, or no console left).
 pub fn console_clip(monitors: &[Rect], seat_rects: &[Rect], cursor: (i32, i32), primary: Option<Rect>) -> Option<Rect> {
     if seat_rects.is_empty() {
         return None;
     }
-    let console: Vec<Rect> =
-        monitors.iter().copied().filter(|m| !seat_rects.iter().any(|s| intersects(m, s))).collect();
-    let bbox = bounding(&console)?;
+    let console: Vec<(Rect, Rect)> =
+        monitors.iter().filter_map(|m| seat_core::area::free_part(m, seat_rects).map(|part| (*m, part))).collect();
+    let parts: Vec<Rect> = console.iter().map(|(_, p)| *p).collect();
+    let bbox = bounding(&parts)?;
     if !seat_rects.iter().any(|s| intersects(&bbox, s)) {
         return Some(bbox);
     }
     console
         .iter()
-        .find(|m| contains_point(m, cursor.0, cursor.1))
-        .copied()
-        .or_else(|| primary.filter(|p| console.contains(p)))
-        .or_else(|| console.first().copied())
+        .find(|(_, p)| contains_point(p, cursor.0, cursor.1))
+        .or_else(|| console.iter().find(|(m, _)| Some(*m) == primary))
+        .or_else(|| console.first())
+        .map(|(_, p)| *p)
+}
+
+/// Console share (G8): the screen parts the console must keep free, one AppBar each, for
+/// the outputs marked `console_share` (halves of a monitor shared with seat 1).
+pub fn console_share_reservations(outputs: &seat_core::backend::display::SeatOutputs) -> Vec<(Rect, seat_core::area::Edge)> {
+    outputs
+        .outputs
+        .iter()
+        .filter(|o| o.console_share && o.clone_of.is_none())
+        .filter_map(|o| o.area.and_then(|a| a.edge()).map(|e| (o.rect, e)))
+        .collect()
+}
+
+/// AppBar position after `ABM_QUERYPOS` (G8): the shell may move the docked side (another
+/// AppBar such as the task bar sits on that edge); keep the reserved thickness from the
+/// side the shell granted.
+pub fn appbar_dock(edge: seat_core::area::Edge, want: &Rect, granted: &Rect) -> Rect {
+    use seat_core::area::Edge;
+    match edge {
+        Edge::Left => Rect { x: granted.x, width: want.width, ..*granted },
+        Edge::Right => {
+            let right = granted.x + granted.width as i32;
+            Rect { x: right - want.width as i32, width: want.width, ..*granted }
+        }
+        Edge::Top => Rect { y: granted.y, height: want.height, ..*granted },
+        Edge::Bottom => {
+            let bottom = granted.y + granted.height as i32;
+            Rect { y: bottom - want.height as i32, height: want.height, ..*granted }
+        }
+    }
+}
+
+/// Where foreign console windows go (guard "home"): the work area of the primary console
+/// monitor, else of the first one, cut to its free part when a seat shares it (G8).
+/// `monitors` = (monitor rect, work area, primary).
+pub fn console_home(monitors: &[(Rect, Rect, bool)], seat_rects: &[Rect]) -> Option<Rect> {
+    let free = |(m, w, _): &(Rect, Rect, bool)| -> Option<Rect> {
+        let part = seat_core::area::free_part(m, seat_rects)?;
+        if part == *m {
+            return Some(*w);
+        }
+        // The work area inside the free part (the AppBar already shrank it, normally).
+        let x0 = part.x.max(w.x);
+        let y0 = part.y.max(w.y);
+        let x1 = (part.x + part.width as i32).min(w.x + w.width as i32);
+        let y1 = (part.y + part.height as i32).min(w.y + w.height as i32);
+        (x1 > x0 && y1 > y0).then(|| Rect { x: x0, y: y0, width: (x1 - x0) as u32, height: (y1 - y0) as u32 })
+    };
+    monitors.iter().filter(|m| m.2).find_map(free).or_else(|| monitors.iter().find_map(free))
 }
 
 /// Where a foreign window that landed on a seat monitor is moved back to: same size
@@ -1125,6 +1177,30 @@ pub(crate) mod tests {
         assert_eq!(console_clip(&mons, &[mons[0]], (-5, 5), Some(mons[0])), Some(mons[2]));
         assert_eq!(console_clip(&mons, &[], (0, 0), None), None);
         assert_eq!(console_clip(&mons[..1], &[mons[0]], (0, 0), None), None);
+        // Split screen with the console (G8): a seat on the right half of the only monitor
+        // leaves the console its left half.
+        let one = [Rect { x: 0, y: 0, width: 1920, height: 1080 }];
+        let right = Rect { x: 960, y: 0, width: 960, height: 1080 };
+        assert_eq!(console_clip(&one, &[right], (100, 100), Some(one[0])), Some(Rect { x: 0, y: 0, width: 960, height: 1080 }));
+        // Next to another console monitor: the part holding the cursor.
+        let two = [one[0], Rect { x: 1920, y: 0, width: 1920, height: 1080 }];
+        assert_eq!(console_clip(&two, &[right], (2000, 5), Some(one[0])), Some(two[1]));
+        assert_eq!(console_clip(&two, &[right], (970, 5), Some(one[0])), Some(Rect { x: 0, y: 0, width: 960, height: 1080 }));
+        // Guard home: the free part of the primary's work area.
+        let work = Rect { x: 0, y: 0, width: 1920, height: 1040 };
+        assert_eq!(console_home(&[(one[0], work, true)], &[right]), Some(Rect { x: 0, y: 0, width: 960, height: 1040 }));
+        assert_eq!(console_home(&[(one[0], work, true)], &[]), Some(work));
+        assert_eq!(console_home(&[(one[0], work, true)], &[one[0]]), None);
+        // AppBar docking keeps the reserved thickness on the granted side.
+        use seat_core::area::Edge;
+        let granted = Rect { x: 960, y: 0, width: 960, height: 1040 };
+        assert_eq!(appbar_dock(Edge::Right, &right, &granted), Rect { x: 960, y: 0, width: 960, height: 1040 });
+        let wide = Rect { x: 900, y: 0, width: 1020, height: 1080 };
+        assert_eq!(appbar_dock(Edge::Right, &right, &wide), Rect { x: 960, y: 0, width: 960, height: 1080 });
+        assert_eq!(appbar_dock(Edge::Left, &right, &wide), Rect { x: 900, y: 0, width: 960, height: 1080 });
+        let top = Rect { x: 0, y: 0, width: 1920, height: 540 };
+        assert_eq!(appbar_dock(Edge::Bottom, &top, &one[0]), Rect { x: 0, y: 540, width: 1920, height: 540 });
+        assert_eq!(appbar_dock(Edge::Top, &top, &one[0]), top);
         let w = Rect { x: 2000, y: 10, width: 3000, height: 500 };
         assert_eq!(move_back(&w, &mons[0]), Rect { x: 0, y: 290, width: 1920, height: 500 });
         assert_eq!(centre(&mons[1]), (2880, 540));
