@@ -28,6 +28,13 @@ pub enum InputBackendKind {
     /// Our KMDF filters (`drivers/seat-input-filter`, one driver with keyboard / mouse and HID roles): full isolation.
     /// Unloaded until signed.
     KmdfFilter,
+    /// User mode, no driver of ours (osms G2, 2026-11-18): `RawInputHost` for every unit,
+    /// plus USB keyboard / mouse interfaces of a running extra seat moved to the inbox
+    /// `winusb.inf` and read by the service (packets as with `KmdfFilter`). Those units are
+    /// isolated from the console under any topology; Bluetooth, built-in and other non-USB
+    /// units stay as with `RawInputHost`. Journaled and restored (seat stop, service stop,
+    /// next start, uninstall). Untested on hardware.
+    WinusbCapture,
     /// No local input routing (fast user switching; or signing unavailable, spec 50 §4.2).
     None,
 }

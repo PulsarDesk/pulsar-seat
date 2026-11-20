@@ -3691,3 +3691,22 @@ fn host_audio_notes_reach_the_seat_runtime() {
     h.s.on_host_audio_report(s(2), true, true, vec![]);
     assert!(h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap().audio_notes.is_empty());
 }
+
+/// `winusb_capture` (osms G2): USB input left on WinUSB is restored at boot, released at
+/// service stop, and on the operator's `restore_usb_input` (confirm needed, admin only).
+#[test]
+fn usb_input_is_restored_at_boot_stop_and_on_request() {
+    let h = harness();
+    assert_eq!(h.f.usb_restores.load(Ordering::SeqCst), 1, "boot restores what an earlier run left");
+    let mut a = admin();
+    let e = call(&h, &mut a, RequestBody::RestoreUsbInput { confirm: false }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidValue);
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::RestoreUsbInput { confirm: true }).unwrap_err().code, ErrorCode::AccessDenied);
+    *h.f.usb_failures.lock().unwrap() = vec![r"USB\VID_1\1: unplugged".into()];
+    let ResponseBody::UsbInputRestore(r) = call(&h, &mut a, RequestBody::RestoreUsbInput { confirm: true }).unwrap() else { panic!() };
+    assert_eq!(r.failed, vec![r"USB\VID_1\1: unplugged".to_string()]);
+    assert_eq!(h.f.usb_restores.load(Ordering::SeqCst), 2);
+    h.s.shutdown();
+    assert_eq!(h.f.usb_releases.load(Ordering::SeqCst), 1);
+}

@@ -10,6 +10,9 @@
 //!   `HostAssignment::input_interfaces` (raw input sink on a message-only window, legacy
 //!   messages off) and feeds them through a [`SeatForwarder`] into the sink;
 //! - `kmdf_filter`: no reader; `input_packets` events for this seat go straight to the sink;
+//! - `winusb_capture` (osms G2): both. The raw reader serves the units still on HID; the
+//!   captured USB units are gone from raw input and arrive as `input_packets` from the
+//!   service's WinUSB reader, so no unit comes twice;
 //! - `none`: nothing is forwarded.
 //!
 //! On a service gap (pipe lost), seat stop or reassignment everything held down in the
@@ -39,6 +42,16 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use seat_input::win::raw::{RawNotice, RawReader, RawReaderConfig};
 
 type Forwarder = Arc<Mutex<SeatForwarder<DynSink>>>;
+
+/// The seat host reads raw input itself under this backend.
+fn reads_raw(k: InputBackendKind) -> bool {
+    matches!(k, InputBackendKind::RawInputHost | InputBackendKind::WinusbCapture)
+}
+
+/// The service sends this seat's input as `input_packets` under this backend.
+fn takes_packets(k: InputBackendKind) -> bool {
+    matches!(k, InputBackendKind::KmdfFilter | InputBackendKind::WinusbCapture)
+}
 
 fn lock(f: &Forwarder) -> MutexGuard<'_, SeatForwarder<DynSink>> {
     f.lock().unwrap_or_else(|e| e.into_inner())
@@ -91,13 +104,13 @@ impl HostInput {
             #[cfg(windows)]
             reader: None,
         };
-        if me.backend == InputBackendKind::RawInputHost {
+        if reads_raw(me.backend) {
             me.start_reader(assignment)?;
         }
         Ok(me)
     }
 
-    /// Start the raw reader for `assignment` (raw_input_host only).
+    /// Start the raw reader for `assignment` (raw_input_host, winusb_capture).
     #[cfg(windows)]
     fn start_reader(&mut self, assignment: &HostAssignment) -> BackendResult<()> {
         let f = self.fwd.clone();
@@ -154,10 +167,10 @@ impl HostInput {
         let new = assignment.input_backend;
         // Packets of the old backend stop being forwarded from here on.
         self.backend = new;
-        if old == InputBackendKind::RawInputHost && new != InputBackendKind::RawInputHost {
+        if reads_raw(old) && !reads_raw(new) {
             self.stop_reader();
         }
-        if new == InputBackendKind::RawInputHost {
+        if reads_raw(new) {
             #[cfg(windows)]
             if let Some(r) = &self.reader {
                 r.set_units(&assignment.input_interfaces);
@@ -172,7 +185,7 @@ impl HostInput {
     pub fn on_event(&self, event: &Event) -> BackendResult<bool> {
         match event {
             Event::InputPackets { seat, packets } if *seat == self.seat => {
-                if self.backend == InputBackendKind::KmdfFilter {
+                if takes_packets(self.backend) {
                     lock(&self.fwd).on_service_packets(packets)?;
                 }
                 Ok(true)
@@ -307,6 +320,27 @@ mod tests {
         h.on_event(&ev).unwrap();
         let sas = rec.0.lock().unwrap().iter().filter(|p| **p == InputPacket::Sas).count();
         assert_eq!(sas, 2, "only the packets that arrived under kmdf_filter");
+    }
+
+    /// winusb_capture: the raw reader runs (units still on HID) and service packets of
+    /// the captured USB units are forwarded too.
+    #[test]
+    fn winusb_capture_reads_raw_and_takes_service_packets() {
+        let rec = Rec::default();
+        let mut h = HostInput::start(&assignment(2, InputBackendKind::WinusbCapture), &InputSettings::default(), Box::new(rec.clone())).unwrap();
+        assert_eq!(h.reads_raw_input(), cfg!(windows));
+        let ev = Event::InputPackets { seat: SeatNumber::new(2).unwrap(), packets: vec![InputPacket::Sas] };
+        h.on_event(&ev).unwrap();
+        // To raw_input_host: the reader stays, packets stop.
+        h.reconfigure(&assignment(2, InputBackendKind::RawInputHost)).unwrap();
+        assert_eq!(h.reads_raw_input(), cfg!(windows));
+        h.on_event(&ev).unwrap();
+        // To kmdf_filter: the reader stops, packets flow.
+        h.reconfigure(&assignment(2, InputBackendKind::KmdfFilter)).unwrap();
+        assert!(!h.reads_raw_input());
+        h.on_event(&ev).unwrap();
+        let sas = rec.0.lock().unwrap().iter().filter(|p| **p == InputPacket::Sas).count();
+        assert_eq!(sas, 2, "packets under winusb_capture and kmdf_filter only");
     }
 
     #[test]

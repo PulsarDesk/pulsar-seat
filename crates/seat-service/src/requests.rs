@@ -252,6 +252,7 @@ impl Service {
             B::SteamProxyDll { action } => self.steam_proxy(action),
             B::VmSeats { action } => self.vm_seats_request(action),
             B::RestartTermService { confirm } => self.restart_term_service(confirm),
+            B::RestoreUsbInput { confirm } => self.restore_usb_input(confirm),
             B::RequestReboot => {
                 log::info(&format!("reboot requested by pid {}", caller.pid));
                 self.platform.reboot()?;
@@ -959,7 +960,9 @@ impl Service {
         let outputs = slot.outputs.clone().unwrap_or(seat_core::backend::display::SeatOutputs { seat, outputs: Vec::new() });
         let audio = slot.audio.clone().unwrap_or_default();
         let input_backend = b.input.kind();
-        let input_interfaces = if input_backend == seat_core::backend::InputBackendKind::RawInputHost {
+        // winusb_capture: the host reads the units still on HID too (captured ones are gone
+        // from raw input and come as service packets).
+        let input_interfaces = if matches!(input_backend, seat_core::backend::InputBackendKind::RawInputHost | seat_core::backend::InputBackendKind::WinusbCapture) {
             let eff = st.inventory.effective(&st.config);
             // Pending hotkey moves (runtime overrides) count too, so a moved keyboard is
             // read by its new seat's host at once (spec 50 §4.1.9).

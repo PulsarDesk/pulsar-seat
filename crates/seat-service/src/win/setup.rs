@@ -37,6 +37,7 @@ mod copy {
     pub const GATE_DRIVE_LETTERS: Text = Text::new("session drive letters", "oturum sürücü harfleri");
     pub const GATE_MINIFILTER: Text = Text::new("storage filter", "depolama filtresi");
     pub const RDS_SETTINGS: Text = Text::new("Remote Desktop settings", "Uzak Masaüstü ayarları");
+    pub const USB_INPUT: Text = Text::new("USB keyboard / mouse driver", "USB klavye / fare sürücüsü");
     pub const REMOTE_PARTIAL: Text = Text::new(
         "Warning: the remote seat changes could not be fully undone (exit {0}); details: {1}",
         "Uyarı: uzak koltuk değişiklikleri tam geri alınamadı (çıkış {0}); ayrıntılar: {1}",
@@ -255,6 +256,14 @@ pub fn uninstall(data_dir: &Path, args: &[String]) -> i32 {
     let make = |kind| seat_media::create_gate_in(kind, pnp.clone(), Some(&run));
     for (kind, e) in revert_gates(&make, gate_journals_present(&run)) {
         eprintln!("{}", copy::REVERT_FAILED_IN.fmt(&[&gate_name(kind), &e]));
+        code = code.max(setup::EXIT_PARTIAL);
+    }
+    // USB keyboards / mice an extra seat held on WinUSB (`winusb_capture`, osms G2): back
+    // to their own driver from `journal\usb-capture.json` (plus any node that still
+    // carries our capture interface). The node of an unplugged device is removed, so it
+    // comes back on its own driver when plugged in (`seat_input::win::usb_swap`, HYPOTHESIS).
+    for e in seat_input::usb_capture::restore_at_start(&data_dir.join(seat_core::consts::JOURNAL_DIR)) {
+        eprintln!("{}", copy::REVERT_FAILED_IN.fmt(&[&copy::USB_INPUT.get(), &e]));
         code = code.max(setup::EXIT_PARTIAL);
     }
     // Passwordless-seat RDP listener + its firewall rule, then the RDS values (spec 30

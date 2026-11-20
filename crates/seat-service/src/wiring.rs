@@ -7,7 +7,7 @@
 //! | --- | --- |
 //! | session | `seat_session::create_backend(kind, SessionDeps::system(data_dir))` |
 //! | display | `seat_display::create_binding_with_runner(kind, pnp, runner)`, runner = `win::console_runner` |
-//! | input | `seat_input::create(kind, pnp, &settings.input, topology)`: `.router` + `.control` |
+//! | input | `seat_input::create(kind, pnp, &settings.input, topology)`: `.router` + `.control`; `winusb_capture` through `create_with_capture` with the factory's one `UsbCapture` |
 //! | audio | `seat_media::create_audio(kind, pnp)` (+ `set_endpoint_masks` from `apply_ownership`; in session 0 test tones go through `win::console_runner::play_tone_in_console`) |
 //! | gates | `seat_media::create_gate_in(kind, pnp, Some(data_dir\run))`; drive letters: `create_letters_gate` (its agent tasks go to the seat agents) |
 //! | PnP tree | `seat_media::pnp::WinPnpTree` |
@@ -57,6 +57,8 @@ pub struct PackageFactory {
     /// `%ProgramData%\Pulsar Seat` (journals of the session and gate packages).
     pub data_dir: PathBuf,
     cache: Mutex<Cache>,
+    /// `winusb_capture` state, shared by every router instance ([`Self::usb_capture`]).
+    usb: Mutex<Option<Arc<seat_input::usb_capture::UsbCapture>>>,
     /// Per-seat users of kiosk shells (desktops backend; `None` in console dev mode, where
     /// no account is created).
     kiosk_logons: Option<Arc<dyn seat_session::kiosk_account::SeatLogons>>,
@@ -64,7 +66,7 @@ pub struct PackageFactory {
 
 impl PackageFactory {
     pub fn new(pnp: Arc<dyn PnpTree>, data_dir: PathBuf) -> Self {
-        Self { pnp, data_dir, cache: Mutex::default(), kiosk_logons: None }
+        Self { pnp, data_dir, cache: Mutex::default(), usb: Mutex::default(), kiosk_logons: None }
     }
 
     /// With per-seat kiosk users (the service, not the console dev mode).
@@ -100,9 +102,28 @@ impl PackageFactory {
             return b.clone();
         }
         let (settings, topology) = self.input_config();
-        let b = seat_input::create(kind, self.pnp.clone(), &settings, topology);
+        let b = if kind == InputBackendKind::WinusbCapture {
+            seat_input::create_with_capture(kind, self.pnp.clone(), &settings, topology, self.usb_capture())
+        } else {
+            seat_input::create(kind, self.pnp.clone(), &settings, topology)
+        };
         lock(&self.cache).input.insert(kind, b.clone());
         b
+    }
+
+    /// The one USB capture state of this service (`winusb_capture`, osms G2): built on
+    /// first use over `<data>\journal\usb-capture.json`; what an earlier run journaled is
+    /// pending in it from the start (restored by [`BackendFactory::restore_usb_input`] at
+    /// boot, or by the next sync). Router rebuilds share it, so captures survive them.
+    pub fn usb_capture(&self) -> Arc<seat_input::usb_capture::UsbCapture> {
+        let mut g = lock(&self.usb);
+        if let Some(c) = g.as_ref() {
+            return c.clone();
+        }
+        let c = seat_input::usb_capture::UsbCapture::system(&self.data_dir.join(seat_core::consts::JOURNAL_DIR));
+        c.watch();
+        *g = Some(c.clone());
+        c
     }
 
     fn input_config(&self) -> (InputSettings, HostTopology) {
@@ -146,9 +167,23 @@ impl BackendFactory for PackageFactory {
         Some(self.input_backend(kind).control)
     }
 
-    /// raw_input_host sees no input in session 0: the console listener reports it.
+    /// raw_input_host sees no input in session 0: the console listener reports it (also
+    /// under winusb_capture, for every unit that is not captured).
     fn console_listener(&self, kind: InputBackendKind) -> bool {
-        kind == InputBackendKind::RawInputHost
+        matches!(kind, InputBackendKind::RawInputHost | InputBackendKind::WinusbCapture)
+    }
+
+    fn restore_usb_input(&self) -> Vec<String> {
+        let c = self.usb_capture();
+        if !c.needs_restore() {
+            return Vec::new();
+        }
+        c.restore_all()
+    }
+
+    fn release_usb_input(&self) -> Vec<String> {
+        let c = lock(&self.usb).clone();
+        c.map(|c| c.release_all()).unwrap_or_default()
     }
 
     fn audio(&self, kind: AudioBackendKind) -> Option<Arc<dyn AudioRouter>> {

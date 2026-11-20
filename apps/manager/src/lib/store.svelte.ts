@@ -37,6 +37,7 @@ import type {
   SeatNumber,
   ServiceStatus,
   TermServiceRestart,
+  UsbInputRestore,
   UpdateSettings,
   UserPicture,
   WizardProgress
@@ -615,6 +616,20 @@ export class ManagerStore {
     else this.toast('error', t.advanced.restartTsFailed(r.reason ?? ''), r.reason);
     await this.refreshStatus();
     return r.restarted;
+  }
+
+  /** USB keyboards / mice held on WinUSB back to their own driver (`winusb_capture`, the operator confirmed). */
+  async restoreUsbInput(): Promise<boolean> {
+    let out: UsbInputRestore | null = null;
+    const ok = await this.run(async () => {
+      out = await this.api.restoreUsbInput();
+    });
+    if (!ok || !out) return false;
+    const failed = (out as UsbInputRestore).failed ?? [];
+    if (failed.length) this.toast('error', t.advanced.restoreUsbFailed(failed.length), failed.join('\n'));
+    else this.toast('ok', t.advanced.restoreUsbDone);
+    await this.refreshBackends();
+    return failed.length === 0;
   }
 
   /** Delete the Windows user Pulsar made for a former kiosk seat, with its profile. */

@@ -110,7 +110,7 @@ export type ProductState =
 export type SessionBackendKind = 'rds_loopback' | 'termsrv_wrapper' | 'fast_user_switch' | 'desktops';
 export type HostTopology = 'seat_one_console' | 'dedicated_host';
 export type DisplayBackendKind = 'window_presenter' | 'display_core' | 'pulsar_idd' | 'console_only';
-export type InputBackendKind = 'raw_input_host' | 'kmdf_filter' | 'none';
+export type InputBackendKind = 'raw_input_host' | 'winusb_capture' | 'kmdf_filter' | 'none';
 export type AudioBackendKind = 'rdp_bridge' | 'console_shared' | 'none';
 export type GateBackendKind = 'device_security' | 'session_drive_letters' | 'camera_consent' | 'storage_minifilter' | 'printer_acl';
 
@@ -910,6 +910,7 @@ export type RequestBody =
   | { type: 'steam_proxy_dll'; data: { action: SteamProxyAction } }
   | { type: 'vm_seats'; data: { action: VmAction } }
   | { type: 'restart_term_service'; data: { confirm: boolean } }
+  | { type: 'restore_usb_input'; data: { confirm: boolean } }
   | { type: 'request_reboot' }
   | { type: 'wizard_start'; data: { variant: WizardVariant } }
   | { type: 'wizard_command'; data: { command: WizardCommand } }
@@ -1009,6 +1010,11 @@ export interface VmHostStatus {
   seats: VmSeatInfo[];
 }
 
+/** Result of `restore_usb_input` (added 2026-11-20, osms G2): devices still on WinUSB, as `<node>: <error>`. */
+export interface UsbInputRestore {
+  failed?: string[];
+}
+
 /** Result of `restart_term_service` (added 2026-11-17). */
 export interface TermServiceRestart {
   stopped_seats?: SeatNumber[];
@@ -1023,6 +1029,7 @@ export type ResponseBody =
   | { type: 'steam_proxy'; data: SteamProxyStatus }
   | { type: 'vm_seats'; data: VmHostStatus }
   | { type: 'term_service_restart'; data: TermServiceRestart }
+  | { type: 'usb_input_restore'; data: UsbInputRestore }
   | { type: 'status'; data: ServiceStatus }
   | { type: 'backends'; data: BackendReport }
   | { type: 'checks'; data: Check[] }

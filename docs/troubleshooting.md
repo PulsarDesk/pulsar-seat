@@ -74,6 +74,26 @@ reg add HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatInput\Parameters /v Pas
 Restart. The on-screen keyboard (Accessibility > On-Screen Keyboard) or a remote desktop can
 be used to type this command. In Safe Mode the filter passes everything anyway.
 
+## 3a. A USB keyboard or mouse is missing after an extra seat used it
+
+With the input method "Raw input, plus USB keyboards and mice taken from seat 1"
+(`winusb_capture`) a running seat's USB keyboard or mouse is moved to the Windows WinUSB
+driver; Device Manager then lists it under **Universal Serial Bus devices**, not under
+Keyboards or Mice. Pulsar Seat gives it back when the seat stops, when the service stops or
+starts again, and at uninstall. If it is still missing (this method is not yet tested on
+real hardware):
+
+1. In the manager, **Settings > Advanced > Give USB keyboards and mice back to Windows**.
+2. Or restart the Pulsar Seat service (`sc stop PulsarSeat`, then `sc start PulsarSeat` in an
+   administrator command prompt): it gives every device back when it starts.
+3. By hand: in Device Manager, under Universal Serial Bus devices, right-click the device >
+   **Uninstall device**, then unplug it and plug it in again. Windows installs its own
+   keyboard / mouse driver again. On the command line, `pnputil /enum-devices /class USBDevice`
+   shows its instance id and `pnputil /remove-device "<instance id>"` removes it.
+
+Use another keyboard, the on-screen keyboard or a remote desktop for this. Pulsar Seat
+never takes the last keyboard or mouse that seat 1 has.
+
 ## 4. Windows does not start: Windows Recovery Environment (WinRE)
 
 If startup fails twice, Windows opens the recovery environment by itself. Or start from the

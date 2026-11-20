@@ -61,6 +61,7 @@
 
   let experimentalFor = $state<string | null>(null);
   let restartAsk = $state(false);
+  let restoreUsbAsk = $state(false);
   let outputsOpen = $state(false);
   let current = $state('methods');
   // Disks and volumes are refused by the service (system disk); never offered.
@@ -79,7 +80,7 @@
   const FALLBACK: Record<Single | 'gates', string[]> = {
     session: ['rds_loopback', 'termsrv_wrapper', 'fast_user_switch', 'desktops'],
     display: ['window_presenter', 'display_core', 'pulsar_idd', 'console_only'],
-    input: ['raw_input_host', 'kmdf_filter', 'none'],
+    input: ['raw_input_host', 'winusb_capture', 'kmdf_filter', 'none'],
     audio: ['rdp_bridge', 'console_shared', 'none'],
     gates: ['device_security', 'session_drive_letters', 'camera_consent', 'storage_minifilter', 'printer_acl']
   };
@@ -198,6 +199,8 @@
   }
 
   const notIsolated = $derived(draft?.settings.backends.input === 'raw_input_host' && draft?.settings.backends.host_topology === 'seat_one_console');
+  /** `winusb_capture` under seat_one_console: USB units isolated, the rest not (osms G2). */
+  const notIsolatedNonUsb = $derived(draft?.settings.backends.input === 'winusb_capture' && draft?.settings.backends.host_topology === 'seat_one_console');
   const logChoice = $derived(logLevelOf(draft?.settings.log));
   const logOptions = $derived<SelectOption<LogLevelChoice>[]>([
     ...(['errors', 'info', 'debug', 'trace'] as const).map((v) => ({ value: v, label: t.advancedPage.logLevels[v] })),
@@ -295,7 +298,18 @@
             </Group>
             {#if notIsolated}
               <div class="after" data-testid="input-not-isolated"><Notice kind="warn" text={t.advanced.inputNotIsolated} /></div>
+            {:else if notIsolatedNonUsb}
+              <div class="after" data-testid="input-not-isolated-non-usb"><Notice kind="warn" text={t.advanced.inputNotIsolatedNonUsb} /></div>
             {/if}
+            <div class="after">
+              <Group>
+                <Row label={t.advanced.restoreUsb} help={t.advanced.restoreUsbHint}>
+                  {#snippet control()}
+                    <Button compact label={t.advanced.restoreUsbConfirm} aria-label={t.advanced.restoreUsb} data-testid="restore-usb-input" disabled={!store.isAdmin} onclick={() => (restoreUsbAsk = true)} />
+                  {/snippet}
+                </Row>
+              </Group>
+            </div>
 
             <SubLabel text={t.advancedPage.gates} />
             <p class="help sub">{t.advancedPage.gatesHelp}</p>
@@ -516,6 +530,19 @@
       void store.restartTermService();
     }}
     onCancel={() => (restartAsk = false)}
+  />
+{/if}
+
+{#if restoreUsbAsk}
+  <ConfirmDialog
+    title={t.advanced.restoreUsbTitle}
+    body={t.advanced.restoreUsbBody}
+    confirmLabel={t.advanced.restoreUsbConfirm}
+    onConfirm={() => {
+      restoreUsbAsk = false;
+      void store.restoreUsbInput();
+    }}
+    onCancel={() => (restoreUsbAsk = false)}
   />
 {/if}
 

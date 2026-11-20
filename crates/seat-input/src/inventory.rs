@@ -38,6 +38,10 @@ impl Inventory {
         &self.platform
     }
 
+    pub fn pnp(&self) -> &Arc<dyn PnpTree> {
+        &self.pnp
+    }
+
     fn scan(&self) -> BackendResult<Vec<Device>> {
         let list = self.platform.list_interfaces()?;
         let mut units = build_units(&*self.pnp, &list);

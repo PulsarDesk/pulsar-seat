@@ -25,6 +25,7 @@ import type {
   VmAction,
   VmHostStatus,
   TermServiceRestart,
+  UsbInputRestore,
   Issue,
   LocalUser,
   HelpLink,
@@ -136,6 +137,8 @@ export interface Api extends LocalApi {
   vmSeats(action: VmAction): Promise<VmHostStatus>;
   /** Stop the seats, then restart Remote Desktop Services (`restart_term_service`). */
   restartTermService(): Promise<TermServiceRestart>;
+  /** Give USB keyboards / mice held on WinUSB back to their own driver (`restore_usb_input`). */
+  restoreUsbInput(): Promise<UsbInputRestore>;
   requestReboot(): Promise<void>;
   wizardStart(variant: WizardVariant): Promise<void>;
   wizardCommand(command: WizardCommand): Promise<void>;
@@ -211,6 +214,7 @@ export function createRequestApi(
     vmSeats: async (action) => expectBody(await call({ type: 'vm_seats', data: { action } }), 'vm_seats').data,
     restartTermService: async () =>
       expectBody(await call({ type: 'restart_term_service', data: { confirm: true } }), 'term_service_restart').data,
+    restoreUsbInput: async () => expectBody(await call({ type: 'restore_usb_input', data: { confirm: true } }), 'usb_input_restore').data,
     requestReboot: () => ack({ type: 'request_reboot' }),
     wizardStart: (variant) => ack({ type: 'wizard_start', data: { variant } }),
     wizardCommand: (command) => ack({ type: 'wizard_command', data: { command } }),

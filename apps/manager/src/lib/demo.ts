@@ -398,6 +398,13 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
         ],
         input: [
           info('raw_input_host', b.input === 'raw_input_host', { state: 'available' }, false, b.host_topology === 'seat_one_console' ? ['input_not_isolated'] : []),
+          info(
+            'winusb_capture',
+            b.input === 'winusb_capture',
+            { state: 'available' },
+            false,
+            b.host_topology === 'seat_one_console' ? ['input_not_isolated_non_usb', 'gamepads_shared'] : ['gamepads_shared']
+          ),
           info('kmdf_filter', b.input === 'kmdf_filter', { state: 'driver_not_signed', driver: 'kbd_mou_filter' }),
           info('none', b.input === 'none', { state: 'available' })
         ],
@@ -604,6 +611,11 @@ export function createDemoApi(opts: { admin?: boolean; restricted?: boolean } = 
         .filter((s) => s.remote?.vm)
         .map((s) => ({ seat: s.number, state: 'missing', guest_address: s.remote?.vm?.guest_address ?? '' }));
       return structuredClone(vmHost);
+    },
+    restoreUsbInput: async () => {
+      await step('restore_usb_input');
+      needAdmin();
+      return {};
     },
     restartTermService: async () => {
       await step('restart_term_service');
