@@ -554,6 +554,7 @@ const t = {
     productRow: 'Pulsar Seat',
     noStatus: 'Hizmet durumunu bildirmedi.',
     windowsSession: (id: number) => `Windows oturumu ${id}`,
+    audioBuffer: (underruns: number, drops: number) => `Ses kesintileri: ${underruns} boşluk, ${drops} gecikme sıfırlama`,
     categories: {
       session: 'Oturum',
       display: 'Ekran',

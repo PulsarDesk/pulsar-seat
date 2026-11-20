@@ -163,4 +163,22 @@ describe('status page', () => {
     expect(within(row).getByTestId('redirect-refusals')).toBeInTheDocument();
     expect(row.querySelector('[data-kind="danger"]')).not.toBeNull();
   });
+
+  it('shows the sound buffer counters only after a gap or a delay reset (G7)', async () => {
+    const { store } = await setup();
+    const seat = (underruns: number, drops: number) => ({
+      seat: 2,
+      state: { state: 'at_logon' as const },
+      since_ms: 1,
+      audio_playback: { queued_ms: 31, target_ms: 30, max_ms: 100, underruns, drops }
+    });
+    store.status = { ...store.status!, seats: [seat(0, 0)] };
+    await Promise.resolve();
+    const name = store.draft?.seats.find((s) => s.number === 2)?.name;
+    const label = name && name !== '2' ? name : t.seatN(2);
+    expect(rowOf(label)).not.toHaveTextContent(t.statusPage.audioBuffer(0, 0));
+    store.status = { ...store.status!, seats: [seat(2, 1)] };
+    await Promise.resolve();
+    expect(rowOf(label)).toHaveTextContent(t.statusPage.audioBuffer(2, 1));
+  });
 });

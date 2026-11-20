@@ -88,6 +88,21 @@ export interface SeatRuntime {
   redirect_refusals?: RedirectRefusal[];
   /** The seat host's audio notes (`render_absent`: no playback device, ...). Added 2026-11-17. */
   audio_notes?: string[];
+  /** Playback jitter-buffer counters of the seat host (OSMS parity G7). Added 2026-11-20;
+   *  missing from older services and while no playback stream runs. */
+  audio_playback?: AudioPlaybackStats;
+}
+
+/** `SeatRuntime.audio_playback`: counters since the playback stream started. */
+export interface AudioPlaybackStats {
+  queued_ms?: number;
+  target_ms?: number;
+  max_ms?: number;
+  underruns?: number;
+  drops?: number;
+  dropped_bytes?: number;
+  drift_skipped_frames?: number;
+  drift_repeated_frames?: number;
 }
 
 /** One refused clipboard / drive / smart-card request of a seat session. */

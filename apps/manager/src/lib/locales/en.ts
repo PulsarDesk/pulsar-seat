@@ -555,6 +555,9 @@ const t = {
     productRow: 'Pulsar Seat',
     noStatus: 'The service has not reported its state.',
     windowsSession: (id: number) => `Windows session ${id}`,
+    /** Seat sound buffer counters, shown only after a gap or a jump (OSMS parity G7). */
+    audioBuffer: (underruns: number, drops: number) =>
+      `Sound dropouts: ${underruns} gap${underruns === 1 ? '' : 's'}, ${drops} delay reset${drops === 1 ? '' : 's'}`,
     categories: {
       session: 'Session',
       display: 'Display',
