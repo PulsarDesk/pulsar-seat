@@ -10,6 +10,8 @@ pub mod hid;
 #[cfg(feature = "local-pads")]
 pub mod pad_io;
 pub mod raw;
+pub mod usb_swap;
+pub mod winusb_reader;
 
 pub use hid::WinHidSource;
 
@@ -155,28 +157,35 @@ impl InputPlatform for WinPlatform {
     }
 
     fn watch(&self, cb: ChangeCallback) -> BackendResult<Box<dyn Guard>> {
-        let ctx = Box::into_raw(Box::new(cb));
-        let mut guard = WatchGuard { handles: Vec::new(), ctx: ctx as usize };
-        let classes = [DeviceKind::Keyboard, DeviceKind::Mouse, DeviceKind::Hid, DeviceKind::UsbHub];
-        for k in classes {
-            let Some(g) = k.interface_class().and_then(guid) else { continue };
-            let mut filter = CM_NOTIFY_FILTER {
-                cbSize: std::mem::size_of::<CM_NOTIFY_FILTER>() as u32,
-                FilterType: CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
-                ..Default::default()
-            };
-            filter.u.DeviceInterface.ClassGuid = g;
-            let mut h: HCMNOTIFICATION = std::ptr::null_mut();
-            // SAFETY: filter and out handle valid; `ctx` stays alive until the guard has
-            // unregistered every handle (Drop below).
-            let cr = unsafe { CM_Register_Notification(&filter, ctx as *const c_void, Some(on_notify), &mut h) };
-            if cr != CR_SUCCESS {
-                return Err(cr_error(cr, "CM_Register_Notification"));
-            }
-            guard.handles.push(h as usize);
-        }
-        Ok(Box::new(guard))
+        let classes: Vec<GUID> = [DeviceKind::Keyboard, DeviceKind::Mouse, DeviceKind::Hid, DeviceKind::UsbHub]
+            .into_iter()
+            .filter_map(|k| k.interface_class().and_then(guid))
+            .collect();
+        watch_interfaces(&classes, cb)
     }
+}
+
+/// Call `cb` (from a CfgMgr32 thread) on arrival / removal of an interface of `classes`.
+pub(crate) fn watch_interfaces(classes: &[GUID], cb: ChangeCallback) -> BackendResult<Box<dyn Guard>> {
+    let ctx = Box::into_raw(Box::new(cb));
+    let mut guard = WatchGuard { handles: Vec::new(), ctx: ctx as usize };
+    for g in classes {
+        let mut filter = CM_NOTIFY_FILTER {
+            cbSize: std::mem::size_of::<CM_NOTIFY_FILTER>() as u32,
+            FilterType: CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE,
+            ..Default::default()
+        };
+        filter.u.DeviceInterface.ClassGuid = *g;
+        let mut h: HCMNOTIFICATION = std::ptr::null_mut();
+        // SAFETY: filter and out handle valid; `ctx` stays alive until the guard has
+        // unregistered every handle (Drop below).
+        let cr = unsafe { CM_Register_Notification(&filter, ctx as *const c_void, Some(on_notify), &mut h) };
+        if cr != CR_SUCCESS {
+            return Err(cr_error(cr, "CM_Register_Notification"));
+        }
+        guard.handles.push(h as usize);
+    }
+    Ok(Box::new(guard))
 }
 
 thread_local! {

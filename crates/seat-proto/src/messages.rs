@@ -182,6 +182,11 @@ pub enum RequestBody {
     /// and answers [`ResponseBody::TermServiceRestart`]. Seats are not started again by
     /// themselves. Added 2026-11-17 (rdp-listener, additive, admin).
     RestartTermService { confirm: bool },
+    /// Give every USB keyboard / mouse that `winusb_capture` holds on WinUSB (and whatever
+    /// an earlier run journaled) back to its own driver now. `confirm` must be true.
+    /// Answers [`ResponseBody::UsbInputRestore`]. Added 2026-11-20 (osms G2, additive,
+    /// admin).
+    RestoreUsbInput { confirm: bool },
 
     // ---- first-run wizard (spec 10 §9.2) ----
     WizardStart { variant: WizardVariant },
@@ -468,6 +473,7 @@ impl RequestBody {
             | R::SteamProxyDll { .. }
             | R::VmSeats { .. }
             | R::RestartTermService { .. }
+            | R::RestoreUsbInput { .. }
             | R::WizardStart { .. }
             | R::WizardCommand { .. }
             | R::WizardStop { .. }
@@ -564,6 +570,7 @@ impl RequestBody {
             | R::SteamProxyDll { .. }
             | R::VmSeats { .. }
             | R::RestartTermService { .. }
+            | R::RestoreUsbInput { .. }
             | R::HostAudioReport { .. }
             | R::HostDriveBroker { .. } => 3,
             _ => crate::MIN_PROTOCOL_VERSION,
@@ -708,6 +715,8 @@ pub enum ResponseBody {
     AudioCleanup(remote::AudioCleanup),
     /// Answer of `restart_term_service` (added 2026-11-17, additive).
     TermServiceRestart(TermServiceRestart),
+    /// Answer of `restore_usb_input` (added 2026-11-20, additive).
+    UsbInputRestore(UsbInputRestore),
     /// Answer of `host_drive_broker`: the host's ends of the broker pipes (handle values
     /// valid in the host process: `read` from the broker, `write` to it). Added
     /// 2026-11-17, additive.
@@ -715,6 +724,15 @@ pub enum ResponseBody {
     /// Answer of `set_seat_display_mode`: `seat_display::remote::ModeResult` (`status`,
     /// applied and render size, format). Added 2026-11-17 (additive).
     ModeResult(serde_json::Value),
+}
+
+/// Result of `restore_usb_input`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UsbInputRestore {
+    /// `<device node>: <error>` of the devices that could not be restored now (they stay
+    /// journaled and are tried again at the next start). Empty = everything restored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
 }
 
 /// Result of `restart_term_service`.

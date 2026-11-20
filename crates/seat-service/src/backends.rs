@@ -49,6 +49,17 @@ pub trait BackendFactory: Send + Sync {
     fn console_listener(&self, _kind: InputBackendKind) -> bool {
         false
     }
+    /// `winusb_capture` (osms G2): give every USB keyboard / mouse an extra seat holds on
+    /// WinUSB back to its own driver, including what an earlier run journaled (boot, the
+    /// manual "restore input devices" command). Returns error texts. Default: nothing.
+    fn restore_usb_input(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// Release what this run captured (service stop, input backend deselected), without
+    /// touching anything else. Returns error texts. Default: nothing.
+    fn release_usb_input(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Agent work the gates produced since the last call (session drive letters), as
     /// `(session_id, task)`. Drained.
     fn take_gate_agent_tasks(&self) -> Vec<(u32, seat_proto::AgentTaskKind)> {
@@ -287,7 +298,7 @@ pub fn report(
         info(kind_name(&k), b.availability(), false, sel.display == k, a.display == k, serde_json::to_value(b.caps()).unwrap_or_default(), notes)
     })
     .collect();
-    let input = [InputBackendKind::RawInputHost, InputBackendKind::KmdfFilter, InputBackendKind::None]
+    let input = [InputBackendKind::RawInputHost, InputBackendKind::WinusbCapture, InputBackendKind::KmdfFilter, InputBackendKind::None]
         .into_iter()
         .map(|k| {
             let b: Arc<dyn InputRouter> = if k == InputBackendKind::None {
@@ -298,6 +309,14 @@ pub fn report(
             let mut notes = Vec::new();
             if k == InputBackendKind::RawInputHost && sel.host_topology == HostTopology::SeatOneConsole {
                 notes.push("input_not_isolated".into());
+            }
+            if k == InputBackendKind::WinusbCapture {
+                // The active router knows what it captured / refused; otherwise the kind's
+                // static notes (non-USB units are not isolated under seat_one_console).
+                notes = match f.input_control(k) {
+                    Some(c) if a.input == k => c.notes(),
+                    _ => seat_input::backend_notes(k, sel.host_topology),
+                };
             }
             info(kind_name(&k), b.availability(), false, sel.input == k, a.input == k, serde_json::to_value(b.caps()).unwrap_or_default(), notes)
         })
@@ -648,6 +667,10 @@ pub mod testing {
         pub gate: Arc<MockGate>,
         /// `console_listener` answer (tests of `crate::listener`).
         pub listener: std::sync::atomic::AtomicBool,
+        /// Calls of `restore_usb_input` / `release_usb_input`, and what they answer.
+        pub usb_restores: std::sync::atomic::AtomicU32,
+        pub usb_releases: std::sync::atomic::AtomicU32,
+        pub usb_failures: std::sync::Mutex<Vec<String>>,
     }
 
     impl Default for MockFactory {
@@ -661,6 +684,9 @@ pub mod testing {
                 audio: Arc::new(MockAudio::default()),
                 gate: Arc::new(MockGate::new(GateBackendKind::DeviceSecurity)),
                 listener: std::sync::atomic::AtomicBool::new(false),
+                usb_restores: Default::default(),
+                usb_releases: Default::default(),
+                usb_failures: Default::default(),
             }
         }
     }
@@ -688,6 +714,14 @@ pub mod testing {
         }
         fn console_listener(&self, kind: InputBackendKind) -> bool {
             kind == InputBackendKind::RawInputHost && self.listener.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn restore_usb_input(&self) -> Vec<String> {
+            self.usb_restores.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.usb_failures.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+        fn release_usb_input(&self) -> Vec<String> {
+            self.usb_releases.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Vec::new()
         }
     }
 }

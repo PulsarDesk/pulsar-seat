@@ -74,6 +74,26 @@ reg add HKLM\SYSTEM\CurrentControlSet\Services\PulsarSeatInput\Parameters /v Pas
 Yeniden başlatın. Ekran klavyesi (Erişim Kolaylığı > Ekran Klavyesi) ya da uzaktan masaüstü
 bu komutu yazmak için kullanılabilir. Güvenli Mod'da süzgeç zaten her şeyi geçirir.
 
+## 3a. Bir USB klavye ya da fare, ek bir koltuk kullandıktan sonra kayboldu
+
+"Ham giriş, ayrıca 1. koltuktan alınan USB klavye ve fareler" (`winusb_capture`) giriş
+yönteminde çalışan bir koltuğun USB klavye ya da faresi Windows WinUSB sürücüsüne taşınır;
+Aygıt Yöneticisi onu o sırada Klavyeler ya da Fareler altında değil, **Evrensel Seri Veri Yolu
+aygıtları** altında gösterir. Pulsar Seat aygıtı koltuk durunca, hizmet durunca ya da yeniden
+başlayınca ve kaldırmada geri verir. Hâlâ yoksa (bu yöntem henüz gerçek donanımda
+denenmedi):
+
+1. Yöneticide **Ayarlar > Gelişmiş > USB klavye ve fareleri Windows’a geri ver**.
+2. Ya da Pulsar Seat hizmetini yeniden başlatın (yönetici komut isteminde `sc stop PulsarSeat`,
+   sonra `sc start PulsarSeat`): hizmet açılırken her aygıtı geri verir.
+3. Elle: Aygıt Yöneticisi'nde Evrensel Seri Veri Yolu aygıtları altında aygıta sağ tıklayın >
+   **Cihazı kaldır**, sonra aygıtı çıkarıp yeniden takın. Windows kendi klavye / fare
+   sürücüsünü yeniden kurar. Komut satırında `pnputil /enum-devices /class USBDevice` aygıtın
+   örnek kimliğini gösterir, `pnputil /remove-device "<örnek kimliği>"` onu kaldırır.
+
+Bunun için başka bir klavye, ekran klavyesi ya da uzak masaüstü kullanın. Pulsar Seat
+1. koltuğun son klavyesini ya da faresini hiçbir zaman almaz.
+
 ## 4. Windows açılmıyor: Windows Kurtarma Ortamı (WinRE)
 
 Açılış iki kez yarıda kalırsa Windows kendiliğinden kurtarma ortamını açar. Ya da kurulum

@@ -86,7 +86,7 @@ impl Service {
             return None;
         }
         let kind = self.backends().input.kind();
-        if kind != InputBackendKind::RawInputHost || !self.factory.console_listener(kind) {
+        if !matches!(kind, InputBackendKind::RawInputHost | InputBackendKind::WinusbCapture) || !self.factory.console_listener(kind) {
             return None;
         }
         self.platform.console_session()

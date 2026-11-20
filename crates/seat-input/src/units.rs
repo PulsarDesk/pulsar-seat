@@ -351,7 +351,8 @@ pub(crate) mod tests {
     pub const VENDOR_PATH: &str = r"\\?\HID#VID_046D&PID_C52B&MI_02&Col01#7&3&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
     pub const TOUCH_PATH: &str = r"\\?\HID#ELAN0001&Col01#5&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
     pub const PEN_PATH: &str = r"\\?\HID#ELAN0001&Col02#5&1&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}";
-    pub const RDP_PATH: &str = r"\\?\TERMINPUT_BUS#UMB#1&1&0&RDP_KBD#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
+    pub const KBD2_PATH: &str = r"\\?\HID#VID_04F2&PID_0112#6&9&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
+    pub const RDP_PATH: &str =r"\\?\TERMINPUT_BUS#UMB#1&1&0&RDP_KBD#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
 
     fn node(id: &str, parent: Option<&str>, enumerator: &str) -> PnpNode {
         PnpNode {
@@ -410,6 +411,16 @@ pub(crate) mod tests {
         }
         let rdp = node(r"TERMINPUT_BUS\UMB\1&1&0&RDP_KBD", None, "TERMINPUT_BUS");
         t.add(rdp);
+        // A second, single-interface USB keyboard on port 4 (not in `list()`; the
+        // winusb_capture tests add it).
+        let mut kb2_usb = node(r"USB\VID_04F2&PID_0112\5&2", Some(r"USB\ROOT_HUB30\4&1"), "USB");
+        kb2_usb.location_paths = vec!["PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(4)".into()];
+        t.add(kb2_usb);
+        let mut kb2 = node(r"HID\VID_04F2&PID_0112\6&9&0&0000", Some(r"USB\VID_04F2&PID_0112\5&2"), "HID");
+        kb2.hardware_ids = vec![r"HID\VID_04F2&PID_0112".into()];
+        kb2.compatible_ids = vec!["HID_DEVICE_SYSTEM_KEYBOARD".into(), "HID_DEVICE_UP:0001_U:0006".into()];
+        t.add(kb2);
+        t.add_interface(KBD2_PATH, r"HID\VID_04F2&PID_0112\6&9&0&0000");
         t.add_interface(KBD_PATH, r"HID\VID_046D&PID_C52B&MI_00\7&1&0&0000");
         t.add_interface(KBD_HID_PATH, r"HID\VID_046D&PID_C52B&MI_00\7&1&0&0000");
         t.add_interface(MOU_PATH, r"HID\VID_046D&PID_C52B&MI_01&COL01\7&2&0&0000");

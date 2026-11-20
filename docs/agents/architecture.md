@@ -922,7 +922,8 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
 ### 4.3 Input (`InputRouter` service-side, `InputSink` host-side; seat-input)
 
 `raw_input_host` (default, user mode; isolation complete only under `dedicated_host`),
-`kmdf_filter` (our filters, not signed), `none`. Methods: `enumerate`,
+`winusb_capture` (raw input plus USB keyboards / mice of running extra seats on the inbox
+WinUSB driver, below), `kmdf_filter` (our filters, not signed), `none`. Methods: `enumerate`,
 `apply_routes(&[InputRoute]) -> RouteReport`, `set_wizard_capture`, sinks for hot-plug /
 activity (`ActivityEvent`) / packets (`PacketSink`, KMDF path) / hotkey (`HotkeyEvent`).
 Packets: `InputPacket::{Key{sc,f}, Move, Abs, Buttons, Wheel, Touch, Consumer, Sas}`.
@@ -965,6 +966,61 @@ Seat hosts swallow the hotkey but do not report it (the listener does; no double
 new seat's host at once. Limits: under `seat_one_console` the hotkey / wizard keys of seat-1
 units also reach the console's foreground window; on the secure desktop (lock screen, UAC)
 raw input does not reach the listener.
+
+**`winusb_capture` (osms G2, 2026-11-20; untested on hardware, HYPOTHESIS throughout).**
+User-mode isolation of USB keyboards / mice without a driver of ours (works with HVCI /
+Secure Boot; clean room from Microsoft's SetupAPI / newdev / WinUSB docs, the USB HID 1.11
+spec, the HID Usage Tables and the Keyboard Scan Code Specification; no OSMS code ported).
+Hybrid router `seat_input::winusb_router::WinusbCaptureRouter`: every unit is handled as with
+`raw_input_host` (seat hosts read raw input, the console listener runs), and in addition
+the USB devnode under a seat-routed unit (`usb_capture::usb_node_of`: the HID collection's
+parent `USB\…&MI_xx` interface node, or the device node of a single-interface device; never
+a hub) is moved to the **inbox** `winusb.inf` while that seat has a session:
+
+- *Plan* (`usb_capture::plan`, pure): units are grouped by that node, because a swap takes
+  every HID collection under it. A group is captured only when all its keyboards / mice go
+  to one seat ≥ 2 that runs (`InputControl::set_running_seats`, from the logons in
+  `apply_ownership`), its consumer / system-control collections are on seat 1 or the same
+  seat (they follow), and it has no other collection (pad, touch, pen). Refusals are notes:
+  `usb_capture_mixed_seats`, `usb_capture_unsupported_collection`,
+  `usb_capture_last_console_input` (never the last keyboard or mouse the console still has;
+  a PC with none is not made worse). No capture while the capture wizard runs
+  (`set_wizard_capture(true)` releases everything first, so the units reach the listener).
+- *Swap* (`win::usb_swap::WinUsbSwap`): `Device Parameters\DeviceInterfaceGUIDs` = our own
+  GUID `{6f1d3a52-9c47-4b8e-a5d0-2e7c41b98f36}`, `SPDRP_CLASSGUID` = `USBDevice`, then
+  `DI_ENUMSINGLEINF` with `%windir%\INF\winusb.inf`, `SetupDiBuildDriverInfoList`,
+  `newdev!DiInstallDevice` on that one devnode. Release reinstalls the journaled class +
+  INF (fallback `input.inf`), then deletes the GUID value. A node that is not present is
+  removed (`SetupDiRemoveDevice`) so Windows enumerates it fresh on its own driver when it is
+  plugged in again. windows-sys structs sized with `size_of` (same code on x64 / ARM64;
+  `DiInstallDevice` on ARM64 not yet run).
+- *Journal* (`journal\usb-capture.json`, `usb_capture::FileJournal`): written **before** each
+  swap (temporary file + `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`); a journal write
+  failure blocks the swap. A new `UsbCapture` loads it as pending releases, so a later save
+  never drops an earlier run's entry. Restore: at service start (`Service::boot`, before
+  anything else and also in Windows Safe Mode, `BackendFactory::restore_usb_input`), on seat
+  stop (next `apply_ownership`), on disable (`apply_routes(&[])`), when the input backend is
+  deselected and at service stop (`release_usb_input`), on arrival of a captured node
+  (`CM_Register_Notification` on our GUID retries pending releases), on the admin request
+  `restore_usb_input{confirm}` (manager: Advanced > methods) and at uninstall
+  (`seat-service uninstall`, `usb_capture::restore_at_start`). Nodes that still carry our GUID
+  but are not journaled (lost journal) are restored with `input.inf`.
+- *Reader* (`win::winusb_reader`, one thread per captured node, in the service):
+  `CM_Get_Device_Interface_List` on our GUID, `CreateFile` + `WinUsb_Initialize`, the first
+  interrupt-IN pipe, the HID report descriptor by `GET_DESCRIPTOR(0x22)` (boot-protocol
+  layout when it fails). `hid_layout` parses the descriptor, `hid_translate` maps reports to
+  `RawUnitEvent`s (`hid_keys`: keyboard page → set-1), then the same `UnitProcessor` as the
+  other paths (hotkey, emergency combination, SAS, key-up after a gap) and
+  `PacketSink` → `input_packets` → seat host → RDP fast path. Activity of captured units goes
+  to the activity sink from here (they are gone from raw input). The seat host under
+  `winusb_capture` runs its raw reader **and** forwards `input_packets` (`seat-host/src/input.rs`).
+- Limits: LED output reports (`TS_SET_KEYBOARD_INDICATORS_PDU` → `SET_REPORT(Output)`) not
+  done (keyboard LEDs stay dark); Bluetooth, I2C / SPI (most ARM64 laptops) and PS/2 units
+  stay on raw input (note `input_not_isolated_non_usb` under `seat_one_console`); about a
+  second of PnP restart per capture; a seat-start capture follows the next ownership apply
+  (hot-plug: a new USB keyboard on a running seat is captured when the inventory refresh
+  re-applies routes). Notes: `usb_input_captured`, `usb_capture_failed`. VM test with USB
+  passthrough first (docs/progress/osms-local-parity.md G2 point 8).
 
 ### 4.4 Audio (`AudioRouter`; seat-media)
 

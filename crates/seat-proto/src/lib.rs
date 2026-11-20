@@ -252,6 +252,7 @@ mod tests {
             RequestBody::ResetGraphics { seat: SeatNumber::new(2).unwrap() },
             RequestBody::VmSeats { action: crate::hyperv::VmAction::Status },
             RequestBody::RestartTermService { confirm: true },
+            RequestBody::RestoreUsbInput { confirm: true },
             RequestBody::HostDriveBroker { seat: SeatNumber::new(2).unwrap() },
         ] {
             assert_eq!(r.min_protocol(), 3, "parity-round request {r:?}");

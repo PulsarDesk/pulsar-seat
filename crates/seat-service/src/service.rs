@@ -378,6 +378,13 @@ impl Service {
     pub fn boot(&self) {
         let p = self.platform.clone();
         self.boot_prepare();
+        // USB keyboards / mice an earlier run left on WinUSB (`winusb_capture`, crash or
+        // power loss) go back to their own driver first, in every mode (Windows Safe Mode
+        // too): the console must have its keyboard. Running seats capture again with the
+        // next ownership apply.
+        for e in self.factory.restore_usb_input() {
+            log::error_id(eventid::BACKEND_FAILED, &format!("USB input restore at start: {e}"));
+        }
         let (settings, decision) = {
             let st = self.lock();
             (st.config.settings.clone(), st.boot_decision.clone().expect("boot_prepare ran"))
@@ -879,6 +886,10 @@ impl Service {
             if let Err(e) = c.set_seat_sessions(&sessions) {
                 log::warn(&format!("input seat sessions: {e}"));
             }
+            // winusb_capture holds only the units of seats with a session (applied with
+            // the routes below; a stopped seat's keyboard goes back to the console).
+            let running: Vec<SeatNumber> = logons.iter().map(|l| l.seat).filter(|s| !s.is_console()).collect();
+            c.set_running_seats(&running);
         }
         // Kiosk seat -> device map for the per-process shim (round 4 kiosk-isolation).
         {
@@ -1077,6 +1088,14 @@ impl Service {
             match old.session.restore_host() {
                 Ok(()) => log::info(&format!("session backend {} deselected: host restored", backends::kind_name(&old.session.kind()))),
                 Err(e) => log::error_id(eventid::BACKEND_FAILED, &format!("restore_host on deselect: {e}")),
+            }
+        }
+        if old.input.kind() == seat_core::backend::InputBackendKind::WinusbCapture
+            && b.input.kind() != seat_core::backend::InputBackendKind::WinusbCapture
+        {
+            // winusb_capture deselected: nothing would release its USB units otherwise.
+            for e in self.factory.release_usb_input() {
+                log::warn(&format!("USB input release on deselect: {e}"));
             }
         }
         let kept: std::collections::HashSet<_> = b.gates.iter().map(|g| g.kind()).collect();
@@ -1338,6 +1357,11 @@ impl Service {
         for (i, seat) in seats.into_iter().enumerate() {
             self.stop_seat_now(seat, true);
             progress(i + 1, total);
+        }
+        // USB keyboards / mice held on WinUSB for the stopped seats: back to their driver
+        // (no tick applies ownership any more). A failure stays journaled for the next start.
+        for e in self.factory.release_usb_input() {
+            log::warn(&format!("USB input release at stop: {e}"));
         }
         // Seat 1's kiosk shell (is_stopping is set: no longer wanted), then the kiosk
         // console user's default terminal goes back.
@@ -1702,6 +1726,22 @@ impl Service {
             }
         };
         Ok(ResponseBody::TermServiceRestart(out))
+    }
+
+    /// `restore_usb_input` (osms G2): every USB keyboard / mouse an extra seat holds on
+    /// WinUSB, and whatever an earlier run journaled, goes back to its own driver now.
+    /// Under `winusb_capture` running seats capture again with the next ownership apply
+    /// (seat start / stop, a config change); choosing another input backend keeps them off.
+    pub(crate) fn restore_usb_input(&self, confirm: bool) -> Result<ResponseBody, ProtoError> {
+        if !confirm {
+            return Err(err(ErrorCode::InvalidValue, "confirmation needed").with_reason("confirm"));
+        }
+        log::info("USB input restore requested by the operator");
+        let failed = self.factory.restore_usb_input();
+        for e in &failed {
+            log::warn(&format!("USB input restore: {e}"));
+        }
+        Ok(ResponseBody::UsbInputRestore(seat_proto::UsbInputRestore { failed }))
     }
 
     /// `hyper_v` (parity review 2026-11-17): the Hyper-V helper of the source-IP tools.

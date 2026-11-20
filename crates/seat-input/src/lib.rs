@@ -13,6 +13,9 @@
 //! | [`routes`] | both | route table, seat interface lists, hotkey groups |
 //! | [`raw_router`] | service | `raw_input_host` (default) |
 //! | [`kmdf_router`] | service | `kmdf_filter` client (unsigned driver → `driver_not_signed`) |
+//! | [`winusb_router`] | service | `winusb_capture`: raw input plus USB keyboard / mouse interfaces of running extra seats on inbox WinUSB (osms G2) |
+//! | [`usb_capture`] | service | capture plan, journal, swap / reader state machine of `winusb_capture` |
+//! | [`hid_layout`], [`hid_translate`], [`hid_keys`] | service | HID report descriptor parser, report → events, keyboard usage → set-1 (pure) |
 //! | [`NoneRouter`] | service | `none`: inventory only |
 //! | [`convert`] | both | scan codes, mouse, consumer, touch → [`seat_core::backend::InputPacket`]; hotkey, emergency, SAS |
 //! | [`filter_proto`] | service | IOCTL contract of the filter (mirror of the C header) |
@@ -31,6 +34,9 @@ pub mod convert;
 pub mod filter_proto;
 pub mod forward;
 pub mod gamepad;
+pub mod hid_keys;
+pub mod hid_layout;
+pub mod hid_translate;
 pub mod hotkey_guard;
 pub mod inventory;
 pub mod kiosk;
@@ -43,8 +49,10 @@ pub mod raw_router;
 pub mod rdp;
 pub mod routes;
 pub mod units;
+pub mod usb_capture;
 #[cfg(windows)]
 pub mod win;
+pub mod winusb_router;
 
 use inventory::{Inventory, lock};
 use platform::{FilterOpener, InputPlatform};
@@ -80,6 +88,15 @@ pub trait InputControl: Send + Sync {
     /// (`raw_input_host`: activity, hotkey and wizard capture then work, see
     /// [`console_report`]). Default: ignored (backends that see input themselves).
     fn set_console_reporter(&self, _connected: bool) {}
+    /// Seats that have a session now (`winusb_capture` captures only their units, so a
+    /// stopped seat's keyboard returns to the console). Default: ignored.
+    fn set_running_seats(&self, _seats: &[SeatNumber]) {}
+    /// Give every captured USB unit back to its own driver (`winusb_capture`; service
+    /// stop). Returns error texts of units that could not be restored now (they stay
+    /// journaled). Default: nothing captured.
+    fn release_captures(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Snake_case notes for `BackendInfo::notes` (`input_not_isolated`, …).
     fn notes(&self) -> Vec<String>;
 }
@@ -101,7 +118,27 @@ pub fn create(
     create_with(kind, pnp, settings, topology, default_platform(), default_opener())
 }
 
-/// [`create`] with explicit OS seams (tests, diagnostics).
+/// [`create`] for `winusb_capture` with the service's shared [`usb_capture::UsbCapture`]
+/// (one per service, so router rebuilds keep the captured nodes and their journal).
+/// Other kinds ignore `capture`.
+pub fn create_with_capture(
+    kind: InputBackendKind,
+    pnp: Arc<dyn PnpTree>,
+    settings: &InputSettings,
+    topology: HostTopology,
+    capture: Arc<usb_capture::UsbCapture>,
+) -> InputBackend {
+    if kind == InputBackendKind::WinusbCapture {
+        let inv = Inventory::new(default_platform(), pnp);
+        let r = winusb_router::WinusbCaptureRouter::new(inv, settings, topology, capture);
+        return InputBackend { router: r.clone(), control: r };
+    }
+    create(kind, pnp, settings, topology)
+}
+
+/// [`create`] with explicit OS seams (tests, diagnostics). `winusb_capture` gets a capture
+/// state over the default journal folder (`%ProgramData%\Pulsar Seat\journal`); the
+/// service uses [`create_with_capture`] instead.
 pub fn create_with(
     kind: InputBackendKind,
     pnp: Arc<dyn PnpTree>,
@@ -112,6 +149,11 @@ pub fn create_with(
 ) -> InputBackend {
     let inv = Inventory::new(platform, pnp);
     match kind {
+        InputBackendKind::WinusbCapture => {
+            let cap = usb_capture::UsbCapture::system(&usb_capture::default_journal_dir());
+            let r = winusb_router::WinusbCaptureRouter::new(inv, settings, topology, cap);
+            InputBackend { router: r.clone(), control: r }
+        }
         InputBackendKind::RawInputHost => {
             let r = raw_router::RawInputRouter::new(inv, settings, topology);
             InputBackend { router: r.clone(), control: r }
@@ -166,6 +208,7 @@ pub fn backend_notes(kind: InputBackendKind, topology: HostTopology) -> Vec<Stri
         InputBackendKind::KmdfFilter => {
             vec!["driver_not_signed".into(), "xinput_pads_shared".into(), "touch_emulated_as_mouse".into()]
         }
+        InputBackendKind::WinusbCapture => winusb_router::static_notes(topology),
         InputBackendKind::None => vec!["input_not_routed".into()],
     }
 }

@@ -1024,7 +1024,17 @@ const t = {
     restartTsFailed: (reason: string): string =>
       reason === 'restart_needs_reboot'
         ? 'Bu Windows sürümünde Uzak Masaüstü Hizmetleri durdurulamıyor; bunun yerine bilgisayarı yeniden başlatın.'
-        : 'Uzak Masaüstü Hizmetleri yeniden başlatılamadı (hizmet günlüğüne bakın).'
+        : 'Uzak Masaüstü Hizmetleri yeniden başlatılamadı (hizmet günlüğüne bakın).',
+    inputNotIsolatedNonUsb:
+      'Çalışan bir koltuğun USB klavye ve fareleri 1. koltuktan alınır (koltuk çalışırken Windows WinUSB sürücüsüne taşınır). Bu düzende diğer koltukların Bluetooth, yerleşik ve USB olmayan klavye ve fareleri 1. koltuğun öndeki penceresine yine ulaşabilir. Henüz gerçek donanımda denenmedi.',
+    restoreUsb: 'USB klavye ve fareleri Windows’a geri ver',
+    restoreUsbHint:
+      'Bir koltuğun tuttuğu tüm USB klavye ve fareleri şimdi kendi Windows sürücülerine geri koyar; bir çökmeden sonra da. Çalışan koltuklar kendi aygıtlarını bir sonraki koltuk başlangıcında ya da değişiklikte yeniden alır; almamaları için başka bir giriş yöntemi seçin.',
+    restoreUsbTitle: 'USB klavye ve fareler geri verilsin mi?',
+    restoreUsbBody: 'Çalışan koltukların klavye ve fareleri, koltuk onları yeniden alana kadar o koltuklarda çalışmaz. Her aygıt yeniden kurulur; bu yaklaşık bir saniye sürer.',
+    restoreUsbConfirm: 'Geri ver',
+    restoreUsbDone: 'USB klavye ve fareler kendi sürücülerine döndü',
+    restoreUsbFailed: (n: number): string => ` aygıt şimdi geri verilemedi (takılı değil ya da meşgul); Pulsar Seat bir sonraki başlangıçta yeniden dener.`
   },
 
   backendNames: {
@@ -1039,6 +1049,7 @@ const t = {
     pulsar_idd: 'Pulsar sanal ekran sürücüsü',
     console_only: 'Yalnızca konsol',
     raw_input_host: 'Ham giriş, kullanıcı kipi',
+    winusb_capture: 'Ham giriş, ayrıca 1. koltuktan alınan USB klavye ve fareler (bize ait sürücü yok)',
     kmdf_filter: 'Pulsar giriş süzgeç sürücüsü',
     none: 'Kapalı',
     rdp_bridge: 'Koltuğun kendi ses aygıtına yönlendir',
@@ -1173,6 +1184,12 @@ const t = {
     gamepads_shared: 'Oyun kumandaları tüm koltuklarca paylaşılır',
     xinput_pads_shared: 'XInput oyun kumandaları tüm koltuklarca paylaşılır',
     touch_emulated_as_mouse: 'Dokunma fare olarak aktarılır',
+    input_not_isolated_non_usb: 'USB olmayan klavye ve fareler tam yalıtılmıyor',
+    usb_input_captured: 'Çalışan koltukların USB klavye ya da fareleri 1. koltuktan alındı',
+    usb_capture_mixed_seats: 'Parçaları farklı koltuklara giden bir USB aygıtı 1. koltuktan alınmaz',
+    usb_capture_last_console_input: '1. koltukta klavye ya da fare kalmayacağı için bir USB aygıtı 1. koltukta kalıyor',
+    usb_capture_unsupported_collection: 'Oyun kumandası, dokunma ya da kalem parçası da olan bir USB aygıtı 1. koltuktan alınmaz',
+    usb_capture_failed: 'Bir USB klavye ya da fare taşınamadı (hizmet günlüğüne bakın)',
     driver_not_signed: 'Sürücü imzalı değil',
     input_not_routed: 'Giriş aygıtları koltuklara yönlendirilmiyor',
     rdp_listener_on_all_interfaces: 'Uzak Masaüstü bütün ağ bağdaştırıcılarında dinliyor (ağ düzeyinde kimlik doğrulaması açık)',

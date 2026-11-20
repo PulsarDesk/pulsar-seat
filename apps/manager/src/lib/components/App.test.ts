@@ -194,6 +194,21 @@ describe('App shell', () => {
     expect(store.draft?.settings.backends.host_autologon).toBe(false);
   });
 
+  it('advanced view: USB capture input method, its note and the restore command', async () => {
+    const { store, user, api } = await setup();
+    store.setPref('tab', 'advanced');
+    await tick();
+    await user.selectOptions(screen.getByRole('combobox', { name: t.advanced.input }), 'winusb_capture');
+    expect(store.draft?.settings.backends.input).toBe('winusb_capture');
+    expect(screen.queryByTestId('input-not-isolated')).toBeNull();
+    expect(screen.getByTestId('input-not-isolated-non-usb')).toBeInTheDocument();
+    await user.click(screen.getByTestId('restore-usb-input'));
+    const dlg = screen.getByRole('alertdialog');
+    await user.click(within(dlg).getByRole('button', { name: t.advanced.restoreUsbConfirm }));
+    await tick();
+    expect(api.calls).toContain('restore_usb_input');
+  });
+
   it('advanced view: TermService restart only while Remote Desktop Services is in use', async () => {
     const { store } = await setup();
     store.setPref('tab', 'advanced');

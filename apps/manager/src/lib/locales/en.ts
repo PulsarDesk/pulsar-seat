@@ -1027,7 +1027,17 @@ const t = {
     restartTsFailed: (reason: string): string =>
       reason === 'restart_needs_reboot'
         ? 'Remote Desktop Services cannot be stopped on this Windows build; restart the PC instead.'
-        : 'Remote Desktop Services could not restart (see the service log).'
+        : 'Remote Desktop Services could not restart (see the service log).',
+    inputNotIsolatedNonUsb:
+      'USB keyboards and mice of a running seat are taken away from seat 1 (moved to the Windows WinUSB driver while the seat runs). Bluetooth, built-in and other non-USB keyboards and mice of the other seats can still reach seat 1’s foreground window in this layout. Not yet tested on real hardware.',
+    restoreUsb: 'Give USB keyboards and mice back to Windows',
+    restoreUsbHint:
+      'Puts every USB keyboard and mouse that a seat holds back on its own Windows driver now, also after a crash. Running seats take theirs again at the next seat start or change; choose another input method to keep them off.',
+    restoreUsbTitle: 'Give USB keyboards and mice back?',
+    restoreUsbBody: 'Keyboards and mice of running seats stop working in those seats until the seat takes them again. Each device is reinstalled, which takes about a second.',
+    restoreUsbConfirm: 'Give them back',
+    restoreUsbDone: 'USB keyboards and mice are back on their own driver',
+    restoreUsbFailed: (n: number): string => ` device(s) could not be given back now (unplugged or busy); Pulsar Seat tries again at the next start.`
   },
 
   backendNames: {
@@ -1042,6 +1052,7 @@ const t = {
     pulsar_idd: 'Pulsar virtual display driver',
     console_only: 'Console only',
     raw_input_host: 'Raw input, user mode',
+    winusb_capture: 'Raw input, plus USB keyboards and mice taken from seat 1 (no driver of ours)',
     kmdf_filter: 'Pulsar input filter driver',
     none: 'Off',
     rdp_bridge: 'Route to the seat’s own sound device',
@@ -1176,6 +1187,12 @@ const t = {
     gamepads_shared: 'Gamepads are shared by all seats',
     xinput_pads_shared: 'XInput gamepads are shared by all seats',
     touch_emulated_as_mouse: 'Touch is passed as mouse input',
+    input_not_isolated_non_usb: 'Non-USB keyboards and mice are not fully isolated',
+    usb_input_captured: 'USB keyboards or mice of running seats are taken from seat 1',
+    usb_capture_mixed_seats: 'A USB device whose parts go to different seats is not taken from seat 1',
+    usb_capture_last_console_input: 'Seat 1 would have no keyboard or mouse left, so one USB device stays with seat 1',
+    usb_capture_unsupported_collection: 'A USB device that also has a gamepad, touch or pen part is not taken from seat 1',
+    usb_capture_failed: 'A USB keyboard or mouse could not be moved (see the service log)',
     driver_not_signed: 'The driver is not signed',
     input_not_routed: 'Input devices are not routed to seats',
     rdp_listener_on_all_interfaces: 'Remote Desktop listens on all network adapters (network level authentication on)',
