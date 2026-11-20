@@ -399,6 +399,16 @@ pub fn queued_latency(queued_bytes: usize, fmt: PcmFormat) -> std::time::Duratio
     std::time::Duration::from_micros((queued_bytes as u128 * 1_000_000 / rate).min(u128::from(u64::MAX)) as u64)
 }
 
+/// Whether the playback jitter-buffer counters are worth a new `host_audio_report` (G7):
+/// a counter moved, or the playback stream appeared or went away. The queue depth alone
+/// changes on every read and does not count.
+pub fn playback_stats_moved(now: Option<&seat_core::state::AudioPlaybackStats>, sent: Option<&seat_core::state::AudioPlaybackStats>) -> bool {
+    match (now, sent) {
+        (Some(a), Some(b)) => !a.same_counters(b),
+        (a, b) => a.is_some() != b.is_some(),
+    }
+}
+
 /// rdpsnd playback into the seat's render endpoint.
 pub struct BridgePlayback {
     bridge: Arc<AudioBridge>,
@@ -841,6 +851,9 @@ mod win {
                 // `None` = never reported: the first state is always sent (rdp-listener
                 // 2026-11-17: the manager shows a seat without a sound device).
                 let mut last: Option<(bool, bool, Vec<String>)> = None;
+                // Jitter-buffer counters last sent (G7): resent at most every 10 s, and only
+                // when a counter moved (the queue depth alone does not count).
+                let mut last_stats: Option<seat_core::state::AudioPlaybackStats> = None;
                 let mut tick = 0u32;
                 while !stop.load(Ordering::SeqCst) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -852,15 +865,28 @@ mod win {
                     }
                     let st = b.status();
                     let now = (st.render_open, st.capture_open, st.notes);
-                    if last.as_ref() != Some(&now) {
-                        eprintln!("seat host: audio notes {:?}", now.2);
+                    let stats = b.playback_stats();
+                    let stats_moved = tick % 10 == 0 && playback_stats_moved(stats.as_ref(), last_stats.as_ref());
+                    let notes_changed = last.as_ref() != Some(&now);
+                    if notes_changed || stats_moved {
+                        if notes_changed {
+                            eprintln!("seat host: audio notes {:?}", now.2);
+                        }
+                        if stats_moved && let Some(s) = &stats {
+                            eprintln!(
+                                "seat host: audio buffer {} ms (target {} ms): {} underruns, {} drops, drift -{} / +{} frames",
+                                s.queued_ms, s.target_ms, s.underruns, s.drops, s.drift_skipped_frames, s.drift_repeated_frames
+                            );
+                        }
                         let _ = lock(&ctl).call(RequestBody::HostAudioReport {
                             seat,
                             render_open: now.0,
                             capture_open: now.1,
                             notes: now.2.clone(),
+                            playback: stats,
                         });
                         last = Some(now);
+                        last_stats = stats;
                     }
                 }
             });
@@ -1338,5 +1364,15 @@ mod tests {
         assert_eq!(queued_latency(192_000, f), std::time::Duration::from_secs(1));
         assert_eq!(queued_latency(19_200, f), std::time::Duration::from_millis(100));
         assert_eq!(queued_latency(0, f), std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn playback_stats_resent_only_when_a_counter_moves() {
+        let a = seat_core::state::AudioPlaybackStats { queued_ms: 30, target_ms: 30, max_ms: 100, ..Default::default() };
+        assert!(playback_stats_moved(Some(&a), None), "stream appeared");
+        assert!(playback_stats_moved(None, Some(&a)), "stream went away");
+        assert!(!playback_stats_moved(None, None));
+        assert!(!playback_stats_moved(Some(&seat_core::state::AudioPlaybackStats { queued_ms: 55, ..a }), Some(&a)), "depth only");
+        assert!(playback_stats_moved(Some(&seat_core::state::AudioPlaybackStats { underruns: 1, ..a }), Some(&a)));
     }
 }

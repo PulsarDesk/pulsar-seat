@@ -145,6 +145,49 @@ pub struct SeatRuntime {
     /// (rdp-listener, additive).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_notes: Vec<String>,
+    /// Counters of the seat's playback jitter buffer (`seat_media::bridge::PcmRing`), from
+    /// `host_audio_report`; `None` while no playback stream runs or the host is older.
+    /// Added 2026-11-20 (OSMS parity G7, additive). Boxed: `SeatRuntime` travels inside
+    /// events and should stay small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_playback: Option<Box<AudioPlaybackStats>>,
+}
+
+/// Playback jitter-buffer counters of one seat host (since its playback stream started).
+/// Every field defaults so older and newer senders stay compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AudioPlaybackStats {
+    /// Audio waiting in the buffer when the report was made, in ms.
+    #[serde(default)]
+    pub queued_ms: u32,
+    /// Prebuffer / steady-state target, in ms (0 = no prebuffer).
+    #[serde(default)]
+    pub target_ms: u32,
+    /// Latency cap, in ms; above it the buffer drops back to the target.
+    #[serde(default)]
+    pub max_ms: u32,
+    /// Times the buffer ran dry while playing (each one faded out, then prebuffered again).
+    #[serde(default)]
+    pub underruns: u64,
+    /// Times the buffer passed the cap and dropped back to the target.
+    #[serde(default)]
+    pub drops: u64,
+    /// Bytes thrown away by those drops.
+    #[serde(default)]
+    pub dropped_bytes: u64,
+    /// Single frames skipped by slow drift correction (buffer stayed above target).
+    #[serde(default)]
+    pub drift_skipped_frames: u64,
+    /// Single frames repeated by slow drift correction (buffer stayed below target).
+    #[serde(default)]
+    pub drift_repeated_frames: u64,
+}
+
+impl AudioPlaybackStats {
+    /// The same counters (ignores `queued_ms`, which changes on every read).
+    pub fn same_counters(&self, other: &Self) -> bool {
+        Self { queued_ms: 0, ..*self } == Self { queued_ms: 0, ..*other }
+    }
 }
 
 /// How many redirection refusals a seat keeps.
@@ -180,6 +223,7 @@ impl SeatRuntime {
             redirect_notes: Vec::new(),
             redirect_refusals: Vec::new(),
             audio_notes: Vec::new(),
+            audio_playback: None,
         }
     }
 }

@@ -3685,9 +3685,28 @@ fn host_audio_notes_reach_the_seat_runtime() {
     let h = harness();
     let mut a = admin();
     call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
-    h.s.on_host_audio_report(s(2), false, true, vec!["render_absent".into(), "Not A Code".into()]);
+    h.s.on_host_audio_report(s(2), false, true, vec!["render_absent".into(), "Not A Code".into()], None);
     let rt = h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap();
     assert_eq!(rt.audio_notes, vec!["render_absent".to_string()]);
-    h.s.on_host_audio_report(s(2), true, true, vec![]);
+    h.s.on_host_audio_report(s(2), true, true, vec![], None);
     assert!(h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap().audio_notes.is_empty());
+}
+
+/// OSMS parity G7: the playback jitter-buffer counters reach the seat runtime, and a seat
+/// stop clears them.
+#[test]
+fn host_audio_playback_stats_reach_the_seat_runtime() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: Some(vec![s(2)]) }).unwrap();
+    let p = seat_core::state::AudioPlaybackStats { queued_ms: 31, target_ms: 30, max_ms: 100, underruns: 2, drops: 1, dropped_bytes: 13_440, ..Default::default() };
+    h.s.on_host_audio_report(s(2), true, true, vec![], Some(p));
+    let rt = h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap();
+    assert!(rt.audio_notes.is_empty());
+    assert_eq!(rt.audio_playback.as_deref(), Some(&p));
+    // The wire form stays additive: an old report without `playback` still parses.
+    let old: RequestBody = serde_json::from_str(r#"{"type":"host_audio_report","data":{"seat":2,"render_open":true}}"#).expect("old report parses");
+    assert!(matches!(old, RequestBody::HostAudioReport { playback: None, .. }));
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(2) }).unwrap();
+    assert_eq!(h.s.status().seats.into_iter().find(|r| r.seat == s(2)).unwrap().audio_playback, None);
 }

@@ -872,6 +872,7 @@ impl Service {
             slot.rt.user_sid = None;
             slot.rt.degraded.clear();
             slot.rt.audio_notes.clear();
+            slot.rt.audio_playback = None;
             st.run.known_sessions.retain(|k| k.seat != seat);
             st.run.set_host(seat, None);
             st.ownership_dirty = true;
