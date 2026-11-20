@@ -140,6 +140,8 @@ pub struct MockSessionBackend {
     pub console_seat_away: Mutex<Option<u32>>,
     /// `start` takes this long (ms; race tests).
     pub start_delay_ms: AtomicU64,
+    /// Every `set_frame_interval` value, in order.
+    pub frame_intervals: Mutex<Vec<Option<u32>>>,
 }
 
 impl MockSessionBackend {
@@ -155,6 +157,7 @@ impl MockSessionBackend {
             start_passwords: Mutex::new(Vec::new()),
             console_seat_away: Mutex::new(None),
             start_delay_ms: AtomicU64::new(0),
+            frame_intervals: Mutex::new(Vec::new()),
         }
     }
     /// The seat's session ended (a crashed kiosk shell): `query` answers `Gone`.
@@ -211,6 +214,10 @@ impl SessionBackend for MockSessionBackend {
     }
     fn restore_host(&self) -> BackendResult<()> {
         self.rec.hit("restore_host")
+    }
+    fn set_frame_interval(&self, ms: Option<u32>) -> Vec<String> {
+        lock(&self.frame_intervals).push(ms);
+        Vec::new()
     }
     fn start(&self, req: &SeatStartRequest<'_>) -> BackendResult<StartStep> {
         self.rec.hit(format!("start {}", req.seat))?;

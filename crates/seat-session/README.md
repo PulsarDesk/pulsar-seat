@@ -49,7 +49,14 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   `journal\session.jsonl`; policies reported, never fought. **restore_host** releases the
   claim: guarded reverse replay of the rows no remote seat still needs (values changed
   after us stay). Writer order with the second listener and the wrapper: `rds.rs` module
-  doc and architecture §10.4.
+  doc and architecture §10.4. Since OSMS parity G3 the local claim also writes policy
+  `bEnumerateHWBeforeSW=1` (only while absent) and, when the service sends one
+  (`set_frame_interval`), `WinStations\DWMFRAMEINTERVAL=<ms>` (journaled; written only while
+  absent or still our own last value, someone else's value is reported as
+  `PolicyOverride`; changed in place while prepared, restored when turned off, on release,
+  uninstall and the boot replay). Notes: `dwm_frame_interval_set`,
+  `dwm_frame_interval_restored`, `session_reconnect_for_frame_rate`,
+  `dwm_frame_interval_failed`.
 - **Seat ↔ session matching**: the documented RDP ActiveX control cannot set a client name, so
   `wait_session` takes the loopback remote session with our `PSEAT-NN` name **or** the newest
   loopback session that did not exist when the start began, not claimed by another seat, with
@@ -144,6 +151,12 @@ desktop that is never switched to).
 - Fast user switching: the `WTSINFOEX` lock flag of the console / target session as the
   switch gate, `LookupAccountNameW` SID matching.
 - `open_trusted_append` (reparse / hard-link / owner checks) for seat-host and agent logs.
+- `DWMFRAMEINTERVAL` (OSMS parity G3, x64 and ARM64): HYPOTHESIS that the `WinStations`
+  value alone lifts the about-30-fps cap of our loopback sessions on Server + RDSH and under
+  the wrapper, that a new value needs only a session reconnect (no TermService restart),
+  and that `floor(1000 / Hz)` is smooth on a seat monitor without the 4 ms `smooth` mode.
+  If `WinStations` alone is not enough, `RDP-Tcp\DWMFRAMEINTERVAL` (as OpenStreamMultiSeat
+  writes) is the next step, behind its own HYPOTHESIS note.
 
 ## Not implemented end to end (gap)
 

@@ -199,6 +199,10 @@ impl SessionBackend for TermsrvWrapperBackend {
         self.rdp.wait_session(seat, client_name, timeout)
     }
 
+    fn set_frame_interval(&self, ms: Option<u32>) -> Vec<String> {
+        super::rds_loopback::frame_interval(self.d(), ms)
+    }
+
     fn host_hint(&self, seat: SeatNumber, hint: seat_core::backend::session::HostHint) {
         self.rdp.host_hint(seat, hint);
     }

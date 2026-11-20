@@ -76,6 +76,9 @@ pub enum RowScope {
     Remote,
     /// Remote seats with `SetGpuRealtimePriority` on (optional, default on).
     RemoteGpu,
+    /// Local seats whose claim carries a composition interval (`DWMFRAMEINTERVAL`, OSMS
+    /// parity G3): the row's data is computed ([`RowSet::frame_interval_ms`]), not fixed.
+    LocalFrame,
 }
 
 /// One value the writer may write.
@@ -116,6 +119,9 @@ pub struct RowSet {
     pub local: bool,
     pub remote: bool,
     pub gpu_realtime: bool,
+    /// `DWMFRAMEINTERVAL` in ms while the local claim is held and an interval is set
+    /// ([`RdsApplier::set_frame_interval`]); `None` = the row is not written.
+    pub frame_interval_ms: Option<u32>,
 }
 
 impl RowSet {
@@ -136,6 +142,7 @@ impl RowSet {
             RowScope::Local => self.local,
             RowScope::Remote => self.remote,
             RowScope::RemoteGpu => self.remote && self.gpu_realtime,
+            RowScope::LocalFrame => self.local && self.frame_interval_ms.is_some(),
         }
     }
 }
@@ -152,7 +159,13 @@ impl RowSet {
 /// - `RDP-Tcp\SecurityLayer = 2` (remote): TLS; the headless hold pins the certificate.
 /// - `Keyboard Layout\IgnoreRemoteKeyboardLayout = 1` (remote): the session keeps the
 ///   user's own layout.
-/// - Policy `bEnumerateHWBeforeSW = 1` and `Shadow = 0` (remote): only while absent.
+/// - `WinStations\DWMFRAMEINTERVAL = <ms>` (local, computed; OSMS parity G3): the
+///   composition interval of every RDP session (Microsoft-documented; about 30 fps without
+///   it). Written only while absent or still our own earlier value; someone else's value
+///   is reported ([`RdsWarning::PolicyOverride`]), never overwritten. Windows reads it when
+///   a session connects.
+/// - Policy `bEnumerateHWBeforeSW = 1` (every RDP seat since OSMS parity G3, so local seats
+///   compose on the hardware GPU too) and `Shadow = 0` (remote): only while absent.
 /// - `fDisableAudioCapture` / `fDisableCam` are *not* written (media package).
 pub fn rds_rows() -> Vec<RdsRow> {
     use RowScope::*;
@@ -161,19 +174,33 @@ pub fn rds_rows() -> Vec<RdsRow> {
         r(TS, "fDenyTSConnections", 0, "rdp_connections_enabled", Common),
         r(TS, "fSingleSessionPerUser", 0, "single_session_per_user_off", Local),
         r(TS_WINSTATIONS, "SetGpuRealtimePriority", 1, "gpu_realtime_priority_on", RemoteGpu),
+        // Data 0 is a placeholder: `rows_for` puts the computed interval in.
+        r(TS_WINSTATIONS, DWM_FRAME_INTERVAL, 0, "dwm_frame_interval_set", LocalFrame),
         r(TS_RDP_TCP, "UserAuthentication", 1, "nla_on", Common),
         r(TS_RDP_TCP, "Shadow", 0, "shadow_off", Common),
         r(TS_RDP_TCP, "SecurityLayer", 2, "tls_on", Remote),
         r(KEYBOARD_LAYOUT, "IgnoreRemoteKeyboardLayout", 1, "remote_keyboard_layout_ignored", Remote),
-        r(POL, "bEnumerateHWBeforeSW", 1, "hardware_gpu_enabled", Remote),
+        r(POL, "bEnumerateHWBeforeSW", 1, "hardware_gpu_enabled", Common),
         r(POL, "Shadow", 0, "shadow_policy_off", Remote),
     ]
 }
 
-/// The rows a set of claims needs, in apply order.
+/// The rows a set of claims needs, in apply order (computed data filled in).
 pub fn rows_for(set: RowSet) -> Vec<RdsRow> {
-    rds_rows().into_iter().filter(|r| set.includes(r.scope)).collect()
+    rds_rows()
+        .into_iter()
+        .filter(|r| set.includes(r.scope))
+        .map(|mut r| {
+            if r.scope == RowScope::LocalFrame {
+                r.data = set.frame_interval_ms.unwrap_or(0);
+            }
+            r
+        })
+        .collect()
 }
+
+/// Value name of the composition interval row (under [`TS_WINSTATIONS`]).
+pub const DWM_FRAME_INTERVAL: &str = "DWMFRAMEINTERVAL";
 
 /// Policy values that win over our listener / Terminal Server rows when set.
 const POLICY_SHADOWED: [&str; 4] = ["fDenyTSConnections", "fSingleSessionPerUser", "UserAuthentication", "SecurityLayer"];
@@ -213,8 +240,11 @@ pub struct RestoreReport {
 /// Current claims of the service process. Also serialises the writers: a claim or release
 /// holds [`TsClaims::writing`] for its whole journal + registry work, so the local backend
 /// and the remote seat worker never interleave records in the shared journal.
+/// The third field is the composition interval the local claim carries
+/// ([`RdsApplier::set_frame_interval`]); it is kept across a release (it is configuration)
+/// and only written while the local claim is held.
 #[derive(Debug, Default)]
-pub struct TsClaims(Mutex<Vec<Claim>>, Mutex<()>);
+pub struct TsClaims(Mutex<Vec<Claim>>, Mutex<()>, Mutex<Option<u32>>);
 
 impl TsClaims {
     /// The claims shared by every writer of this process (real wiring: the local session
@@ -232,20 +262,28 @@ impl TsClaims {
         self.1.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    fn frame(&self) -> Option<u32> {
+        *self.2.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// Union of the current claims.
     pub fn set(&self) -> RowSet {
-        union(self.lock().iter().copied())
+        union(self.lock().iter().copied(), self.frame())
     }
 }
 
-fn union(claims: impl Iterator<Item = Claim>) -> RowSet {
-    claims.fold(RowSet::default(), |mut acc, c| {
+fn union(claims: impl Iterator<Item = Claim>, frame: Option<u32>) -> RowSet {
+    let mut set = claims.fold(RowSet::default(), |mut acc, c| {
         let s = RowSet::of(c);
         acc.local |= s.local;
         acc.remote |= s.remote;
         acc.gpu_realtime |= s.gpu_realtime;
         acc
-    })
+    });
+    if set.local {
+        set.frame_interval_ms = frame;
+    }
+    set
 }
 
 fn same_kind(a: &Claim, b: &Claim) -> bool {
@@ -331,9 +369,63 @@ impl RdsApplier {
             let mut c = self.claims.lock();
             c.retain(|x| !same_kind(x, &who));
             c.push(who);
-            union(c.iter().copied())
+            union(c.iter().copied(), self.claims.frame())
         };
-        self.write(set)
+        self.write_and_trim(set)
+    }
+
+    /// Sets the composition interval the local claim carries (`None` = Windows' default)
+    /// and, while the local claim is held, writes or restores `DWMFRAMEINTERVAL` now.
+    /// Without the local claim it is only remembered for the next one. Returns the report
+    /// of the write (empty when nothing changed or nothing was held).
+    pub fn set_frame_interval(&self, ms: Option<u32>) -> Result<ApplyReport, SysError> {
+        let _w = self.claims.writing();
+        let changed = {
+            let mut f = self.claims.2.lock().unwrap_or_else(|p| p.into_inner());
+            let changed = *f != ms;
+            *f = ms;
+            changed
+        };
+        let set = self.claims.set();
+        if !changed || !set.local {
+            return Ok(ApplyReport::default());
+        }
+        let mut rep = self.write_and_trim(set)?;
+        rep.notes.push("session_reconnect_for_frame_rate".into());
+        Ok(rep)
+    }
+
+    /// [`Self::write`], then restores a `DWMFRAMEINTERVAL` we wrote earlier when `set` no
+    /// longer wants one (interval turned off).
+    fn write_and_trim(&self, set: RowSet) -> Result<ApplyReport, SysError> {
+        let mut rep = self.write(set)?;
+        if set.frame_interval_ms.is_none() {
+            let target = registry_target(TS_WINSTATIONS, DWM_FRAME_INTERVAL).to_ascii_lowercase();
+            if self.log.read_all()?.iter().any(|r| r.package == PACKAGE && r.target.to_ascii_lowercase() == target) {
+                // Only this row: other rows a narrower claim no longer needs stay until a
+                // release, as before.
+                let r = self.restore_rows(set, Some(&target))?;
+                for s in &r.skipped_changed {
+                    log::warn!("rds: {s} was changed after us; left as it is");
+                }
+                if !r.restored.is_empty() {
+                    rep.notes.push("dwm_frame_interval_restored".into());
+                }
+            }
+        }
+        Ok(rep)
+    }
+
+    /// The value our last completed write of `target` left (`None` = we never wrote it).
+    fn our_value(&self, target: &str) -> Result<Option<RegValue>, SysError> {
+        let t = target.to_ascii_lowercase();
+        Ok(self
+            .log
+            .read_all()?
+            .into_iter()
+            .filter(|r| r.package == PACKAGE && r.status == RecordStatus::Done && r.target.to_ascii_lowercase() == t)
+            .max_by_key(|r| r.seq)
+            .map(|r| r.new))
     }
 
     fn write(&self, set: RowSet) -> Result<ApplyReport, SysError> {
@@ -356,6 +448,13 @@ impl RdsApplier {
             if r.is_policy() && cur != RegValue::Absent {
                 // Someone's GPO value (also when we wrote this row first and a GPO changed
                 // it later): the policy wins (spec/remote 30 §2.3). Only absent is written.
+                rep.warnings.push(RdsWarning::PolicyOverride { value: target.clone() });
+                rep.policy_overrides.push(target);
+                continue;
+            }
+            if r.scope == RowScope::LocalFrame && cur != RegValue::Absent && self.our_value(&target)?.as_ref() != Some(&cur) {
+                // Someone set their own composition interval (an admin, a tuning tool):
+                // theirs wins, like a policy (OSMS parity G3: do not fight it).
                 rep.warnings.push(RdsWarning::PolicyOverride { value: target.clone() });
                 rep.policy_overrides.push(target);
                 continue;
@@ -383,7 +482,7 @@ impl RdsApplier {
         let remaining = {
             let mut c = self.claims.lock();
             c.retain(|x| !same_kind(x, &who));
-            union(c.iter().copied())
+            union(c.iter().copied(), self.claims.frame())
         };
         self.restore_except(remaining)
     }
@@ -399,7 +498,14 @@ impl RdsApplier {
     /// ever written back (the journal is data, not authority). Records of kept rows and
     /// account records stay in the journal; the rest is dropped.
     fn restore_except(&self, keep: RowSet) -> Result<RestoreReport, SysError> {
+        self.restore_rows(keep, None)
+    }
+
+    /// [`Self::restore_except`], limited to one lower-case `only` target when given (the
+    /// other records stay in the journal untouched).
+    fn restore_rows(&self, keep: RowSet, only: Option<&str>) -> Result<RestoreReport, SysError> {
         let mut rep = RestoreReport::default();
+        let other = |t: &str| only.is_some_and(|o| o != t);
         let lower = |rows: Vec<RdsRow>| rows.iter().map(|r| r.target().to_ascii_lowercase()).collect::<Vec<_>>();
         let allowed = lower(rds_rows());
         let kept = lower(rows_for(keep));
@@ -407,7 +513,7 @@ impl RdsApplier {
         let registry_records: Vec<RestoreRecord> = records.iter().filter(|r| r.kind != ACCOUNT_KIND).cloned().collect();
         for step in replay_plan(&registry_records, PACKAGE) {
             let t = step.target.to_ascii_lowercase();
-            if kept.contains(&t) {
+            if kept.contains(&t) || other(&t) {
                 continue;
             }
             if !allowed.contains(&t) {
@@ -433,7 +539,10 @@ impl RdsApplier {
         }
         let retained: Vec<RestoreRecord> = records
             .into_iter()
-            .filter(|r| r.package != PACKAGE || r.kind == ACCOUNT_KIND || kept.contains(&r.target.to_ascii_lowercase()))
+            .filter(|r| {
+                let t = r.target.to_ascii_lowercase();
+                r.package != PACKAGE || r.kind == ACCOUNT_KIND || kept.contains(&t) || other(&t)
+            })
             .collect();
         for r in retained.iter().filter(|r| r.kind == ACCOUNT_KIND && r.status == RecordStatus::Done) {
             if !rep.accounts_left.contains(&r.target) {
@@ -684,10 +793,10 @@ mod tests {
         defaults(&reg);
         let before = reg.snapshot();
         let rep = a.apply().unwrap();
-        assert_eq!(rep.changed.len(), 3, "{rep:?}");
+        assert_eq!(rep.changed.len(), 4, "{rep:?}");
         assert!(rep.notes.contains(&"single_session_per_user_off".to_string()));
         assert!(rep.unchanged.contains(&registry_target(TS_RDP_TCP, "UserAuthentication")));
-        assert_eq!(log.records.lock().unwrap().len(), 6);
+        assert_eq!(log.records.lock().unwrap().len(), 8);
         assert_eq!(reg.get(TS, "fSingleSessionPerUser").unwrap(), RegValue::Dword(0));
         // Windows flips a value back; a second apply journals it again.
         reg.put(TS, "fDenyTSConnections", RegValue::Dword(1));
@@ -780,7 +889,7 @@ mod tests {
         }
         let names = |s| rows_for(s).iter().map(|r| r.value).collect::<Vec<_>>();
         let local = names(RowSet::of(Claim::Local));
-        assert_eq!(local, ["fDenyTSConnections", "fSingleSessionPerUser", "UserAuthentication", "Shadow"]);
+        assert_eq!(local, ["fDenyTSConnections", "fSingleSessionPerUser", "UserAuthentication", "Shadow", "bEnumerateHWBeforeSW"]);
         let remote = names(RowSet::of(REMOTE));
         assert!(!remote.contains(&"fSingleSessionPerUser"), "remote seats never share an account");
         assert!(remote.contains(&"SetGpuRealtimePriority") && remote.contains(&"SecurityLayer"));
@@ -879,7 +988,7 @@ mod tests {
         local.apply().unwrap();
         remote.claim(REMOTE).unwrap();
         remote.record_account("koltuk3").unwrap();
-        assert_eq!(claims.set(), RowSet { local: true, remote: true, gpu_realtime: true });
+        assert_eq!(claims.set(), RowSet { local: true, remote: true, gpu_realtime: true, frame_interval_ms: None });
         let r = remote.release(REMOTE).unwrap();
         assert!(r.restored.contains(&registry_target(TS_RDP_TCP, "SecurityLayer")));
         assert!(!r.restored.contains(&registry_target(TS, "fDenyTSConnections")), "local still needs it");
@@ -904,8 +1013,159 @@ mod tests {
         a.claim(Claim::Remote { gpu_realtime: false }).unwrap();
         // The gpu row of the first claim is no longer needed but stays until a release;
         // the second claim alone does not write it.
-        assert_eq!(a.claims.set(), RowSet { local: false, remote: true, gpu_realtime: false });
+        assert_eq!(a.claims.set(), RowSet { local: false, remote: true, gpu_realtime: false, frame_interval_ms: None });
         let r = a.release(Claim::Remote { gpu_realtime: false }).unwrap();
         assert!(r.restored.contains(&registry_target(TS_WINSTATIONS, "SetGpuRealtimePriority")));
     }
+
+    #[test]
+    fn turning_the_frame_interval_off_restores_only_that_row() {
+        let (reg, _log, a) = applier();
+        windows_defaults(&reg);
+        a.set_frame_interval(Some(16)).unwrap();
+        a.apply().unwrap();
+        a.claim(REMOTE).unwrap();
+        a.claim(Claim::Remote { gpu_realtime: false }).unwrap();
+        assert_eq!(reg.get(TS_WINSTATIONS, "SetGpuRealtimePriority").unwrap(), RegValue::Dword(1));
+        let rep = a.set_frame_interval(None).unwrap();
+        assert!(rep.notes.contains(&"dwm_frame_interval_restored".to_string()), "{rep:?}");
+        assert_eq!(dwm(&reg), RegValue::Absent);
+        // The stale gpu row still waits for a release, like before G3.
+        assert_eq!(reg.get(TS_WINSTATIONS, "SetGpuRealtimePriority").unwrap(), RegValue::Dword(1));
+        let r = a.release(Claim::Remote { gpu_realtime: false }).unwrap();
+        assert!(r.restored.contains(&registry_target(TS_WINSTATIONS, "SetGpuRealtimePriority")));
+    }
+
+    // ---- composition interval (OSMS parity G3) ----
+
+    fn dwm(reg: &MemoryRegistry) -> RegValue {
+        reg.get(TS_WINSTATIONS, DWM_FRAME_INTERVAL).unwrap()
+    }
+
+    #[test]
+    fn frame_interval_follows_the_local_claim_and_restores_exactly() {
+        let (reg, log, a) = applier();
+        windows_defaults(&reg);
+        let before = reg.snapshot();
+        // Remembered before the claim (the service sends it before prepare_host).
+        assert_eq!(
+            a.set_frame_interval(Some(16)).unwrap(),
+            ApplyReport::default()
+        );
+        assert_eq!(
+            dwm(&reg),
+            RegValue::Absent,
+            "nothing written without the local claim"
+        );
+        let rep = a.apply().unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(16));
+        assert!(
+            rep.notes.contains(&"dwm_frame_interval_set".to_string()),
+            "{rep:?}"
+        );
+        // A faster monitor: our own value is updated in place, journaled again.
+        let rep = a.set_frame_interval(Some(6)).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(6));
+        assert!(
+            rep.notes
+                .contains(&"session_reconnect_for_frame_rate".to_string())
+        );
+        assert_eq!(
+            a.set_frame_interval(Some(6)).unwrap(),
+            ApplyReport::default(),
+            "unchanged = no work"
+        );
+        // Turned off: our value is restored (absent again); the other rows stay.
+        let rep = a.set_frame_interval(None).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Absent);
+        assert!(
+            rep.notes
+                .contains(&"dwm_frame_interval_restored".to_string()),
+            "{rep:?}"
+        );
+        assert_eq!(
+            reg.get(TS, "fSingleSessionPerUser").unwrap(),
+            RegValue::Dword(0)
+        );
+        assert!(
+            !log.records
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.target.contains(DWM_FRAME_INTERVAL))
+        );
+        // On again, then the local backend goes: everything back as it was.
+        a.set_frame_interval(Some(8)).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(8));
+        a.release(Claim::Local).unwrap();
+        assert_eq!(reg.snapshot(), before);
+        assert!(log.records.lock().unwrap().is_empty());
+        // The interval is remembered for the next claim.
+        a.apply().unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(8));
+        a.restore_all().unwrap();
+        assert_eq!(reg.snapshot(), before);
+    }
+
+    #[test]
+    fn someone_elses_frame_interval_is_reported_not_overwritten() {
+        let (reg, log, a) = applier();
+        windows_defaults(&reg);
+        reg.put(TS_WINSTATIONS, DWM_FRAME_INTERVAL, RegValue::Dword(15)); // an admin's value
+        a.set_frame_interval(Some(16)).unwrap();
+        let rep = a.apply().unwrap();
+        let target = registry_target(TS_WINSTATIONS, DWM_FRAME_INTERVAL);
+        assert_eq!(dwm(&reg), RegValue::Dword(15));
+        assert!(
+            rep.warnings.contains(&RdsWarning::PolicyOverride {
+                value: target.clone()
+            }),
+            "{rep:?}"
+        );
+        assert!(
+            !log.records
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.target == target)
+        );
+        // Off: nothing of ours to restore, theirs stays.
+        a.set_frame_interval(None).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(15));
+        // We wrote it, then someone changed it: theirs wins, the restore leaves it.
+        reg.put(TS_WINSTATIONS, DWM_FRAME_INTERVAL, RegValue::Absent);
+        a.set_frame_interval(Some(16)).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(16));
+        reg.put(TS_WINSTATIONS, DWM_FRAME_INTERVAL, RegValue::Dword(10));
+        let rep = a.set_frame_interval(Some(8)).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(10), "not fought");
+        assert!(rep.policy_overrides.contains(&target));
+        let r = a.release(Claim::Local).unwrap();
+        assert!(r.skipped_changed.contains(&target), "{r:?}");
+        assert_eq!(dwm(&reg), RegValue::Dword(10));
+    }
+
+    #[test]
+    fn remote_claim_alone_never_writes_the_frame_interval() {
+        let (reg, _log, a) = applier();
+        windows_defaults(&reg);
+        a.set_frame_interval(Some(16)).unwrap();
+        a.claim(REMOTE).unwrap();
+        assert_eq!(dwm(&reg), RegValue::Absent);
+        a.apply().unwrap();
+        assert_eq!(dwm(&reg), RegValue::Dword(16));
+        // Local released while remote seats run: the interval goes, the shared rows stay.
+        let r = a.release(Claim::Local).unwrap();
+        assert!(
+            r.restored
+                .contains(&registry_target(TS_WINSTATIONS, DWM_FRAME_INTERVAL))
+        );
+        assert_eq!(dwm(&reg), RegValue::Absent);
+        assert_eq!(
+            reg.get(POL, "bEnumerateHWBeforeSW").unwrap(),
+            RegValue::Dword(1),
+            "remote still needs it"
+        );
+    }
 }
+

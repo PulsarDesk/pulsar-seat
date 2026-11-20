@@ -331,6 +331,15 @@ pub trait SessionBackend: Send + Sync {
     /// 2026-11-13). The service calls it before `prepare_host` and whenever seat accounts
     /// or stored passwords change. Others ignore it.
     fn set_listener_plan(&self, _plan: &LoopbackListenerPlan) {}
+    /// Composition interval of the RDP seat sessions in ms (`DWMFRAMEINTERVAL`,
+    /// [`crate::frame_rate::interval_for`]); `None` = leave Windows' default. RDP-based
+    /// backends write it with their host rows (journaled; applied at once when the host is
+    /// already prepared; reaches a session when it next connects) and return snake_case
+    /// notes. The service calls it before `prepare_host` and after a config apply or an
+    /// inventory change. Others ignore it. Added 2026-11-18 (OSMS parity G3, additive).
+    fn set_frame_interval(&self, _ms: Option<u32>) -> Vec<String> {
+        Vec::new()
+    }
     /// Retry host work that had to wait (added 2026-11-13, fix-second-listener): e.g. a
     /// TermService restart that was skipped while seat sessions ran, so a removed listener
     /// is still served. The service calls it after a seat stops and after a session logs

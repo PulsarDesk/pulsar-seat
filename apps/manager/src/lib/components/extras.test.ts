@@ -130,6 +130,24 @@ describe('dialogs', () => {
     const r = onSave.mock.calls[0][0];
     expect(r.settings.force_assign_at_start).toBe(true);
     expect(r.monitors[0].outputs).toHaveLength(1);
+    expect(r.settings.session_frame_rate, 'the default is not written').toBeUndefined();
+  });
+
+  it('outputs dialog stores the machine-wide session frame rate', async () => {
+    const onSave = vi.fn();
+    const config = normalize(demoConfig());
+    config.settings.outputs = { allow_clone: false, force_assign_at_start: false, session_frame_rate: { mode: 'fixed', fps: 85 } };
+    render(OutputsDialog, { config, devices: demoInventory(), onSave, onCancel: vi.fn() });
+    const user = userEvent.setup();
+    const pick = screen.getByRole('combobox', { name: t.outputs.sessionFps });
+    // A saved rate outside the presets stays selectable.
+    expect((pick as HTMLSelectElement).value).toBe('fixed:85');
+    await user.selectOptions(pick, 'fixed:144');
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave.mock.calls[0][0].settings.session_frame_rate).toEqual({ mode: 'fixed', fps: 144 });
+    await user.selectOptions(pick, 'off');
+    await user.click(screen.getByRole('button', { name: t.save }));
+    expect(onSave.mock.calls[1][0].settings.session_frame_rate).toEqual({ mode: 'off', fps: 85 });
   });
 
   it('picture dialog offers built-in and user pictures', async () => {

@@ -167,7 +167,7 @@ Events: `service-event` (`EventFrame`), `service-link` (bool), `tray-action`
 - Devices are listed row by row in a container (spec: column-major).
 - Nothing of spec 10 is listed as "not built" any more (the old list was stale and is
   gone). Built since the first phases: per-seat IP binding (`IpBindingDialog`),
-  video-output assignment (`OutputsDialog`), custom device pictures (`PictureDialog`),
+  video-output assignment (`OutputsDialog`; since OSMS parity G3 also the machine-wide session frame rate, `settings.outputs.session_frame_rate`), custom device pictures (`PictureDialog`),
   webcam preview (`CameraPreview`), log verbosity (Advanced > Safety, a Select), Hyper-V helper
   (Advanced > Network addresses); parity review: seat menu "Restart the graphics driver" and "Delete the
   seat's kiosk user…", CPU dialog column "Whole session", GameInputSvc hint on the shim

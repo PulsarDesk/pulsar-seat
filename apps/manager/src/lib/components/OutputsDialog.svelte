@@ -2,12 +2,13 @@
 <!-- Video outputs assignment (spec 10 §7.5; redesign 60-dlg-outputs): per monitor, the output
      of its adapter that should feed it (one Select; with cloning allowed, one box per output),
      the cursor kind, HDR and variable refresh for seats 2..N (spec 40 §6.6), then the
-     machine-wide options (cloning, force-assign at start, resolution follows the session).
+     machine-wide options (cloning, force-assign at start, resolution follows the session,
+     session frame rate = DWMFRAMEINTERVAL, OSMS parity G3).
      Applied by the service at the next seat start / reboot. -->
 <script lang="ts">
   import { Button, Checkbox, Group, Modal, Notice, Row, Select, SubLabel, Switch } from '#lib/ui/index.ts';
   import { outputTechLabel, t } from '#lib/i18n.ts';
-  import type { Config, Device, DisplayInfo, OutputSettings } from '#lib/types.ts';
+  import type { Config, Device, DisplayInfo, OutputSettings, SessionFrameRate } from '#lib/types.ts';
 
   export interface OutputsResult {
     monitors: { device: Device; outputs: number[]; software_cursor: boolean; hdr: boolean; vrr: boolean }[];
@@ -43,7 +44,28 @@
   // svelte-ignore state_referenced_locally
   let follow = $state<'auto' | 'on' | 'off'>(settings.follow_session_mode === true ? 'on' : settings.follow_session_mode === false ? 'off' : 'auto');
 
-  const cloneBlocked = $derived(!settings.allow_clone && Object.values(rows).some((r) => r.outputs.length > 1));
+  // Session frame rate (OSMS parity G3): one Select; `fixed` is offered as common rates.
+  const FIXED_FPS = [60, 75, 90, 100, 120, 144, 165, 240];
+  // svelte-ignore state_referenced_locally
+  const savedFr: SessionFrameRate = settings.session_frame_rate ?? { mode: 'auto', fps: 60 };
+  let frameRate = $state(savedFr.mode === 'fixed' ? `fixed:${savedFr.fps}` : savedFr.mode);
+  const fpsOptions = $derived([
+    ...(['auto', 'smooth'] as const).map((k) => ({ value: k, label: t.outputs.sessionFpsChoice[k] })),
+    ...[...new Set([...FIXED_FPS, ...(savedFr.mode === 'fixed' ? [savedFr.fps] : [])])]
+      .sort((a, b) => a - b)
+      .map((f) => ({ value: `fixed:${f}`, label: t.outputs.sessionFpsFixed(f) })),
+    { value: 'off', label: t.outputs.sessionFpsChoice.off }
+  ]);
+
+  function frameSettings(s: OutputSettings, v: string): OutputSettings {
+    const [mode, fps] = v.split(':');
+    const fr: SessionFrameRate = mode === 'fixed' ? { mode: 'fixed', fps: Number(fps) } : { mode: mode as SessionFrameRate['mode'], fps: savedFr.fps };
+    if (fr.mode === 'auto' && fr.fps === 60) delete s.session_frame_rate;
+    else s.session_frame_rate = fr;
+    return s;
+  }
+
+  const cloneBlocked =$derived(!settings.allow_clone && Object.values(rows).some((r) => r.outputs.length > 1));
 
   function toggle(key: string, target: number, on: boolean) {
     const r = rows[key];
@@ -81,7 +103,7 @@
         hdr: rows[m.device.key]?.hdr ?? false,
         vrr: rows[m.device.key]?.vrr ?? false
       })),
-      settings: followSettings({ ...settings }, follow)
+      settings: frameSettings(followSettings({ ...settings }, follow), frameRate)
     });
   }
 </script>
@@ -143,6 +165,11 @@
     <Row label={t.outputs.followMode}>
       {#snippet control()}
         <Select label={t.outputs.followMode} bind:value={follow} options={(['auto', 'on', 'off'] as const).map((k) => ({ value: k, label: t.outputs.followModeChoice[k] }))} />
+      {/snippet}
+    </Row>
+    <Row label={t.outputs.sessionFps} help={t.outputs.sessionFpsNote}>
+      {#snippet control()}
+        <Select label={t.outputs.sessionFps} bind:value={frameRate} options={fpsOptions} />
       {/snippet}
     </Row>
   </Group>

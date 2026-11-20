@@ -727,15 +727,22 @@ impl Service {
                 self.events.publish(Event::DeviceChanged { view: Box::new(v) });
             }
         }
+        let mut monitors_changed = false;
         if !ch.is_empty() {
             st.ownership_dirty = true;
             if ch.touches_kind(&st.inventory, DeviceKind::Monitor) {
+                monitors_changed = true;
                 for s in st.seats.values_mut() {
                     if s.rt.state == SeatState::WaitingForDisplay {
                         s.retry_at = Some(now);
                     }
                 }
             }
+        }
+        drop(st);
+        if monitors_changed {
+            // A monitor with another refresh rate may change the session frame interval.
+            self.sync_frame_interval();
         }
         ch
     }
