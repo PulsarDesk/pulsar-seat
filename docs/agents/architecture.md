@@ -1903,7 +1903,9 @@ engine are the remote seat worker in `crates/seat-service/src/remote/`:
     `input.pad_device_scope`, default **off** since the parity review 2026-11-17: opt-in,
     spec/remote 50 §4.4). Owner of each physical pad: the local seat it is
     routed to alone (session + user), else, while remote seats run, the console user;
-    only while a second session exists. Nodes: the HID collection and its parent.
+    only while a second session exists. Nodes: the HID collection and its parent (since
+    OSMS parity G5: the whole pad subtree found by class, see "Physical pad pass-through
+    and Guide-button guard" below).
     Original SDDL and session id are journaled (`<data>\pads\scope.json`) **before** a
     change; restore at service start, stop and when the setting goes off. Device calls:
     `seat_pads::win::devtree` (`SPDRP_SECURITY_SDS`, `DEVPKEY_Device_SessionId`,
@@ -2375,3 +2377,79 @@ Rules:
   release; `uninstall` removes our two keys.
 - **Not on this path.** RDP virtual channels (audio redirection, microphone hold, clipboard,
   drives): a provider session has none. Open item in status.md.
+
+## Physical pad pass-through and Guide-button guard (OSMS parity G5, 2026-11-20)
+
+Extends the pad scoping of 10.6 (`seat_input::pad_scope`); no new subsystem, no driver.
+Behaviour reference: OpenStreamMultiSeat (MIT), read only, no code copied. Everything here
+is **HYPOTHESIS**: nothing ran on hardware or in the VM, on x64 or ARM64. Same code paths
+on both architectures; the only arch-specific value is the PE machine HidHide must match.
+
+- **Kill switch.** `settings.input.pad_device_scope` (default **off**) gates everything
+  below. Its default may flip to on only after a VM / hardware check.
+- **Per-seat mode.** `LocalSeat::pad_mode` (`seat_core::config::PadMode`, additive, not
+  written when default): `passthrough` (default) = the physical pads routed to the seat are
+  scoped to the seat's session (descriptor + restart, no virtual pad); `shared` = they are
+  left alone (not scoped, not even to the console). Virtual pads (`virtual_pads`) stay for
+  remapping and DualSense feature cases. Manager: seat menu entry (`settingsPage.padsShare`
+  / `padsPassthrough`, seats 2..N), seat fact `padsSharedFact`, and the
+  `advanced.padDeviceScopeHint` text names the guard.
+- **Discovery** (`pad_scope::discover` over the `PadTree` trait; Windows:
+  `pad_runtime::WinPadTree` over `seat_pads::win::devtree`: `CM_Get_Device_ID_List` with a
+  class filter, `CM_Get_Child` / `CM_Get_Sibling`, `SPDRP_CLASSGUID`,
+  `SPDRP_COMPATIBLEIDS`, all read only). Controller nodes: class XUSB
+  `{d61ca365-5af4-4486-998b-9db4734c6ca3}`, GIP `{05f5cfe2-4733-4950-a6bb-07aad01a3a84}`,
+  HIDClass with compatible id `HID_DEVICE_SYSTEM_GAME`. Pad root = the topmost ancestor
+  still of class XUSB / GIP / HID (a hub, a USB composite parent or a Bluetooth radio stops
+  the walk). Scoped set = root + every XUSB / GIP / HID node below it. Console-input
+  safety: every node above a Keyboard or Mouse class node is dropped, so a combo pad's
+  keyboard is never restarted or put under a narrowed descriptor. An inventory pad unit
+  the class walk did not find keeps the older "HID collection + parent" set.
+- **Routing** (`seat_service::local_pads::scope_pads`): a pad group goes to the seat one of
+  its HID units is routed to, else to the seat of the nearest inventory device on its
+  ancestor chain (its own USB device or the hub / port it is plugged into), so GIP and
+  XUSB pads without a HID unit follow port assignment.
+- **Owner principal** (`pad_scope::principal`): the user SID; when the same user SID owns
+  two sessions (two seats, or a seat and the console), each session's logon SID
+  (`S-1-5-5-X-Y`, `SessionUser::logon_sid`). HYPOTHESIS (OSMS measurement, not ours): the
+  descriptor is checked per token, so a logon SID separates two sessions of one user.
+- **Handles.** HYPOTHESIS (OSMS measurement): the descriptor applies only after the
+  `DIF_PROPERTYCHANGE` restart, and the restart closes handles other sessions had open.
+- **`DEVPKEY_Device_SessionId`** is cosmetic only (HYPOTHESIS, OSMS measurement: it hides
+  enumeration with CR 13, an open by path still works, Windows clears it on every device
+  start). `PadScoper::reassert_session_ids` re-applies it after each device-interface
+  arrival (`devtree::DeviceArrivalWatch`; every 10 s when the watch could not be
+  registered); no restart, no journal change.
+- **Guide-button guard** (`seat_compat::guide_guard`, driven by
+  `seat_service::guide_guard` from the 1 s pad tick). While the switch is on and a second
+  session could open the pads, for the users of running seats with their own session
+  (local seats in passthrough, remote seats) plus the console user:
+  `HKEY_USERS\<sid>\Software\Microsoft\GameBar\UseNexusForGameBarEnabled` = 0, and machine
+  `HKLM\SOFTWARE\Microsoft\Input\Settings\ControllerProcessor\ControllerToVKMapping\Enabled`
+  = 0. The seat running in the console session counts as the console user, not as a seat
+  that needs the guard. Journal first in `%ProgramData%\Pulsar Seat\journal\changes.jsonl`
+  (`Change::UserGameBarGuide` per user, owner `guide_guard:<SID>`; the machine value as
+  `Change::Registry`, owner `guide_guard_vk`, in the revert allowlist). A user value is
+  written only while the hive is loaded (a sign-in still loading is retried after 30 s);
+  a value already 0 is not ours and never journaled; a value changed after us is left
+  alone at revert. Restore: the want shrinks (seat stop, mode shared), service stop (empty
+  sync), and the first tick after a crash or reboot (syncs to what is running now, so
+  leftovers go back); uninstall's journal `revert_all` knows both kinds. OSMS keeps the
+  previous value only in the user hive and has no start-up restore. HYPOTHESIS: Game Bar
+  reads the user value at button press (no sign-out needed) and the VK mapping value
+  stops cross-session navigation input.
+- **Coexist.** The ASTER footprint row for `ControllerToVKMapping\Enabled` (expected absent,
+  repairable) skips the value while the service journal holds it as an active change
+  (`seat_setup::journal::compat_registry_targets`, read into `SetupCtx::own_targets`), so
+  our own 0 is not reported or repaired as residue. `spec/remote/90-install.md` is
+  analyst-owned and was not changed.
+- **HidHide** (`seat_input::pad_jail`, `pad_jail_hidhide`): **detect only**. At service
+  start the file `%SystemRoot%\System32\drivers\HidHide.sys` is read as data (never loaded
+  or run); its version resource and PE machine are logged; "usable" = version >= 1.4.181
+  and machine = this build's arch. Never bundled, downloaded or installed; the jail IOCTL
+  path is not implemented. HYPOTHESIS: an ARM64 HidHide build exists.
+- **Limit.** GameInput and Windows.Gaming.Input open pads from a system broker service, so
+  no device descriptor isolates them (OSMS states the same). Mitigation is limited to the
+  SDL hints and the shim's XInput seat map.
+- **Cost.** Discovery runs on the 1 s pad tick only while the switch is on and a second
+  session exists (three class lists plus SetupAPI reads per node). Not measured.

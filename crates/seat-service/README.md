@@ -131,3 +131,20 @@ without privileges on the console desktop), `WTSLogoffSession`, reboot, Event Lo
 messages (message DLL path, ARM64 `FrameworkArm64` is a HYPOTHESIS), required-privilege
 list completeness (HYPOTHESIS), pre-shutdown ordering and checkpoints, resume handling,
 session-change mapping on real RDP sessions, every package backend.
+
+## Physical pad pass-through and Guide-button guard (OSMS parity G5)
+
+Under the kill switch `settings.input.pad_device_scope` (default off). `src/local_pads.rs`
+finds pads by setup class (XUSB, GIP, HID collections with `HID_DEVICE_SYSTEM_GAME`) with
+their whole pad subtree (`seat_input::pad_scope::discover`), routes them by their HID unit
+or by the inventory device / USB port above them, and scopes them to local seats in
+`PadMode::Passthrough` (per seat, the default). The logon SID replaces the user SID when
+one user is signed in to two sessions. `src/pad_runtime.rs` re-applies the cosmetic
+`DEVPKEY_Device_SessionId` after each device arrival and logs whether HidHide is installed
+(`seat_input::pad_jail`, detect only: never installed, loaded or used). `src/guide_guard.rs`
+drives `seat_compat::guide_guard`: Game Bar's controller button off for the seat users and
+the console user, `ControllerToVKMapping\Enabled` = 0, journaled in the seat-compat
+journal, restored on seat stop, service stop and the first tick after a crash. No code was
+copied from OpenStreamMultiSeat (MIT); it was read as a behaviour reference only.
+HYPOTHESIS end to end (never ran on hardware, x64 or ARM64); details in
+`docs/agents/architecture.md`, section "Physical pad pass-through and Guide-button guard".
