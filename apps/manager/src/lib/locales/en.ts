@@ -1118,6 +1118,8 @@ const t = {
     rdsh_role_missing: 'The Remote Desktop Session Host role is not installed',
     rdp_denied_by_policy: 'Remote Desktop connections are blocked by policy',
     foreign_service_dll: 'The Remote Desktop service does not use the Windows default',
+    external_wrapper_inactive: 'The wrapper another program installed is not turned on; that program turns it on',
+    concurrent_sessions_off: 'The program that installed the wrapper has not turned on multiple sessions',
     unknown_termsrv_build: 'This build of the Remote Desktop service is not recognised',
     wrapper_missing: 'No installed wrapper was found',
     reference_product_present: 'Another multiseat product is installed',
@@ -1265,7 +1267,8 @@ const t = {
     loopback_listener_firewall_rule: 'Firewall rule added for the port for seats without a password',
     loopback_listener_old_rule_removed: 'Old firewall rule removed',
     termsrv_wrapper_enabled: 'Remote Desktop wrapper enabled',
-    wrapper_managed_externally: 'Another program manages the Remote Desktop wrapper; Pulsar Seat does not touch it'
+    wrapper_managed_externally: 'Another program manages the Remote Desktop wrapper; Pulsar Seat does not touch it',
+    termsrv_wrapper_external: 'Seats use the Remote Desktop wrapper another program installed; Pulsar Seat does not change it'
   } as Record<string, string>,
 
   redirect: {
@@ -2748,6 +2751,7 @@ const rt = {
       off: 'Off',
       on: 'On',
       foreign_active: 'Another tool redirected the Remote Desktop service; Pulsar Seat does not touch it.',
+      external: 'Another program’s wrapper is active; Pulsar Seat uses it and does not change it.',
       blocked: 'Turned off automatically (unsupported version or wrapper problem)'
     } as Record<string, string>,
     twEnable: 'Turn on',
@@ -2894,6 +2898,8 @@ const rt = {
     warning_not_acknowledged: 'Read and acknowledge the warning first.',
     not_client_sku: 'This module is only for Windows Pro / Enterprise.',
     foreign_wrapper: 'The Remote Desktop service is redirected by another tool.',
+    external_wrapper: 'This wrapper belongs to another program; Pulsar Seat never turns it on or off.',
+    concurrent_sessions_off: 'The program that installed the wrapper has not turned on multiple sessions.',
     unknown_termsrv_build: 'This Windows update is not supported by the wrapper yet.',
     wrapper_missing: 'The wrapper was not found.',
     wrapper_unsigned: 'The wrapper’s signature was not accepted.',

@@ -1115,6 +1115,8 @@ const t = {
     rdsh_role_missing: 'Uzak Masaüstü Oturumu Ana Bilgisayarı rolü kurulu değil',
     rdp_denied_by_policy: 'Uzak Masaüstü bağlantıları ilkeyle engellenmiş',
     foreign_service_dll: 'Uzak Masaüstü hizmeti Windows varsayılanını kullanmıyor',
+    external_wrapper_inactive: 'Başka bir programın kurduğu sarmalayıcı açık değil; onu o program açar',
+    concurrent_sessions_off: 'Sarmalayıcıyı kuran program çoklu oturumu açmamış',
     unknown_termsrv_build: 'Uzak Masaüstü hizmetinin bu derlemesi tanınmıyor',
     wrapper_missing: 'Kurulu bir sarmalayıcı bulunamadı',
     reference_product_present: 'Başka bir çoklu koltuk yazılımı kurulu',
@@ -1262,7 +1264,8 @@ const t = {
     loopback_listener_firewall_rule: 'Parolasız koltuk bağlantı noktası için güvenlik duvarı kuralı eklendi',
     loopback_listener_old_rule_removed: 'Eski güvenlik duvarı kuralı kaldırıldı',
     termsrv_wrapper_enabled: 'Uzak Masaüstü sarmalayıcısı etkinleştirildi',
-    wrapper_managed_externally: 'Uzak Masaüstü sarmalayıcısını başka bir program yönetiyor; Pulsar Seat dokunmaz'
+    wrapper_managed_externally: 'Uzak Masaüstü sarmalayıcısını başka bir program yönetiyor; Pulsar Seat dokunmaz',
+    termsrv_wrapper_external: 'Koltuklar başka bir programın kurduğu Uzak Masaüstü sarmalayıcısını kullanıyor; Pulsar Seat onu değiştirmez'
   } as Record<string, string>,
 
   redirect: {
@@ -2740,6 +2743,7 @@ const rt = {
       off: 'Kapalı',
       on: 'Açık',
       foreign_active: 'Başka bir araç Uzak Masaüstü hizmetini yönlendirmiş; Pulsar Seat dokunmaz.',
+      external: 'Başka bir programın sarmalayıcısı etkin; Pulsar Seat onu kullanır ve değiştirmez.',
       blocked: 'Otomatik kapatıldı (desteklenmeyen sürüm ya da sarmalayıcı sorunu)'
     } as Record<string, string>,
     twEnable: 'Aç',
@@ -2886,6 +2890,8 @@ const rt = {
     warning_not_acknowledged: 'Önce uyarıyı okuyup onaylayın.',
     not_client_sku: 'Bu modül yalnızca Windows Pro / Enterprise içindir.',
     foreign_wrapper: 'Uzak Masaüstü hizmeti başka bir araç tarafından yönlendirilmiş.',
+    external_wrapper: 'Bu sarmalayıcı başka bir programa ait; Pulsar Seat onu hiçbir zaman açıp kapatmaz.',
+    concurrent_sessions_off: 'Sarmalayıcıyı kuran program çoklu oturumu açmamış.',
     unknown_termsrv_build: 'Bu Windows güncellemesi sarmalayıcı tarafından henüz desteklenmiyor.',
     wrapper_missing: 'Sarmalayıcı bulunamadı.',
     wrapper_unsigned: 'Sarmalayıcının imzası kabul edilmedi.',

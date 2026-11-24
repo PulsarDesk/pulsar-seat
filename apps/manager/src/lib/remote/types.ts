@@ -275,7 +275,14 @@ export interface WrapperCandidate {
 }
 
 export interface TermwrapStatus {
-  state: { state: 'off' | 'on' | 'foreign_active' | 'blocked'; service_dll?: string; reason?: { reason: string } };
+  /** `external` = another product's wrapper is active (detect-only); usable while `blocked` is null. */
+  state: {
+    state: 'off' | 'on' | 'foreign_active' | 'external' | 'blocked';
+    service_dll?: string;
+    reason?: { reason: string };
+    wrapper?: WrapperCandidate;
+    blocked?: { reason: string } | null;
+  };
   termsrv_version: unknown;
   supported: boolean;
   candidates: WrapperCandidate[];
