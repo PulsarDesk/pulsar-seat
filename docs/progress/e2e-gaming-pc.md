@@ -310,3 +310,63 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
     `seat-rdp: connection N: graphics adapter`. Not black + monitor black: presentation, rerun
     with `PULSAR_SEAT_PRESENTER=gdi`. Black: RDP composition, rerun with `PULSAR_SEAT_GFX=no-h264`
     then `bitmap`.
+
+## Round 2 prep, integration (2026-11-24): branches e2e2-a..d merged on main
+
+- Merged (no-ff, not pushed): e2e2-a (bugs 1, 7), e2e2-b (bugs 3, 9), e2e2-c (bugs 4, 6),
+  e2e2-d (bugs 5, 11). Only conflict: `docs/journal.md` (both dated entries kept).
+- Gates on the merged tree (`CARGO_TARGET_DIR=target\wf-integ`, changed .rs touched first):
+  clippy --workspace --all-targets -D warnings clean on aarch64 and on
+  `--target x86_64-pc-windows-msvc`; cargo test --workspace all ok, 0 failed (aarch64).
+  Manager (touched by e2e2-d): check 0 errors; test 376/376 after abce764 (the first
+  RemoteTab render passed vitest's 5 s default under the full parallel run; 15 s now).
+  Installer not touched. Worktrees and branches e2e2-a..d removed after `git branch --merged`.
+- Every fix is HYPOTHESIS on hardware until round 2. Bug 7's commit widens the listener-only
+  `WINSTA_EXITWINDOWS` exception to seat hosts: needs the maintainer's OK before a release.
+- Host environment (read from code, 2026-11-24): `launch_host` passes no extra env; the host
+  gets `CreateEnvironmentBlock(host token, bInherit = FALSE)` plus `PULSAR_SEAT_LOG` and the
+  service PID. So `PULSAR_SEAT_PRESENTER`, `PULSAR_SEAT_GFX` and `PULSAR_SEAT_HOST_LOG` set on
+  the service (or in a shell) do not reach it. HYPOTHESIS: a machine variable under
+  `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment` does (journal it, remove
+  it after).
+- Round 2 checks (run a new x64 test build from main HEAD first):
+  - Bug 1 (reconnect loop): leave a pstest-s2 session disconnected (or force an RDP drop), start
+    seat 2: one `seat 2: rebound from session X to session Y` or `session Y is the seat's` line,
+    then no `session ended` and no relaunch loop. `stop_seat` logs off the real session
+    (`qwinsta` shows nothing left). After a host exit, a `session X not logged off ...` line
+    shows the WTS view of a disconnected session (settles the client-name HYPOTHESIS).
+    `error_info 17` itself is not addressed.
+  - Bug 7 (host 0xc0000142): first seat start logs `host token = account PulsarSeatHostNN ...
+    mask 0x173` (0x177 with clipboard redirection); no `exit 0xc0000142` / `could not reach its
+    desktop`; about 7 s faster start. 0xc0000142 with mask 0x173: cause is elsewhere (profile,
+    desktop rights, or `Local\` rights of the logon SID; HYPOTHESIS from fix agent c).
+  - Bug 9 (detached monitor): see the fix agent b section above.
+  - Bug 3 (black rdp_decode): see the fix agent b section above; for the reruns use the env
+    route of the host environment note.
+  - Bug 6 (kiosk, desktops backend, `kiosk.accounts = per_seat`, seats 2 and 3): service.log
+    `kiosk shell runs as seat account ...` with no `desktop grant` error and no console-user
+    fallback; `kiosk-shell-0N.log` has no `stop event could not be created` and shows
+    `service connected`, `layout: N monitor(s)` (or `lists no monitor of this seat`),
+    `autostart: N app(s)`, `app X started`; launcher + charmap/cmd/notepad visible on the
+    VG27As; `stop_seat` without `kiosk shell did not stop in time; killing it`.
+  - Bug 4 (audio, wav in a seat with the VG27A endpoint): `host-0N.log` has `audio formats on
+    <rdpsnd|AUDIO_PLAYBACK_DVC>: ...`, then `playback started ... on the seat's endpoint`, then
+    `audio buffer ...`; status has `audio_playback`; sound on the VG27A. No `audio formats`
+    line at all: the server never opened audio; check the session's Remote Audio device.
+  - Bug 5 (winusb_capture driver): record MI_00/MI_01 INF, section, version, extension IDs and
+    the LOGI_DOWNLOAD_ASSISTANT component first (`g2probe.ps1`, `logiext.ps1`; expect MI_00 =
+    oem128.inf [LogiLDA] 1.10.80.0, MI_01 = input.inf + oem185.inf). Capture logs `journaled
+    original driver: oem128.inf [LogiLDA] 1.10.80.0 Logitech` (MI_01 with `extensions:
+    oem185.inf`). `restore_usb_input` with seat 2 running: answer `{"capture_held":true}`, note
+    `usb_capture_held`, `installed oem128.inf [LogiLDA]`, `extension oem185.inf re-applied` (or
+    `is back by itself`), `restore check: exact` for both, no `still carries the Pulsar capture`
+    sweep line, no re-capture until a seat starts again; SWD component present. Reboot
+    mid-capture: one exact restore per node, none at later starts. Report any `NOT exact` text
+    and any device other than MI_01 touched by the oem185.inf install.
+  - Bug 11 (host lock guard): repeat G6 (dedicated_host + host_autologon with ahmet's
+    auto-logon): ahmet's `DisableLockWorkstation` and `ScreenSaveActive` match
+    `logs/g4-before.txt`; service.log has `console user X is not the host account ...; nothing
+    written there` and no `console lock guard (host account): N written`. Open decision: with
+    the preset off, a console user under `dedicated_host` still gets the guard.
+  - Not addressed in round 2 prep: bug 10 (remote kind passive beside Duo); the remote seat
+    step stays BLOCKED while Duo is installed.
