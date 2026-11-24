@@ -1172,7 +1172,11 @@ const t = {
     windows_safe_mode: { pass: 'Normal açılış.', warn: 'Windows Güvenli Mod’da: ek koltuklar başlatılmaz.' },
     hyperv_vm: { info: 'Yalnızca VM koltukları için gerekir; Pulsar Seat kendiliğinden açmaz (Gelişmiş > Ağ adresleri; ardından yeniden başlatma).' },
     driver_signing: { info: 'Pulsar Seat sürücüleri henüz imzalı değil; kullanıcı kipi yöntemleri kullanılır.' },
-    reference_product: { pass: 'Kurulu değil.', fail: 'Başka bir çoklu koltuk yazılımı kurulu.' },
+    reference_product: {
+      pass: 'Kurulu değil.',
+      warn: 'Başka bir çoklu koltuk yazılımı kurulu, ancak kapalı (hizmeti ve sürücüsü devre dışı). Pulsar Seat kurulu olduğu sürece kapalı tutun; yeniden açılırsa Uzak Masaüstü tabanlı koltuklar ve güncellemeler engellenir.',
+      fail: 'Başka bir çoklu koltuk yazılımı kurulu. Kaldırın ya da kapatın (hizmetinin ve sürücüsünün başlangıç türü Devre dışı) ve bilgisayarı yeniden başlatın.'
+    },
     termservice_stock: { pass: 'Uzak Masaüstü hizmeti Windows’un kendi dosyasını kullanıyor.', warn: 'Uzak Masaüstü hizmeti Windows varsayılanını kullanmıyor.' },
     foreign_input_filters: { pass: 'Yok.', warn: 'Başka giriş süzgeçleri var (dokunulmadı).' },
     steam_proxy_dll: { warn: 'steam.exe’nin yanında eski bir Steam eklenti DLL’si (version.dll) var. Pulsar Seat onu kaldırmaz; Gelişmiş > Uyumluluk bölümüne bakın.' },
@@ -1256,6 +1260,7 @@ const t = {
     session_reset_on_timeout: 'Bağlantısı kopan oturumlar bir süre sonra kapatılıyor (ilke ayarı)',
     hardware_gpu_not_enabled: 'Uzak Masaüstü oturumları ekran kartını kullanmıyor (ilke ayarı kapalı)',
     rdp_disabled_until_prepare: 'Uzak Masaüstü kapalı; hazırlık adımı açacak',
+    reference_product_disabled: 'Başka bir çoklu koltuk yazılımı kurulu, ancak kapalı; koltuklar çalışırken kapalı tutun',
     rds_licensing_not_configured: 'Uzak Masaüstü lisanslaması ayarlanmamış; deneme süresi bitince oturumlar açılmaz',
     two_admin_sessions_only: 'Bu Windows Server yalnızca iki yönetici oturumuna izin verir (Uzak Masaüstü Oturum Ana Bilgisayarı rolü yok)',
     termservice_restarted: 'Uzak Masaüstü Hizmetleri yeniden başlatıldı',

@@ -1175,7 +1175,11 @@ const t = {
     windows_safe_mode: { pass: 'Normal boot.', warn: 'Windows is in Safe Mode: extra seats do not start.' },
     hyperv_vm: { info: 'Needed only for VM seats; Pulsar Seat never turns it on by itself (Advanced > Network addresses; a restart follows).' },
     driver_signing: { info: 'The Pulsar Seat drivers are not signed yet; user-mode methods are used.' },
-    reference_product: { pass: 'Not installed.', fail: 'Another multiseat product is installed.' },
+    reference_product: {
+      pass: 'Not installed.',
+      warn: 'Another multiseat product is installed but turned off (its service and driver are disabled). Keep it off while Pulsar Seat is installed; if it is turned on again, seats based on Remote Desktop and updates are refused.',
+      fail: 'Another multiseat product is installed. Uninstall it, or turn it off (startup type Disabled for its service and its driver) and restart the PC.'
+    },
     termservice_stock: { pass: 'The Remote Desktop service uses Windows’ own file.', warn: 'The Remote Desktop service does not use the Windows default.' },
     foreign_input_filters: { pass: 'None.', warn: 'Other input filters are present (left untouched).' },
     steam_proxy_dll: { warn: 'An old Steam add-on DLL (version.dll) is next to steam.exe. Pulsar Seat does not remove it; see Advanced > Compatibility.' },
@@ -1259,6 +1263,7 @@ const t = {
     session_reset_on_timeout: 'Disconnected sessions are closed after a while (policy setting)',
     hardware_gpu_not_enabled: 'Remote Desktop sessions do not use the graphics card (policy setting off)',
     rdp_disabled_until_prepare: 'Remote Desktop is off; the preparation step turns it on',
+    reference_product_disabled: 'Another multiseat product is installed but turned off; keep it off while seats run',
     rds_licensing_not_configured: 'Remote Desktop licensing is not configured; sessions will not open once the grace period ends',
     two_admin_sessions_only: 'This Windows Server allows only two administrator sessions (no Remote Desktop Session Host role)',
     termservice_restarted: 'Remote Desktop Services restarted',

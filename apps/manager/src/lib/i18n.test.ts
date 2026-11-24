@@ -62,6 +62,8 @@ describe('i18n (English default)', () => {
   it('shows check results and setup needs by id, not by the service detail', () => {
     expect(checkText('termservice_stock', 'pass')).toContain('Windows');
     expect(checkText('unknown_check', 'warn')).toBe('Warning');
+    expect(checkText('reference_product', 'warn')).toContain('turned off');
+    expect(checkText('reference_product', 'fail')).toContain('Disabled');
     expect(availabilityLabel({ state: 'needs_setup', what: 'console_sign_in' })).toContain('sign in');
     expect(availabilityLabel({ state: 'needs_setup', what: 'some english text' })).toBe('Setup needed');
   });
@@ -97,6 +99,7 @@ describe('passwordless-seat listener copy', () => {
     expect(noteLabel('kiosk_shell_seat_aware_apps_only')).toContain('kiosk');
     expect(noteLabel('two_admin_sessions_only')).toContain('two administrator');
     expect(noteLabel('loopback_listener_created')).toContain('created');
+    expect(noteLabel('reference_product_disabled')).toContain('turned off');
   });
 
   it('says what each session mode really is (spec 35 §6.2)', () => {
