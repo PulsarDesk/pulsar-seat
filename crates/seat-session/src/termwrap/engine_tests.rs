@@ -615,6 +615,83 @@ mod external {
         assert_eq!(rows(&w), (RegValue::Dword(1), RegValue::Dword(1)));
     }
 
+    /// Remote kind (2026-11-25): the acknowledgement is the only value written, in our own
+    /// state; the wrapper, its rows, the journal and TermService stay untouched.
+    #[test]
+    fn remote_ack_of_the_external_wrapper_writes_only_our_ack() {
+        use crate::termwrap::RemoteWrapper;
+        let w = FakeWorld::with_external_active();
+        let t = tw(&w);
+        let s = t.status().unwrap();
+        assert_eq!(s.ack_warning_version, 0);
+        assert_eq!(s.remote_wrapper(), RemoteWrapper::External { usable: false }, "no ack yet");
+        assert!(!s.remote_wrapper().active());
+
+        assert_eq!(code(t.set_external_ack(Some(WARNING_VERSION - 1))), "experimental_not_acknowledged");
+        let s = t.set_external_ack(Some(WARNING_VERSION)).unwrap();
+        assert_eq!(s.ack_warning_version, WARNING_VERSION);
+        assert_eq!(s.remote_wrapper(), RemoteWrapper::External { usable: true });
+        assert!(s.remote_wrapper().active());
+        assert_eq!(w.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+        assert_eq!(restarts(&w), 0);
+        assert!(w.journal.records.lock().unwrap().is_empty());
+        assert_eq!(rows(&w), (RegValue::Dword(1), RegValue::Dword(1)));
+        assert_eq!(
+            load(w.registry.as_ref()).unwrap(),
+            StoredState { ack_warning_version: WARNING_VERSION, ..StoredState::default() }
+        );
+        // Boot check and uninstall still leave the wrapper alone.
+        t.boot_check().unwrap();
+        t.restore_all().unwrap();
+        assert_eq!(w.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+        assert_eq!(restarts(&w), 0);
+
+        // A failing read-only check: the ack stays stored but the wrapper is not usable,
+        // and a new ack is refused with the block reason.
+        w.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(0));
+        let s = t.status().unwrap();
+        assert_eq!(s.remote_wrapper(), RemoteWrapper::External { usable: false });
+        assert_eq!(code(t.set_external_ack(Some(WARNING_VERSION))), "concurrent_sessions_off");
+        // Clearing works while blocked.
+        let s = t.set_external_ack(None).unwrap();
+        assert_eq!(s.ack_warning_version, 0);
+        assert_eq!(rows(&w), (RegValue::Dword(0), RegValue::Dword(1)), "the owner's rows are never written");
+        w.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(1));
+        assert_hands_off(&w);
+    }
+
+    #[test]
+    fn remote_ack_needs_an_active_external_wrapper_and_the_feature() {
+        use crate::termwrap::RemoteWrapper;
+        // Stock ServiceDll (an RDP Wrapper is installed but off): nothing to acknowledge.
+        let w = FakeWorld::with_wrapper();
+        assert_eq!(code(tw(&w).set_external_ack(Some(WARNING_VERSION))), "external_wrapper_inactive");
+        assert_eq!(tw(&w).status().unwrap().remote_wrapper(), RemoteWrapper::None);
+        assert_untouched(&w);
+        // An unknown foreign ServiceDll stays foreign.
+        let w = FakeWorld::default();
+        *w.scm.service_dll.lock().unwrap() = r"C:\Program Files\Other\TermWrap.dll".into();
+        assert_eq!(code(tw(&w).set_external_ack(Some(WARNING_VERSION))), "foreign_wrapper");
+        assert_eq!(tw(&w).status().unwrap().remote_wrapper(), RemoteWrapper::None);
+        // Without the cargo feature the ack is refused (clearing still works).
+        let w = FakeWorld::with_external_active();
+        let t = w.termwrap_as_built(TermwrapPolicy { enable_built_in: false, ..TermwrapPolicy::default() });
+        assert_eq!(code(t.set_external_ack(Some(WARNING_VERSION))), "unsupported");
+        t.set_external_ack(None).unwrap();
+        assert_hands_off(&w);
+    }
+
+    #[test]
+    fn our_own_wrapper_counts_for_remote_seats_without_a_new_ack() {
+        use crate::termwrap::RemoteWrapper;
+        let w = FakeWorld::with_wrapper();
+        let t = tw(&w);
+        let s = t.enable(Path::new(FAKE_WRAPPER), WARNING_VERSION).unwrap();
+        assert_eq!(s.remote_wrapper(), RemoteWrapper::Own);
+        assert_eq!(s.ack_warning_version, WARNING_VERSION);
+        assert_eq!(code(t.set_external_ack(Some(WARNING_VERSION))), "external_wrapper_inactive");
+    }
+
     type Setup = Box<dyn Fn(&FakeWorld)>;
 
     #[test]

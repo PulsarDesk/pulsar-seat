@@ -11,7 +11,9 @@
 //!   leaves `Enabled=0`, so a boot check never re-enables what the operator disabled; the
 //!   next disable / boot check / uninstall finishes the job.
 //! - External wrapper mode is read-only: [`WindowsTermwrap::external_state`] only reads
-//!   ServiceDll, the DLL's metadata and the two rows; no path here writes for it.
+//!   ServiceDll, the DLL's metadata and the two rows; no path here writes for it. The only
+//!   write in that mode is our own state value `AckWarningVersion`
+//!   ([`Termwrap::set_external_ack`], the remote kind's acknowledgement).
 //! - A ServiceDll we did not write is never touched (hands off). "We wrote it" comes only
 //!   from our own HKLM state (`Enabled` or `RestorePending`, plus `WrapperPath`), never from
 //!   the journal file.
@@ -55,6 +57,12 @@ pub trait Termwrap: Send + Sync {
     /// Boot-time check: if we enabled it and the gate now fails (Windows update), disable
     /// automatically and return Blocked.
     fn boot_check(&self) -> Result<TermwrapStatus, TermwrapError>;
+    /// External wrapper mode, remote kind: store (`Some(ack)`, must be the current
+    /// `WARNING_VERSION`) or clear (`None`) the acknowledgement under which remote seats
+    /// use an already active external wrapper. Needs `TermwrapState::External` (and, to
+    /// store, no failing read-only check). Writes only our own state value
+    /// `AckWarningVersion`: never ServiceDll, the wrapper rows, the journal or TermService.
+    fn set_external_ack(&self, ack_warning_version: Option<u32>) -> Result<TermwrapStatus, TermwrapError>;
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +305,7 @@ impl WindowsTermwrap {
             supported,
             candidates,
             warning_version: WARNING_VERSION,
+            ack_warning_version: st.ack_warning_version,
         })
     }
 
@@ -599,6 +608,36 @@ impl Termwrap for WindowsTermwrap {
             }
             Ok(_) => {}
         }
+        self.status_locked()
+    }
+
+    fn set_external_ack(&self, ack_warning_version: Option<u32>) -> Result<TermwrapStatus, TermwrapError> {
+        if let Some(ack) = ack_warning_version {
+            if !self.policy.enable_built_in {
+                return Err(TermwrapError::Unsupported("built without the experimental-client-sku feature".into()));
+            }
+            if ack != WARNING_VERSION {
+                return Err(TermwrapError::WarningNotAcknowledged { got: ack, expected: WARNING_VERSION });
+            }
+        }
+        let _g = self.lock();
+        let st = state::load(self.d.registry.as_ref())?;
+        let sd = self.d.scm.service_dll()?;
+        if self.is_stock(&sd) || self.owned(&st, &sd)? {
+            return Err(TermwrapError::ExternalWrapperInactive(sd));
+        }
+        let Some(TermwrapState::External { wrapper, blocked }) = self.external_state(&sd)? else {
+            return Err(TermwrapError::ForeignWrapper(sd));
+        };
+        if let (Some(_), Some(reason)) = (ack_warning_version, blocked) {
+            return Err(reason.into_error(wrapper.service_dll.display().to_string()));
+        }
+        // Our own state value only (see the trait doc); everything else stays as stored.
+        let ack = ack_warning_version.unwrap_or(0);
+        if st.ack_warning_version != ack {
+            state::save(self.d.registry.as_ref(), &StoredState { ack_warning_version: ack, ..st })?;
+        }
+        log::info!("termwrap: external wrapper {} for remote seats", if ack == 0 { "not acknowledged" } else { "acknowledged" });
         self.status_locked()
     }
 }

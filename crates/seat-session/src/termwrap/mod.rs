@@ -43,6 +43,10 @@
 //!   `None` (the experimental ack is still required). There is no `termsrv.dll` build gate:
 //!   the product has no public support table, keeping it working across Windows updates is
 //!   its owner's job, and a broken wrapper shows up as seats that do not get a session.
+//!   Remote seats (2026-11-25) use the same detection ([`TermwrapStatus::remote_wrapper`]):
+//!   an `External { blocked: None }` wrapper counts once the remote kind acknowledged the
+//!   current warning ([`Termwrap::set_external_ack`], stored as our own
+//!   `AckWarningVersion`, the only value written in this mode).
 //!
 //! **Untested on hardware**: every Windows path in [`win`].
 
@@ -191,6 +195,48 @@ pub struct TermwrapStatus {
     pub supported: bool,
     pub candidates: Vec<WrapperCandidate>,
     pub warning_version: u32,
+    /// Warning version stored with our state (`AckWarningVersion`): written by `enable`
+    /// and, in external wrapper mode, by [`Termwrap::set_external_ack`] (the remote kind's
+    /// acknowledgement). `0` = none. Older services omit it.
+    #[serde(default)]
+    pub ack_warning_version: u32,
+}
+
+/// What the remote seat kind may use for concurrent sessions on this host. Derived from
+/// [`TermwrapStatus`] only ([`TermwrapStatus::remote_wrapper`]), so the remote kind uses
+/// the same read-only detection as the local `termsrv_wrapper` backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RemoteWrapper {
+    /// Stock ServiceDll, an unknown foreign ServiceDll, or no status.
+    #[default]
+    None,
+    /// Our own wrapper (`TermwrapState::On`).
+    Own,
+    /// A recognised external wrapper (`TermwrapState::External`). `usable` = no read-only
+    /// check failed **and** the current warning version is acknowledged for remote seats.
+    External { usable: bool },
+}
+
+impl RemoteWrapper {
+    /// Concurrent sessions are available through a wrapper.
+    pub fn active(self) -> bool {
+        matches!(self, RemoteWrapper::Own | RemoteWrapper::External { usable: true })
+    }
+}
+
+impl TermwrapStatus {
+    /// The remote kind's view of this status: our own wrapper counts as is; an external
+    /// wrapper counts once every read-only check passed and the stored acknowledgement
+    /// equals [`WARNING_VERSION`] (the experimental ack is never bypassed).
+    pub fn remote_wrapper(&self) -> RemoteWrapper {
+        match &self.state {
+            TermwrapState::On { .. } => RemoteWrapper::Own,
+            TermwrapState::External { blocked, .. } => RemoteWrapper::External {
+                usable: blocked.is_none() && self.ack_warning_version == WARNING_VERSION,
+            },
+            _ => RemoteWrapper::None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -207,6 +253,8 @@ pub enum TermwrapError {
     ExternalWrapper(String),
     #[error("concurrent sessions are not turned on by the wrapper's owner: {0}")]
     ConcurrentSessionsOff(String),
+    #[error("no other product's wrapper is active: {0}")]
+    ExternalWrapperInactive(String),
     #[error("termsrv.dll build {0} is not listed by the wrapper's support file")]
     UnknownTermsrvBuild(FileVersion),
     #[error("termsrv.dll version could not be read: {0}")]
@@ -254,6 +302,7 @@ impl TermwrapError {
             TermwrapError::ForeignWrapper(_) => "foreign_wrapper",
             TermwrapError::ExternalWrapper(_) => "external_wrapper",
             TermwrapError::ConcurrentSessionsOff(_) => "concurrent_sessions_off",
+            TermwrapError::ExternalWrapperInactive(_) => "external_wrapper_inactive",
             TermwrapError::UnknownTermsrvBuild(_) | TermwrapError::TermsrvVersionUnreadable(_) => "unknown_termsrv_build",
             TermwrapError::WrapperMissing(_) => "wrapper_missing",
             TermwrapError::WrapperUnsigned(_) => "wrapper_unsigned",
@@ -290,6 +339,7 @@ impl From<TermwrapError> for seat_core::error::ProtoError {
             TermwrapError::ForeignWrapper(_)
             | TermwrapError::ExternalWrapper(_)
             | TermwrapError::ConcurrentSessionsOff(_)
+            | TermwrapError::ExternalWrapperInactive(_)
             | TermwrapError::ReferenceProductPresent => ErrorCode::ServiceUnavailable,
             _ => ErrorCode::Internal,
         };
@@ -320,6 +370,7 @@ impl From<TermwrapError> for BackendError {
             TermwrapError::ForeignWrapper(_)
             | TermwrapError::ExternalWrapper(_)
             | TermwrapError::ConcurrentSessionsOff(_)
+            | TermwrapError::ExternalWrapperInactive(_)
             | TermwrapError::ReferenceProductPresent => ErrorKind::Coexistence,
             TermwrapError::TermserviceRestart(_) | TermwrapError::Registry(_) => ErrorKind::Os,
             TermwrapError::Journal(_) => ErrorKind::Internal,
@@ -413,6 +464,7 @@ mod tests {
                 signed: SignatureState::Unsigned,
             }],
             warning_version: WARNING_VERSION,
+            ack_warning_version: 0,
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains(r#""state":{"state":"blocked","reason":{"reason":"unknown_termsrv_build","version":"#), "{j}");
@@ -442,5 +494,46 @@ mod tests {
         assert_eq!(BlockReason::ExternalWrapper.code(), "external_wrapper");
         let b: BackendError = TermwrapError::ExternalWrapper("x".into()).into();
         assert_eq!(b.kind, ErrorKind::Coexistence);
+    }
+
+    #[test]
+    fn remote_wrapper_needs_no_block_and_the_current_ack() {
+        let wrapper = WrapperCandidate {
+            kind: WrapperKind::duo(),
+            service_dll: PathBuf::from(r"C:\Program Files\Duo\TermWrap.dll"),
+            config_file: None,
+            dll_version: None,
+            signed: SignatureState::Trusted,
+        };
+        let status = |state, ack| TermwrapStatus {
+            state,
+            termsrv_version: None,
+            supported: true,
+            candidates: vec![],
+            warning_version: WARNING_VERSION,
+            ack_warning_version: ack,
+        };
+        let ext = |blocked| TermwrapState::External { wrapper: wrapper.clone(), blocked };
+        assert_eq!(status(ext(None), WARNING_VERSION).remote_wrapper(), RemoteWrapper::External { usable: true });
+        assert_eq!(status(ext(None), 0).remote_wrapper(), RemoteWrapper::External { usable: false });
+        assert_eq!(status(ext(None), WARNING_VERSION - 1).remote_wrapper(), RemoteWrapper::External { usable: false });
+        let blocked = status(ext(Some(BlockReason::WrapperUnsigned)), WARNING_VERSION).remote_wrapper();
+        assert_eq!(blocked, RemoteWrapper::External { usable: false });
+        assert!(!blocked.active());
+        assert_eq!(status(TermwrapState::On { wrapper: wrapper.clone() }, 0).remote_wrapper(), RemoteWrapper::Own);
+        assert!(RemoteWrapper::Own.active());
+        assert_eq!(status(TermwrapState::Off, WARNING_VERSION).remote_wrapper(), RemoteWrapper::None);
+        assert_eq!(
+            status(TermwrapState::ForeignActive { service_dll: "x".into() }, WARNING_VERSION).remote_wrapper(),
+            RemoteWrapper::None
+        );
+        // Older services omit the ack: it reads as none.
+        let mut j = serde_json::to_value(status(ext(None), WARNING_VERSION)).unwrap();
+        j.as_object_mut().unwrap().remove("ack_warning_version");
+        let back: TermwrapStatus = serde_json::from_value(j).unwrap();
+        assert_eq!(back.ack_warning_version, 0);
+        let e = TermwrapError::ExternalWrapperInactive("x".into());
+        assert_eq!(e.code(), "external_wrapper_inactive");
+        assert_eq!(BackendError::from(e).kind, ErrorKind::Coexistence);
     }
 }

@@ -262,14 +262,20 @@ impl FakeWorld {
     /// x64 client host where another product installed its signed wrapper, pointed
     /// ServiceDll at it and set both concurrent-session rows (as on the test PC).
     pub fn with_external_active() -> Self {
+        let w = Self::default();
+        w.activate_external();
+        w
+    }
+
+    /// What the other product's own setup does on this world: install its signed wrapper,
+    /// point ServiceDll at it and set both concurrent-session rows.
+    pub fn activate_external(&self) {
         use crate::journal::RegValue;
         use crate::termwrap::system::{ALLOW_MULTIPLE_TS_SESSIONS, ENABLE_CONCURRENT_SESSIONS, LICENSING_CORE, WINLOGON};
-        let w = Self::default();
-        w.files.put(FAKE_EXTERNAL, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
-        *w.scm.service_dll.lock().unwrap() = FAKE_EXTERNAL_SERVICE_DLL.into();
-        w.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(1));
-        w.registry.put(WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS, RegValue::Dword(1));
-        w
+        self.files.put(FAKE_EXTERNAL, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+        *self.scm.service_dll.lock().unwrap() = FAKE_EXTERNAL_SERVICE_DLL.into();
+        self.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(1));
+        self.registry.put(WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS, RegValue::Dword(1));
     }
 
     /// The engine over these fakes. Tests exercise `enable` in every build, so the fake
