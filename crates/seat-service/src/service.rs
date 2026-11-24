@@ -1101,6 +1101,11 @@ impl Service {
                 log::warn(&format!("USB input release on deselect: {e}"));
             }
         }
+        if backends::usb_capture_chosen_again(old.input.kind(), b.input.kind()) {
+            // The operator's restore hold ends when the backend is chosen again, as its log
+            // line says (gaming PC E2E round 2: off and on again kept it held, bug J).
+            self.factory.resume_usb_capture();
+        }
         let kept: std::collections::HashSet<_> = b.gates.iter().map(|g| g.kind()).collect();
         for g in old.gates.iter().filter(|g| !kept.contains(&g.kind())) {
             match g.revert_all() {
@@ -1356,6 +1361,9 @@ impl Service {
             st.seats.values().filter(|s| Self::managed(&st, s.seat) && s.is_active()).map(|s| s.seat).collect()
         };
         let total = seats.len();
+        // When the stop began (round 3 of the gaming PC E2E compares it with the host exits
+        // Windows causes before its pre-shutdown notice, bug K).
+        log::info(&format!("service stop requested: {total} seat(s) to stop"));
         progress(0, total);
         for (i, seat) in seats.into_iter().enumerate() {
             self.stop_seat_now(seat, true);

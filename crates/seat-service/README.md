@@ -79,7 +79,14 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   `starting` after `seat_start_timeout_s` + 60 s → `error{session_timeout}`. Failures carry
   `step=<phase> reason=<reason> [win32=<code>]`. Logon failure marks the stored password
   failing (no retry loop) until it is set again. A stale start worker (its generation was
-  bumped) only logs off the session it got and never touches the slot.
+  bumped) only logs off the session it got and never touches the slot; a failure the host
+  reports bumps the generation too. After a host exit a signed-in seat keeps its session
+  (the restarted host is reconnected to it and the seat follows the host's report; startup
+  apps are not started again), a seat at the logon screen is logged off; this recovery runs
+  off the watchdog thread. A manual start clears the crash window. No restart while
+  `SM_SHUTTINGDOWN` reads true (HYPOTHESIS that it does during the session log-offs of a
+  shutdown). The session poll catches up a logon the seat missed (gaming PC E2E round 2,
+  bug B); every SCM session change is logged with the seat sessions at that moment.
 - Topology: `seat_one_console` (seat 1 = console session) and `dedicated_host` (every
   seat, seat 1 included, is started; console session changes are host-session events).
 - Processes: seat hosts run with the service's SYSTEM token moved into the target

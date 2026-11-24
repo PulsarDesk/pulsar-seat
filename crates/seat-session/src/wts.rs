@@ -63,6 +63,14 @@ pub fn seat_of_client_name(name: &str) -> Option<SeatNumber> {
     SeatNumber::new(n)
 }
 
+/// The session's client name is another local seat's `PSEAT-NN` (not `own`). Such a session
+/// is never this seat's, whatever else matches: gaming PC E2E round 2 (2026-11-24, bug C)
+/// saw seat 3's start take seat 2's new session 10 (client `PSEAT-02`, still in
+/// `ConnectQuery`) through the ActiveX "newest new session" fallback and try to log it off.
+pub fn names_other_seat(client_name: &str, own: &str) -> bool {
+    seat_of_client_name(client_name).is_some() && !client_name.eq_ignore_ascii_case(own)
+}
+
 /// `WTS_CONNECTSTATE_CLASS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +244,9 @@ pub fn find_rdp_seat_session(all: &[WtsSession], m: &SeatMatch<'_>) -> Option<u3
             // A remote seat's session (`PSS…`) is never a local seat's, also not as the
             // "newest new session" fallback while a remote seat starts at the same time.
             && client_name_kind(&s.client_name) != Some(seat_core::config::SeatKind::Remote)
+            // Another local seat's connection (bound or still connecting, so not in
+            // `claimed` yet) is never this seat's, also not as the newest new session.
+            && !names_other_seat(&s.client_name, m.client_name)
             && match m.account {
                 // The user name is empty while the session is still at the logon / NLA stage.
                 Some((d, u)) => s.user.is_empty() || s.user_matches(d, u),
@@ -401,6 +412,28 @@ mod tests {
         let n2 = SeatMatch { client_name: "PSEAT-04", ..n.clone() };
         assert_eq!(find_rdp_seat_session(&all, &n2), None);
         assert_eq!(find_rdp_seat_session(&all, &SeatMatch { newest_fallback: true, ..n2 }), Some(7));
+    }
+
+    /// Gaming PC E2E round 2 (2026-11-24, bug C): seat 3's ActiveX fallback took seat 2's
+    /// new session 10 (client `PSEAT-02`, `ConnectQuery`, not bound yet).
+    #[test]
+    fn newest_fallback_never_takes_another_seats_connecting_session() {
+        let all = vec![
+            session(1, "", "owner", "", WtsState::Active),
+            session(10, "PSEAT-02", "", "127.0.0.1", WtsState::ConnectQuery),
+        ];
+        let m = SeatMatch { client_name: "PSEAT-03", account: None, before: &[1], claimed: &[], reported: None, newest_fallback: true };
+        assert_eq!(find_rdp_seat_session(&all, &m), None);
+        // Its own seat still finds it by name.
+        assert_eq!(find_rdp_seat_session(&all, &SeatMatch { client_name: "PSEAT-02", ..m.clone() }), Some(10));
+        // A session with a computer name (the ActiveX client) is still a fallback candidate.
+        let mut all2 = all.clone();
+        all2.push(session(11, "HOSTPC", "", "127.0.0.1", WtsState::Connected));
+        assert_eq!(find_rdp_seat_session(&all2, &m), Some(11));
+        assert!(names_other_seat("pseat-02", "PSEAT-03"));
+        assert!(!names_other_seat("PSEAT-03", "pseat-03"));
+        assert!(!names_other_seat("HOSTPC", "PSEAT-03"));
+        assert!(!names_other_seat("", "PSEAT-03"));
     }
 
     #[test]

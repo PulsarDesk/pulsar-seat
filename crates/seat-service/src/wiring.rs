@@ -186,6 +186,15 @@ impl BackendFactory for PackageFactory {
         true
     }
 
+    /// The cached `winusb_capture` router is not rebuilt when the backend is chosen again
+    /// (one router per kind and settings), so its constructor's resume never ran (gaming
+    /// PC E2E round 2, bug J).
+    fn resume_usb_capture(&self) {
+        if let Some(c) = lock(&self.usb).clone() {
+            c.resume();
+        }
+    }
+
     fn release_usb_input(&self) -> Vec<String> {
         let c = lock(&self.usb).clone();
         c.map(|c| c.release_all()).unwrap_or_default()

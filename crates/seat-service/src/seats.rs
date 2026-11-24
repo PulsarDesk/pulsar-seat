@@ -53,6 +53,11 @@ pub const DENY_LOGOFF_AFTER_MS: u32 = 15_000;
 /// Extra time on top of `seat_start_timeout_s` for the steps before and after the session
 /// wait (display bind, host launch, audio bind).
 pub const START_DEADLINE_SLACK_MS: u64 = 60_000;
+/// A due restart while Windows shuts down is looked at again after this long.
+pub const SHUTDOWN_RETRY_MS: u64 = 5_000;
+/// A session-backend call on a seat's session that takes this long is logged (round 3 of
+/// the gaming PC E2E looks for the two-minute WTS stall of bug D).
+const SLOW_SESSION_CALL: Duration = Duration::from_secs(5);
 
 /// A seat host the service started.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +98,10 @@ pub struct Slot {
     pub deadline_ms: Option<u64>,
     /// Session id the seat host reported (`host_report` `signed_in`), for this launch.
     pub reported_session: Option<u32>,
+    /// A WTS Logoff was seen for this session and no logon since: the tick's logon
+    /// catch-up ([`Service::catch_up_logon`]) leaves it alone while WTS may still name the
+    /// leaving user.
+    pub logoff_seen: Option<u32>,
 }
 
 impl Slot {
@@ -114,6 +123,7 @@ impl Slot {
             logon: None,
             deadline_ms: None,
             reported_session: None,
+            logoff_seen: None,
         }
     }
 
@@ -388,6 +398,12 @@ impl Service {
                 slot.want = true;
                 slot.retry_at = None;
                 slot.reported_session = None;
+                // A start someone asked for (manager, autostart, re-logon) begins a fresh
+                // crash window: host exits before an operator stop / start counted on, and
+                // the next start gave up after its first exit (gaming PC E2E round 2,
+                // 16:56:07 UTC "host_exited (3 exits)", bug E). The watchdog's own restarts
+                // do not come through here and keep counting.
+                slot.crashes.clear();
                 let g = slot.generation;
                 if unattended {
                     st.credprov.unattended.insert(seat, g);
@@ -550,6 +566,13 @@ impl Service {
         self.set_seat_state(&mut st, seat, SeatState::Error { reason, detail });
         drop(st);
         self.cleanup_seat(seat, false, Some(generation));
+        // The failure may come from the host (`host_report` failed) while this start's
+        // worker still waits for a session: a new generation makes it abandon what it finds
+        // instead of recording a session into the failed seat (gaming PC E2E round 2: seat
+        // 3's failed ActiveX start kept waiting for a minute, bug C).
+        if let Some(s) = self.lock().seats.get_mut(&seat).filter(|s| s.generation == generation) {
+            s.generation += 1;
+        }
     }
 
     /// A start worker found its generation outdated (stopped, re-logon, watchdog). It
@@ -626,8 +649,8 @@ impl Service {
                 s.outputs = Some(outputs);
             }
         }
-        // 2. Session backend.
-        if !self.phase(seat, generation, StartPhase::LaunchingHost) {
+        // 2. Session backend. Never a new host while the service stops (bug K).
+        if self.is_stopping() || !self.phase(seat, generation, StartPhase::LaunchingHost) {
             return self.abandon_start(seat, generation, None);
         }
         let (cfg, settings, creds) = {
@@ -881,8 +904,12 @@ impl Service {
         self.events.publish(Event::HostCommand { seat, command: HostCommand::Exit });
         if log_off && let Some(id) = session {
             let b = self.backends();
+            let t0 = std::time::Instant::now();
             if let Err(e) = b.session.log_off(seat, id) {
                 log::warn(&format!("seat {seat}: log off: {e}"));
+            }
+            if t0.elapsed() >= SLOW_SESSION_CALL {
+                log::warn(&format!("seat {seat}: log-off of session {id} took {} ms", t0.elapsed().as_millis()));
             }
         }
         self.cleanup_seat(seat, true, Some(generation));
@@ -929,6 +956,7 @@ impl Service {
             slot.outputs = None;
             slot.audio = None;
             slot.logon = None;
+            slot.logoff_seen = None;
             slot.rt.session_id = None;
             slot.rt.user_sid = None;
             slot.rt.degraded.clear();
@@ -983,6 +1011,7 @@ impl Service {
 
     /// SCM session-change notification (WTS).
     pub fn on_session_change(&self, change: SessionChange, session_id: u32) {
+        self.log_session_change(change, session_id);
         if matches!(change, SessionChange::Logon | SessionChange::Logoff | SessionChange::Terminate) {
             // A one-time credential never outlives the logon screen it was armed for.
             self.drop_credprov_grant(session_id);
@@ -1068,6 +1097,10 @@ impl Service {
                         self.set_seat_state(&mut st, seat, SeatState::SignedIn { user: name });
                     }
                     self.on_seat_logon(seat, session_id, u);
+                } else {
+                    // Round 3 reads this: a logon WTS reports without a user. The tick's
+                    // catch-up (`catch_up_logon`) sees the user once WTS names it.
+                    log::warn(&format!("seat {seat}: logon in session {session_id}, but WTS names no user yet; the watchdog checks again"));
                 }
             }
             SessionChange::Lock | SessionChange::Unlock => {
@@ -1082,6 +1115,7 @@ impl Service {
                 if let Some(slot) = st.seats.get_mut(&seat) {
                     slot.logon = None;
                     slot.rt.user_sid = None;
+                    slot.logoff_seen = Some(session_id);
                 }
                 self.set_seat_state(&mut st, seat, SeatState::AtLogon);
                 st.ownership_dirty = true;
@@ -1122,6 +1156,7 @@ impl Service {
             if let Some(slot) = st.seats.get_mut(&seat) {
                 slot.logon = Some(user.clone());
                 slot.rt.user_sid = Some(user.sid.clone());
+                slot.logoff_seen = None;
             }
             st.run.last_user_sid.insert(seat, user.sid.clone());
             // A successful logon clears a failing-password marker.
@@ -1484,8 +1519,14 @@ impl Service {
     /// and a periodic session query.
     pub(crate) fn watchdog(&self, now: u64) {
         let mut restart = Vec::new();
+        let mut recover = Vec::new();
         let mut poll = Vec::new();
         let mut timed_out = Vec::new();
+        // Windows logs the sessions off before the SCM sends the service its pre-shutdown
+        // notice: a host that died with them was relaunched into a shutting-down system
+        // (gaming PC E2E round 2, 17:40:42 UTC, bug K). HYPOTHESIS: `SM_SHUTTINGDOWN`
+        // already reads non-zero then from the service.
+        let shutting_down = self.platform.system_shutting_down();
         {
             let mut st = self.lock();
             let budget = Self::start_budget_ms(&st);
@@ -1526,17 +1567,28 @@ impl Service {
                     let mut crashes = slot.crashes.clone();
                     crashes.retain(|t| now.saturating_sub(*t) < CRASH_WINDOW_MS);
                     crashes.push(now);
-                    log::error_id(eventid::SEAT_HOST_EXITED, &format!("seat {seat}: host exited (pid {})", h.pid));
+                    let note = if shutting_down { " while Windows shuts down" } else { "" };
+                    log::error_id(eventid::SEAT_HOST_EXITED, &format!("seat {seat}: host exited (pid {}){note}", h.pid));
                     let give_up = crashes.len() >= CRASH_LIMIT;
                     let next = now + backoff_ms(crashes.len());
+                    // A signed-in seat keeps its session: the restarted host's connection is
+                    // reconnected to it by Windows and the seat follows the host's report
+                    // (`follow_reported_session`). Logging it off made Windows hand the new
+                    // connections to the session being logged off, which then ended them
+                    // ("forced logoff ... by an administrative tool"), and the seat churned
+                    // through sessions 12, 13 and 14 (gaming PC E2E round 2, 17:12:39 UTC,
+                    // bug E). A seat that gives up, or still at the logon screen, is logged
+                    // off as before.
+                    let keep = !give_up && slot.logon.is_some() && slot.rt.session_id.is_some();
                     if let Some(s) = st.seats.get_mut(&seat) {
                         s.crashes = crashes;
                         s.host = None;
                         s.generation += 1;
+                        // The retry is armed by the recovery below, once the dead host's
+                        // session and resources are handled (it runs off this thread).
+                        s.retry_at = None;
                         if give_up {
                             s.want = false;
-                        } else {
-                            s.retry_at = Some(next);
                         }
                     }
                     let state = if give_up {
@@ -1545,18 +1597,26 @@ impl Service {
                         SeatState::Starting { phase: StartPhase::Queued }
                     };
                     self.set_seat_state(&mut st, seat, state);
-                    restart.push((seat, true));
+                    let g = st.seats.get(&seat).map(|s| s.generation).unwrap_or_default();
+                    recover.push((seat, g, (!give_up).then_some(next), keep));
                     continue;
                 }
                 if let Some(at) = slot.retry_at
                     && now >= at
                 {
+                    if shutting_down {
+                        if let Some(s) = st.seats.get_mut(&seat) {
+                            s.retry_at = Some(now + SHUTDOWN_RETRY_MS);
+                        }
+                        log::info(&format!("seat {seat}: restart held, Windows is shutting down"));
+                        continue;
+                    }
                     if let Some(s) = st.seats.get_mut(&seat) {
                         s.retry_at = None;
                         // The start begins now: a fresh time limit.
                         s.deadline_ms = Some(now + budget);
                     }
-                    restart.push((seat, false));
+                    restart.push(seat);
                     continue;
                 }
                 if poll_due
@@ -1571,53 +1631,135 @@ impl Service {
             log::error_id(eventid::SEAT_START_FAILED, &format!("seat {seat}: start timed out"));
             self.cleanup_seat(seat, false, Some(g));
         }
-        for (seat, crashed) in restart {
-            if crashed {
-                // Release what the dead host held; the session (if any) is logged off so
-                // the restart gets a fresh one.
-                let (session, retry, g) = {
-                    let st = self.lock();
-                    let s = st.seats.get(&seat);
-                    (s.and_then(|s| s.rt.session_id), s.and_then(|s| s.retry_at), s.map(|s| s.generation))
-                };
-                if let Some(id) = session
-                    && let Err(e) = self.backends().session.log_off(seat, id)
-                {
-                    // A session left here is what the next connection reconnects to
-                    // (gaming PC E2E 2026-11-24, bug 1).
-                    log::warn(&format!("seat {seat}: session {id} not logged off after the host exit: {e}"));
-                }
-                self.cleanup_seat(seat, false, g);
-                if let Some(s) = self.lock().seats.get_mut(&seat).filter(|s| Some(s.generation) == g) {
-                    s.retry_at = retry;
-                }
-            } else {
-                let mut st = self.lock();
-                let Some(slot) = st.seats.get_mut(&seat) else { continue };
-                slot.generation += 1;
-                slot.want = true;
-                let g = slot.generation;
-                self.set_seat_state(&mut st, seat, SeatState::Starting { phase: StartPhase::Queued });
-                drop(st);
-                self.spawn(move |s| s.run_start(seat, g));
-            }
+        // Off the watchdog thread: one WTS call on the dead host's session took two minutes
+        // on the gaming PC (round 2, 16:51:16 -> 16:53:16 UTC, bug D) and held up every
+        // other seat's watchdog meanwhile.
+        for (seat, g, next, keep) in recover {
+            self.spawn(move |s| s.recover_host_exit(seat, g, next, keep));
+        }
+        for seat in restart {
+            let mut st = self.lock();
+            let Some(slot) = st.seats.get_mut(&seat) else { continue };
+            slot.generation += 1;
+            slot.want = true;
+            let g = slot.generation;
+            self.set_seat_state(&mut st, seat, SeatState::Starting { phase: StartPhase::Queued });
+            drop(st);
+            self.spawn(move |s| s.run_start(seat, g));
         }
         let b = self.backends();
         for (seat, id) in poll {
             match b.session.query(seat, id) {
                 Ok(info) if info.state == SessionState::Gone => self.on_session_gone(seat),
                 Ok(info) => {
-                    let mut st = self.lock();
-                    let user = st.seats.get(&seat).and_then(|s| s.logon.clone());
-                    let state = map_session_state(info.state, user.as_ref());
-                    if !matches!(st.seats.get(&seat).map(|s| &s.rt.state), Some(SeatState::Error { .. })) {
-                        self.set_seat_state(&mut st, seat, state);
+                    {
+                        let mut st = self.lock();
+                        let user = st.seats.get(&seat).and_then(|s| s.logon.clone());
+                        let state = map_session_state(info.state, user.as_ref());
+                        if !matches!(st.seats.get(&seat).map(|s| &s.rt.state), Some(SeatState::Error { .. })) {
+                            self.set_seat_state(&mut st, seat, state);
+                        }
                     }
+                    self.catch_up_logon(seat, id);
                 }
                 Err(e) if e.kind == ErrorKind::NotFound => self.on_session_gone(seat),
                 Err(e) => log::debug(&format!("seat {seat}: query: {e}")),
             }
         }
+    }
+
+    /// After a host exit (watchdog): the seat's session is logged off, or kept when `keep`
+    /// (a signed-in seat that restarts), the dead host's resources are released, and the
+    /// restart is armed (`next`; `None` = the seat gave up). Only for generation `g`: a stop
+    /// or start meanwhile owns the slot.
+    fn recover_host_exit(&self, seat: SeatNumber, g: u64, next: Option<u64>, keep: bool) {
+        let (session, apps) = {
+            let st = self.lock();
+            let Some(s) = st.seats.get(&seat).filter(|s| s.generation == g) else { return };
+            (s.rt.session_id, s.apps_started)
+        };
+        if let Some(id) = session {
+            if keep {
+                log::info(&format!(
+                    "seat {seat}: session {id} kept after the host exit (its user is signed in); the restarted host's connection is reconnected to it"
+                ));
+            } else {
+                let t0 = std::time::Instant::now();
+                let r = self.backends().session.log_off(seat, id);
+                let took = t0.elapsed();
+                if took >= SLOW_SESSION_CALL {
+                    log::warn(&format!("seat {seat}: log-off of session {id} after the host exit took {} ms", took.as_millis()));
+                }
+                if let Err(e) = r {
+                    // A session left here is what the next connection reconnects to
+                    // (gaming PC E2E 2026-11-24, bug 1).
+                    log::warn(&format!("seat {seat}: session {id} not logged off after the host exit: {e}"));
+                }
+            }
+        }
+        self.cleanup_seat(seat, false, Some(g));
+        if let Some(s) = self.lock().seats.get_mut(&seat).filter(|s| s.generation == g) {
+            s.retry_at = next;
+            // The startup apps of the kept logon already run: the reconnect must not start
+            // them again (`on_seat_logon` starts them once per logon session).
+            if keep {
+                s.apps_started = apps;
+            }
+        }
+    }
+
+    /// Logon catch-up (watchdog poll): the seat's session has a signed-in user, but the seat
+    /// never saw the logon (no session agent, no capture offer, no startup apps). Gaming PC
+    /// E2E round 2 (2026-11-24, bug B): existing-profile logons whose logon took about 0.1 s
+    /// (LocalSessionManager events 41 -> 21) often left the seat `at_logon` for good, although
+    /// the logon came ~2 s after the seat recorded its session; slower logons (~0.3 s and
+    /// more) were seen. Why the WTS Logon notification was lost or had no user is not known
+    /// (HYPOTHESIS: the user name is not set yet when the notification is handled); the
+    /// session-change log lines tell round 3. Not after a Logoff of the same session (WTS may
+    /// still name the leaving user).
+    pub(crate) fn catch_up_logon(&self, seat: SeatNumber, session_id: u32) {
+        {
+            let st = self.lock();
+            let Some(s) = st.seats.get(&seat) else { return };
+            if s.rt.session_id != Some(session_id)
+                || s.logon.is_some()
+                || s.logoff_seen == Some(session_id)
+                || matches!(s.rt.state, SeatState::Error { .. } | SeatState::Starting { .. } | SeatState::Stopping)
+            {
+                return;
+            }
+        }
+        let Some(u) = self.platform.session_user(session_id) else { return };
+        log::warn(&format!(
+            "seat {seat}: session {session_id} has signed-in user {} but no logon was seen; handling the logon now",
+            u.display()
+        ));
+        {
+            let mut st = self.lock();
+            if st.seats.get(&seat).is_none_or(|s| s.rt.session_id != Some(session_id) || s.logon.is_some()) {
+                return;
+            }
+            self.set_seat_state(&mut st, seat, SeatState::SignedIn { user: u.display() });
+        }
+        self.on_seat_logon(seat, session_id, u);
+    }
+
+    /// Session-change log line (gaming PC E2E round 2 asked for it, bug B): the change, its
+    /// session and every seat's session at that moment.
+    fn log_session_change(&self, change: SessionChange, session_id: u32) {
+        let seats: Vec<String> = {
+            let st = self.lock();
+            st.seats.values().filter_map(|s| s.rt.session_id.map(|id| format!("{}={id}", s.seat))).collect()
+        };
+        let user = if change == SessionChange::Logon {
+            if self.platform.session_user(session_id).is_some() { ", user named" } else { ", no user named" }
+        } else {
+            ""
+        };
+        log::info(&format!(
+            "session change {change:?} for session {session_id}{user} (seat sessions: {})",
+            if seats.is_empty() { "none".to_string() } else { seats.join(", ") }
+        ));
     }
 
     /// A host reported its connection state (`host_report`).

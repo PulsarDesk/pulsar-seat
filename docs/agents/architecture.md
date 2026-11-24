@@ -278,6 +278,48 @@ bound id and the seat's user, never the console winstation: the host-exit log-of
 `log_off` refusals and failures are logged with the session's WTS view (state, remote flag,
 client name, address, user).
 
+Update 2026-11-24 (gaming PC E2E round 2, bugs B, C, D, E, J, K), **unit-tested, retest in
+round 3:**
+- **Host exit keeps a signed-in session (E).** Round 2 proved the rebind above on hardware
+  ("rebound from session 6 to session 4"), and showed that logging the seat's own session off
+  after a host exit makes things worse: the log-off is asynchronous, the restarted host's
+  connections were handed to the session being logged off and ended with `error_info 2`
+  ("forced logoff ... by an administrative tool"), and the seat churned through sessions
+  12, 13, 14. Now the watchdog keeps the session of a seat whose user is signed in (no
+  log-off; the backend binding stays, so other seats never take it), restarts the host, and
+  the seat follows the host's report to that session (`follow_reported_session`); the startup
+  apps of that logon are not started again (`Slot.apps_started` kept). A seat at the logon
+  screen, or one that gives up, is logged off as before. The recovery runs off the watchdog
+  thread (`Service::recover_host_exit`, the retry is armed when it is done), and a log-off
+  that takes 5 s or more is logged with its duration. A manual start (`start_sequence_with`)
+  clears the crash window; the watchdog's own restarts keep counting.
+- **The bound session without its connection (D, proven).** Right after a host exit WTS read
+  the seat's session as "state Active, remote false, client "", address none" (not
+  `Disconnected`). `RdpCore::bound_offline` (was `bound_disconnected`) accepts any live state
+  for the bound id with the seat's account and no other client name.
+- **Never another seat's session (C).** `find_rdp_seat_session` never matches a session whose
+  client name is another seat's `PSEAT-NN` (`wts::names_other_seat`), also not through the
+  ActiveX newest-session fallback; `RdpCore::is_ours` (query, log-off) refuses a session bound
+  to another seat or named for another seat, and `log_off` drops a binding of this seat that
+  names another seat's session. A failure the host reports (`host_report` failed) now ends the
+  start's generation, so a start worker still in `wait_session` abandons what it finds.
+- **Logon catch-up (B).** Existing-profile logons whose logon took ~0.1 s (LocalSessionManager
+  events 41 -> 21) often left the seat `at_logon` with no agent, although the logon came ~2 s
+  after the seat recorded its session (root cause not known; HYPOTHESIS: the Logon
+  notification is handled before WTS names the user). The watchdog's session poll
+  (`SESSION_POLL_MS`) now handles a logon the seat missed (`Service::catch_up_logon`: the
+  seat's session has a WTS user, the slot has none, no Logoff of that session seen since).
+  Every SCM session change is logged with the seat sessions at that moment and, for a Logon,
+  whether WTS names a user; a change that takes 2 s or more to handle is logged with its time.
+- **Shutdown (K, HYPOTHESIS).** Windows logs the sessions off before the SCM's pre-shutdown
+  notice, so a host that died with them was relaunched. A due restart is held while
+  `Platform::system_shutting_down` (`GetSystemMetrics(SM_SHUTTINGDOWN)`) reads true, and
+  `run_start` never launches a host once the service stops; `shutdown_with` logs when the stop
+  began.
+- **USB capture hold (J).** Choosing `winusb_capture` again (from another input backend) ends
+  the operator's `restore_usb_input` hold (`BackendFactory::resume_usb_capture`): the factory
+  caches one router per kind, so the router constructor's resume never ran.
+
 Logon-screen seats (no stored password) on an NLA listener — **decision 2026-11-13
 (fix-rdp-client), HYPOTHESIS until tested:** `rds.rs` keeps RDP-Tcp `UserAuthentication=1`
 (NLA on) for password seats, so a TLS-only connection gets `HYBRID_REQUIRED_BY_SERVER` and

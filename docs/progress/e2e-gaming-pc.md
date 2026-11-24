@@ -398,3 +398,18 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   (try without `HostTokenCompat`), and fixes for bug B (log every SessionChange with the slot's session
   id), bug I (join rdpdr with audio), bug H (detach when no seat names the target), bug C (claim
   connecting sessions), bug F (do not resend an unchanged layout). Final removal: LEFT-INSTALLED.txt.
+
+## Round 3 prep, fix agent a (2026-11-24): bugs B, C, D, E, J, K (branch e2e3-a)
+
+- Done (unit-tested, gates clean): C (no match / log-off of a session named for or bound to another
+  seat; host-reported failure ends the start generation), D (bound session after a host exit: any live
+  state + bound id + account), E (signed-in seat keeps its session after a host exit, follows the
+  reconnect; recovery off the watchdog thread; manual start clears the crash window), B (session poll
+  catches up a missed logon; every SessionChange logged), K (no restart while `SM_SHUTTINGDOWN`; stop
+  logged), J (re-choosing `winusb_capture` resumes the capture). Journal line of 2026-11-24 has the
+  evidence (LocalSessionManager events read on the PC, read-only).
+- Round 3 checks: see the journal line and the e2e3-a hand-off; log lines to look for:
+  `session change Logon for session N, user named|no user named (seat sessions: ...)`,
+  `has signed-in user ... but no logon was seen` (catch-up fired), `session N kept after the host exit`,
+  `log-off of session N ... took N ms`, `restart held, Windows is shutting down`,
+  `host exited (pid N) while Windows shuts down`, `service stop requested`, `USB capture resumed`.

@@ -239,9 +239,16 @@ impl RdpCore {
     }
 
     fn is_ours(&self, seat: SeatNumber, s: &WtsSession) -> bool {
+        // Another seat's session (bound to it, or named `PSEAT-NN` of another seat while
+        // still connecting) is never this seat's, whatever this seat's binding says: a stale
+        // start worker's binding once pointed at seat 2's new session and the abandon path
+        // tried to log it off (gaming PC E2E round 2, bug C).
+        if self.claimed_except(seat).contains(&s.id) || crate::wts::names_other_seat(&s.client_name, &crate::wts::client_name_for(seat)) {
+            return false;
+        }
         let b = lock(&self.bound).get(&seat).cloned();
         if !s.is_loopback_remote() {
-            return b.is_some_and(|b| Self::bound_disconnected(&b, s));
+            return b.is_some_and(|b| Self::bound_offline(&b, s));
         }
         match b {
             Some(b) if b.session_id == s.id => match &b.account {
@@ -255,16 +262,19 @@ impl RdpCore {
         }
     }
 
-    /// The seat's bound session, disconnected. HYPOTHESIS (gaming PC E2E 2026-11-24):
-    /// Windows blanks the client name and address of a disconnected session, so it no
-    /// longer reads as loopback; the host restart's log-off of the bound session 3 left it
-    /// in place, and the next connection was reconnected to it. Ours only by its bound id,
-    /// when it is not the console winstation and its user is the seat's account (a seat
-    /// without an account never qualifies: nothing but the id would identify it).
-    fn bound_disconnected(b: &Bound, s: &WtsSession) -> bool {
+    /// The seat's bound session after its connection is gone: it no longer reads as a
+    /// loopback remote session. Proven on the gaming PC (E2E round 2, 2026-11-24, 16:53:16
+    /// UTC): right after the host exit WTS reported the seat's session 5 as "state Active,
+    /// remote false, client "", address none, user pstest-r2b", not as `Disconnected`, so
+    /// the earlier rule (disconnected only) refused it. Ours only by its bound id, when it is
+    /// not a service / listener / console winstation, its user is the seat's account (a
+    /// seat without an account never qualifies: nothing but the id would identify it) and it
+    /// carries no other client name than the seat's own.
+    fn bound_offline(b: &Bound, s: &WtsSession) -> bool {
         b.session_id == s.id
-            && s.state == crate::wts::WtsState::Disconnected
+            && !matches!(s.state, crate::wts::WtsState::Down | crate::wts::WtsState::Reset | crate::wts::WtsState::Listen)
             && !s.is_never_seat()
+            && (s.client_name.is_empty() || s.client_name.eq_ignore_ascii_case(&b.client_name))
             && b.account.as_ref().is_some_and(|(dom, user)| s.user_matches(dom, user))
     }
 
@@ -294,10 +304,15 @@ impl RdpCore {
         };
         if !self.is_ours(seat, s) {
             log::warn!("seat {seat}: session {session_id} not logged off, not the seat's ({})", describe(s));
+            // A binding of this seat that names another seat's session is wrong (a stale
+            // start's ActiveX fallback, bug C): drop it, so it is not "claimed" either.
+            if crate::wts::names_other_seat(&s.client_name, &crate::wts::client_name_for(seat)) {
+                lock(&self.bound).retain(|k, b| !(*k == seat && b.session_id == session_id));
+            }
             return Err(err(ErrorKind::Policy, reason::NOT_OUR_SESSION, format!("session {session_id} is not seat {seat}'s")));
         }
-        // A disconnected bound session may no longer read as remote (HYPOTHESIS, see
-        // `bound_disconnected`); it was matched by its bound id and the seat's account.
+        // A bound session whose connection is gone no longer reads as remote (proven, see
+        // `bound_offline`); it was matched by its bound id and the seat's account.
         let require_remote = s.is_loopback_remote();
         if let Err(e) = d.wts.logoff(session_id, require_remote) {
             log::warn!("seat {seat}: session {session_id} not logged off: {e} ({})", describe(s));

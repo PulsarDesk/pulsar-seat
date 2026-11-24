@@ -496,6 +496,52 @@ fn a_disconnected_bound_session_is_logged_off() {
     assert!(!w.wts.logoffs.lock().unwrap().iter().any(|(id, _)| *id == 5 || *id == 6));
 }
 
+#[test]
+fn the_seat_session_right_after_a_host_exit_is_still_the_seats() {
+    // Gaming PC E2E round 2 (2026-11-24, 16:53:16 UTC, bug D): after the host exit WTS read
+    // seat 3's session 5 as "state Active, remote false, client "", address none, user
+    // pstest-r2b". Not `Disconnected`, so it was "not the seat's" and stayed.
+    let w = FakeWorld::server();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    let settings = GlobalSettings::default();
+    b.prepare_host(&settings).unwrap();
+    let s2 = seat_cfg(2, Some("ali"));
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(5, "PSEAT-02", "ali"));
+    b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap();
+    w.wts.add(crate::wts::WtsSession { state: crate::wts::WtsState::Active, ..disconnected(5, "ali") });
+    assert_eq!(b.query(seat(2), 5).unwrap().state, SessionState::Active);
+    b.log_off(seat(2), 5).unwrap();
+    assert_eq!(w.wts.logoffs.lock().unwrap().last(), Some(&(5, false)));
+}
+
+#[test]
+fn a_stale_start_never_logs_off_another_seats_connecting_session() {
+    // Gaming PC E2E round 2 (2026-11-24, 17:01:06 UTC, bug C): seat 3's failed ActiveX start
+    // kept waiting; its "newest new session" fallback took seat 2's new session 10 (client
+    // PSEAT-02, ConnectQuery, not bound yet) and the abandon path tried to log it off.
+    let w = FakeWorld::server();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    let settings = GlobalSettings::default();
+    b.prepare_host(&settings).unwrap();
+    // Seat 3 without an account, no pending start record (the stale worker's view).
+    b.host_hint(seat(3), HostHint { session_id: None, legacy_client: true });
+    w.wts.add(crate::wts::WtsSession { state: crate::wts::WtsState::ConnectQuery, ..FakeWts::rdp(10, "PSEAT-02", "") });
+    assert_eq!(b.wait_session(seat(3), "PSEAT-03", Duration::from_secs(2)).unwrap_err().reason, "session_timeout");
+    // Even a binding that names it (as the old fallback made) never logs it off.
+    w.wts.add(crate::wts::WtsSession { state: crate::wts::WtsState::ConnectQuery, ..FakeWts::rdp(11, "HOSTPC", "") });
+    assert_eq!(b.wait_session(seat(3), "PSEAT-03", Duration::from_secs(2)).unwrap().session_id, 11);
+    lock_sessions(&w).retain(|s| s.id != 11);
+    w.wts.add(crate::wts::WtsSession { state: crate::wts::WtsState::ConnectQuery, ..FakeWts::rdp(11, "PSEAT-02", "") });
+    assert_eq!(b.log_off(seat(3), 11).unwrap_err().reason, "not_our_session");
+    // Nor a session another seat has bound.
+    let s2 = seat_cfg(2, Some("ali"));
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    assert_eq!(b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap().session_id, 10);
+    assert_eq!(b.log_off(seat(3), 10).unwrap_err().reason, "not_our_session");
+    assert!(w.wts.logoffs.lock().unwrap().is_empty());
+}
+
 fn lock_sessions(w: &FakeWorld) -> std::sync::MutexGuard<'_, Vec<crate::wts::WtsSession>> {
     w.wts.sessions.lock().unwrap()
 }

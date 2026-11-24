@@ -4270,3 +4270,140 @@ fn usb_input_is_restored_at_boot_stop_and_on_request() {
     h.s.shutdown();
     assert_eq!(h.f.usb_releases.load(Ordering::SeqCst), 1);
 }
+
+// ---- gaming PC E2E round 2 (2026-11-24): bugs B, C, D/E, K -----------------------------
+
+fn agent_launches(h: &Harness, session: u32) -> usize {
+    h.p.launched().iter().filter(|l| l.exe.ends_with("pulsar-seat-agent.exe") && l.session_id == session).count()
+}
+
+fn host_pid(h: &Harness) -> u32 {
+    h.s.lock().seats.get(&s(2)).and_then(|x| x.host.as_ref()).map(|x| x.pid).expect("seat 2 host")
+}
+
+/// Bug B: an existing-profile logon the seat never saw (no Logon notification handled with
+/// a user) is caught up by the watchdog's session poll: agent, signed_in.
+#[test]
+fn a_logon_the_seat_missed_is_caught_up_by_the_session_poll() {
+    let h = harness();
+    h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    assert_eq!(state(&h, s(2)), SeatState::AtLogon);
+    // The Logon notification came while WTS named no user, then the user is there.
+    h.s.on_session_change(SessionChange::Logon, 10);
+    assert_eq!(state(&h, s(2)), SeatState::AtLogon);
+    h.p.sign_in(10, "ali");
+    h.clock.advance(crate::service::SESSION_POLL_MS);
+    h.s.tick();
+    assert_eq!(state(&h, s(2)), SeatState::SignedIn { user: "PC\\ali".into() });
+    assert_eq!(agent_launches(&h, 10), 1);
+    // Once seen, the poll does not handle it again.
+    h.clock.advance(crate::service::SESSION_POLL_MS);
+    h.s.tick();
+    assert_eq!(agent_launches(&h, 10), 1);
+    // After a Logoff of that session WTS may still name the leaving user: no catch-up.
+    h.s.on_session_change(SessionChange::Logoff, 10);
+    assert_eq!(state(&h, s(2)), SeatState::AtLogon);
+    h.clock.advance(crate::service::SESSION_POLL_MS);
+    h.s.tick();
+    assert_eq!(state(&h, s(2)), SeatState::AtLogon);
+    assert_eq!(agent_launches(&h, 10), 1);
+}
+
+/// Bug E: a host exit of a signed-in seat keeps the seat's session (no log-off); the
+/// restarted host's connection is reconnected to it, the seat follows the host's report,
+/// and the startup apps of that logon are not started a second time.
+#[test]
+fn host_exit_keeps_a_signed_in_session_for_the_reconnect() {
+    let mut c = two_seat_config();
+    c.seats[1].startup_apps = vec![seat_core::config::KioskApp { command: r"C:\Games\Lan\game.exe".into(), args: vec![] }];
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let games = |h: &Harness| h.p.launched().iter().filter(|l| l.exe.ends_with("game.exe")).count();
+    assert_eq!(games(&h), 1);
+    h.p.kill(host_pid(&h));
+    h.s.tick();
+    assert!(!h.f.session.rec.calls().iter().any(|c| c == "log_off 2"), "{:?}", h.f.session.rec.calls());
+    assert_eq!(state(&h, s(2)), SeatState::Starting { phase: seat_core::state::StartPhase::Queued });
+    h.clock.advance(70_000);
+    h.s.tick();
+    assert_eq!(h.p.launched().iter().filter(|l| l.exe.ends_with("pulsar-seat-host.exe")).count(), 2);
+    // The new connection's transient session is 11; Windows reconnects it to 10.
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(11));
+    h.s.on_host_report(s(2), &seat_proto::HostState::SignedIn { session_id: Some(10) }, Some("ironrdp"));
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(10));
+    assert_eq!(state(&h, s(2)), SeatState::SignedIn { user: "PC\\ali".into() });
+    assert_eq!(agent_launches(&h, 10), 2, "the agent ended with the cleanup and starts again");
+    assert_eq!(games(&h), 1, "startup apps run once per logon");
+}
+
+/// A seat still at the logon screen is logged off after a host exit, as before.
+#[test]
+fn host_exit_at_the_logon_screen_still_logs_the_session_off() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.p.kill(host_pid(&h));
+    h.s.tick();
+    assert!(h.f.session.rec.calls().iter().any(|c| c == "log_off 2"));
+}
+
+/// Bug E: an operator stop / start begins a fresh crash window (round 2 gave up after the
+/// first exit of the next start, "host_exited (3 exits)").
+#[test]
+fn a_manual_start_begins_a_fresh_crash_window() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    for _ in 0..2 {
+        h.p.kill(host_pid(&h));
+        h.s.tick();
+        h.clock.advance(70_000);
+        h.s.tick();
+    }
+    call(&h, &mut a, RequestBody::StopSeat { seat: s(2) }).unwrap();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.p.kill(host_pid(&h));
+    h.s.tick();
+    assert_eq!(state(&h, s(2)), SeatState::Starting { phase: seat_core::state::StartPhase::Queued });
+}
+
+/// Bug C: a failure the host reports ends the start's generation, so a start worker still
+/// waiting for a session abandons what it finds instead of recording it.
+#[test]
+fn a_host_reported_failure_ends_the_start_generation() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    let g = h.s.lock().seats.get(&s(2)).unwrap().generation;
+    h.s.on_host_report(s(2), &seat_proto::HostState::Failed { reason: "rdp_control".into() }, None);
+    assert!(matches!(state(&h, s(2)), SeatState::Error { .. }));
+    assert_eq!(h.s.lock().seats.get(&s(2)).unwrap().generation, g + 1);
+}
+
+/// Bug K: no host restart while Windows shuts down (sessions are logged off before the
+/// service's pre-shutdown notice).
+#[test]
+fn no_host_restart_while_windows_shuts_down() {
+    let h = harness();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    let hosts = |h: &Harness| h.p.launched().iter().filter(|l| l.exe.ends_with("pulsar-seat-host.exe")).count();
+    h.p.kill(host_pid(&h));
+    h.p.shutting_down.store(true, Ordering::SeqCst);
+    h.s.tick();
+    h.clock.advance(70_000);
+    h.s.tick();
+    assert_eq!(hosts(&h), 1);
+    // A false alarm only delays the restart.
+    h.p.shutting_down.store(false, Ordering::SeqCst);
+    h.clock.advance(crate::seats::SHUTDOWN_RETRY_MS);
+    h.s.tick();
+    assert_eq!(hosts(&h), 2);
+}
