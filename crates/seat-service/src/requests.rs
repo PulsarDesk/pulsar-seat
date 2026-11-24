@@ -147,6 +147,8 @@ impl Service {
             B::ValidateConfig { config } => {
                 let mut c = *config;
                 c.normalize();
+                // What the save would fill in (id, client name, port block) is not an issue.
+                let _ = fill_remote_resources(&mut c);
                 let st = self.lock();
                 let inv = st.inventory.devices();
                 Ok(ResponseBody::Issues(self.validate_full(&c, &inv)))
@@ -609,6 +611,9 @@ impl Service {
 
     fn apply_config(&self, mut cfg: Config, base: u64, force: bool) -> R {
         cfg.normalize();
+        if let Err(seat) = fill_remote_resources(&mut cfg) {
+            return Err(err(ErrorCode::InvalidConfig, format!("no free port block for remote seat {seat}")).with_field(format!("seats[{seat}].remote.port")));
+        }
         let (issues, old) = {
             let st = self.lock();
             if base != st.config.revision {
@@ -1273,6 +1278,35 @@ pub(crate) fn audio_report_notes(render_open: bool, capture_open: bool, notes: V
     v.dedup();
     v.truncate(8);
     v
+}
+
+/// Fill what the manager leaves empty on a remote seat (a new one has `id: ""`, `port: 0`,
+/// `rdp_client_name: ""`): [`seat_core::remote::assign_resources`], with the ports this PC
+/// listens on. Gaming PC E2E round 4 (2026-11-25): nothing called it on the merged
+/// config path, so a new remote seat failed validation (`invalid_port`) or its start
+/// (`seat id is empty`). Seats that have the values keep them.
+pub(crate) fn fill_remote_resources(cfg: &mut Config) -> Result<(), SeatNumber> {
+    if !cfg.seats.iter().any(|s| s.kind == SeatKind::Remote) {
+        return Ok(());
+    }
+    seat_core::remote::assign_resources(cfg, &listening_ports(), || uuid::Uuid::new_v4().to_string())
+}
+
+/// Local TCP / UDP ports in use (the remote seat port allocator skips their blocks).
+fn listening_ports() -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use seat_stream::ports::ListenerProbe;
+        match seat_stream::win::IpHelperProbe.listening() {
+            Ok(v) => v.into_iter().map(|(p, _)| p).collect(),
+            Err(e) => {
+                log::warn(&format!("listening ports not read: {e}"));
+                Vec::new()
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    Vec::new()
 }
 
 #[cfg(test)]

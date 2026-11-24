@@ -2791,6 +2791,34 @@ fn apply_config_accepts_remote_seats_and_validates_them() {
     assert_eq!(r.unwrap_err().code, ErrorCode::InvalidConfig);
 }
 
+/// Gaming PC E2E round 4: a remote seat as the manager adds it (`id` and
+/// `rdp_client_name` empty, `port` 0) validates and saves with the service filling them;
+/// a later save keeps them.
+#[test]
+fn apply_config_fills_a_new_remote_seats_id_client_name_and_port() {
+    let h = harness();
+    let mut a = admin();
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let mut cfg = two_seat_config();
+    let r = seat_core::remote::RemoteSeat { display_name: "Salon".into(), port: 0, ..Default::default() };
+    cfg.seats.push(SeatConfig::new_remote(s(3), r));
+    cfg.revision = view.config.revision;
+    let ResponseBody::Issues(issues) = call(&h, &mut a, RequestBody::ValidateConfig { config: Box::new(cfg.clone()) }).unwrap() else { panic!() };
+    assert!(!seat_core::validate::has_errors(&issues), "{issues:?}");
+    let r = call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(cfg), base_revision: view.config.revision, force: false });
+    assert!(r.is_ok(), "{r:?}");
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let got = view.config.seat(s(3)).and_then(|x| x.remote.clone()).unwrap();
+    assert!(!got.id.is_empty() && !got.rdp_client_name.is_empty(), "{got:?}");
+    assert!(seat_core::remote::ports::is_valid_base(got.port), "{}", got.port);
+    // Saved again unchanged: the values stay.
+    let again = view.config.clone();
+    assert!(call(&h, &mut a, RequestBody::ApplyConfig { config: Box::new(again), base_revision: view.config.revision, force: false }).is_ok());
+    let ResponseBody::Config(view) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    let kept = view.config.seat(s(3)).and_then(|x| x.remote.clone()).unwrap();
+    assert_eq!((kept.id, kept.port, kept.rdp_client_name), (got.id, got.port, got.rdp_client_name));
+}
+
 /// A DualSense on USB: HID game pad collection (usage page 1, usage 5).
 fn ds5_dev(key: &str, path: &str) -> seat_core::device::Device {
     use seat_core::device::{DeviceDetails, InputClass, InputInfo};
