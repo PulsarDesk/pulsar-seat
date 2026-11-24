@@ -121,6 +121,18 @@ releasable.
 The x64 MSI can be built on the ARM64 dev box (cross-compiled binaries, same WiX); its
 `candle -arch x64` output is the same as on an x64 host.
 
+Fast **test** build (not for release): the release profile uses `lto = "thin"` and
+`codegen-units = 1`, so the last big crates (manager, Tauri, service) compile on one core.
+For a test installer, override the profile through Cargo's environment variables; paths and
+scripts stay the same:
+
+```powershell
+$env:CARGO_PROFILE_RELEASE_LTO = "false"; $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "16"
+powershell -ExecutionPolicy Bypass -File installer\scripts\build-installer.ps1 -Arch x64
+```
+
+Release builds never set these variables.
+
 ## Signing and release
 
 Full ordered list, including accounts and approvals: [docs/release/checklist.md](../docs/release/checklist.md).
