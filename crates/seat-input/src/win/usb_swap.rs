@@ -42,7 +42,9 @@ use windows_sys::Win32::Devices::Properties::{
     DEVPKEY_Device_ExtendedConfigurationIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_MatchingDeviceId, DEVPROP_TYPE_STRING, DEVPROP_TYPE_STRING_LIST,
     DEVPROPTYPE,
 };
-use windows_sys::Win32::Foundation::{DEVPROPKEY, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_SUCH_DEVINST, GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    DEVPROPKEY, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_SUCH_DEVINST, ERROR_SHUTDOWN_IN_PROGRESS, GetLastError, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::System::Registry::{
     HKEY, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_MULTI_SZ, RegCloseKey, RegDeleteValueW, RegQueryValueExW, RegSetValueExW,
 };
@@ -512,6 +514,14 @@ impl UsbSwap for WinUsbSwap {
         } else {
             match d.install(&original.inf_path, &[SPDIT_COMPATDRIVER, SPDIT_CLASSDRIVER], original) {
                 Ok(section) => format!("{} [{section}]", original.inf_path),
+                // Windows is shutting down (ERROR_SHUTDOWN_IN_PROGRESS): no driver installs
+                // now. Gaming PC E2E round 3: the "best driver" fallback below then blocked
+                // the service stop for ~3 min and failed anyway; the node stays journaled
+                // and the boot-time recovery restores it (it did, "restore check: exact").
+                Err(e) if e.win32 == Some(ERROR_SHUTDOWN_IN_PROGRESS) => {
+                    log::warn!("USB release of {node}: Windows is shutting down ({e}); left for the restore at the next start");
+                    return Err(e);
+                }
                 Err(e) => {
                     // The package left the driver store, or does not match any more: the
                     // driver Windows itself would pick, never a fixed input.inf (bug 5).
