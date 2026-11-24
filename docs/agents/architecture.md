@@ -1790,6 +1790,11 @@ bun test installer/scripts
 cd shim && cargo test && cargo test --target x86_64-pc-windows-msvc   (ARM64 natively with Detours; x64 under emulation)
 ```
 
+Faster debug / test loops (CONTRIBUTING.md "Faster local builds"): `cargo nextest run
+--workspace` instead of `cargo test --workspace` when cargo-nextest is installed (no doc
+tests in the workspace, so nothing is lost), and the opt-in `. .\scripts\fast-link.ps1` to
+link debug builds with rust-lld (own target dir; release / installer scripts ignore it).
+
 seat-service builds seat-session with `experimental-client-sku` (a default feature of
 seat-service): the termsrv wrapper module is compiled in but stays off at run time until the
 admin acknowledged the current warning version. `--no-default-features` leaves it out.

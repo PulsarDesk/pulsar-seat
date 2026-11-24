@@ -86,6 +86,13 @@ if (-not $CargoTargetDir) { $CargoTargetDir = if ($env:CARGO_TARGET_DIR) { $env:
 # picked up a stale one (VM test 2026-11-15).
 $CargoTargetDir = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($CargoTargetDir)) { $CargoTargetDir } else { Join-Path (Get-Location).Path $CargoTargetDir }))
 $env:CARGO_TARGET_DIR = $CargoTargetDir
+# Release binaries link with MSVC link.exe only. The opt-in rust-lld switch for debug / test
+# builds (scripts/fast-link.ps1, ci-local.ps1) works through CARGO_TARGET_<TRIPLE>_LINKER;
+# drop it for this run so a shell that has it set still builds the payload with link.exe.
+Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_TARGET_.+_LINKER$' } | ForEach-Object {
+    Write-Warning "ignoring $($_.Name)=$($_.Value) for this build (release links with link.exe)"
+    Remove-Item "Env:$($_.Name)"
+}
 $buildStarted = Get-Date
 $work = Join-Path $repo "target\installer\$Arch"
 $payload = Join-Path $repo "target\payload\$Arch"
@@ -161,7 +168,10 @@ if (-not $SkipCargo) {
     try {
         # Two invocations: cargo unifies features across the packages of one build, so a
         # joint build would compile the service against seat-rdp/client (IronRDP, sspi,
-        # native-tls) that only the seat host enables.
+        # native-tls) that only the seat host enables (and the host against
+        # seat-input/local-pads), which changes the shipped binaries. Each invocation
+        # builds its packages in parallel; the second reuses every dependency the first
+        # built with the same features.
         Invoke-Checked "cargo build (service)" {
             cargo build --locked --release --target $triple -p seat-service -p seat-wrds
         }
@@ -178,12 +188,16 @@ if (-not $SkipCargo) {
             $sets.arm64 = "aarch64-pc-windows-msvc"
             if (-not $NoArm64ec) { $sets.arm64ec = "arm64ec-pc-windows-msvc" }
         }
+        # Own workspace and target dir (Tauri's MSI bundler would pick up a DLL in
+        # <target>\<triple>\release). One cargo invocation for every architecture, so the
+        # targets build in parallel; output stays <helperTarget>\<triple>\release.
         $helperTarget = Join-Path $CargoTargetDir "apihelper"
+        $helperTargets = @($sets.Values | ForEach-Object { "--target"; $_ })
+        Invoke-Checked "app API helper ($($sets.Keys -join ', '))" {
+            cargo build --locked --release --manifest-path (Join-Path $repo "crates\seat-compat\apihelper\Cargo.toml") @helperTargets --target-dir $helperTarget
+        }
         foreach ($k in $sets.Keys) {
             $t = $sets[$k]
-            Invoke-Checked "app API helper $k ($t)" {
-                cargo build --locked --release --manifest-path (Join-Path $repo "crates\seat-compat\apihelper\Cargo.toml") --target $t --target-dir $helperTarget
-            }
             $dst = Join-Path $payload "apihelper\$k"
             New-Item -ItemType Directory -Force $dst | Out-Null
             Copy-Item (Join-Path $helperTarget "$t\release\pulsar_seat_api.dll") (Join-Path $dst "pulsar-seat-api.dll") -Force
@@ -225,11 +239,11 @@ if (-not $SkipCargo) {
     $oldFlags = $env:RUSTFLAGS
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
     try {
-        foreach ($t in $shimTriples.Values) {
-            # Own sub-folder (like the API helper): Tauri's MSI bundler picks up every DLL
-            # next to the manager exe in <target>\<triple>\release.
-            Invoke-Checked "shim ($t)" { cargo build --locked --release --manifest-path (Join-Path $repo "shim\Cargo.toml") --target $t --target-dir $shimTarget }
-        }
+        # Own workspace and sub-folder (like the API helper): Tauri's MSI bundler picks up
+        # every DLL next to the manager exe in <target>\<triple>\release. One cargo
+        # invocation for every architecture (parallel); output stays <shimTarget>\<triple>\release.
+        $shimTargetArgs = @($shimTriples.Values | ForEach-Object { "--target"; $_ })
+        Invoke-Checked "shim ($($shimTriples.Values -join ', '))" { cargo build --locked --release --manifest-path (Join-Path $repo "shim\Cargo.toml") @shimTargetArgs --target-dir $shimTarget }
     } finally {
         $env:RUSTFLAGS = $oldFlags
     }

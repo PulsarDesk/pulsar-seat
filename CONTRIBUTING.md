@@ -51,6 +51,27 @@ bun installer/scripts/repo-scan.ts
   (`fix(seat-input): ...`, `feat(installer): ...`, `docs: ...`).
 - Keep changes focused; update the matching README / doc in the same change.
 
+### Faster local builds (optional)
+
+- **cargo-nextest**: `cargo install cargo-nextest --locked` (user-level, installs into
+  `~/.cargo\bin`; nothing system-wide). `ci-local.ps1` then runs the workspace tests with
+  `cargo nextest run` (one process per test, parallel across test binaries) and falls back
+  to `cargo test` when it is not installed. By hand: `cargo nextest run --workspace`
+  (`--workspace` includes the manager, which needs `bun run build` in `apps/manager`
+  first). nextest does not run doc tests; the workspace has none today (its doc blocks are
+  ` ```text `). A crate that adds a runnable doc example also needs `cargo test --doc`.
+- **rust-lld for debug / test builds (opt-in)**: link with `rust-lld.exe` (LLVM lld-link,
+  shipped with rustup) instead of MSVC `link.exe`. In your own shell:
+  `. .\scripts\fast-link.ps1` (sets
+  `CARGO_TARGET_{AARCH64,X86_64,I686}_PC_WINDOWS_MSVC_LINKER=rust-lld.exe` for that shell
+  only), `. .\scripts\fast-link.ps1 -Off` to go back; `ci-local.ps1 -FastLink` for its
+  debug gates. Release binaries always link with `link.exe`: `build-installer.ps1`,
+  `build-setup.ps1`, `build-drivers.ps1` and the `-Payload` gates drop these variables.
+  Cargo keys its cache on the linker, so switching rebuilds the whole target dir once; use
+  a separate `CARGO_TARGET_DIR` per setting. Measured on the ARM64 dev box (2026-11-25):
+  the incremental debug rebuilds are as fast as with `link.exe` (linking is not their
+  bottleneck); a full debug test build was ~20 % faster (one sample).
+
 ## Drivers
 
 Driver changes are built unsigned (`installer/scripts/build-drivers.ps1`), pass infverif,

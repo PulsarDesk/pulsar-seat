@@ -13,6 +13,14 @@
 #   ... -Installers     also the MSI for the native arch (build-installer.ps1 -SkipCargo; implies -Payload)
 #   ... -StreamServer   also the stream-server job (Sunshine patch check + MSYS2 build, x64 and ARM64)
 #   ... -Release        also the tag-only gates (release key list); never sets up a tag
+#   ... -FastLink       link the debug / test gates with rust-lld instead of MSVC link.exe
+#
+# -FastLink: debug / test gates link with rust-lld (scripts/fast-link.ps1,
+# CARGO_TARGET_<TRIPLE>_LINKER); cargo keys its cache on the linker, so the first run with or
+# without it rebuilds a target dir. Release builds (payload, installers) always link with
+# link.exe. The
+# workspace tests run with cargo-nextest when it is installed (`cargo install cargo-nextest
+# --locked`, user-level, ~/.cargo), else with cargo test.
 #
 # Tests run only for the native target (CI runs each target on its own runner); the other
 # target is built and clippy-checked (cross-compiled), like cargo check.
@@ -24,6 +32,7 @@ param(
     [switch] $Installers,
     [switch] $Release,
     [switch] $StreamServer,
+    [switch] $FastLink,
     [string] $CargoTargetDir = ""
 )
 
@@ -36,6 +45,9 @@ $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Pa
 $native = if ((Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture -eq 12) { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
 $archOf = @{ "aarch64-pc-windows-msvc" = "arm64"; "x86_64-pc-windows-msvc" = "x64" }
 $done = New-Object System.Collections.Generic.List[string]
+$nextest = [bool](Get-Command cargo-nextest -ErrorAction SilentlyContinue)
+if ($FastLink) { . (Join-Path $repo "scripts\fast-link.ps1") }
+if ($nextest) { Write-Host "tests: cargo nextest run" } else { Write-Host "tests: cargo test (cargo-nextest not installed)" }
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 function Gate([string] $Name, [scriptblock] $Block) {
@@ -63,6 +75,20 @@ function Run([string] $Exe) {
     if ($LASTEXITCODE -ne 0) { throw "$Exe $($args -join ' ') failed (exit $LASTEXITCODE)" }
 }
 
+# Workspace tests: cargo-nextest when installed (one process per test, parallel across test
+# binaries), else cargo test. Same package selection either way. nextest does not run doc
+# tests; the workspace has none (its doc blocks are ```text), so there is no `cargo test
+# --doc` step: add one here when a crate gets a runnable doc example.
+function Test-Workspace {
+    if ($nextest) { Run cargo nextest run @args } else { Run cargo test @args }
+}
+
+# Release builds link with MSVC link.exe: drop every CARGO_TARGET_<TRIPLE>_LINKER (the
+# fast-link switch or the caller's own) for the rest of this run (this process only).
+function Clear-LinkerOverride {
+    Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_TARGET_.+_LINKER$' } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
+}
+
 Push-Location $repo
 try {
     # Structure of ci.yml, plus: every job / installer script there has its counterpart in
@@ -74,13 +100,13 @@ try {
     foreach ($t in $Targets) {
         Gate "cargo build ($t)" { Run cargo build --locked --target $t }
         if ($t -eq $native) {
-            Gate "cargo test ($t)" { Run cargo test --locked --target $t }
+            Gate "cargo test ($t)" { Test-Workspace --locked --target $t }
         }
         Gate "clippy ($t)" { Run cargo clippy --locked --target $t --all-targets --features seat-core/mock '--' -D warnings }
     }
     Gate "manager frontend build" { Push-Location apps/manager; try { Run bun run build } finally { Pop-Location } }
     foreach ($t in $Targets) {
-        if ($t -eq $native) { Gate "manager (Rust) test ($t)" { Run cargo test --locked --target $t -p pulsar-seat-manager } }
+        if ($t -eq $native) { Gate "manager (Rust) test ($t)" { Test-Workspace --locked --target $t -p pulsar-seat-manager } }
         Gate "manager (Rust) clippy ($t)" { Run cargo clippy --locked --target $t -p pulsar-seat-manager --all-targets '--' -D warnings }
     }
     # Separate Cargo workspaces, same target dir (debug builds only; the release builds of
@@ -134,6 +160,8 @@ try {
         # Release helper DLLs in their own folder: Tauri's MSI bundler would pick up a DLL
         # in <target>\<triple>\release (same rule as build-installer.ps1).
         $helperDir = Join-Path $targetDir "apihelper"
+        # Release builds link with link.exe; the debug gates are done by now.
+        Clear-LinkerOverride
         foreach ($t in $Targets) {
             $arch = $archOf[$t]
             $out = Join-Path $repo "target\payload\$arch"
@@ -141,19 +169,22 @@ try {
             $env:RUSTFLAGS = "-C target-feature=+crt-static"
             if ($Release) { $env:PULSAR_SEAT_RELEASE = "1" }
             try {
+                # Two invocations on purpose: feature unification (build-installer.ps1).
                 Gate "release binaries ($t)" {
                     Run cargo build --locked --release --target $t -p seat-service -p seat-wrds
                     Run cargo build --locked --release --target $t -p seat-host
                 }
                 $sets = [ordered]@{ x86 = "i686-pc-windows-msvc"; x64 = "x86_64-pc-windows-msvc" }
                 if ($arch -eq "arm64") { $sets.arm64 = "aarch64-pc-windows-msvc"; $sets.arm64ec = "arm64ec-pc-windows-msvc" }
-                foreach ($k in $sets.Keys) {
-                    $ht = $sets[$k]
-                    Gate "API helper DLL $k ($ht)" {
-                        Run cargo build --locked --release --manifest-path crates/seat-compat/apihelper/Cargo.toml --target $ht --target-dir $helperDir
+                # One cargo invocation for every helper architecture (they build in
+                # parallel), as in build-installer.ps1.
+                $helperTargets = @($sets.Values | ForEach-Object { "--target"; $_ })
+                Gate "API helper DLLs ($($sets.Keys -join ', '))" {
+                    Run cargo build --locked --release --manifest-path crates/seat-compat/apihelper/Cargo.toml @helperTargets --target-dir $helperDir
+                    foreach ($k in $sets.Keys) {
                         $dst = Join-Path $out "apihelper\$k"
                         New-Item -ItemType Directory -Force $dst | Out-Null
-                        Copy-Item (Join-Path $helperDir "$ht\release\pulsar_seat_api.dll") (Join-Path $dst "pulsar-seat-api.dll") -Force
+                        Copy-Item (Join-Path $helperDir "$($sets[$k])\release\pulsar_seat_api.dll") (Join-Path $dst "pulsar-seat-api.dll") -Force
                     }
                 }
             } finally {

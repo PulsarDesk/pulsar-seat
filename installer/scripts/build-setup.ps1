@@ -69,6 +69,13 @@ $setupTarget = Join-Path $CargoTargetDir "setup"
 $msiHash = (Get-FileHash $Msi -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $saved = @{ RUSTFLAGS = $env:RUSTFLAGS; PULSAR_SEAT_SETUP_MSI = $env:PULSAR_SEAT_SETUP_MSI; PULSAR_SEAT_RELEASE = $env:PULSAR_SEAT_RELEASE; PULSAR_SEAT_SETUP_SIGNERS = $env:PULSAR_SEAT_SETUP_SIGNERS }
+# Release exe: MSVC link.exe only. Drop the opt-in rust-lld switch for debug builds
+# (scripts/fast-link.ps1, CARGO_TARGET_<TRIPLE>_LINKER) for this build; restored below.
+Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_TARGET_.+_LINKER$' } | ForEach-Object {
+    $saved[$_.Name] = $_.Value
+    Write-Warning "ignoring $($_.Name)=$($_.Value) for this build (release links with link.exe)"
+    Remove-Item "Env:$($_.Name)"
+}
 try {
     $env:RUSTFLAGS = "-C target-feature=+crt-static"
     $env:PULSAR_SEAT_SETUP_MSI = $Msi
