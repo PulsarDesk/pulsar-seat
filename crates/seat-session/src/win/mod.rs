@@ -103,6 +103,53 @@ pub fn service_key_exists(name: &str) -> bool {
     registry::WinRegistry.key_exists(&format!(r"SYSTEM\CurrentControlSet\Services\{name}")).unwrap_or(true)
 }
 
+/// SCM state of a service or driver: `Some(true)` = any state but stopped (a driver:
+/// loaded), `Some(false)` = stopped or unknown to the SCM, `None` = the query failed.
+/// Query rights only.
+pub fn service_active(name: &str) -> Option<bool> {
+    use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS, SERVICE_STATUS,
+        SERVICE_STOPPED,
+    };
+    let n = wide(name);
+    // SAFETY: plain SCM calls with valid pointers; both handles are closed below.
+    unsafe {
+        let scm = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+        if scm.is_null() {
+            return None;
+        }
+        let svc = OpenServiceW(scm, n.as_ptr(), SERVICE_QUERY_STATUS);
+        if svc.is_null() {
+            let e = last_error();
+            CloseServiceHandle(scm);
+            return (e == ERROR_SERVICE_DOES_NOT_EXIST).then_some(false);
+        }
+        let mut st: SERVICE_STATUS = std::mem::zeroed();
+        let ok = QueryServiceStatus(svc, &mut st) != 0;
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        ok.then_some(st.dwCurrentState != SERVICE_STOPPED)
+    }
+}
+
+/// Coexistence state of the reference product (`seat_core::reference`): its service keys,
+/// their `Start` values and the SCM state. Read only; unknown facts fail closed.
+pub fn reference_product_state() -> seat_core::reference::ReferenceState {
+    use crate::journal::RegValue;
+    use crate::registry::Registry;
+    let key = |name: &str| format!(r"SYSTEM\CurrentControlSet\Services\{name}");
+    let keys = seat_core::reference::probe(
+        |name| registry::WinRegistry.key_exists(&key(name)).ok(),
+        |name| match registry::WinRegistry.get(&key(name), "Start") {
+            Ok(RegValue::Dword(v)) => Some(v),
+            _ => None,
+        },
+        service_active,
+    );
+    seat_core::reference::classify(&keys)
+}
+
 /// Uninstall (service stopped): remove the passwordless-seat listener and its firewall
 /// rules (reserved names, works without a journal), then put back the RDS values of
 /// `journal\session.jsonl`. Both steps always run; the first error is returned after
@@ -162,7 +209,7 @@ impl SessionDeps {
             geometry: None,
             last_user: None,
             system_root: std::env::var("SystemRoot").ok().or_else(|| expand_env("%SystemRoot%")),
-            reference_product_present: Arc::new(|| seat_core::consts::REFERENCE_SERVICE_KEYS.iter().any(|k| service_key_exists(k))),
+            reference_product: Arc::new(reference_product_state),
             #[cfg(feature = "experimental-client-sku")]
             termwrap: Some(Arc::new(crate::termwrap::WindowsTermwrap::system(data_dir, crate::termwrap::TermwrapPolicy::default()))),
         }

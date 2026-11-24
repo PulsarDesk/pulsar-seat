@@ -77,8 +77,10 @@ pub struct SessionDeps {
     pub last_user: Option<LastUser>,
     /// Expanded `%SystemRoot%`.
     pub system_root: Option<String>,
-    /// The reference multi-seat product is installed (coexistence, spec 90 §11).
-    pub reference_product_present: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Reference multi-seat product state (coexistence, spec 90 §11,
+    /// `seat_core::reference`): `Active` refuses the RDP backends, `Disabled` (installed,
+    /// every key disabled and stopped) only adds the `reference_product_disabled` note.
+    pub reference_product: Arc<dyn Fn() -> seat_core::reference::ReferenceState + Send + Sync>,
     /// Experimental wrapper engine (feature `experimental-client-sku`).
     #[cfg(feature = "experimental-client-sku")]
     pub termwrap: Option<Arc<dyn crate::termwrap::Termwrap>>,

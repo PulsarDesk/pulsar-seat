@@ -63,8 +63,11 @@ pub mod reason {
     pub const RDP_DENIED_BY_POLICY: &str = "rdp_denied_by_policy";
     /// `TermService\Parameters\ServiceDll` is not the stock value and not ours.
     pub const FOREIGN_SERVICE_DLL: &str = "foreign_service_dll";
-    /// The reference multi-seat product is installed.
+    /// The reference multi-seat product is installed (and not fully disabled).
     pub const REFERENCE_PRODUCT_PRESENT: &str = "reference_product_present";
+    /// Note (not a block): the reference product is installed but every key of it is
+    /// disabled and stopped (`seat_core::reference`, 2026-11-24).
+    pub const REFERENCE_PRODUCT_DISABLED: &str = seat_core::reference::REFERENCE_PRODUCT_DISABLED;
     /// No console session (boot not finished, or between sessions).
     pub const CONSOLE_NOT_READY: &str = "console_not_ready";
     /// The console session has no signed-in user (desktops backend needs one).

@@ -355,7 +355,11 @@ pub struct FakeWorld {
     pub loopback: Arc<FakeLoopbackHost>,
     pub listener_journal: Arc<MemoryRestoreLog>,
     pub edition: Arc<FakeEdition>,
+    /// Reference product present and not disabled (`ReferenceState::Active`).
     pub reference_present: Arc<AtomicBool>,
+    /// Reference product present but fully disabled (`ReferenceState::Disabled`); ignored
+    /// while `reference_present` is set.
+    pub reference_disabled: Arc<AtomicBool>,
     pub termservice_running: bool,
 }
 
@@ -395,12 +399,14 @@ impl FakeWorld {
             listener_journal: Arc::default(),
             edition: Arc::new(e),
             reference_present: Arc::default(),
+            reference_disabled: Arc::default(),
             termservice_running: true,
         }
     }
 
     pub fn deps(&self) -> SessionDeps {
         let rp = self.reference_present.clone();
+        let rd = self.reference_disabled.clone();
         SessionDeps {
             registry: self.registry.clone(),
             edition: self.edition.clone(),
@@ -420,7 +426,15 @@ impl FakeWorld {
             })),
             last_user: None,
             system_root: Some(r"C:\Windows".into()),
-            reference_product_present: Arc::new(move || rp.load(Ordering::SeqCst)),
+            reference_product: Arc::new(move || {
+                if rp.load(Ordering::SeqCst) {
+                    seat_core::reference::ReferenceState::Active
+                } else if rd.load(Ordering::SeqCst) {
+                    seat_core::reference::ReferenceState::Disabled
+                } else {
+                    seat_core::reference::ReferenceState::Absent
+                }
+            }),
             #[cfg(feature = "experimental-client-sku")]
             termwrap: None,
         }

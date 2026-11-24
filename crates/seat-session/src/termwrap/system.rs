@@ -83,9 +83,10 @@ pub fn classify_edition(edition_id: &str, product_type: &str) -> HostEdition {
 
 pub trait HostFacts: Send + Sync {
     fn edition(&self) -> Result<HostEdition, TermwrapError>;
-    /// The reference multi-seat product is installed or its service exists (spec 90 §8.1
-    /// signals 1 and 2).
-    fn reference_product_present(&self) -> bool;
+    /// Reference multi-seat product state (spec 90 §8.1 signals 1 and 2,
+    /// `seat_core::reference`): only `Active` blocks; `Disabled` (installed, every key
+    /// disabled and stopped) does not.
+    fn reference_product(&self) -> seat_core::reference::ReferenceState;
     /// IMAGE_FILE_MACHINE of the OS (IsWow64Process2 native machine).
     fn native_machine(&self) -> u16;
     /// Expanded `%SystemRoot%`, e.g. `C:\Windows`.

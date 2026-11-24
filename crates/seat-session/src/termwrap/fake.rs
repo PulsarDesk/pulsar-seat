@@ -128,7 +128,10 @@ impl FileInspector for FakeFiles {
 
 pub struct FakeHost {
     pub edition: Mutex<HostEdition>,
+    /// Reference product present and not disabled (`ReferenceState::Active`).
     pub reference_present: AtomicBool,
+    /// Present but every key disabled and stopped; ignored while `reference_present` is set.
+    pub reference_disabled: AtomicBool,
     pub machine: AtomicU32,
 }
 
@@ -137,6 +140,7 @@ impl Default for FakeHost {
         Self {
             edition: Mutex::new(HostEdition::Client { edition_id: "Professional".into() }),
             reference_present: AtomicBool::new(false),
+            reference_disabled: AtomicBool::new(false),
             machine: AtomicU32::new(u32::from(pe::IMAGE_FILE_MACHINE_AMD64)),
         }
     }
@@ -146,8 +150,15 @@ impl HostFacts for FakeHost {
     fn edition(&self) -> Result<HostEdition, TermwrapError> {
         Ok(self.edition.lock().unwrap().clone())
     }
-    fn reference_product_present(&self) -> bool {
-        self.reference_present.load(Ordering::SeqCst)
+    fn reference_product(&self) -> seat_core::reference::ReferenceState {
+        use seat_core::reference::ReferenceState;
+        if self.reference_present.load(Ordering::SeqCst) {
+            ReferenceState::Active
+        } else if self.reference_disabled.load(Ordering::SeqCst) {
+            ReferenceState::Disabled
+        } else {
+            ReferenceState::Absent
+        }
     }
     fn native_machine(&self) -> u16 {
         self.machine.load(Ordering::SeqCst) as u16

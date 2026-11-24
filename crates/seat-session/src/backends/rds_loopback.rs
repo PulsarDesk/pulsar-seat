@@ -19,6 +19,7 @@ use seat_core::backend::session::{
 };
 use seat_core::backend::{Availability, BackendResult, ErrorKind};
 use seat_core::config::GlobalSettings;
+use seat_core::reference::ReferenceState;
 
 use super::SessionDeps;
 use super::rdp::RdpCore;
@@ -234,8 +235,13 @@ impl RdsLoopbackBackend {
     /// Shared checks of both RDP backends: TermService, listener, policy, coexistence.
     /// `wrapper_ok` = the experimental wrapper vouches for a non-stock ServiceDll.
     pub(crate) fn rdp_readiness(&self, notes: &mut Vec<String>, wrapper_ok: bool) -> Option<Availability> {
-        if (self.d.reference_product_present)() {
-            return Some(Availability::Unavailable { reason: reason::REFERENCE_PRODUCT_PRESENT.into() });
+        match (self.d.reference_product)() {
+            ReferenceState::Active => {
+                return Some(Availability::Unavailable { reason: reason::REFERENCE_PRODUCT_PRESENT.into() });
+            }
+            // Installed but every key disabled and stopped: a warning, not a block.
+            ReferenceState::Disabled => notes.push(reason::REFERENCE_PRODUCT_DISABLED.into()),
+            ReferenceState::Absent => {}
         }
         match self.d.rds.service_dll() {
             Ok(sd) if !wrapper_ok && !termservice_is_stock(&sd, self.d.system_root.as_deref()) => {

@@ -71,6 +71,16 @@ fn rds_probe_matrix() {
     let p = create_backend(SessionBackendKind::RdsLoopback, r.deps()).probe().unwrap();
     assert_eq!(p.availability, Availability::Unavailable { reason: "reference_product_present".into() });
 
+    // Installed but every key disabled and stopped: a note, not a block.
+    let d = FakeWorld::server();
+    d.reference_disabled.store(true, std::sync::atomic::Ordering::SeqCst);
+    let p = create_backend(SessionBackendKind::RdsLoopback, d.deps()).probe().unwrap();
+    assert_ne!(p.availability, Availability::Unavailable { reason: "reference_product_present".into() });
+    assert!(p.notes.contains(&"reference_product_disabled".to_string()), "{:?}", p.notes);
+    let clean = create_backend(SessionBackendKind::RdsLoopback, FakeWorld::server().deps()).probe().unwrap();
+    assert_eq!(p.availability, clean.availability);
+    assert!(!clean.notes.contains(&"reference_product_disabled".to_string()));
+
     let pol = FakeWorld::server();
     pol.registry.put(POL, "fDenyTSConnections", RegValue::Dword(1));
     let p = create_backend(SessionBackendKind::RdsLoopback, pol.deps()).probe().unwrap();

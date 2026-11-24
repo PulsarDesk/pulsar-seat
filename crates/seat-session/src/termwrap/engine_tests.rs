@@ -121,6 +121,10 @@ fn host_gates() {
     assert_eq!(code(tw(&w).enable(Path::new(FAKE_WRAPPER), WARNING_VERSION)), "reference_product_present");
     assert!(!tw(&w).status().unwrap().supported);
     assert_untouched(&w);
+    // Installed but fully disabled (every key Start = 4, none running): the gate passes.
+    w.host.reference_present.store(false, Ordering::SeqCst);
+    w.host.reference_disabled.store(true, Ordering::SeqCst);
+    assert!(tw(&w).status().unwrap().supported);
 }
 
 #[test]
@@ -657,6 +661,18 @@ mod external {
             assert_eq!(restarts(&w), 0, "case {i}");
             assert!(w.journal.records.lock().unwrap().is_empty(), "case {i}");
         }
+    }
+
+    /// Reference product installed but every key disabled and stopped: not a block.
+    #[test]
+    fn disabled_reference_product_does_not_block() {
+        let w = FakeWorld::with_external_active();
+        w.host.reference_disabled.store(true, Ordering::SeqCst);
+        assert_eq!(blocked(&w), None);
+        assert!(tw(&w).status().unwrap().state.wrapper_usable());
+        // Active again (a key not disabled, or still running): blocked as before.
+        w.host.reference_present.store(true, Ordering::SeqCst);
+        assert_eq!(blocked(&w), Some(BlockReason::ReferenceProductPresent));
     }
 
     #[test]

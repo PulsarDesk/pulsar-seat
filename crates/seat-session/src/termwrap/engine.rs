@@ -119,7 +119,7 @@ impl WindowsTermwrap {
     }
 
     fn host_block(&self) -> Result<Option<Block>, TermwrapError> {
-        if self.d.host.reference_product_present() {
+        if self.d.host.reference_product().blocks() {
             return Ok(Some((BlockReason::ReferenceProductPresent, String::new())));
         }
         Ok(match self.d.host.edition()? {
