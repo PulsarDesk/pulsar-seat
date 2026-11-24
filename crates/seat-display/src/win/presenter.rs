@@ -32,6 +32,15 @@
 //!   id) through CCD, move the windows and report the new layout to the host (RDP monitor
 //!   layout update), or mark the output lost (localized idle text) until it comes back.
 //!
+//! - hybrid GPUs (gaming PC E2E bug 3, 2026-11-24): each output's flip chain device goes on
+//!   the adapter DXGI lists the window's monitor under (`super::dxgi_output_owner`,
+//!   [`pick_flip_adapter`]), which can differ from the CCD target's adapter; a flip chain
+//!   that fails for good is dropped and the output gets a **new** window for the GDI blit
+//!   (GDI and flip-model presentation are not mixed on one window). Diagnostics in the
+//!   host log: the adapter per output, the first RDP frame's sampled brightness, and every
+//!   10 s per output (when something moved) frames in, presents, present errors,
+//!   `DXGI_STATUS_OCCLUDED` presents and GDI paints.
+//!
 //! Known limits (shown in the manager, spec 40 §6.3.7): the console's lock screen, UAC and
 //! Ctrl+Alt+Del replace the console desktop and blank these windows; the console user can
 //! capture them. Untested on hardware.
@@ -41,7 +50,7 @@ use super::wide;
 use super::flip::FlipChain;
 use crate::model::{
     blend_cursor_region, centre, coalesce_dirty, console_clip, contains_point, copy_region, cursor_rect, letterbox, move_back,
-    pick_follow_mode, ModeFollower, MODE_FOLLOW_SETTLE,
+    nonblack_samples, pick_flip_adapter, pick_follow_mode, AdapterChoice, ModeFollower, MODE_FOLLOW_SETTLE,
 };
 use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, OutputPlacement, SeatOutputs};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
@@ -85,6 +94,8 @@ const WM_APP_FRAME: u32 = WM_APP + 4;
 const WM_APP_MODE: u32 = WM_APP + 5;
 const TIMER_GUARD: usize = 1;
 const GUARD_MS: u32 = 250;
+/// Guard ticks between two diagnostics lines per output (10 s; only when a counter moved).
+const STATS_TICKS: u32 = 40;
 
 const EVENT_OBJECT_SHOW: u32 = 0x8002;
 const EVENT_OBJECT_LOCATIONCHANGE: u32 = 0x800b;
@@ -156,6 +167,34 @@ struct Out {
     /// A frame (CPU or GPU) waits for the next vblank (back-pressure; cursor moves do not
     /// count).
     frame_pending: bool,
+    /// Flip presentation failed for good: GDI blit on a window created after the flip
+    /// chain was dropped (never a flip chain again for this output).
+    gdi_only: bool,
+    /// Diagnostics (gaming PC E2E bug 3): what came in, what went out.
+    stats: OutStats,
+}
+
+/// Per-output counters for the presenter's diagnostics lines (host log).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct OutStats {
+    cpu_frames: u64,
+    gpu_frames: u64,
+    /// Flip-chain presents that worked / failed / reported `DXGI_STATUS_OCCLUDED`.
+    presents: u64,
+    present_errors: u64,
+    occluded: u64,
+    /// GDI paints of a frame.
+    gdi_paints: u64,
+    /// Adapter choice of the flip chain (`None`: no chain).
+    adapter: Option<AdapterChoice>,
+}
+
+impl OutStats {
+    /// The counters that make a new diagnostics line worth writing.
+    fn moved_since(&self, last: &OutStats) -> bool {
+        (self.cpu_frames, self.gpu_frames, self.presents, self.present_errors, self.occluded, self.gdi_paints)
+            != (last.cpu_frames, last.gpu_frames, last.presents, last.present_errors, last.occluded, last.gdi_paints)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,6 +246,8 @@ struct Shared {
     /// GDI device names whose mode this presenter changed, with the (adapter LUID, target
     /// id) they belong to (reset on stop or when the output no longer follows).
     mode_changed: Vec<(String, (u64, u32))>,
+    /// Counters per output at its last diagnostics line.
+    logged: Vec<OutStats>,
 }
 
 fn lock(s: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -289,9 +330,12 @@ impl WindowPresenter {
                         gpu_source: false,
                         shared: None,
                         frame_pending: false,
+                        gdi_only: false,
+                        stats: OutStats::default(),
                     })
                 })
                 .collect();
+            s.logged = vec![OutStats::default(); s.outputs.len()];
         }
         self.ensure_thread()?;
         unsafe {
@@ -414,6 +458,9 @@ impl FrameSink for WindowPresenter {
         }
         let mut gdi: Vec<(usize, bool)> = Vec::new();
         let (mut post_frame, mut post_mode) = (false, false);
+        // First RDP frame per output (gaming PC E2E bug 3): "not black here, black on the
+        // monitor" is a presentation fault; "black here" comes from the RDP client.
+        let mut first: Vec<String> = Vec::new();
         {
             let mut s = lock(&self.shared);
             let now = Instant::now();
@@ -453,6 +500,12 @@ impl FrameSink for WindowPresenter {
                         }
                     }
                 }
+                o.stats.cpu_frames += 1;
+                if o.stats.cpu_frames == 1 {
+                    let (n, lit) = nonblack_samples(&o.frame, frame.width, frame.height, 16);
+                    let via = if o.gpu { "flip chain" } else { "GDI" };
+                    first.push(format!("presenter: output {i}: first RDP frame {}x{}, {lit} of {n} samples not black, via {via}", frame.width, frame.height));
+                }
                 if o.gpu {
                     o.pending = true;
                     o.frame_pending = true;
@@ -480,6 +533,9 @@ impl FrameSink for WindowPresenter {
                 s.mode_requests.extend(modes);
                 post_mode = true;
             }
+        }
+        for l in first {
+            log::info!("{l}");
         }
         if post_frame {
             self.post(WM_APP_FRAME);
@@ -572,6 +628,7 @@ impl FrameSink for WindowPresenter {
                 return Err(BackendError::new(ErrorKind::Internal, "bad_frame", "GPU frame source outside its texture"));
             }
             o.shared = Some(SharedFrame { handle: frame.handle, generation: frame.generation, src });
+            o.stats.gpu_frames += 1;
             o.gpu_source = true;
             o.blank = None;
             o.fw = src.width;
@@ -703,6 +760,9 @@ fn ui_thread(shared: Arc<Mutex<Shared>>, tx: std::sync::mpsc::Sender<u32>) {
                             if tick % 8 == 0 {
                                 retry_gpu(&shared);
                             }
+                            if tick % STATS_TICKS == 0 {
+                                log_stats(&shared);
+                            }
                         }
                         _ => {}
                     }
@@ -784,15 +844,18 @@ fn retry_gpu(shared: &Arc<Mutex<Shared>>) {
             .filter(|(_, h, _, _, _)| *h != 0)
             .collect()
     };
+    let mut gave_up = false;
     for (i, h, r, luid, vrr) in todo {
-        let res = FlipChain::new(HWND(h as *mut _), luid, r.width, r.height, vrr);
+        let choice = flip_adapter(i, &r, luid);
+        let res = FlipChain::new(HWND(h as *mut _), choice.luid(), r.width, r.height, vrr);
         let mut s = lock(shared);
         let Some(o) = s.outputs.get_mut(i).and_then(|o| o.as_mut()) else { continue };
         match res {
             Ok(c) => {
                 o.gpu_luid = c.luid();
+                o.stats.adapter = Some(choice);
                 CHAINS.with(|m| m.borrow_mut().insert(i, c));
-                log::info!("presenter: output {i}: flip chain re-created after a device loss");
+                log::info!("presenter: output {i}: flip chain re-created after a device loss on adapter {:x}", o.gpu_luid);
                 o.gpu = true;
                 o.gpu_retry = false;
                 o.gpu_create_failures = 0;
@@ -804,17 +867,94 @@ fn retry_gpu(shared: &Arc<Mutex<Shared>>) {
                 o.gpu_create_failures = o.gpu_create_failures.saturating_add(1);
                 if o.gpu_create_failures >= MAX_GPU_CREATE_FAILURES {
                     o.gpu_retry = false;
-                    log::warn!("presenter: output {i}: flip chain re-creation failed {} times ({e}); GDI blit from now on", o.gpu_create_failures);
+                    o.gdi_only = true;
+                    gave_up = true;
+                    log::warn!("presenter: output {i}: flip chain re-creation failed {} times ({e}); GDI blit on a new window from now on", o.gpu_create_failures);
                 }
             }
         }
+    }
+    if gave_up {
+        post_self(WM_APP_RECONFIGURE);
+    }
+}
+
+/// Post a message to this (the UI) thread's queue.
+fn post_self(msg: u32) {
+    // SAFETY: plain message post to the calling thread.
+    unsafe {
+        let _ = PostThreadMessageW(GetCurrentThreadId(), msg, WPARAM(0), LPARAM(0));
+    }
+}
+
+/// The adapter for output `i`'s flip chain (window `r`, CCD target adapter `ccd`), logged
+/// when DXGI disagrees with CCD (see [`pick_flip_adapter`]).
+fn flip_adapter(i: usize, r: &Rect, ccd: u64) -> AdapterChoice {
+    let owner = super::dxgi_output_owner(r);
+    let choice = pick_flip_adapter(ccd, owner.as_ref().map(|o| o.0));
+    match (&choice, &owner) {
+        (AdapterChoice::Owner { ccd, dxgi }, Some((_, gpu, name))) => {
+            log::warn!("presenter: output {i}: CCD names adapter {ccd:x}, DXGI lists {name} under {dxgi:x} ({gpu}); device on {dxgi:x}")
+        }
+        (AdapterChoice::CcdOnly(l), _) => log::warn!("presenter: output {i}: no DXGI output covers {r:?}; device on the CCD adapter {l:x}"),
+        _ => {}
+    }
+    choice
+}
+
+/// Diagnostics line per output whose counters moved since its last line (host log, every
+/// [`STATS_TICKS`] guard ticks). Gaming PC E2E bug 3.
+fn log_stats(shared: &Arc<Mutex<Shared>>) {
+    let lines: Vec<String> = {
+        let mut s = lock(shared);
+        let s = &mut *s;
+        s.logged.resize(s.outputs.len(), OutStats::default());
+        let mut lines = Vec::new();
+        for (i, o) in s.outputs.iter().enumerate() {
+            let Some(o) = o else { continue };
+            if !o.stats.moved_since(&s.logged[i]) {
+                continue;
+            }
+            s.logged[i] = o.stats;
+            let st = &o.stats;
+            let path = if o.gpu { format!("flip chain on adapter {:x} ({:?})", o.gpu_luid, st.adapter) } else { "GDI".to_string() };
+            let picture = if o.gpu_source {
+                "GPU frames".to_string()
+            } else if o.fw > 0 && !o.frame.is_empty() {
+                let (n, lit) = nonblack_samples(&o.frame, o.fw, o.fh, 16);
+                format!("last RDP frame {}x{} {lit}/{n} not black", o.fw, o.fh)
+            } else {
+                "no frame".to_string()
+            };
+            lines.push(format!(
+                "presenter: output {i} (target {} adapter {:x}) via {path}: cpu frames {}, gpu frames {}, presents {}, present errors {}, occluded {}, gdi paints {}, {picture}",
+                o.placement.target_id, o.placement.adapter_luid, st.cpu_frames, st.gpu_frames, st.presents, st.present_errors, st.occluded, st.gdi_paints
+            ));
+        }
+        lines
+    };
+    for l in lines {
+        log::info!("{l}");
     }
 }
 
 unsafe fn reconfigure(shared: &Arc<Mutex<Shared>>, hinst: windows::Win32::Foundation::HINSTANCE, class: &[u16]) {
     reset_unfollowed_modes(shared);
-    // Swap chains go before their windows.
+    // Swap chains go before their windows; an output is on a flip chain only once one is
+    // created below again (this also runs after a flip chain gave up, `gdi_only`).
     CHAINS.with(|c| c.borrow_mut().clear());
+    for o in lock(shared).outputs.iter_mut().flatten() {
+        o.gpu = false;
+        o.gpu_luid = 0;
+        o.stats.adapter = None;
+        o.shared = None;
+        o.frame_pending = false;
+        if o.gpu_source {
+            // GPU frames cannot reach GDI; the producer sees the output lose its adapter.
+            o.gpu_source = false;
+            o.fw = 0;
+        }
+    }
     let old = std::mem::take(&mut lock(shared).hwnds);
     for h in old.into_iter().filter(|&h| h != 0) {
         let _ = unsafe { DestroyWindow(HWND(h as *mut _)) };
@@ -857,31 +997,46 @@ unsafe fn reconfigure(shared: &Arc<Mutex<Shared>>, hinst: windows::Win32::Founda
         }
     }
     let use_gpu = lock(shared).options.as_ref().is_some_and(|o| o.gpu);
-    if use_gpu {
-        for (i, &h) in hwnds.iter().enumerate() {
-            let Some((r, luid, vrr)) = rects[i].map(|r| {
-                let s = lock(shared);
-                let o = s.outputs[i].as_ref();
-                (r, o.map_or(0, |o| o.placement.adapter_luid), o.is_some_and(|o| o.placement.vrr))
-            }) else {
-                continue;
-            };
-            if h == 0 {
-                continue;
-            }
-            match FlipChain::new(HWND(h as *mut _), luid, r.width, r.height, vrr) {
-                Ok(c) => {
-                    let got = c.luid();
-                    CHAINS.with(|m| m.borrow_mut().insert(i, c));
-                    if let Some(o) = lock(shared).outputs[i].as_mut() {
-                        o.gpu = true;
-                        o.gpu_luid = got;
-                        o.pending = true;
-                        o.pending_full = true;
-                    }
+    for (i, &h) in hwnds.iter().enumerate() {
+        let Some((r, luid, tid, vrr, gdi_only)) = rects[i].map(|r| {
+            let s = lock(shared);
+            let o = s.outputs[i].as_ref();
+            (
+                r,
+                o.map_or(0, |o| o.placement.adapter_luid),
+                o.map_or(0, |o| o.placement.target_id),
+                o.is_some_and(|o| o.placement.vrr),
+                o.is_some_and(|o| o.gdi_only),
+            )
+        }) else {
+            continue;
+        };
+        if h == 0 {
+            continue;
+        }
+        if !use_gpu || gdi_only {
+            log::info!("presenter: output {i} (target {tid} adapter {luid:x}) at {r:?}: GDI blit{}", if gdi_only { " (flip chain gave up)" } else { "" });
+            continue;
+        }
+        let choice = flip_adapter(i, &r, luid);
+        match FlipChain::new(HWND(h as *mut _), choice.luid(), r.width, r.height, vrr) {
+            Ok(c) => {
+                let got = c.luid();
+                log::info!(
+                    "presenter: output {i} (target {tid} adapter {luid:x}) at {r:?}: flip chain on adapter {got:x}{}{}",
+                    if got != choice.luid() && choice.luid() != 0 { " (NOT the chosen adapter: cross-adapter present)" } else { "" },
+                    if c.tearing() { ", tearing presents" } else { "" }
+                );
+                CHAINS.with(|m| m.borrow_mut().insert(i, c));
+                if let Some(o) = lock(shared).outputs[i].as_mut() {
+                    o.gpu = true;
+                    o.gpu_luid = got;
+                    o.stats.adapter = Some(choice);
+                    o.pending = true;
+                    o.pending_full = true;
                 }
-                Err(e) => log::warn!("presenter: output {i}: D3D11 flip model unavailable ({e}); GDI blit"),
             }
+            Err(e) => log::warn!("presenter: output {i}: D3D11 flip model unavailable ({e}); GDI blit"),
         }
     }
     lock(shared).hwnds = hwnds;
@@ -939,26 +1094,45 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
     };
     let result = CHAINS.with(|c| {
         let mut c = c.borrow_mut();
-        let Some(ch) = c.get_mut(&i) else { return Ok(()) };
-        match job {
+        let Some(ch) = c.get_mut(&i) else { return Ok(0) };
+        let r = match job {
             Job::Message(text) => {
                 let (w, h) = (ww.clamp(1, 7680), wh.clamp(1, 4320));
                 let img = super::dcore::render_message(w, h, &text);
-                ch.upload(w, h, &[(Rect { x: 0, y: 0, width: w, height: h }, img)])?;
+                ch.upload(w, h, &[(Rect { x: 0, y: 0, width: w, height: h }, img)]).and_then(|_| ch.present(ww, wh))
             }
-            Job::Frame(fw, fh, regions) => ch.upload(fw, fh, &regions)?,
+            Job::Frame(fw, fh, regions) => ch.upload(fw, fh, &regions).and_then(|_| ch.present(ww, wh)),
             Job::Shared(frame, cursor) => {
-                if let Some(f) = frame {
-                    ch.take_shared(f.handle, f.generation, f.src)?;
+                let taken = match frame {
+                    Some(f) => ch.take_shared(f.handle, f.generation, f.src),
+                    None => Ok(()),
+                };
+                taken.and_then(|_| ch.present_with_cursor(ww, wh, cursor.as_ref().map(|(c, p)| (c, p.as_slice()))))
+            }
+        };
+        r.map(|_| ch.last_present_status())
+    });
+    {
+        let mut s = lock(shared);
+        if let Some(o) = s.outputs.get_mut(i).and_then(|o| o.as_mut()) {
+            match &result {
+                Ok(status) => {
+                    o.stats.presents += 1;
+                    if *status == super::flip::DXGI_STATUS_OCCLUDED {
+                        if o.stats.occluded == 0 {
+                            log::warn!("presenter: output {i}: Present reports DXGI_STATUS_OCCLUDED (the window's content is not shown)");
+                        }
+                        o.stats.occluded += 1;
+                    }
                 }
-                return ch.present_with_cursor(ww, wh, cursor.as_ref().map(|(c, p)| (c, p.as_slice())));
+                Err(_) => o.stats.present_errors += 1,
             }
         }
-        ch.present(ww, wh)
-    });
+    }
     if let Err(e) = result {
         let lost = e.win32.is_some_and(|c| DXGI_DEVICE_LOST.contains(&c));
         CHAINS.with(|c| c.borrow_mut().remove(&i));
+        let mut new_window = false;
         if let Some(o) = lock(shared).outputs.get_mut(i).and_then(|o| o.as_mut()) {
             o.gpu = false;
             o.gpu_luid = 0;
@@ -972,8 +1146,17 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
                 o.gpu_create_failures = 0;
                 log::warn!("presenter: output {i}: GPU device lost ({e}); GDI blit until the flip chain is re-created");
             } else {
-                log::warn!("presenter: output {i}: flip present failed ({e}); GDI blit from now on");
+                // GDI and flip-model presentation are not mixed on one window (HYPOTHESIS
+                // for the black gaming PC monitors, E2E bug 3): the GDI blit goes to a new
+                // window.
+                o.gdi_only = true;
+                new_window = true;
+                log::warn!("presenter: output {i}: flip present failed ({e}); GDI blit on a new window from now on");
             }
+        }
+        if new_window {
+            post_self(WM_APP_RECONFIGURE);
+            return;
         }
         if hwnd != 0 {
             unsafe {
@@ -1323,6 +1506,12 @@ unsafe fn paint(hwnd: HWND) {
                 if c.visible && c.output == o.src && c.width > 0 && s.cursor_pm.len() >= (c.width * c.height * 4) as usize {
                     draw_cursor(hdc, &s, &dst, o.fw, o.fh);
                 }
+                drop(s);
+                if let Some(o) = lock(&shared).outputs.get_mut(idx - 1).and_then(|o| o.as_mut()) {
+                    o.stats.gdi_paints += 1;
+                }
+                let _ = EndPaint(hwnd, &ps);
+                return;
             }
             _ => {
                 FillRect(hdc, &rc, HBRUSH(black.0));
@@ -1415,5 +1604,25 @@ mod tests {
         assert_eq!(premultiply(&[200, 100, 50, 128, 1, 2, 3, 255]), vec![100, 50, 25, 128, 1, 2, 3, 255]);
         let c = CursorState { visible: true, x: 10, y: 10, hotspot_x: 2, hotspot_y: 3, width: 32, height: 32, ..Default::default() };
         assert_eq!(cursor_area(&c), Some(Rect { x: 8, y: 7, width: 32, height: 32 }));
+    }
+
+    #[test]
+    fn stats_lines_only_when_counters_move() {
+        let a = OutStats::default();
+        let mut b = a;
+        b.adapter = Some(AdapterChoice::Same(7));
+        assert!(!b.moved_since(&a), "the adapter alone is no new line");
+        for bump in [
+            |s: &mut OutStats| s.cpu_frames += 1,
+            |s: &mut OutStats| s.gpu_frames += 1,
+            |s: &mut OutStats| s.presents += 1,
+            |s: &mut OutStats| s.present_errors += 1,
+            |s: &mut OutStats| s.occluded += 1,
+            |s: &mut OutStats| s.gdi_paints += 1,
+        ] {
+            let mut c = a;
+            bump(&mut c);
+            assert!(c.moved_since(&a));
+        }
     }
 }

@@ -52,6 +52,25 @@ Clean-room: written from the OSMS gap description and Microsoft Learn, no OSMS c
 Same code on x64 and ARM64. HYPOTHESIS until a hardware run: all of it, in particular the
 AppBar cleanup after a killed seat host and the area-sized `pulsar_idd` mode.
 
+**Hybrid GPU presenter (gaming PC E2E bug 3, 2026-11-24, local `window_presenter`):**
+each output's flip chain device goes on the adapter DXGI lists the window's monitor under
+(`win::dxgi_output_owner`, `model::pick_flip_adapter`; logged when it differs from the CCD
+target's adapter); a flip chain that fails for good leaves its window and the output's
+GDI blit gets a new one (HYPOTHESIS: GDI shows nothing on a window that had a flip-model
+swap chain). Diagnostics through `log` (the seat host prints them since the same day):
+first RDP frame brightness per output (`model::nonblack_samples`) and every 10 s frames
+in, presents, present errors, `DXGI_STATUS_OCCLUDED` presents and GDI paints. Root cause of
+the black picture on that PC not proven.
+
+**Attach a connected monitor outside the desktop (gaming PC E2E bug 9, 2026-11-24,
+local):** `apply_topology` gives a plan target (seat 1, a seat presented through the
+desktop, every monitor in the wizard's extend step) that is connected but detached a CCD
+path of its own (`topology::plan_topology` + `win::ccd::apply_request`: explicit paths, a
+free source on the target's own adapter first), journaled as `attached` in
+`display-topology.json` before the change and detached again once no plan names it.
+`SDC_TOPOLOGY_EXTEND` (`ccd::extend_desktop`) is database driven and keeps a monitor the
+user disconnected out. HYPOTHESIS on hardware until round 2.
+
 Both kinds' `pulsar_idd` share a wire name and the driver binary, not the control interface. They never meet in one config
 field: local seats read `settings.backends.display`, remote seats
 `settings.remote.display_backend`.

@@ -10,8 +10,12 @@
 //! | `pulsar_idd` | as `display_core`, plus one virtual monitor per output from our IddCx driver | as `display_core` |
 //! | `console_only` | none (fast user switching) | seat 1 `native` only |
 //!
-//! The binding never adds monitors to the console desktop on its own (the wizard's extend
-//! step is [`Binding::extend_desktop`]) and never touches graphics-kernel state.
+//! The binding adds a monitor to the console desktop only when the plan names it (seat 1,
+//! a seat that presents it through the desktop, or every monitor in the wizard's extend
+//! step) and it is connected but outside the desktop: one CCD path with explicit paths,
+//! journaled first as `attached`, removed again once no plan names it (gaming PC E2E bug
+//! 9, 2026-11-24: Windows' extend topology kept a user-detached monitor out). It never
+//! touches graphics-kernel state.
 //!
 //! - `apply_topology` takes the seat targets of `display_core` / `pulsar_idd` out of the
 //!   console desktop where Windows offers monitor specialization (feature-detected; see
@@ -537,7 +541,15 @@ impl DisplayBinding for Binding {
                 .collect();
             let all: Vec<Candidate> = live.iter().map(cand).collect();
             let journal = lock(&inner.state).journal.clone();
-            let actions = plan_topology(takes_out, &reserved, &all, &journal);
+            // Console targets (seat 1, the wizard's extend step) outside the desktop are
+            // attached too; never under console_only (its seat agent owns the topology).
+            let console_cands: Vec<Candidate> = if inner.kind == DisplayBackendKind::ConsoleOnly {
+                Vec::new()
+            } else {
+                live.iter().filter(|m| console.contains(&m.device.key)).map(cand).collect()
+            };
+            let attach = inner.kind != DisplayBackendKind::ConsoleOnly && lock(&inner.state).journal_refused.is_none();
+            let actions = plan_topology(takes_out, &reserved, &console_cands, attach, &all, &journal);
             if actions.kept_for_console {
                 log::warn!("display: seat targets stay in the console desktop: seat 1 would have no monitor left");
             }
@@ -551,11 +563,29 @@ impl DisplayBinding for Binding {
                         for (t, why) in &outcome.failed {
                             log::warn!("display: topology change for target {} on adapter {:x}: {why}", t.target_id, t.adapter_luid);
                         }
+                        for t in &actions.attaching {
+                            let key = all.iter().find(|c| &c.target == t).map(|c| c.key.to_string()).unwrap_or_default();
+                            if outcome.activated.contains(t) {
+                                log::info!("display: attached {key} (target {} of adapter {:x}) to the console desktop; journaled", t.target_id, t.adapter_luid);
+                            } else {
+                                log::warn!("display: {key} (target {} of adapter {:x}) is connected but could not be attached", t.target_id, t.adapter_luid);
+                            }
+                        }
+                        let detaching: Vec<TargetRef> = actions.detaching.iter().map(|(_, t)| *t).collect();
+                        for t in detaching.iter().filter(|t| outcome.deactivated.contains(t)) {
+                            log::info!("display: target {} of adapter {:x} detached again (no seat uses it)", t.target_id, t.adapter_luid);
+                        }
                         report.changed = outcome.applied || !outcome.specialized.is_empty() || !outcome.unspecialized.is_empty();
                         report.rolled_back = outcome.rolled_back;
-                        report.removed = all.iter().filter(|c| actions.request.remove.iter().any(|r| r.target == c.target) && outcome.took_out(&c.target)).map(|c| c.key.clone()).collect();
+                        report.removed = all
+                            .iter()
+                            .filter(|c| !detaching.contains(&c.target))
+                            .filter(|c| actions.request.remove.iter().any(|r| r.target == c.target) && outcome.took_out(&c.target))
+                            .map(|c| c.key.clone())
+                            .collect();
                         report.restored = all
                             .iter()
+                            .filter(|c| !actions.attaching.contains(&c.target))
                             .filter(|c| {
                                 actions.request.restore.iter().any(|r| {
                                     r.target == c.target
@@ -1165,19 +1195,46 @@ mod tests {
             DeviceDetails::Display(d) => assert_eq!(d.presentation, Presentation::Fallback),
             _ => panic!(),
         }
-        let plan = TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()]), (s(3), vec![devs[2].key.clone()])] };
-        let r = b.apply_topology(&plan).unwrap();
-        assert_eq!(r.fallback, vec![k2.clone()]);
-        assert_eq!(r.missing, vec![devs[2].key.clone()]);
-        assert!(!r.changed);
-        b.release_seat(s(2)).unwrap();
-        assert!(b.seat_outputs(s(2)).is_none());
         b.identify(&[(devs[0].key.clone(), "1".into())], true).unwrap();
         b.set_power(&devs[0].key, false).unwrap();
         assert!(b.set_power(&devs[2].key, false).is_err());
         let cmds = lock(&c.cmds).clone();
         assert!(matches!(&cmds[0], ConsoleCommand::Identify { items, on: true, .. } if items.len() == 1));
         assert!(matches!(&cmds[1], ConsoleCommand::Power { on: false, .. }));
+        // Bug 9 (gaming PC E2E): the connected target outside the desktop is attached by the
+        // seat's plan (explicit CCD paths, journaled), then binds as a desktop target.
+        let k3 = devs[2].key.clone();
+        let plan = TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()]), (s(3), vec![k3.clone()])] };
+        let r = b.apply_topology(&plan).unwrap();
+        assert!(r.changed);
+        assert!(r.missing.is_empty(), "{:?}", r.missing);
+        assert_eq!(r.fallback, vec![k2.clone(), k3.clone()]);
+        assert!(r.restored.is_empty(), "an attach is no journal undo");
+        let req = lock(&c.cmds).iter().rev().find_map(|c| match c {
+            ConsoleCommand::ApplyTopology { request } => Some(request.clone()),
+            _ => None,
+        });
+        assert_eq!(req.unwrap().restore, vec![crate::topology::RestoreTarget { target: TargetRef { adapter_luid: 5, target_id: 3 }, unspecialize: false, activate: true }]);
+        let j = b.topology_journal();
+        assert_eq!(j.entries.len(), 1);
+        assert!(j.entries[0].attached && j.entries[0].key == k3);
+        assert_eq!(b.bind_seat(s(3), std::slice::from_ref(&k3)).unwrap().outputs[0].presentation, Presentation::Fallback);
+        b.release_seat(s(3)).unwrap();
+        // Same plan again: nothing to do.
+        assert!(!b.apply_topology(&plan).unwrap().changed);
+        // Seat 3 no longer uses it: the path goes again and the journal is empty.
+        let r = b.apply_topology(&TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()])] }).unwrap();
+        assert!(r.changed && r.removed.is_empty());
+        assert!(b.topology_journal().entries.is_empty());
+        assert_eq!(b.bind_seat(s(3), std::slice::from_ref(&k3)).unwrap_err().reason, "no_display");
+        b.release_seat(s(2)).unwrap();
+        assert!(b.seat_outputs(s(2)).is_none());
+        // console_only never attaches (its seat agent owns the topology).
+        let (b, c) = setup(DisplayBackendKind::ConsoleOnly, vec![target(5, 1, true, 0), target(5, 3, false, 0)]);
+        let devs = b.enumerate().unwrap();
+        let r = b.apply_topology(&TopologyPlan { console: devs.iter().map(|d| d.key.clone()).collect(), seats: vec![] }).unwrap();
+        assert!(!r.changed && r.missing == vec![devs[1].key.clone()]);
+        assert!(lock(&c.cmds).is_empty());
     }
 
     #[test]

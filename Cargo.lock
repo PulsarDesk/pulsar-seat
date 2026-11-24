@@ -4620,6 +4620,7 @@ dependencies = [
 name = "seat-host"
 version = "0.1.0"
 dependencies = [
+ "log",
  "seat-core",
  "seat-display",
  "seat-input",

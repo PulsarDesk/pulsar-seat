@@ -76,7 +76,12 @@ pub struct FlipChain {
     opened: Vec<Opened>,
     /// Variable refresh: tearing presents (sync interval 0).
     tearing: bool,
+    /// HRESULT of the last `Present` (0 = S_OK).
+    last_status: i32,
 }
+
+/// `DXGI_STATUS_OCCLUDED`: the present worked but the window's content is not visible.
+pub const DXGI_STATUS_OCCLUDED: i32 = 0x087A_0001;
 
 fn flags(tearing: bool) -> DXGI_SWAP_CHAIN_FLAG {
     if tearing {
@@ -105,7 +110,7 @@ impl FlipChain {
         let (dev, ctx) = match super::dcore::d3d_for_luid(luid) {
             Ok(d) => d,
             Err(err) => {
-                log::debug!("flip: adapter {luid:x} not usable ({err}); default adapter");
+                log::warn!("flip: adapter {luid:x} not usable ({err}); device on the default adapter (cross-adapter present)");
                 super::dcore::d3d_default()?
             }
         };
@@ -139,8 +144,18 @@ impl FlipChain {
                 return Err(BackendError::new(ErrorKind::Os, "flip_presenter", "no frame latency waitable object"));
             }
             let luid = adapter.GetDesc().map(|d| super::luid_u64(d.AdapterLuid)).unwrap_or(0);
-            Ok(Self { ctx, dev, chain, waitable, buf: (w.max(1), h.max(1)), content: None, luid, opened: Vec::new(), tearing })
+            Ok(Self { ctx, dev, chain, waitable, buf: (w.max(1), h.max(1)), content: None, luid, opened: Vec::new(), tearing, last_status: 0 })
         }
+    }
+
+    /// Presents with tearing (variable refresh).
+    pub fn tearing(&self) -> bool {
+        self.tearing
+    }
+
+    /// HRESULT of the last `Present` (0 = S_OK; see [`DXGI_STATUS_OCCLUDED`]).
+    pub fn last_present_status(&self) -> i32 {
+        self.last_status
     }
 
     /// Signalled when the next frame may be rendered (vblank pacing).
@@ -337,7 +352,9 @@ impl FlipChain {
             drop(rtv);
             drop(back);
             let hr = if self.tearing { self.chain.Present(0, DXGI_PRESENT_ALLOW_TEARING) } else { self.chain.Present(1, DXGI_PRESENT(0)) };
-
+            // Success codes count too (diagnostics): DXGI_STATUS_OCCLUDED means the
+            // window's content is not shown.
+            self.last_status = hr.0;
             if hr.is_err() {
                 return Err(BackendError::new(ErrorKind::Os, "flip_presenter", format!("Present failed: {hr:?}")).with_win32(hr.0 as u32));
             }

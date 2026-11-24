@@ -29,6 +29,8 @@ seat-shim-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Stderr logger for the libraries' `log` records (src/hostlog.rs, host-NN.log).
+log.workspace = true
 # Session side of the host (rdp/, keeper.rs): launch specs, desktop keeper helpers.
 seat-session.workspace = true
 # Default RDP backend (IronRDP engine, src/ironrdp.rs).
