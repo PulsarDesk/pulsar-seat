@@ -876,8 +876,8 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   `display-topology.json.untrusted-<ms>`, an untrusted folder refuses the journal and no
   target is taken out. The temporary file is written with `create_new`. Removing the primary shifts the remaining sources so one
   sits at (0, 0). `TopologyReport` gained `removed`, `restored`, `rolled_back` (additive).
-- *Attach (gaming PC E2E bug 9, 2026-11-24).* A plan target (console list, which is every
-  monitor in the wizard's extend step, or a seat target the plan does not take out) that
+- *Attach (gaming PC E2E bug 9, 2026-11-24).* A plan target (`TopologyPlan::attach`, or a
+  seat target the plan does not take out) that
   is connected (`targetAvailable`) but outside the desktop and not specialized gets a CCD
   path: `plan_topology(.., console, attach, ..)` adds `RestoreTarget { activate: true }`
   and journals `JournalEntry { attached: true }` first (serde default false, old journals
@@ -892,8 +892,18 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   monitor detached, so `DisplaySwitch /extend` and `SDC_TOPOLOGY_EXTEND`
   (`ccd::extend_desktop`, database driven, not used by the service) left it out, and the
   wizard's extend step (`apply_topology` with every wizard monitor as console) only
-  reported it `missing`. HYPOTHESIS on hardware until round 2 sees seat 2 bind that monitor
-  without a manual `ccd.ps1` attach.
+  reported it `missing`. Round 2 proved the attach on hardware (DP VG27A at 1920,0).
+  Round 2 bug H (detach-back, fixed 2026-11-24): `TopologyPlan::console` listed every
+  unassigned monitor (default mask), so the user-detached monitor was attached at product
+  enable and stayed attached after the seat config dropped it and after `set_enabled
+  false` (`release_ownership` lists every monitor). Now only `TopologyPlan::attach` (serde
+  default empty) and seat targets are attached: the service fills `attach` with monitors
+  given to seat 1 (mask source not `Default`) and, while the wizard runs after its extend
+  step (`Wizard::extended`), the wizard's monitors; `release_ownership` attaches nothing.
+  An attached journal entry that neither a seat nor `attach` names is detached (log
+  "detached again (no seat uses it)"; a detach that would leave the console without a
+  monitor is kept and logged). Unchanged: under `dedicated_host` seat 1's default-mask
+  monitors are seat targets and are still attached.
 - *Clone.* `AssignmentOptions::outputs` (target ids on the surface monitor's adapter,
   needs `OutputSettings::allow_clone`) reaches the binding through
   `DisplayBinding::configure_seat(seat, &SeatDisplayPrefs::from_config(&config, seat))`
@@ -1344,6 +1354,17 @@ monitor's same-container hub keeps a seat the monitor is not on.
 - **Graphics:** BGRA framebuffer with a software pointer, cut per RDP monitor (=
   `SeatOutputs::layout_outputs()` index) into `display::SeatDisplay::new`'s `FrameSink`.
   The presenter clones on its own. Presenter layout changes go to display control.
+  Layouts are sent only on a real change (gaming PC E2E round 2 bug F, 2026-11-24): the
+  presenter reports `PresenterEvent::Layout` only when a seat output moved or was lost,
+  or on a DPI change (not on every `WM_DISPLAYCHANGE` / work-area change); the host
+  handles the service's `Reconfigure` (sent to every host on every ownership run) by
+  rebuilding the presenter and sending a layout only when its `SeatOutputs` changed
+  (`ironrdp::reconfigure_outputs`); the engine drops a layout equal to the one in effect
+  and sends a changed one at most every 2 s (`seat_rdp::session::layout_verdict`). Before,
+  each seat logon / state change re-sent the same layout to every seat and the server
+  re-moded each session display (10 layouts / 11 graphics resets a minute on the gaming
+  PC, `error_info 17`, DriverFrameworks-UserMode 10111 for the Remote Display Adapter).
+  HYPOTHESIS until round 3: these re-modes crash RdpIdd and keep the RDP picture black.
   `host_command: blank` drops frames and shows the idle text. EGFX (MS-RDPEGFX) through
   `ironrdp-egfx` (`seat-rdp/src/gfx.rs`) with Media Foundation H.264 decode
   (`seat-rdp/src/h264/`, hardware first, software fallback at start and at run time)

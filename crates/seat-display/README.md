@@ -63,13 +63,20 @@ in, presents, present errors, `DXGI_STATUS_OCCLUDED` presents and GDI paints. Ro
 the black picture on that PC not proven.
 
 **Attach a connected monitor outside the desktop (gaming PC E2E bug 9, 2026-11-24,
-local):** `apply_topology` gives a plan target (seat 1, a seat presented through the
-desktop, every monitor in the wizard's extend step) that is connected but detached a CCD
-path of its own (`topology::plan_topology` + `win::ccd::apply_request`: explicit paths, a
-free source on the target's own adapter first), journaled as `attached` in
-`display-topology.json` before the change and detached again once no plan names it.
-`SDC_TOPOLOGY_EXTEND` (`ccd::extend_desktop`) is database driven and keeps a monitor the
-user disconnected out. HYPOTHESIS on hardware until round 2.
+local):** `apply_topology` gives a plan target (a seat presented through the desktop, or
+`TopologyPlan::attach`: seat 1's assigned monitors, every monitor in the wizard's extend
+step) that is connected but detached a CCD path of its own (`topology::plan_topology` +
+`win::ccd::apply_request`: explicit paths, a free source on the target's own adapter
+first), journaled as `attached` in `display-topology.json` before the change and
+detached again once neither a seat nor `attach` names it. A `console` target that is not
+in `attach` (an unassigned monitor) is never attached (round 2 bug H: it was attached at
+product enable and never detached, also not at product off). `SDC_TOPOLOGY_EXTEND`
+(`ccd::extend_desktop`) is database driven and keeps a monitor the user disconnected out.
+Attach proven on hardware in round 2; the detach-back is HYPOTHESIS until round 3.
+
+**Presenter layout reports (round 2 bug F):** `PresenterEvent::Layout` goes out only when
+a seat output moved or was lost, or on `WM_DPICHANGED`; a `WM_DISPLAYCHANGE` or
+work-area change that moves nothing logs "seat outputs unchanged; no layout".
 
 Both kinds' `pulsar_idd` share a wire name and the driver binary, not the control interface. They never meet in one config
 field: local seats read `settings.backends.display`, remote seats
