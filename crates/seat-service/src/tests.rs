@@ -240,6 +240,22 @@ fn frame_interval_reaches_the_session_backend_before_prepare_and_follows_monitor
 }
 
 #[test]
+fn start_seat_sees_a_logon_that_beat_the_session_record() {
+    // Gaming PC E2E 2026-11-24: with an existing profile the user is signed in before the
+    // service records the seat's session id, so the WTS Logon notification finds no seat.
+    // The start itself must still see the logon (agent, signed_in).
+    let h = harness();
+    h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();
+    h.p.sign_in(10, "ali");
+    h.s.on_session_change(SessionChange::Logon, 10);
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(10));
+    assert_eq!(state(&h, s(2)), SeatState::SignedIn { user: "PC\\ali".into() });
+    assert!(h.p.launched().iter().any(|l| l.exe.ends_with("pulsar-seat-agent.exe") && l.session_id == 10));
+}
+
+#[test]
 fn start_seat_full_flow_with_host_handshake() {
     let h = harness();
     h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();

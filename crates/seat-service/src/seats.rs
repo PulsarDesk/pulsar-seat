@@ -686,8 +686,18 @@ impl Service {
                 None
             }
         };
-        // 4. Record the session.
-        let user = info.user_sid.as_ref().and_then(|_| self.platform.session_user(info.session_id));
+        // 4. Record the session. The id goes in first, and the user is read only after it:
+        // a WTS Logon notification finds the seat by this id (`on_session_change`), so one
+        // that arrived before (a fast logon of an existing profile during the audio bind) was
+        // dropped and only this read sees the logon (gaming PC E2E 2026-11-24: the seat stayed
+        // at_logon with no session agent). A logon seen by both runs `on_seat_logon` twice,
+        // which it tolerates (re-report of the same logon).
+        {
+            let mut st = self.lock();
+            let Some(slot) = st.seats.get_mut(&seat).filter(|s| s.generation == generation) else { return };
+            slot.rt.session_id = Some(info.session_id);
+        }
+        let user = self.platform.session_user(info.session_id);
         let host_connected = {
             let mut st = self.lock();
             let Some(slot) = st.seats.get_mut(&seat).filter(|s| s.generation == generation) else { return };
@@ -717,7 +727,11 @@ impl Service {
                 user_sid: info.user_sid.clone(),
             });
             self.save_run(&st);
-            let state = map_session_state(info.state, user.as_ref());
+            // `info.state` is the snapshot of the wait: a user read after it signed in since.
+            let state = match (&user, info.state) {
+                (Some(u), SessionState::AtLogon) => SeatState::SignedIn { user: u.display() },
+                _ => map_session_state(info.state, user.as_ref()),
+            };
             self.set_seat_state(&mut st, seat, state);
             connected
         };
