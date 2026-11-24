@@ -85,20 +85,26 @@ pub struct Finding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PassiveReason {
-    ReferenceRunning,
-    ReferenceInstalled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum CoexistMode {
     Normal,
-    /// Blocks every shared system change (RDS, termwrap, shim, pads, display registry)
-    /// and every seat start.
-    Passive { reason: PassiveReason },
+    /// The reference product is installed (signal 1 or 2). Maintainer decision 2026-11-24
+    /// (gaming PC E2E bug 10, "always allow"): this blocks nothing any more. Drivers install
+    /// and remote seats start as in `Normal`; a running reference service only adds the
+    /// note [`CoexistNote::DuoServiceRunning`]. Until then this was `passive` (no system
+    /// change, no seat start). Its residue signals are still reported, but never offered
+    /// for repair while it is installed: they are its live configuration.
+    Alongside { reference_running: bool },
     ResidueOnly,
+}
+
+/// Warnings that do not block anything (wire codes, snake_case).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoexistNote {
+    /// The reference product's service runs: both products may fight over sessions,
+    /// virtual displays and ports. Reported, not blocked (decision 2026-11-24, bug 10).
+    DuoServiceRunning,
 }
 
 /// One opt-in "repair residue" step (spec 90 §8.2/§8.3). `value == None` = the whole key.
@@ -122,14 +128,18 @@ pub struct CoexistReport {
     pub findings: Vec<Finding>,
     pub upstream_ports: Vec<u16>,
     pub repairable: Vec<RepairItem>,
+    /// Non-blocking warnings (additive, 2026-11-24).
+    #[serde(default)]
+    pub notes: Vec<CoexistNote>,
 }
 
 impl CoexistReport {
     pub fn has(&self, s: Signal) -> bool {
         self.findings.iter().any(|f| f.signal == s)
     }
-    pub fn is_passive(&self) -> bool {
-        matches!(self.mode, CoexistMode::Passive { .. })
+    /// The reference product is installed (running or not). Informational only.
+    pub fn reference_present(&self) -> bool {
+        matches!(self.mode, CoexistMode::Alongside { .. })
     }
 }
 
@@ -539,19 +549,15 @@ pub fn evaluate_with_own(p: &dyn SystemProbe, own: &BTreeSet<String>) -> Coexist
     }
 
     // ---- mode
+    let running = svc.as_ref().is_some_and(|s| s.running);
     let mode = if arp || svc.is_some() {
-        CoexistMode::Passive {
-            reason: if svc.as_ref().is_some_and(|s| s.running) {
-                PassiveReason::ReferenceRunning
-            } else {
-                PassiveReason::ReferenceInstalled
-            },
-        }
+        CoexistMode::Alongside { reference_running: running }
     } else if f.iter().any(|x| x.signal.is_residue()) {
         CoexistMode::ResidueOnly
     } else {
         CoexistMode::Normal
     };
+    let notes = if running { vec![CoexistNote::DuoServiceRunning] } else { Vec::new() };
     // Repair is offered only when the reference itself is gone.
     if mode != CoexistMode::ResidueOnly {
         repair.clear();
@@ -562,6 +568,7 @@ pub fn evaluate_with_own(p: &dyn SystemProbe, own: &BTreeSet<String>) -> Coexist
         findings: f,
         upstream_ports: if upstream { UPSTREAM_SUNSHINE_BLOCK.collect() } else { Vec::new() },
         repairable: repair,
+        notes,
     }
 }
 
@@ -608,29 +615,44 @@ mod tests {
     }
 
     #[test]
-    fn reference_running_is_passive() {
+    fn reference_running_is_alongside_with_note() {
         let p = clean();
         p.add_key(REF_ARP_KEY);
         p.set(REF_ARP_KEY, "DisplayVersion", "1.6.0.0");
         p.add_service(REF_SERVICE, true);
         p.set(TERMSERVICE_PARAMS, "ServiceDll", r"%ProgramFiles%\Duo\TermWrap.dll");
         let r = evaluate(&p);
-        assert_eq!(r.mode, CoexistMode::Passive { reason: PassiveReason::ReferenceRunning });
+        assert_eq!(r.mode, CoexistMode::Alongside { reference_running: true });
+        assert!(r.reference_present());
+        assert_eq!(r.notes, vec![CoexistNote::DuoServiceRunning]);
         assert!(r.has(Signal::RefArp) && r.has(Signal::RefService) && r.has(Signal::TermsrvWrapped));
         assert!(r.repairable.is_empty(), "no repair while the reference is installed");
         let json = serde_json::to_value(&r).unwrap();
-        assert_eq!(json["mode"], "passive");
-        assert_eq!(json["reason"], "reference_running");
+        assert_eq!(json["mode"], "alongside");
+        assert_eq!(json["reference_running"], true);
+        assert_eq!(json["notes"], serde_json::json!(["duo_service_running"]));
     }
 
     #[test]
-    fn reference_installed_stopped_or_arp_only() {
+    fn reference_installed_stopped_or_arp_only_has_no_note() {
         let p = clean();
         p.add_service(REF_SERVICE, false);
-        assert_eq!(evaluate(&p).mode, CoexistMode::Passive { reason: PassiveReason::ReferenceInstalled });
+        let r = evaluate(&p);
+        assert_eq!(r.mode, CoexistMode::Alongside { reference_running: false });
+        assert!(r.notes.is_empty());
         let p = clean();
         p.add_key(REF_ARP_KEY);
-        assert_eq!(evaluate(&p).mode, CoexistMode::Passive { reason: PassiveReason::ReferenceInstalled });
+        p.set(TERMSERVICE_PARAMS, "ServiceDll", r"%ProgramFiles%\Duo\TermWrap.dll");
+        let r = evaluate(&p);
+        assert_eq!(r.mode, CoexistMode::Alongside { reference_running: false }, "residue does not turn into residue_only");
+        assert!(r.notes.is_empty() && r.repairable.is_empty());
+    }
+
+    #[test]
+    fn report_without_notes_still_parses() {
+        let r: CoexistReport =
+            serde_json::from_str(r#"{"mode":"normal","findings":[],"upstream_ports":[],"repairable":[]}"#).unwrap();
+        assert!(r.notes.is_empty() && !r.reference_present());
     }
 
     #[test]

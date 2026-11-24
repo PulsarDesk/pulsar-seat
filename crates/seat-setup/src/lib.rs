@@ -35,7 +35,7 @@ pub use cmds::{
     cmd_reconcile, cmd_uninstall,
 };
 pub use coexist::{
-    CoexistMode, CoexistReport, Finding, PassiveReason, RepairItem, ServiceFacts, Signal, SystemProbe, evaluate,
+    CoexistMode, CoexistNote, CoexistReport, Finding, RepairItem, ServiceFacts, Signal, SystemProbe, evaluate,
 };
 pub use drivers::{
     CmdOutput, CommandRunner, DriverDetect, DriverInstall, DriverPackage, Fetcher, PublishedDriver,

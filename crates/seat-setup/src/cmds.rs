@@ -69,7 +69,7 @@ pub enum StepOutcome {
     Done,
     /// Nothing to do (already in the wanted state).
     Unchanged,
-    /// Wanted but not done (consent missing, passive mode, arch/build): exit 2.
+    /// Wanted but not done (consent missing, arch/build): exit 2.
     Skipped,
     Reboot,
     Failed,
@@ -506,7 +506,7 @@ fn wanted_drivers(ctx: &SetupCtx, pkgs: &[DriverPackage], rep: &mut RunReport) -
     wanted
 }
 
-fn install_drivers(ctx: &SetupCtx, j: &dyn RestoreLog, passive: bool, upgrade: bool, rep: &mut RunReport) {
+fn install_drivers(ctx: &SetupCtx, j: &dyn RestoreLog, upgrade: bool, rep: &mut RunReport) {
     let path = ctx.layout.driver_manifest();
     if !path.exists() {
         rep.push("drivers", StepOutcome::Unchanged, "no drivers.json in the install folder");
@@ -528,10 +528,6 @@ fn install_drivers(ctx: &SetupCtx, j: &dyn RestoreLog, passive: bool, upgrade: b
             }
             continue;
         };
-        if passive {
-            rep.push(step, StepOutcome::Skipped, "passive mode (reference product present): installed by reconcile later");
-            continue;
-        }
         if let (Some(min), Some(build)) = (pkg.min_build, ctx.os_build())
             && build < min
         {
@@ -596,10 +592,17 @@ fn install_like(ctx: &SetupCtx, command: &str, upgrade: bool) -> RunReport {
         ctx.services.remove(layout::LEGACY_SERVICE_NAME, 60_000).map(|_| StepOutcome::Done),
     );
     let report = evaluate_with_own(ctx.probe.as_ref(), &ctx.own_targets());
-    if report.is_passive() {
-        rep.push("coexistence", StepOutcome::Unchanged, "reference product present: passive mode");
+    // Maintainer decision 2026-11-24 (bug 10, "always allow"): the reference product being
+    // installed no longer skips the drivers. A running reference service is a warning only.
+    if report.reference_present() {
+        let detail = if report.notes.contains(&crate::coexist::CoexistNote::DuoServiceRunning) {
+            "reference product installed and its service runs (duo_service_running): both may conflict over sessions, virtual displays and ports; not blocked"
+        } else {
+            "reference product installed: not blocked"
+        };
+        rep.push("coexistence", StepOutcome::Unchanged, detail);
     }
-    install_drivers(ctx, &j, report.is_passive(), upgrade, &mut rep);
+    install_drivers(ctx, &j, upgrade, &mut rep);
     if upgrade {
         for h in &ctx.reconcile_hooks {
             rep.result(format!("reconcile {}", h.name()), h.reconcile().map(|_| StepOutcome::Done));
@@ -915,15 +918,27 @@ mod tests {
     }
 
     #[test]
-    fn passive_mode_skips_drivers() {
+    fn reference_product_present_still_installs_drivers() {
+        // Bug 10 (decision 2026-11-24): no passive mode beside the reference product.
         let f = fixture(Some(&manifest()));
         f.probe.add_service(REF_SERVICE, true);
         let rep = run_install(&f.ctx);
-        assert!(rep.steps.iter().any(|s| s.step == "driver vdd" && s.detail.contains("passive")));
-        assert!(!f.run.calls().iter().any(|c| c.contains("/add-driver")));
+        assert!(!rep.steps.iter().any(|s| s.detail.contains("passive")), "{rep:?}");
+        assert!(rep.steps.iter().any(|s| s.step == "coexistence" && s.detail.contains("duo_service_running")), "{rep:?}");
+        assert!(rep.steps.iter().any(|s| s.step == "driver vdd" && s.outcome != StepOutcome::Skipped), "{rep:?}");
+        assert!(f.run.calls().iter().any(|c| c.contains("/add-driver")));
         let (code, json) = cmd_check_coexistence(&f.ctx);
         assert_eq!(code, ExitCode::Ok);
-        assert!(json.contains(r#""mode":"passive""#), "{json}");
+        assert!(json.contains(r#""mode":"alongside""#) && json.contains(r#""notes":["duo_service_running"]"#), "{json}");
+    }
+
+    #[test]
+    fn reference_product_stopped_has_no_running_note() {
+        let f = fixture(Some(&manifest()));
+        f.probe.add_service(REF_SERVICE, false);
+        let rep = run_install(&f.ctx);
+        assert!(rep.steps.iter().any(|s| s.step == "coexistence" && !s.detail.contains("duo_service_running")), "{rep:?}");
+        assert!(f.run.calls().iter().any(|c| c.contains("/add-driver")));
     }
 
     #[test]

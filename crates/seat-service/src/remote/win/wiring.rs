@@ -488,7 +488,15 @@ pub fn build(
 
     let coexist = Arc::new(|| {
         let r = seat_setup::evaluate(&seat_setup::win::probe::WinProbe);
-        CoexistOutcome { passive: r.is_passive(), report: serde_json::to_value(&r).ok() }
+        // Maintainer decision 2026-11-24 (gaming PC E2E bug 10, "always allow"): the
+        // reference product being installed or running no longer makes the remote kind
+        // passive. A running reference service is a warning (note `duo_service_running`).
+        if r.notes.contains(&seat_setup::CoexistNote::DuoServiceRunning) {
+            log::warn!(
+                "coexistence: the reference multi-seat service runs; both products may conflict over sessions, virtual displays and ports (not blocked)"
+            );
+        }
+        CoexistOutcome { passive: false, report: serde_json::to_value(&r).ok() }
     });
 
     let local_feedback = Arc::new(seat_input::local_pads::LocalFeedbackRouter::new());

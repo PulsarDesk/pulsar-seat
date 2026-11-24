@@ -133,6 +133,9 @@ pub struct Deps {
 /// Result of the coexistence check.
 #[derive(Debug, Clone, Default)]
 pub struct CoexistOutcome {
+    /// Blocks every system change and seat start. The Windows wiring no longer sets it
+    /// (bug 10, maintainer decision 2026-11-24: remote seats are always allowed beside the
+    /// reference product); the gate stays for a future blocking condition.
     pub passive: bool,
     pub report: Option<serde_json::Value>,
 }
