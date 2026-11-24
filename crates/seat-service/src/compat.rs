@@ -65,12 +65,21 @@ pub(crate) fn expected_scale(c: &Config, seat: SeatNumber) -> Option<u32> {
     }
 }
 
+/// Display name a disconnected session reports for its only monitor (Windows' "WinDisc"
+/// display, no real output). Gaming PC E2E round 2 logged "effective DPI in session 5:
+/// WinDisc 125 %" for a seat session read after its host exited.
+const DISCONNECTED_DISPLAY: &str = "WinDisc";
+
+/// Monitors of a DPI read-back that belong to a live display (not [`DISCONNECTED_DISPLAY`]).
+pub(crate) fn live_monitors(monitors: &[MonitorDpi]) -> impl Iterator<Item = &MonitorDpi> {
+    monitors.iter().filter(|m| !m.device.trim().eq_ignore_ascii_case(DISCONNECTED_DISPLAY))
+}
+
 /// One line per monitor whose effective scale differs from `expected` by more than
-/// [`DPI_TOLERANCE`].
+/// [`DPI_TOLERANCE`]. A disconnected session's placeholder display is never compared.
 pub(crate) fn dpi_mismatches(expected: Option<u32>, monitors: &[MonitorDpi]) -> Vec<String> {
     let Some(want) = expected else { return Vec::new() };
-    monitors
-        .iter()
+    live_monitors(monitors)
         .filter(|m| m.dpi > 0 && m.percent().abs_diff(want) > DPI_TOLERANCE)
         .map(|m| format!("{}: {} % instead of {want} %", m.device, m.percent()))
         .collect()
@@ -170,7 +179,11 @@ impl Service {
             let Some(seat) = self.seat_of_session(&st, session_id) else { return };
             (seat, expected_scale(&st.config, seat))
         };
-        let list: Vec<String> = monitors.iter().map(|m| format!("{} {} %", m.device, m.percent())).collect();
+        let list: Vec<String> = live_monitors(monitors).map(|m| format!("{} {} %", m.device, m.percent())).collect();
+        if list.is_empty() && !monitors.is_empty() {
+            log::info(&format!("seat {seat}: session {session_id} is disconnected; DPI read-back skipped"));
+            return;
+        }
         // Device names are the session's own (an RDP seat session sees its virtual
         // `\\.\DISPLAY1`, not the physical monitor's console name).
         log::info(&format!("seat {seat}: effective DPI in session {session_id}: {}", list.join(", ")));
@@ -212,6 +225,14 @@ mod tests {
         assert!(dpi_mismatches(Some(115), &[mon(120)]).is_empty(), "within the tolerance");
         let bad = dpi_mismatches(Some(200), &[mon(96), mon(0)]);
         assert_eq!(bad, vec!["DISPLAY2: 100 % instead of 200 %".to_string()]);
+    }
+
+    #[test]
+    fn disconnected_display_is_not_compared() {
+        let disc = MonitorDpi { device: "WinDisc".into(), dpi: 96, width: 1024, height: 768 };
+        assert!(dpi_mismatches(Some(200), std::slice::from_ref(&disc)).is_empty());
+        assert_eq!(live_monitors(&[disc.clone(), mon(144)]).count(), 1);
+        assert_eq!(live_monitors(&[disc]).count(), 0);
     }
 
     #[test]
