@@ -49,6 +49,13 @@ pub fn service_pid(name: &str) -> Option<u32> {
     }
 }
 
+/// TermService's PID: this process's own SCM query, else the PID the launching service
+/// passed (see [`crate::listener::termservice_pid`]).
+pub fn termservice_pid() -> Option<u32> {
+    let env = std::env::var(seat_core::consts::TERMSERVICE_PID_ENV).ok();
+    crate::listener::termservice_pid(service_pid("TermService"), env.as_deref())
+}
+
 /// Every IPv4 TCP listener with its owning process.
 pub fn tcp_listeners() -> Result<Vec<TcpListenerRow>, SysError> {
     Ok(tcp_table(TCP_TABLE_OWNER_PID_LISTENER)?
@@ -103,7 +110,7 @@ fn tcp_table(class: i32) -> Result<Vec<MIB_TCPROW_OWNER_PID>, SysError> {
 
 /// Fails unless every listener reachable at `addr:port` belongs to TermService.
 pub fn verify_rdp_listener(addr: Ipv4Addr, port: u16) -> Result<(), SysError> {
-    let pid = service_pid("TermService");
+    let pid = termservice_pid();
     let rows = tcp_listeners()?;
     match listener_untrusted_reason(&rows, addr, port, pid) {
         None => Ok(()),
@@ -115,7 +122,7 @@ pub fn verify_rdp_listener(addr: Ipv4Addr, port: u16) -> Result<(), SysError> {
 /// a TermService socket. Run on `OnConnected` to close the TOCTOU window of
 /// [`verify_rdp_listener`].
 pub fn verify_rdp_peer(addr: Ipv4Addr, port: u16, client_pid: u32) -> Result<(), SysError> {
-    let pid = service_pid("TermService");
+    let pid = termservice_pid();
     let rows = tcp_connections()?;
     match connection_untrusted_reason(&rows, client_pid, addr, port, pid) {
         None => Ok(()),

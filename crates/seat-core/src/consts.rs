@@ -18,6 +18,12 @@ pub const LOGS_DIR: &str = "logs";
 /// Environment variable the service sets for the processes it launches (seat hosts, the
 /// console listener): its own PID, for their pipe server check.
 pub const SERVICE_PID_ENV: &str = "PULSAR_SEAT_SERVICE_PID";
+/// Environment variable the service sets for the seat hosts and the console listener it
+/// launches: TermService's PID as the service (SYSTEM) read it, for the loopback RDP
+/// listener check. A host running as a per-seat host account logs on as BATCH, and
+/// TermService's DACL gives `SERVICE_QUERY_STATUS` only to SYSTEM, Administrators,
+/// INTERACTIVE and SERVICE (gaming PC E2E round 2, bug A).
+pub const TERMSERVICE_PID_ENV: &str = "PULSAR_SEAT_TERMSERVICE_PID";
 /// Service run state (crash counter, session map, last boot). SYSTEM + Administrators only.
 pub const RUN_DIR: &str = "run";
 /// Undo journal of every system change (JSON Lines). SYSTEM + Administrators only.

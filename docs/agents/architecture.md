@@ -145,7 +145,13 @@ Console session (seat 1, or a dedicated host session)
       it launches: the pipe server check of a contained host / listener used the SCM,
       which refuses a Low-integrity batch token (`OpenSCManagerW` access denied), and host
       clients retry `ERROR_PIPE_BUSY` with `WaitNamedPipeW` (the listener starts together
-      with the kiosk shell and met a busy pipe). Revoked (`--desktop-acl revoke`) once the host is gone: platform
+      with the kiosk shell and met a busy pipe). For the same reason it passes TermService's
+      PID in `PULSAR_SEAT_TERMSERVICE_PID` to seat hosts and the console listener: a host
+      account logs on as BATCH and TermService's DACL gives `SERVICE_QUERY_STATUS` only to
+      SY / BA / IU / SU, so the host's own query failed and the loopback listener check
+      refused every seat (`rdp_peer_untrusted`, gaming PC E2E round 2 bug A). The host's own
+      SCM query still wins; a stale value fails closed (`seat_session::listener::termservice_pid`).
+      Seat variables cannot replace these values or `PULSAR_SEAT_LOG`. Revoked (`--desktop-acl revoke`) once the host is gone: platform
       exit / reap (also on every service tick), a sweep at service start, uninstall (after
       the service is stopped). Revokes never run under the containment lock. A NULL DACL
       is never edited. The pipe gets one ACE for the account (`pipe_ace`). Process /

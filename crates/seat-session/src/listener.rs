@@ -16,6 +16,10 @@
 
 use std::net::Ipv4Addr;
 
+/// Reason when TermService's process id is unknown. Before gaming PC E2E round 2 this read
+/// only "TermService is not running", also when it ran and the SCM refused the query.
+const TERMSERVICE_UNKNOWN: &str = "TermService is not running or its process id could not be read";
+
 /// One IPv4 TCP listener: local address, local port, owning process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TcpListenerRow {
@@ -24,11 +28,21 @@ pub struct TcpListenerRow {
     pub pid: u32,
 }
 
+/// Pure: TermService's process id for the checks below. The caller's own SCM query wins;
+/// when it found nothing (service stopped, or the SCM refused a contained host the
+/// `SERVICE_QUERY_STATUS` right) the PID the launching service passed in
+/// [`seat_core::consts::TERMSERVICE_PID_ENV`] is used. A stale value (TermService restarted
+/// after the launch) fails closed: the new listener's owner no longer matches it.
+pub fn termservice_pid(scm: Option<u32>, from_service: Option<&str>) -> Option<u32> {
+    scm.filter(|p| *p != 0).or_else(|| from_service.and_then(|s| s.trim().parse::<u32>().ok()).filter(|p| *p != 0))
+}
+
 /// Pure: why connecting to `addr:port` may reach someone other than TermService, or
-/// `None` when it is safe. `termservice_pid` is `None` when the service is not running.
+/// `None` when it is safe. `termservice_pid` is `None` when the service is not running
+/// or its process id could not be read.
 pub fn listener_untrusted_reason(rows: &[TcpListenerRow], addr: Ipv4Addr, port: u16, termservice_pid: Option<u32>) -> Option<String> {
     let Some(ts) = termservice_pid.filter(|p| *p != 0) else {
-        return Some("TermService is not running".into());
+        return Some(TERMSERVICE_UNKNOWN.into());
     };
     let reach: Vec<&TcpListenerRow> = rows.iter().filter(|r| r.port == port && (r.addr == addr || r.addr.is_unspecified())).collect();
     if reach.is_empty() {
@@ -60,7 +74,7 @@ pub fn connection_untrusted_reason(
     termservice_pid: Option<u32>,
 ) -> Option<String> {
     let Some(ts) = termservice_pid.filter(|p| *p != 0) else {
-        return Some("TermService is not running".into());
+        return Some(TERMSERVICE_UNKNOWN.into());
     };
     let mine: Vec<&TcpConnRow> = rows.iter().filter(|r| r.pid == client_pid && r.remote == (addr, port)).collect();
     if mine.is_empty() {
@@ -93,6 +107,19 @@ mod tests {
         assert!(connection_untrusted_reason(&ok, me, LO2, 3390, None).is_some());
         assert!(connection_untrusted_reason(&ok[1..], me, LO2, 3390, Some(900)).unwrap().contains("no connection"));
         assert!(connection_untrusted_reason(&ok[..1], me, LO2, 3390, Some(900)).unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn termservice_pid_falls_back_to_the_service_value() {
+        // Own SCM query wins.
+        assert_eq!(termservice_pid(Some(900), Some("901")), Some(900));
+        // Host account: the SCM refused the query, the service passed the PID (bug A).
+        assert_eq!(termservice_pid(None, Some(" 901 ")), Some(901));
+        assert_eq!(termservice_pid(Some(0), Some("901")), Some(901));
+        // Nothing usable: unknown, so every check fails closed.
+        assert_eq!(termservice_pid(None, None), None);
+        assert_eq!(termservice_pid(None, Some("0")), None);
+        assert_eq!(termservice_pid(None, Some("x")), None);
     }
 
     const LO2: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 2);

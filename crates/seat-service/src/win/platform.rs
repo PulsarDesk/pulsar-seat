@@ -792,6 +792,10 @@ impl Platform for WinPlatform {
         };
         let contained = grant_sid.is_some();
         let release_sid = grant_sid.clone();
+        // A host account may not query TermService (its DACL: SY, BA, IU, SU only; gaming PC
+        // E2E round 2, bug A), so the host's loopback listener check gets the PID from here.
+        let termservice_pid =
+            if spec.as_system { seat_session::win::listener::service_pid("TermService") } else { None };
         let run = move || -> BackendResult<u32> {
             let log = self.logs_dir.join(&spec.log_name);
             let mut vars = vec![
@@ -801,7 +805,13 @@ impl Platform for WinPlatform {
                 // (VM test 2026-11-15: OpenSCManagerW access denied).
                 (seat_core::consts::SERVICE_PID_ENV.to_string(), std::process::id().to_string()),
             ];
-            vars.extend(spec.env.iter().filter(|(n, _)| !n.eq_ignore_ascii_case("PULSAR_SEAT_LOG")).cloned());
+            if let Some(pid) = termservice_pid {
+                vars.push((seat_core::consts::TERMSERVICE_PID_ENV.to_string(), pid.to_string()));
+            }
+            // The service's own values win: a seat variable may not replace the log path or
+            // the PIDs the child's trust checks rely on.
+            let own = ["PULSAR_SEAT_LOG", seat_core::consts::SERVICE_PID_ENV, seat_core::consts::TERMSERVICE_PID_ENV];
+            vars.extend(spec.env.iter().filter(|(n, _)| !own.iter().any(|o| n.eq_ignore_ascii_case(o))).cloned());
             let env = env_block(std::os::windows::io::AsHandle::as_handle(&primary), &vars)?;
             let stdin = stdin_pipe.as_ref().map(|(r, _, _)| r.as_raw_handle() as HANDLE);
             // The child's stdout + stderr go to its log file (opened here by the service, so
