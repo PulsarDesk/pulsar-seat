@@ -71,6 +71,10 @@ must keep one (`seat_one_no_display`) and monitors are exclusive.
   3 network; `0xC000015B` = right not granted, the deny-logon case).
 - Class `Properties` keys (class default descriptors) are readable by SYSTEM only: read
   them through a one-shot `/ru SYSTEM` task.
+- The VM reports a battery and runs on it. A scheduled task with the default settings then
+  stays `Queued` and never runs. Register one-shot SYSTEM tasks with
+  `New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries`
+  (B2 regression 2026-11-24).
 - A single-instance stand-in: any small native ARM64 program that calls
   `CreateMutexW(NULL, FALSE, L"Global\\<name>")` and logs `GetLastError()` (183 = second
   instance, 5 = another user's instance) and `GetModuleHandleW(L"PulsarSplitShim.dll")`.
