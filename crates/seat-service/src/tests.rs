@@ -4190,7 +4190,13 @@ fn usb_input_is_restored_at_boot_stop_and_on_request() {
     *h.f.usb_failures.lock().unwrap() = vec![r"USB\VID_1\1: unplugged".into()];
     let ResponseBody::UsbInputRestore(r) = call(&h, &mut a, RequestBody::RestoreUsbInput { confirm: true }).unwrap() else { panic!() };
     assert_eq!(r.failed, vec![r"USB\VID_1\1: unplugged".to_string()]);
+    assert!(r.capture_held);
     assert_eq!(h.f.usb_restores.load(Ordering::SeqCst), 2);
+    // The operator's restore holds captures off before it restores; the boot restore does not.
+    assert_eq!(*h.f.usb_order.lock().unwrap(), vec!["restore", "hold", "restore"]);
+    // Never an empty answer body (the gaming PC run got `{}`).
+    let body = serde_json::to_string(&seat_proto::UsbInputRestore { failed: Vec::new(), capture_held: true }).unwrap();
+    assert_eq!(body, r#"{"capture_held":true}"#);
     h.s.shutdown();
     assert_eq!(h.f.usb_releases.load(Ordering::SeqCst), 1);
 }

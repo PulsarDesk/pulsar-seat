@@ -1747,18 +1747,21 @@ impl Service {
 
     /// `restore_usb_input` (osms G2): every USB keyboard / mouse an extra seat holds on
     /// WinUSB, and whatever an earlier run journaled, goes back to its own driver now.
-    /// Under `winusb_capture` running seats capture again with the next ownership apply
-    /// (seat start / stop, a config change); choosing another input backend keeps them off.
+    /// Captures are held off first (e2e gaming PC 2026-11-24: the next ownership apply took
+    /// the devices again 1-3 s later while seat 2 ran): `winusb_capture` captures again only
+    /// when a seat starts or the input backend / its settings are chosen again.
     pub(crate) fn restore_usb_input(&self, confirm: bool) -> Result<ResponseBody, ProtoError> {
         if !confirm {
             return Err(err(ErrorCode::InvalidValue, "confirmation needed").with_reason("confirm"));
         }
         log::info("USB input restore requested by the operator");
+        let capture_held = self.factory.hold_usb_capture();
         let failed = self.factory.restore_usb_input();
         for e in &failed {
             log::warn(&format!("USB input restore: {e}"));
         }
-        Ok(ResponseBody::UsbInputRestore(seat_proto::UsbInputRestore { failed }))
+        log::info(&format!("USB input restore done: {} failed, captures held: {capture_held}", failed.len()));
+        Ok(ResponseBody::UsbInputRestore(seat_proto::UsbInputRestore { failed, capture_held }))
     }
 
     /// `hyper_v` (parity review 2026-11-17): the Hyper-V helper of the source-IP tools.

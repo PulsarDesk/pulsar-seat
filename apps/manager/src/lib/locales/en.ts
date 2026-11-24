@@ -1064,7 +1064,7 @@ const t = {
       'USB keyboards and mice of a running seat are taken away from seat 1 (moved to the Windows WinUSB driver while the seat runs). Bluetooth, built-in and other non-USB keyboards and mice of the other seats can still reach seat 1’s foreground window in this layout. Not yet tested on real hardware.',
     restoreUsb: 'Give USB keyboards and mice back to Windows',
     restoreUsbHint:
-      'Puts every USB keyboard and mouse that a seat holds back on its own Windows driver now, also after a crash. Running seats take theirs again at the next seat start or change; choose another input method to keep them off.',
+      'Puts every USB keyboard and mouse that a seat holds back on its own Windows driver now, also after a crash. Running seats take theirs again only when a seat starts or the input settings change; choose another input method to keep them off.',
     restoreUsbTitle: 'Give USB keyboards and mice back?',
     restoreUsbBody: 'Keyboards and mice of running seats stop working in those seats until the seat takes them again. Each device is reinstalled, which takes about a second.',
     restoreUsbConfirm: 'Give them back',
@@ -1231,6 +1231,8 @@ const t = {
     usb_capture_last_console_input: 'Seat 1 would have no keyboard or mouse left, so one USB device stays with seat 1',
     usb_capture_unsupported_collection: 'A USB device that also has a gamepad, touch or pen part is not taken from seat 1',
     usb_capture_failed: 'A USB keyboard or mouse could not be moved (see the service log)',
+    usb_capture_held: 'USB keyboards and mice were given back to Windows and stay with seat 1 until a seat starts',
+    usb_restore_inexact: 'A USB keyboard or mouse did not get its exact original driver back (see the service log)',
     driver_not_signed: 'The driver is not signed',
     input_not_routed: 'Input devices are not routed to seats',
     rdp_listener_on_all_interfaces: 'Remote Desktop listens on all network adapters (network level authentication on)',

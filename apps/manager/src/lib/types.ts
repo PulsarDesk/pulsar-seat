@@ -1107,6 +1107,8 @@ export interface VmHostStatus {
 /** Result of `restore_usb_input` (added 2026-11-20, osms G2): devices still on WinUSB, as `<node>: <error>`. */
 export interface UsbInputRestore {
   failed?: string[];
+  /** `winusb_capture` captures nothing again until a seat starts or the input settings change (added 2026-11-24). */
+  capture_held?: boolean;
 }
 
 /** Result of `restart_term_service` (added 2026-11-17). */
