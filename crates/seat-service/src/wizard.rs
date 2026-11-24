@@ -141,6 +141,9 @@ pub struct Wizard {
     pub keys_seen: bool,
     pub last_unit: Option<DeviceKey>,
     pub done: bool,
+    /// The extend step ran: its monitors stay attached to the console desktop while the
+    /// wizard runs (`TopologyPlan::attach`).
+    pub extended: bool,
 }
 
 fn primary(d: &Device) -> bool {
@@ -189,6 +192,7 @@ impl Wizard {
             keys_seen: false,
             last_unit: None,
             done: quick,
+            extended: false,
         }
     }
 

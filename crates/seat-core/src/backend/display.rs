@@ -59,6 +59,14 @@ pub struct TopologyPlan {
     pub console: Vec<DeviceKey>,
     /// Targets reserved for other seats (removed from the desktop where the backend can).
     pub seats: Vec<(SeatNumber, Vec<DeviceKey>)>,
+    /// Console targets the desktop must gain when they are connected outside it: seat 1's
+    /// explicitly assigned monitors and the wizard's extend step. A `console` target not
+    /// listed here stays where the user put it, in or out of the desktop (gaming PC E2E
+    /// round 2 bug H: an unassigned monitor the user had detached was attached at product
+    /// enable and never detached again). Seat targets (`seats`) that need the desktop are
+    /// attached without being listed here.
+    #[serde(default)]
+    pub attach: Vec<DeviceKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
