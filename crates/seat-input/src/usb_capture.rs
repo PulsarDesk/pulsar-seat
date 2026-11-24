@@ -63,20 +63,124 @@ pub const JOURNAL_FILE: &str = "usb-capture.json";
 /// How long [`UsbCapture`] waits for a reader thread to stop.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The driver a node had before we captured it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The driver a node had before we captured it (or has now, [`UsbSwap::current`]).
+///
+/// e2e gaming PC 2026-11-24 (bug 5): a Logitech receiver interface ran the vendor package
+/// `oem128.inf` (section `LogiLDA`, 1.10.80.0) plus the extension INF `oem185.inf`, whose
+/// software component hangs below the node. The restore must put back that exact package
+/// and re-apply the extension, so everything Windows reports for the node is journaled.
+/// Fields after `inf_path` were added then (additive: older journals load with them empty,
+/// and an empty field is not checked).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OriginalDriver {
     /// Setup class GUID with braces, lowercase.
     pub class_guid: String,
-    /// INF of the installed driver as Windows names it (`input.inf`, `oem12.inf`).
+    /// INF of the installed driver as Windows names it in `%windir%\INF` (`input.inf`,
+    /// `oem12.inf`; `DEVPKEY_Device_DriverInfPath`). Empty = unknown (lost journal): the
+    /// restore lets Windows rank the drivers in its store.
     pub inf_path: String,
+    /// Install section (`DEVPKEY_Device_DriverInfSection`, e.g. `LogiLDA`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub inf_section: String,
+    /// Driver version (`DEVPKEY_Device_DriverVersion`, e.g. `1.10.80.0`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub driver_version: String,
+    /// Provider (`DEVPKEY_Device_DriverProvider`). Diagnostics only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider: String,
+    /// Matching device id (`DEVPKEY_Device_MatchingDeviceId`). Diagnostics only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub matching_id: String,
+    /// Extension INFs applied to the node, as `DEVPKEY_Device_ExtendedConfigurationIds`
+    /// lists them (`oem185.inf:USB\VID_046D&PID_C52B&MI_01,<section>,<date>,<version>`).
+    /// Software components of an extension come back with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
 }
 
 impl OriginalDriver {
     /// What a USB HID interface normally runs: `HIDClass` from the inbox `input.inf`.
     pub fn hid_default() -> Self {
-        Self { class_guid: HID_CLASS.into(), inf_path: "input.inf".into() }
+        Self { class_guid: HID_CLASS.into(), inf_path: "input.inf".into(), ..Self::default() }
     }
+
+    /// Original driver not known (a node that carries our interface but has no journal
+    /// entry): `HIDClass` and the best driver Windows ranks from its store, never a fixed
+    /// `input.inf` (that replaced a vendor driver on the gaming PC, bug 5).
+    pub fn unknown() -> Self {
+        Self { class_guid: HID_CLASS.into(), ..Self::default() }
+    }
+
+    /// The INF file names of [`Self::extensions`] (bare `oemNN.inf` names only, deduplicated).
+    pub fn extension_infs(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for e in &self.extensions {
+            let Some((inf, _)) = e.split_once(':') else { continue };
+            let inf = inf.trim();
+            if !is_bare_inf_name(inf) || out.iter().any(|o| o.eq_ignore_ascii_case(inf)) {
+                continue;
+            }
+            out.push(inf.to_string());
+        }
+        out
+    }
+
+    /// One line for the log: `oem128.inf [LogiLDA] 1.10.80.0 Logitech; extensions: oem185.inf`.
+    pub fn describe(&self) -> String {
+        let mut s = if self.inf_path.is_empty() { "(best ranked driver)".to_string() } else { self.inf_path.clone() };
+        if !self.inf_section.is_empty() {
+            s.push_str(&format!(" [{}]", self.inf_section));
+        }
+        for v in [&self.driver_version, &self.provider] {
+            if !v.is_empty() {
+                s.push(' ');
+                s.push_str(v);
+            }
+        }
+        let ext = self.extension_infs();
+        if !ext.is_empty() {
+            s.push_str(&format!("; extensions: {}", ext.join(", ")));
+        }
+        s
+    }
+}
+
+/// A bare INF file name as Windows records it (`input.inf`, `oem12.inf`): no path.
+pub fn is_bare_inf_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['\\', '/', ':']) && name.to_ascii_lowercase().ends_with(".inf")
+}
+
+/// What differs between the journaled driver `want` and the driver on the node `now` after
+/// a restore (empty = exact). Empty fields of `want` are not checked; an unknown original
+/// only has to be off WinUSB. Logged, and kept for the notes (`usb_restore_inexact`).
+pub fn restore_differences(want: &OriginalDriver, now: &OriginalDriver) -> Vec<String> {
+    let mut d = Vec::new();
+    if now.class_guid.eq_ignore_ascii_case(USB_DEVICE_CLASS) {
+        d.push("still in the USBDevice class (WinUSB)".to_string());
+        return d;
+    }
+    if want.inf_path.is_empty() {
+        return d;
+    }
+    if !want.class_guid.is_empty() && !want.class_guid.eq_ignore_ascii_case(&now.class_guid) {
+        d.push(format!("class {} instead of {}", now.class_guid, want.class_guid));
+    }
+    if !want.inf_path.eq_ignore_ascii_case(&now.inf_path) {
+        d.push(format!("driver {} instead of {}", now.inf_path, want.inf_path));
+    }
+    if !want.inf_section.is_empty() && !want.inf_section.eq_ignore_ascii_case(&now.inf_section) {
+        d.push(format!("section {} instead of {}", now.inf_section, want.inf_section));
+    }
+    if !want.driver_version.is_empty() && want.driver_version != now.driver_version {
+        d.push(format!("version {} instead of {}", now.driver_version, want.driver_version));
+    }
+    let have = now.extension_infs();
+    for e in want.extension_infs() {
+        if !have.iter().any(|h| h.eq_ignore_ascii_case(&e)) {
+            d.push(format!("extension {e} missing"));
+        }
+    }
+    d
 }
 
 /// One captured node in the journal.
@@ -211,16 +315,29 @@ impl JournalStore for MemoryJournal {
 pub trait UsbSwap: Send + Sync {
     /// `Err(reason)` when swapping cannot work here (no `winusb.inf`, no `newdev.dll`).
     fn check(&self) -> Result<(), String>;
-    /// The node's current setup class and INF (journaled before [`UsbSwap::capture`]).
+    /// The node's current driver package (class, INF, section, version, extensions),
+    /// journaled before [`UsbSwap::capture`]. `Err` when the node already runs WinUSB.
     fn original(&self, node: &str) -> BackendResult<OriginalDriver>;
+    /// What the node runs now, whatever it is (the check after a restore). `None` when it
+    /// cannot be read (node gone).
+    fn current(&self, node: &str) -> Option<OriginalDriver>;
     /// Register [`INTERFACE_GUID`], set the class to `USBDevice` and install `winusb.inf`
     /// on this node only.
     fn capture(&self, node: &str) -> BackendResult<()>;
-    /// Put `original` back on the node (falls back to `input.inf`) and remove our
-    /// interface GUID value. `Err(NotFound)` while the device is unplugged.
+    /// Put `original` back on the node: the same INF and install section (falls back to the
+    /// best driver Windows ranks), then the journaled extension INFs that did not come back
+    /// by themselves, and remove our interface GUID value. An empty `inf_path` installs the
+    /// best ranked driver. `Err(NotFound)` while the device is unplugged.
     fn release(&self, node: &str, original: &OriginalDriver) -> BackendResult<()>;
-    /// Devnodes (present or not) that still carry [`INTERFACE_GUID`].
+    /// Devnodes (present or not) with a registration of [`INTERFACE_GUID`]. Windows keeps a
+    /// device interface registered after the driver that registered it is gone, so this
+    /// list also holds nodes restored long ago: [`UsbSwap::still_captured`] decides.
     fn captured_nodes(&self) -> Vec<String>;
+    /// The node still carries our capture: our GUID in its `DeviceInterfaceGUIDs` value or
+    /// the `USBDevice` class. A node that is back on its own driver is not ours any more
+    /// (e2e gaming PC 2026-11-24, bug 5: the sweep reinstalled `input.inf` over the vendor
+    /// driver a release had just put back, at every later start too).
+    fn still_captured(&self, node: &str) -> bool;
     /// Call `cb` when a node with our interface arrives (replug of a captured device).
     fn watch(&self, cb: ChangeCallback) -> BackendResult<Box<dyn Guard>>;
 }
@@ -481,7 +598,15 @@ pub struct UsbCapture {
     watch: Mutex<Option<Box<dyn Guard>>>,
     /// Serialises sync / restore (a swap takes about a second).
     op: Mutex<()>,
+    /// The operator's restore holds captures off ([`Self::hold`]) until [`Self::resume`].
+    held: AtomicBool,
+    /// `<node>: <differences>` of restores that did not bring back the exact original
+    /// driver ([`restore_differences`]), newest last, at most [`MAX_INEXACT`].
+    inexact: Mutex<Vec<String>>,
 }
+
+/// How many inexact restores [`UsbCapture::inexact_restores`] keeps.
+const MAX_INEXACT: usize = 16;
 
 impl UsbCapture {
     pub fn new(swap: Arc<dyn UsbSwap>, source: Arc<dyn UsbReportSource>, journal: Arc<dyn JournalStore>) -> Arc<Self> {
@@ -503,7 +628,55 @@ impl UsbCapture {
             handler: Arc::new(Mutex::new(None)),
             watch: Mutex::new(None),
             op: Mutex::new(()),
+            held: AtomicBool::new(false),
+            inexact: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The operator's "restore input devices" (e2e gaming PC 2026-11-24: the restore was
+    /// undone 1-3 s later by the next route apply while seat 2 still ran): from now on
+    /// [`Self::sync`] only releases, until [`Self::resume`] (a seat starts, the input backend
+    /// is chosen again, the service restarts).
+    pub fn hold(&self) {
+        if !self.held.swap(true, Ordering::SeqCst) {
+            log::info!("USB capture held: nothing is captured again until a seat starts or the input backend is chosen again");
+        }
+    }
+
+    /// End [`Self::hold`]; the next sync captures again.
+    pub fn resume(&self) {
+        if self.held.swap(false, Ordering::SeqCst) {
+            log::info!("USB capture resumed");
+        }
+    }
+
+    pub fn is_held(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
+
+    /// Restores that did not bring back the exact original driver (`<node>: <what differs>`).
+    pub fn inexact_restores(&self) -> Vec<String> {
+        lock(&self.inexact).clone()
+    }
+
+    /// Compare what the node runs after a restore with what was journaled; log either way
+    /// (round 2 of the gaming PC test reads these lines).
+    fn verify_restore(&self, node: &str, want: &OriginalDriver) {
+        let Some(now) = self.swap.current(node) else {
+            log::info!("USB input node {node}: driver after the restore not readable (node absent)");
+            return;
+        };
+        let d = restore_differences(want, &now);
+        if d.is_empty() {
+            log::info!("USB input node {node} restore check: exact ({})", now.describe());
+            return;
+        }
+        log::warn!("USB input node {node} restore check: NOT exact: {}; journaled {}, now {}", d.join("; "), want.describe(), now.describe());
+        let mut v = lock(&self.inexact);
+        v.retain(|x| !x.starts_with(&format!("{node}: ")));
+        v.push(format!("{node}: {}", d.join("; ")));
+        let over = v.len().saturating_sub(MAX_INEXACT);
+        v.drain(..over);
     }
 
     /// Windows parts over the journal in `journal_dir`.
@@ -570,7 +743,27 @@ impl UsbCapture {
     /// Something is left to restore: a journaled or failed release, or a node that still
     /// carries our interface GUID (lost journal).
     pub fn needs_restore(&self) -> bool {
-        !lock(&self.pending).is_empty() || !self.swap.captured_nodes().is_empty()
+        !lock(&self.active).is_empty()
+            || !lock(&self.pending).is_empty()
+            || !self.journal.load().entries.is_empty()
+            || !self.orphans(&BTreeSet::new()).is_empty()
+    }
+
+    /// Nodes that still carry our capture ([`UsbSwap::still_captured`]) but are not in
+    /// `known` (uppercase ids). A stale interface registration alone is not a capture.
+    fn orphans(&self, known: &BTreeSet<String>) -> Vec<String> {
+        let mut out = Vec::new();
+        for node in self.swap.captured_nodes() {
+            if known.contains(&node.to_ascii_uppercase()) || lock(&self.active).keys().any(|n| n.eq_ignore_ascii_case(&node)) {
+                continue;
+            }
+            if self.swap.still_captured(&node) {
+                out.push(node);
+            } else {
+                log::debug!("USB input node {node}: only a stale registration of the capture interface; not ours any more, left alone");
+            }
+        }
+        out
     }
 
     /// Releases that wait for their device.
@@ -590,15 +783,23 @@ impl UsbCapture {
     pub fn sync(&self, want: &BTreeMap<String, (SeatNumber, Vec<Device>)>) -> Vec<(String, BackendError)> {
         let _op = lock(&self.op);
         let mut errors = Vec::new();
-        // Releases first (never two seats on one node in between).
-        let gone: Vec<String> =
-            lock(&self.active).iter().filter(|(n, a)| want.get(*n).is_none_or(|(s, _)| s.get() != a.entry.seat)).map(|(n, _)| n.clone()).collect();
+        // Releases first (never two seats on one node in between). Held: everything goes.
+        let held = self.is_held();
+        let gone: Vec<String> = lock(&self.active)
+            .iter()
+            .filter(|(n, a)| held || want.get(*n).is_none_or(|(s, _)| s.get() != a.entry.seat))
+            .map(|(n, _)| n.clone())
+            .collect();
         for node in gone {
             if let Err(e) = self.release_one(&node) {
                 errors.push((node, e));
             }
         }
         for (node, (seat, units)) in want {
+            if held {
+                log::debug!("USB input node {node} not captured for seat {seat}: held after the operator's restore");
+                continue;
+            }
             let exists = lock(&self.active).contains_key(node);
             if exists {
                 // Keep the record fresh (names, keys) and the reader alive.
@@ -656,7 +857,7 @@ impl UsbCapture {
             let _ = self.save();
             return Err(e);
         }
-        log::info!("USB input node {node} captured for seat {seat}");
+        log::info!("USB input node {node} captured for seat {seat} (journaled original driver: {})", original.describe());
         self.ensure_worker(node);
         Ok(())
     }
@@ -667,14 +868,20 @@ impl UsbCapture {
         if let Some(w) = a.worker.take() {
             w.stop();
         }
-        match self.swap.release(node, &a.entry.original) {
+        // The entry stays in the journal (as pending) until the swap-back is done: a save
+        // in between, or a crash, never loses the original driver.
+        let original = a.entry.original.clone();
+        lock(&self.pending).push(a.entry);
+        let r = self.swap.release(node, &original);
+        match r {
             Ok(()) => {
+                lock(&self.pending).retain(|e| !e.node.eq_ignore_ascii_case(node));
                 log::info!("USB input node {node} back on its own driver");
+                self.verify_restore(node, &original);
                 self.save().map_err(|e| BackendError::new(ErrorKind::Os, "usb_capture_journal_failed", e.to_string()))
             }
             Err(e) => {
                 log::warn!("USB input node {node} not restored yet: {e}");
-                lock(&self.pending).push(a.entry);
                 let _ = self.save();
                 Err(e)
             }
@@ -684,21 +891,23 @@ impl UsbCapture {
     /// Retry releases of nodes that were unplugged (or failed) when released.
     pub fn retry_pending(&self) {
         let _op = lock(&self.op);
-        let list = std::mem::take(&mut *lock(&self.pending));
+        // A copy: the entries stay pending (and journaled) until their release is done.
+        let list = lock(&self.pending).clone();
         if list.is_empty() {
             return;
         }
-        let mut keep = Vec::new();
+        let mut done = Vec::new();
         for e in list {
             match self.swap.release(&e.node, &e.original) {
-                Ok(()) => log::info!("USB input node {} restored after replug", e.node),
-                Err(err) => {
-                    log::debug!("USB input node {} still not restorable: {err}", e.node);
-                    keep.push(e);
+                Ok(()) => {
+                    log::info!("USB input node {} restored after replug", e.node);
+                    self.verify_restore(&e.node, &e.original);
+                    done.push(e.node);
                 }
+                Err(err) => log::debug!("USB input node {} still not restorable: {err}", e.node),
             }
         }
-        *lock(&self.pending) = keep;
+        lock(&self.pending).retain(|e| !done.iter().any(|n| n.eq_ignore_ascii_case(&e.node)));
         if let Err(e) = self.save() {
             log::warn!("USB capture journal not written: {e}");
         }
@@ -724,16 +933,20 @@ impl UsbCapture {
             }
         }
         let known: BTreeSet<String> = todo.iter().map(|e| e.node.to_ascii_uppercase()).collect();
-        for node in self.swap.captured_nodes() {
-            if !known.contains(&node.to_ascii_uppercase()) {
-                log::warn!("USB input node {node} carries the Pulsar capture interface but no journal entry; restoring with input.inf");
-                todo.push(CaptureEntry { node, seat: 0, original: OriginalDriver::hid_default(), units: Vec::new(), at_ms: 0 });
-            }
+        // Only nodes that still carry the capture: a node the release above (or an earlier
+        // run) put back on its own driver keeps a stale interface registration, and must
+        // not get a second driver install over its vendor driver (gaming PC, bug 5).
+        for node in self.orphans(&known) {
+            log::warn!("USB input node {node} still carries the Pulsar capture but has no journal entry; restoring with the best driver Windows ranks");
+            todo.push(CaptureEntry { node, seat: 0, original: OriginalDriver::unknown(), units: Vec::new(), at_ms: 0 });
         }
         let mut keep = Vec::new();
         for e in todo {
             match self.swap.release(&e.node, &e.original) {
-                Ok(()) => log::info!("USB input node {} restored", e.node),
+                Ok(()) => {
+                    log::info!("USB input node {} restored", e.node);
+                    self.verify_restore(&e.node, &e.original);
+                }
                 Err(err) => {
                     errors.push(format!("{}: {err}", e.node));
                     keep.push(e);
@@ -956,6 +1169,9 @@ impl UsbSwap for NullSwap {
     fn original(&self, _: &str) -> BackendResult<OriginalDriver> {
         Err(BackendError::unsupported("USB driver swap"))
     }
+    fn current(&self, _: &str) -> Option<OriginalDriver> {
+        None
+    }
     fn capture(&self, _: &str) -> BackendResult<()> {
         Err(BackendError::unsupported("USB driver swap"))
     }
@@ -964,6 +1180,9 @@ impl UsbSwap for NullSwap {
     }
     fn captured_nodes(&self) -> Vec<String> {
         Vec::new()
+    }
+    fn still_captured(&self, _: &str) -> bool {
+        false
     }
     fn watch(&self, _: ChangeCallback) -> BackendResult<Box<dyn Guard>> {
         Ok(Box::new(()))
@@ -996,6 +1215,14 @@ pub(crate) mod fake {
         pub absent: Mutex<BTreeSet<String>>,
         pub fail_capture: Mutex<bool>,
         pub cb: Mutex<Option<ChangeCallback>>,
+        /// Nodes our interface was ever registered on. Like Windows, the registration stays
+        /// after the release (`captured_nodes` keeps listing them).
+        pub registered: Mutex<BTreeSet<String>>,
+        /// What Windows would rank best for a node (absent = `input.inf`).
+        pub best: Mutex<HashMap<String, OriginalDriver>>,
+        /// What a release really leaves on a node instead of the asked driver (a lost
+        /// extension, a different package).
+        pub release_leaves: Mutex<HashMap<String, OriginalDriver>>,
     }
 
     impl FakeSwap {
@@ -1005,6 +1232,9 @@ pub(crate) mod fake {
         pub fn calls(&self) -> Vec<String> {
             lock(&self.calls).clone()
         }
+        pub fn driver(&self, node: &str) -> OriginalDriver {
+            lock(&self.drivers).get(node).cloned().unwrap_or_else(OriginalDriver::hid_default)
+        }
     }
 
     impl UsbSwap for FakeSwap {
@@ -1012,14 +1242,23 @@ pub(crate) mod fake {
             Ok(())
         }
         fn original(&self, node: &str) -> BackendResult<OriginalDriver> {
-            Ok(lock(&self.drivers).get(node).cloned().unwrap_or_else(OriginalDriver::hid_default))
+            let d = self.driver(node);
+            if d.class_guid == USB_DEVICE_CLASS {
+                return Err(BackendError::new(ErrorKind::Coexistence, "already_winusb", node.to_string()));
+            }
+            Ok(d)
+        }
+        fn current(&self, node: &str) -> Option<OriginalDriver> {
+            Some(self.driver(node))
         }
         fn capture(&self, node: &str) -> BackendResult<()> {
             lock(&self.calls).push(format!("capture {node}"));
             if *lock(&self.fail_capture) {
                 return Err(BackendError::new(ErrorKind::Os, "di_install_failed", "test"));
             }
-            lock(&self.drivers).insert(node.into(), OriginalDriver { class_guid: USB_DEVICE_CLASS.into(), inf_path: "winusb.inf".into() });
+            lock(&self.registered).insert(node.into());
+            lock(&self.drivers)
+                .insert(node.into(), OriginalDriver { class_guid: USB_DEVICE_CLASS.into(), inf_path: "winusb.inf".into(), ..OriginalDriver::default() });
             Ok(())
         }
         fn release(&self, node: &str, original: &OriginalDriver) -> BackendResult<()> {
@@ -1027,11 +1266,27 @@ pub(crate) mod fake {
             if lock(&self.absent).contains(node) {
                 return Err(BackendError::new(ErrorKind::NotFound, "device_absent", "unplugged"));
             }
-            lock(&self.drivers).insert(node.into(), original.clone());
+            let put = if let Some(d) = lock(&self.release_leaves).get(node).cloned() {
+                d
+            } else if original.inf_path.is_empty() {
+                lock(&self.best).get(node).cloned().unwrap_or_else(OriginalDriver::hid_default)
+            } else {
+                original.clone()
+            };
+            lock(&self.drivers).insert(node.into(), put);
             Ok(())
         }
         fn captured_nodes(&self) -> Vec<String> {
-            lock(&self.drivers).iter().filter(|(_, d)| d.class_guid == USB_DEVICE_CLASS).map(|(n, _)| n.clone()).collect()
+            let mut out: Vec<String> = lock(&self.registered).iter().cloned().collect();
+            for (n, d) in lock(&self.drivers).iter() {
+                if d.class_guid == USB_DEVICE_CLASS && !out.contains(n) {
+                    out.push(n.clone());
+                }
+            }
+            out
+        }
+        fn still_captured(&self, node: &str) -> bool {
+            self.is_captured(node)
         }
         fn watch(&self, cb: ChangeCallback) -> BackendResult<Box<dyn Guard>> {
             *lock(&self.cb) = Some(cb);
@@ -1349,8 +1604,8 @@ mod tests {
         e.c.watch();
         let cb = lock(&e.swap.cb).clone().unwrap();
         cb();
-        wait_for(|| e.c.pending_nodes().is_empty());
-        assert!(e.journal.load().entries.is_empty());
+        // The retry runs on its own thread; the journal is written after the release.
+        wait_for(|| e.c.pending_nodes().is_empty() && e.journal.load().entries.is_empty());
         assert!(!e.swap.is_captured(KBD_NODE));
     }
 
@@ -1358,7 +1613,7 @@ mod tests {
     fn restore_all_covers_journal_and_orphans() {
         let e = env();
         // A previous run's entry with its own INF, plus an orphan without a journal entry.
-        let orig = OriginalDriver { class_guid: HID_CLASS.into(), inf_path: "oem7.inf".into() };
+        let orig = OriginalDriver { class_guid: HID_CLASS.into(), inf_path: "oem7.inf".into(), ..OriginalDriver::default() };
         *lock(&e.journal.doc) =
             CaptureJournal { version: 1, entries: vec![CaptureEntry { node: KBD_NODE.into(), seat: 2, original: orig.clone(), units: Vec::new(), at_ms: 1 }] };
         e.swap.capture(KBD_NODE).unwrap();
@@ -1366,7 +1621,7 @@ mod tests {
         assert!(e.c.restore_all().is_empty());
         assert_eq!(lock(&e.swap.drivers)[KBD_NODE], orig);
         assert_eq!(lock(&e.swap.drivers)[MOU_NODE], OriginalDriver::hid_default());
-        assert!(e.swap.captured_nodes().is_empty());
+        assert!(!e.swap.still_captured(KBD_NODE) && !e.swap.still_captured(MOU_NODE));
         assert!(e.journal.load().entries.is_empty());
     }
 
@@ -1394,7 +1649,7 @@ mod tests {
         lock(&e.swap.absent).clear();
         c.sync(&BTreeMap::new());
         assert!(c.pending_nodes().is_empty());
-        assert!(e.swap.captured_nodes().is_empty());
+        assert!(!e.swap.still_captured(MOU_NODE) && !e.swap.still_captured(KBD_NODE));
         assert!(e.journal.load().entries.is_empty());
         // restore_all releases each node once.
         e.swap.calls.lock().unwrap().clear();
@@ -1496,5 +1751,155 @@ mod tests {
         assert!(HID_CLASS.eq_ignore_ascii_case(crate::pad_scope::HID_CLASS));
         assert_eq!(USB_DEVICE_CLASS, "{88bae032-5a81-49f0-bc3d-a4ff138216d6}");
         assert_eq!(OriginalDriver::hid_default().class_guid, HID_CLASS);
+    }
+
+    /// The Logitech receiver of the gaming PC (2026-11-24): MI_00 on the vendor package,
+    /// MI_01 on `input.inf` plus the vendor extension.
+    fn logitech_kbd() -> OriginalDriver {
+        OriginalDriver {
+            class_guid: HID_CLASS.into(),
+            inf_path: "oem128.inf".into(),
+            inf_section: "LogiLDA".into(),
+            driver_version: "1.10.80.0".into(),
+            provider: "Logitech".into(),
+            matching_id: r"usb\vid_046d&pid_c52b&mi_00".into(),
+            extensions: Vec::new(),
+        }
+    }
+
+    fn logitech_mouse() -> OriginalDriver {
+        OriginalDriver {
+            inf_section: "HID_Inst.NT".into(),
+            driver_version: "10.0.26100.9974".into(),
+            extensions: vec![r"oem185.inf:USB\VID_046D&PID_C52B&MI_01,LogiDownloadAssistantExtension_Install.NT,05/06/2026,2.0.998.0".into()],
+            ..OriginalDriver::hid_default()
+        }
+    }
+
+    fn both(seat: u8) -> BTreeMap<String, (SeatNumber, Vec<Device>)> {
+        let mut w = want(KBD_NODE, seat, DeviceKind::Keyboard);
+        w.extend(want(MOU_NODE, seat, DeviceKind::Mouse));
+        w
+    }
+
+    /// e2e gaming PC 2026-11-24, bug 5. Windows keeps our interface registered after a
+    /// release, so the sweep of the operator's restore found both nodes again right after
+    /// they were back on their own drivers and installed `input.inf` over the vendor driver;
+    /// the next capture then journaled `input.inf` as the original, and every later start
+    /// did the same again. Now: one exact release per node, nothing on stale registrations.
+    #[test]
+    fn restore_puts_back_the_exact_driver_once_and_ignores_stale_registrations() {
+        let e = env();
+        lock(&e.swap.drivers).insert(KBD_NODE.into(), logitech_kbd());
+        lock(&e.swap.drivers).insert(MOU_NODE.into(), logitech_mouse());
+        e.src.plug(KBD_NODE, None);
+        e.src.plug(MOU_NODE, None);
+        assert!(e.c.sync(&both(2)).is_empty());
+        let j = e.journal.load();
+        assert_eq!(j.entries.iter().find(|x| x.node == KBD_NODE).unwrap().original, logitech_kbd(), "the vendor package is journaled");
+        assert_eq!(j.entries.iter().find(|x| x.node == MOU_NODE).unwrap().original.extension_infs(), vec!["oem185.inf".to_string()]);
+        // The operator's restore.
+        lock(&e.swap.calls).clear();
+        assert!(e.c.restore_all().is_empty());
+        assert_eq!(e.swap.driver(KBD_NODE), logitech_kbd());
+        assert_eq!(e.swap.driver(MOU_NODE), logitech_mouse());
+        let releases: Vec<String> = e.swap.calls().into_iter().filter(|c| c.starts_with("release")).collect();
+        assert_eq!(releases, vec![format!("release {KBD_NODE}"), format!("release {MOU_NODE}")], "one install per node, none over the restored driver");
+        assert!(e.c.inexact_restores().is_empty());
+        assert!(e.journal.load().entries.is_empty());
+        // Both nodes are still listed by the interface registration, but they are not ours.
+        assert_eq!(e.swap.captured_nodes().len(), 2);
+        // The next service start does nothing at all.
+        lock(&e.swap.calls).clear();
+        let boot = UsbCapture::with_clock(e.swap.clone(), e.src.clone(), e.journal.clone(), Arc::new(seat_core::mock::MockClock::default()));
+        assert!(!boot.needs_restore());
+        assert!(boot.restore_all().is_empty());
+        assert!(e.swap.calls().is_empty(), "{:?}", e.swap.calls());
+        assert_eq!(e.swap.driver(KBD_NODE), logitech_kbd());
+    }
+
+    /// The same incident: `restore_usb_input` while seat 2 still runs was undone 1-3 s later
+    /// by the next route apply. Held now until a resume; the capture after the resume
+    /// journals the vendor driver again, not `input.inf`.
+    #[test]
+    fn operator_restore_holds_captures_until_resumed() {
+        let e = env();
+        lock(&e.swap.drivers).insert(KBD_NODE.into(), logitech_kbd());
+        e.src.plug(KBD_NODE, None);
+        assert!(e.c.sync(&want(KBD_NODE, 2, DeviceKind::Keyboard)).is_empty());
+        e.c.hold();
+        assert!(e.c.restore_all().is_empty());
+        lock(&e.swap.calls).clear();
+        // Seat 2 still runs: the next apply wants the node again.
+        assert!(e.c.sync(&want(KBD_NODE, 2, DeviceKind::Keyboard)).is_empty());
+        assert!(e.swap.calls().is_empty(), "held: {:?}", e.swap.calls());
+        assert!(!e.swap.is_captured(KBD_NODE) && e.c.captured().is_empty());
+        assert!(e.c.is_held());
+        e.c.resume();
+        assert!(e.c.sync(&want(KBD_NODE, 2, DeviceKind::Keyboard)).is_empty());
+        assert!(e.swap.is_captured(KBD_NODE));
+        assert_eq!(e.journal.load().entries[0].original, logitech_kbd());
+        // Hold while captured: the next sync releases.
+        e.c.hold();
+        e.c.sync(&want(KBD_NODE, 2, DeviceKind::Keyboard));
+        assert!(!e.swap.is_captured(KBD_NODE));
+        assert_eq!(e.swap.driver(KBD_NODE), logitech_kbd());
+    }
+
+    /// A restore that does not bring back the journaled package (here: the extension INF did
+    /// not come back) is logged and listed, so round 2 on hardware can see it.
+    #[test]
+    fn inexact_restore_is_reported() {
+        let e = env();
+        lock(&e.swap.drivers).insert(MOU_NODE.into(), logitech_mouse());
+        e.src.plug(MOU_NODE, None);
+        assert!(e.c.sync(&want(MOU_NODE, 2, DeviceKind::Mouse)).is_empty());
+        lock(&e.swap.release_leaves).insert(MOU_NODE.into(), OriginalDriver { extensions: Vec::new(), ..logitech_mouse() });
+        assert!(e.c.release_all().is_empty());
+        assert_eq!(e.c.inexact_restores(), vec![format!("{MOU_NODE}: extension oem185.inf missing")]);
+    }
+
+    /// A node that still runs WinUSB with our interface but has no journal entry (journal
+    /// lost) gets the driver Windows ranks best, not a fixed `input.inf`.
+    #[test]
+    fn orphan_without_journal_gets_the_best_ranked_driver() {
+        let e = env();
+        e.swap.capture(KBD_NODE).unwrap();
+        lock(&e.swap.best).insert(KBD_NODE.into(), logitech_kbd());
+        assert!(e.c.needs_restore());
+        assert!(e.c.restore_all().is_empty());
+        assert_eq!(e.swap.driver(KBD_NODE), logitech_kbd());
+    }
+
+    #[test]
+    fn original_driver_parts() {
+        let m = logitech_mouse();
+        assert_eq!(m.extension_infs(), vec!["oem185.inf".to_string()]);
+        let odd = OriginalDriver { extensions: vec!["nocolon".into(), r"..\x.inf:id".into(), "oem1.inf:a".into(), "OEM1.INF:b".into()], ..OriginalDriver::default() };
+        assert_eq!(odd.extension_infs(), vec!["oem1.inf".to_string()], "bare names only, deduplicated");
+        assert_eq!(logitech_kbd().describe(), "oem128.inf [LogiLDA] 1.10.80.0 Logitech");
+        assert_eq!(m.describe(), "input.inf [HID_Inst.NT] 10.0.26100.9974; extensions: oem185.inf");
+        assert_eq!(OriginalDriver::unknown().describe(), "(best ranked driver)");
+        // Differences.
+        assert!(restore_differences(&logitech_kbd(), &logitech_kbd()).is_empty());
+        let now = OriginalDriver { driver_version: "10.0.26100.9974".into(), inf_section: "HID_Inst.NT".into(), ..OriginalDriver::hid_default() };
+        assert_eq!(
+            restore_differences(&logitech_kbd(), &now),
+            vec![
+                "driver input.inf instead of oem128.inf".to_string(),
+                "section HID_Inst.NT instead of LogiLDA".to_string(),
+                "version 10.0.26100.9974 instead of 1.10.80.0".to_string()
+            ]
+        );
+        let winusb = OriginalDriver { class_guid: USB_DEVICE_CLASS.into(), inf_path: "winusb.inf".into(), ..OriginalDriver::default() };
+        assert_eq!(restore_differences(&OriginalDriver::unknown(), &winusb).len(), 1);
+        assert!(restore_differences(&OriginalDriver::unknown(), &now).is_empty());
+        // Journals written before the extra fields load, and old fields only are checked.
+        let old: CaptureEntry =
+            serde_json::from_str(r#"{"node":"USB\\X","seat":2,"original":{"class_guid":"{745a17a0-74d3-11d0-b6fe-00a0c90f57da}","inf_path":"input.inf"}}"#).unwrap();
+        assert_eq!(old.original, OriginalDriver::hid_default());
+        assert!(restore_differences(&old.original, &now).is_empty());
+        // Empty extra fields are not written.
+        assert!(!serde_json::to_string(&OriginalDriver::hid_default()).unwrap().contains("extensions"));
     }
 }

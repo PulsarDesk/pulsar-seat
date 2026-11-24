@@ -10,11 +10,19 @@
 //! of ours. Structures are windows-sys types sized with `size_of` (same code on x64 and
 //! ARM64; `newdev.dll` exports `DiInstallDevice` on both, ARM64 HYPOTHESIS until run).
 //!
-//! **Untested on hardware (HYPOTHESIS):** that `DiInstallDevice` accepts a class-list
-//! driver node of `winusb.inf` for a HID interface whose ids `winusb.inf` does not list;
-//! that the swap survives a replug of the same port; the restore path through the
-//! compatible list of `input.inf`. Test in the VM with USB passthrough first
-//! (docs/progress/osms-local-parity.md, G2 point 8).
+//! Hardware (x64 gaming PC, 2026-11-24): capture of a Logitech receiver's MI_00 / MI_01 and
+//! the swap back worked. Found there (bug 5): Windows keeps a device interface registered
+//! after the driver that registered it is gone, so `CM_Get_Device_Interface_ListW(…_ALL_DEVICES)`
+//! still lists restored nodes; the old sweep then reinstalled `input.inf` over the vendor
+//! driver (`oem128.inf`) the release had just put back, and the extension INF
+//! (`oem185.inf`) and its software component were gone. Now [`WinUsbSwap::still_captured`]
+//! reads the node's own state, the restore installs the journaled INF's matching section
+//! and version, falls back to the driver Windows ranks best (never a fixed `input.inf`),
+//! and re-applies the journaled extension INFs.
+//!
+//! **Untested on hardware (HYPOTHESIS):** the section / version pick, `install_best`, the
+//! extension re-apply through `DiInstallDriverW`; that the swap survives a replug of the
+//! same port.
 
 use super::{cr_error, guid, last_error, wide};
 use crate::platform::{ChangeCallback, Guard};
@@ -25,11 +33,16 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CR_BUFFER_SMALL, CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DICS_FLAG_GLOBAL, DIREG_DEV,
     DIREG_DRV, DiInstallDevice, HDEVINFO, SETUP_DI_DRIVER_TYPE, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SPDIT_CLASSDRIVER,
     SPDIT_COMPATDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList, SetupDiDestroyDriverInfoList,
-    SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey, SetupDiOpenDeviceInfoW,
-    SetupDiRemoveDevice, SetupDiSetDeviceInstallParamsW, SetupDiSetDeviceRegistryPropertyW,
+    DiInstallDriverW, SP_DRVINFO_DETAIL_DATA_W, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDevicePropertyW,
+    SetupDiGetDeviceRegistryPropertyW, SetupDiGetDriverInfoDetailW, SetupDiGetSelectedDriverW, SetupDiOpenDevRegKey, SetupDiOpenDeviceInfoW,
+    SetupDiRemoveDevice, SetupDiSelectBestCompatDrv, SetupDiSetDeviceInstallParamsW, SetupDiSetDeviceRegistryPropertyW,
 };
-use windows_sys::Win32::Devices::Properties::DEVPKEY_Device_InstanceId;
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_SUCH_DEVINST, GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Devices::Properties::{
+    DEVPKEY_Device_DriverInfPath, DEVPKEY_Device_DriverInfSection, DEVPKEY_Device_DriverProvider, DEVPKEY_Device_DriverVersion,
+    DEVPKEY_Device_ExtendedConfigurationIds, DEVPKEY_Device_InstanceId, DEVPKEY_Device_MatchingDeviceId, DEVPROP_TYPE_STRING, DEVPROP_TYPE_STRING_LIST,
+    DEVPROPTYPE,
+};
+use windows_sys::Win32::Foundation::{DEVPROPKEY, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_SUCH_DEVINST, GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Registry::{
     HKEY, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_MULTI_SZ, RegCloseKey, RegDeleteValueW, RegQueryValueExW, RegSetValueExW,
 };
@@ -41,7 +54,7 @@ const INTERFACE_GUIDS_VALUE: &str = "DeviceInterfaceGUIDs";
 /// `%windir%\INF\<name>` (the system's own folder, never a path from elsewhere).
 fn inf_path(name: &str) -> Option<Vec<u16>> {
     // Only a bare INF file name as Windows records it (`input.inf`, `oem12.inf`).
-    if name.is_empty() || name.contains(['\\', '/', ':']) || !name.to_ascii_lowercase().ends_with(".inf") {
+    if !crate::usb_capture::is_bare_inf_name(name) {
         return None;
     }
     let mut buf = [0u16; 260];
@@ -151,57 +164,255 @@ impl DevInfo {
         Ok(())
     }
 
-    /// Install the first driver of `inf` (one INF only) from the list `kind` on this node.
-    fn install_from(&mut self, inf: &[u16], kind: SETUP_DI_DRIVER_TYPE) -> BackendResult<bool> {
+    /// A device property as strings (`DEVPROP_TYPE_STRING` or `_STRING_LIST`); `None` when
+    /// it is not set or has another type.
+    fn prop_strings(&self, key: &DEVPROPKEY) -> Option<Vec<String>> {
+        let mut ty: DEVPROPTYPE = 0;
+        let mut need = 0u32;
+        // SAFETY: size query (null buffer, zero size).
+        unsafe { SetupDiGetDevicePropertyW(self.set, &self.data, key, &mut ty, std::ptr::null_mut(), 0, &mut need, 0) };
+        if need == 0 || need > 64 * 1024 {
+            return None;
+        }
+        let mut buf = vec![0u16; (need as usize).div_ceil(2)];
+        // SAFETY: buffer of `need` bytes (u16-aligned).
+        if unsafe { SetupDiGetDevicePropertyW(self.set, &self.data, key, &mut ty, buf.as_mut_ptr().cast(), need, &mut need, 0) } == 0 {
+            return None;
+        }
+        if ty != DEVPROP_TYPE_STRING && ty != DEVPROP_TYPE_STRING_LIST {
+            return None;
+        }
+        let v: Vec<String> = buf.split(|c| *c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect();
+        Some(v)
+    }
+
+    fn prop_string(&self, key: &DEVPROPKEY) -> String {
+        self.prop_strings(key).and_then(|v| v.into_iter().next()).unwrap_or_default()
+    }
+
+    /// What the node runs now, as Windows reports it.
+    fn driver_now(&self) -> OriginalDriver {
+        let mut inf_path = self.prop_string(&DEVPKEY_Device_DriverInfPath);
+        if inf_path.is_empty() {
+            inf_path = self.inf_name().unwrap_or_default();
+        }
+        OriginalDriver {
+            class_guid: self.class_guid().unwrap_or_default(),
+            inf_path,
+            inf_section: self.prop_string(&DEVPKEY_Device_DriverInfSection),
+            driver_version: self.prop_string(&DEVPKEY_Device_DriverVersion),
+            provider: self.prop_string(&DEVPKEY_Device_DriverProvider),
+            matching_id: self.prop_string(&DEVPKEY_Device_MatchingDeviceId),
+            extensions: self.prop_strings(&DEVPKEY_Device_ExtendedConfigurationIds).unwrap_or_default(),
+        }
+    }
+
+    /// Our GUID is in the node's `Device Parameters\DeviceInterfaceGUIDs` value.
+    fn has_interface_guid(&self) -> bool {
+        let Some(k) = self.key(DIREG_DEV, KEY_QUERY_VALUE) else { return false };
+        let name = wide(INTERFACE_GUIDS_VALUE);
+        let mut buf = [0u16; 512];
+        let mut len = (buf.len() * 2) as u32;
+        // SAFETY: sized buffer.
+        let r = unsafe { RegQueryValueExW(k.0, name.as_ptr(), std::ptr::null(), std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+        if r != 0 {
+            return false;
+        }
+        buf[..(len as usize / 2).min(buf.len())]
+            .split(|c| *c == 0)
+            .any(|s| String::from_utf16_lossy(s).trim().eq_ignore_ascii_case(INTERFACE_GUID))
+    }
+
+    fn set_install_params(&self, single_inf: Option<&[u16]>) -> BackendResult<()> {
         let mut p = SP_DEVINSTALL_PARAMS_W { cbSize: std::mem::size_of::<SP_DEVINSTALL_PARAMS_W>() as u32, ..unsafe { std::mem::zeroed() } };
         // SAFETY: sized struct.
         if unsafe { SetupDiGetDeviceInstallParamsW(self.set, &self.data, &mut p) } == 0 {
             return Err(last_error("setupdi_failed", "SetupDiGetDeviceInstallParamsW"));
         }
-        p.Flags |= DI_ENUMSINGLEINF;
-        p.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
         p.DriverPath = [0; 260];
-        let n = inf.len().min(259);
-        p.DriverPath[..n].copy_from_slice(&inf[..n]);
+        match single_inf {
+            Some(inf) => {
+                p.Flags |= DI_ENUMSINGLEINF;
+                p.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
+                let n = inf.len().min(259);
+                p.DriverPath[..n].copy_from_slice(&inf[..n]);
+            }
+            None => {
+                p.Flags &= !DI_ENUMSINGLEINF;
+                p.FlagsEx &= !DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
+            }
+        }
         // SAFETY: as above.
         if unsafe { SetupDiSetDeviceInstallParamsW(self.set, &self.data, &p) } == 0 {
             return Err(last_error("setupdi_failed", "SetupDiSetDeviceInstallParamsW"));
         }
+        Ok(())
+    }
+
+    /// Install section and INF file name of a driver node of the list built now.
+    fn driver_detail(&self, drv: &SP_DRVINFO_DATA_V2_W) -> Option<(String, String)> {
+        // u64 words: the detail structure is 8-byte aligned on 64-bit targets.
+        let mut buf: Vec<u64> = vec![0; 1024];
+        for _ in 0..2 {
+            let p = buf.as_mut_ptr().cast::<SP_DRVINFO_DETAIL_DATA_W>();
+            // SAFETY: the buffer is larger than the fixed part of the structure.
+            unsafe { (*p).cbSize = std::mem::size_of::<SP_DRVINFO_DETAIL_DATA_W>() as u32 };
+            let mut need = 0u32;
+            // SAFETY: buffer of `buf.len() * 8` bytes.
+            let ok = unsafe { SetupDiGetDriverInfoDetailW(self.set, &self.data, drv, p, (buf.len() * 8) as u32, &mut need) } != 0;
+            // SAFETY: no arguments.
+            if !ok && unsafe { GetLastError() } == ERROR_INSUFFICIENT_BUFFER && need as usize > buf.len() * 8 {
+                buf = vec![0; (need as usize).div_ceil(8) + 1];
+                continue;
+            }
+            if !ok {
+                return None;
+            }
+            // SAFETY: filled by the call above.
+            let d = unsafe { &*p };
+            let z = |w: &[u16]| String::from_utf16_lossy(&w[..w.iter().position(|c| *c == 0).unwrap_or(w.len())]);
+            let inf = z(&d.InfFileName);
+            let file = inf.rsplit(['\\', '/']).next().unwrap_or_default().to_string();
+            return Some((z(&d.SectionName), file));
+        }
+        None
+    }
+
+    /// Install the driver node of `inf` (one INF only) from the list `kind` whose install
+    /// section and version match `want` (the first one when none matches). `Ok(None)` =
+    /// the INF has no driver for this node in that list; `Ok(Some(section))` = installed.
+    fn install_from(&mut self, inf: &[u16], kind: SETUP_DI_DRIVER_TYPE, want: &OriginalDriver) -> BackendResult<Option<String>> {
+        self.set_install_params(Some(inf))?;
         // SAFETY: valid set / data.
         if unsafe { SetupDiBuildDriverInfoList(self.set, &mut self.data, kind) } == 0 {
             return Err(last_error("driver_list_failed", "SetupDiBuildDriverInfoList"));
         }
-        let mut drv = SP_DRVINFO_DATA_V2_W { cbSize: std::mem::size_of::<SP_DRVINFO_DATA_V2_W>() as u32, ..unsafe { std::mem::zeroed() } };
-        // SAFETY: sized struct.
-        let found = unsafe { SetupDiEnumDriverInfoW(self.set, &self.data, kind, 0, &mut drv) } != 0;
-        let result = if found {
-            let mut reboot = 0;
-            // SAFETY: driver node from the list built for this device.
-            if unsafe { DiInstallDevice(std::ptr::null_mut(), self.set, &self.data, &drv, 0, &mut reboot) } == 0 {
-                Err(last_error("di_install_failed", "DiInstallDevice"))
-            } else {
-                if reboot != 0 {
-                    log::warn!("USB capture: Windows asks for a restart to finish a driver change");
-                }
-                Ok(true)
+        let mut chosen: Option<(SP_DRVINFO_DATA_V2_W, String)> = None;
+        for i in 0..256u32 {
+            let mut drv = SP_DRVINFO_DATA_V2_W { cbSize: std::mem::size_of::<SP_DRVINFO_DATA_V2_W>() as u32, ..unsafe { std::mem::zeroed() } };
+            // SAFETY: sized struct.
+            if unsafe { SetupDiEnumDriverInfoW(self.set, &self.data, kind, i, &mut drv) } == 0 {
+                break;
             }
-        } else {
-            Ok(false)
+            let section = self.driver_detail(&drv).map(|(s, _)| s).unwrap_or_default();
+            let version = version_string(drv.DriverVersion);
+            let section_ok = want.inf_section.is_empty() || section.eq_ignore_ascii_case(&want.inf_section);
+            let version_ok = want.driver_version.is_empty() || version == want.driver_version;
+            if section_ok && version_ok {
+                chosen = Some((drv, section));
+                break;
+            }
+            if chosen.is_none() {
+                chosen = Some((drv, section));
+            }
+        }
+        let result = match chosen {
+            Some((drv, section)) => {
+                let mut reboot = 0;
+                // SAFETY: driver node from the list built for this device.
+                if unsafe { DiInstallDevice(std::ptr::null_mut(), self.set, &self.data, &drv, 0, &mut reboot) } == 0 {
+                    Err(last_error("di_install_failed", "DiInstallDevice"))
+                } else {
+                    if reboot != 0 {
+                        log::warn!("USB capture: Windows asks for a restart to finish a driver change");
+                    }
+                    Ok(Some(section))
+                }
+            }
+            None => Ok(None),
         };
         // SAFETY: list built above.
         unsafe { SetupDiDestroyDriverInfoList(self.set, &self.data, kind) };
         result
     }
 
-    fn install(&mut self, inf_name: &str, lists: &[SETUP_DI_DRIVER_TYPE]) -> BackendResult<()> {
+    fn install(&mut self, inf_name: &str, lists: &[SETUP_DI_DRIVER_TYPE], want: &OriginalDriver) -> BackendResult<String> {
         let inf = inf_path(inf_name).ok_or_else(|| BackendError::new(ErrorKind::Internal, "bad_inf_name", inf_name.to_string()))?;
         for kind in lists {
-            if self.install_from(&inf, *kind)? {
-                return Ok(());
+            if let Some(section) = self.install_from(&inf, *kind, want)? {
+                return Ok(section);
             }
         }
         Err(BackendError::new(ErrorKind::NotFound, "no_driver_in_inf", format!("{inf_name} has no driver for this device")))
     }
+
+    /// Install the compatible driver Windows ranks best from its whole store (the node's
+    /// class must already be its own again; `winusb.inf` is never taken).
+    fn install_best(&mut self) -> BackendResult<String> {
+        self.set_install_params(None)?;
+        // SAFETY: valid set / data.
+        if unsafe { SetupDiBuildDriverInfoList(self.set, &mut self.data, SPDIT_COMPATDRIVER) } == 0 {
+            return Err(last_error("driver_list_failed", "SetupDiBuildDriverInfoList"));
+        }
+        let result = (|| {
+            // SAFETY: list built above.
+            if unsafe { SetupDiSelectBestCompatDrv(self.set, &mut self.data) } == 0 {
+                return Err(last_error("no_driver_in_inf", "SetupDiSelectBestCompatDrv"));
+            }
+            let mut drv = SP_DRVINFO_DATA_V2_W { cbSize: std::mem::size_of::<SP_DRVINFO_DATA_V2_W>() as u32, ..unsafe { std::mem::zeroed() } };
+            // SAFETY: sized struct.
+            if unsafe { SetupDiGetSelectedDriverW(self.set, &self.data, &mut drv) } == 0 {
+                return Err(last_error("no_driver_in_inf", "SetupDiGetSelectedDriverW"));
+            }
+            let (section, file) = self.driver_detail(&drv).unwrap_or_default();
+            if file.eq_ignore_ascii_case("winusb.inf") {
+                return Err(BackendError::new(ErrorKind::NotFound, "no_driver_in_inf", "only winusb.inf matches"));
+            }
+            let mut reboot = 0;
+            // SAFETY: the selected driver node of this device's list.
+            if unsafe { DiInstallDevice(std::ptr::null_mut(), self.set, &self.data, &drv, 0, &mut reboot) } == 0 {
+                return Err(last_error("di_install_failed", "DiInstallDevice"));
+            }
+            if reboot != 0 {
+                log::warn!("USB capture: Windows asks for a restart to finish a driver change");
+            }
+            Ok(format!("{file} [{section}]"))
+        })();
+        // SAFETY: list built above.
+        unsafe { SetupDiDestroyDriverInfoList(self.set, &self.data, SPDIT_COMPATDRIVER) };
+        result
+    }
+
+    /// Extension INFs of `want` that the node does not carry after the core driver install
+    /// are installed again with `DiInstallDriverW` (what `pnputil /add-driver <inf> /install`
+    /// does; the gaming PC needed it by hand for the Logitech `oem185.inf`, whose software
+    /// component then came back). The INF is already in the driver store and was applied to
+    /// this node before; `DiInstallDriverW` applies it to every present device it lists,
+    /// which are the devices it was applied to already (HYPOTHESIS: that the reinstall of
+    /// the core driver dropped the extension, and that this brings back exactly it).
+    fn reapply_extensions(&self, node: &str, want: &OriginalDriver) {
+        let infs = want.extension_infs();
+        if infs.is_empty() {
+            return;
+        }
+        let now = OriginalDriver { extensions: self.prop_strings(&DEVPKEY_Device_ExtendedConfigurationIds).unwrap_or_default(), ..OriginalDriver::default() };
+        let have = now.extension_infs();
+        for inf in infs {
+            if have.iter().any(|h| h.eq_ignore_ascii_case(&inf)) {
+                log::info!("USB release of {node}: extension {inf} is back by itself");
+                continue;
+            }
+            let Some(path) = inf_path(&inf) else { continue };
+            let shown = String::from_utf16_lossy(&path[..path.len() - 1]);
+            if !std::path::Path::new(&shown).exists() {
+                log::warn!("USB release of {node}: extension {inf} is no longer in %windir%\\INF; not re-applied");
+                continue;
+            }
+            let mut reboot = 0;
+            // SAFETY: NUL-terminated path of an INF in the system's INF folder.
+            if unsafe { DiInstallDriverW(std::ptr::null_mut(), path.as_ptr(), 0, &mut reboot) } == 0 {
+                let e = last_error("extension_failed", "DiInstallDriverW");
+                log::warn!("USB release of {node}: extension {inf} not re-applied: {e}");
+            } else {
+                log::info!("USB release of {node}: extension {inf} re-applied{}", if reboot != 0 { " (restart asked)" } else { "" });
+            }
+        }
+    }
+}
+
+/// `DriverVersion` of a driver node (`a.b.c.d`, 16 bits each) as Windows prints it.
+fn version_string(v: u64) -> String {
+    format!("{}.{}.{}.{}", v >> 48, (v >> 32) & 0xFFFF, (v >> 16) & 0xFFFF, v & 0xFFFF)
 }
 
 impl Drop for DevInfo {
@@ -250,15 +461,22 @@ impl UsbSwap for WinUsbSwap {
             // happen: the journal comes first; this is someone else's WinUSB device).
             return Err(BackendError::new(ErrorKind::Coexistence, "already_winusb", format!("{node} already runs WinUSB")));
         }
-        let inf_path = d.inf_name().unwrap_or_else(|| "input.inf".into());
-        Ok(OriginalDriver { class_guid, inf_path })
+        // INF, section, version and extension INFs as Windows reports them; an INF that
+        // cannot be read stays empty (the restore then lets Windows rank the drivers).
+        let mut o = d.driver_now();
+        o.class_guid = class_guid;
+        Ok(o)
+    }
+
+    fn current(&self, node: &str) -> Option<OriginalDriver> {
+        DevInfo::open(node).ok().map(|d| d.driver_now())
     }
 
     fn capture(&self, node: &str) -> BackendResult<()> {
         let mut d = DevInfo::open(node)?;
         d.set_interface_guid(true)?;
         d.set_class_guid(USB_DEVICE_CLASS)?;
-        d.install("winusb.inf", &[SPDIT_CLASSDRIVER, SPDIT_COMPATDRIVER])
+        d.install("winusb.inf", &[SPDIT_CLASSDRIVER, SPDIT_COMPATDRIVER], &OriginalDriver::default()).map(|_| ())
     }
 
     fn release(&self, node: &str, original: &OriginalDriver) -> BackendResult<()> {
@@ -287,18 +505,28 @@ impl UsbSwap for WinUsbSwap {
             log::info!("USB release of {node}: device absent, phantom node removed");
             return Ok(());
         }
-        d.set_class_guid(&original.class_guid)?;
-        let r = d.install(&original.inf_path, &[SPDIT_COMPATDRIVER, SPDIT_CLASSDRIVER]).or_else(|e| {
-            if original.inf_path.eq_ignore_ascii_case("input.inf") {
-                return Err(e);
+        let class = if original.class_guid.is_empty() { crate::usb_capture::HID_CLASS } else { original.class_guid.as_str() };
+        d.set_class_guid(class)?;
+        let installed = if original.inf_path.is_empty() {
+            d.install_best()?
+        } else {
+            match d.install(&original.inf_path, &[SPDIT_COMPATDRIVER, SPDIT_CLASSDRIVER], original) {
+                Ok(section) => format!("{} [{section}]", original.inf_path),
+                Err(e) => {
+                    // The package left the driver store, or does not match any more: the
+                    // driver Windows itself would pick, never a fixed input.inf (bug 5).
+                    log::warn!("USB release of {node}: {} not usable ({e}); installing the best driver Windows ranks", original.describe());
+                    d.set_class_guid(crate::usb_capture::HID_CLASS)?;
+                    d.install_best()?
+                }
             }
-            log::warn!("USB release of {node}: {} not usable ({e}); using input.inf", original.inf_path);
-            d.set_class_guid(crate::usb_capture::HID_CLASS)?;
-            d.install("input.inf", &[SPDIT_COMPATDRIVER, SPDIT_CLASSDRIVER])
-        });
-        r?;
-        // Last, so a failed reinstall leaves the node findable by the start-up sweep.
-        d.set_interface_guid(false)
+        };
+        log::info!("USB release of {node}: installed {installed} (journaled {})", original.describe());
+        // Before the extensions, so a failed reinstall leaves the node findable by the
+        // start-up sweep, and a finished one is not ours any more.
+        d.set_interface_guid(false)?;
+        d.reapply_extensions(node, original);
+        Ok(())
     }
 
     fn captured_nodes(&self) -> Vec<String> {
@@ -344,6 +572,16 @@ impl UsbSwap for WinUsbSwap {
         out
     }
 
+    fn still_captured(&self, node: &str) -> bool {
+        match DevInfo::open(node) {
+            Ok(d) => d.class_guid().is_some_and(|c| c == USB_DEVICE_CLASS) || d.has_interface_guid(),
+            Err(e) => {
+                log::debug!("USB capture: {node} not readable ({e}); not counted as captured");
+                false
+            }
+        }
+    }
+
     fn watch(&self, cb: ChangeCallback) -> BackendResult<Box<dyn Guard>> {
         let g = guid(INTERFACE_GUID).ok_or_else(|| BackendError::new(ErrorKind::Internal, "bad_guid", INTERFACE_GUID))?;
         super::watch_interfaces(&[g], cb)
@@ -372,5 +610,44 @@ mod tests {
         assert_eq!(WinUsbSwap.original(r"USB\VID_0000&PID_0000\NOPE").unwrap_err().kind, ErrorKind::NotFound);
         // A journaled node that no longer exists is done (nothing is changed: the open fails).
         assert_eq!(WinUsbSwap.release(r"USB\VID_0000&PID_0000\NOPE", &OriginalDriver::hid_default()).map_err(|e| e.reason), Ok(()));
+        assert!(!WinUsbSwap.still_captured(r"USB\VID_0000&PID_0000\NOPE"));
+        assert!(WinUsbSwap.current(r"USB\VID_0000&PID_0000\NOPE").is_none());
+    }
+
+    /// Read-only: the driver of a present USB node reads like `pnputil` / Device Manager
+    /// show it (an INF name, a section, a dotted version), and it is not "still captured".
+    #[test]
+    fn current_driver_of_a_usb_hub_reads() {
+        use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+            CM_GETIDLIST_FILTER_ENUMERATOR, CM_GETIDLIST_FILTER_PRESENT, CM_Get_Device_ID_List_SizeW, CM_Get_Device_ID_ListW,
+        };
+        let filter = wide("USB");
+        let flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
+        let mut len = 0u32;
+        // SAFETY: NUL-terminated filter, out length.
+        if unsafe { CM_Get_Device_ID_List_SizeW(&mut len, filter.as_ptr(), flags) } != CR_SUCCESS || len < 2 {
+            return; // no USB on this machine
+        }
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: buffer of `len` units.
+        if unsafe { CM_Get_Device_ID_ListW(filter.as_ptr(), buf.as_mut_ptr(), len, flags) } != CR_SUCCESS {
+            return;
+        }
+        let ids: Vec<String> = buf.split(|c| *c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect();
+        let Some(d) = ids.iter().find_map(|id| {
+            WinUsbSwap.current(id).filter(|d| !d.inf_path.is_empty() && !d.class_guid.eq_ignore_ascii_case(USB_DEVICE_CLASS)).map(|d| (id.clone(), d))
+        }) else {
+            return;
+        };
+        let (id, drv) = d;
+        assert!(crate::usb_capture::is_bare_inf_name(&drv.inf_path), "{id}: {drv:?}");
+        assert!(drv.driver_version.split('.').count() == 4, "{id}: {drv:?}");
+        assert!(!WinUsbSwap.still_captured(&id), "{id}");
+    }
+
+    #[test]
+    fn driver_versions_print_like_windows() {
+        assert_eq!(version_string((1 << 48) | (10 << 32) | (80 << 16)), "1.10.80.0");
+        assert_eq!(version_string((10 << 48) | (26100 << 16) | 9974), "10.0.26100.9974");
     }
 }

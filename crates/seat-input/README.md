@@ -37,6 +37,17 @@ backend change, service stop, the next service start, the manager's "Give USB ke
 and mice back to Windows" command (`restore_usb_input`) and uninstall. The last console
 keyboard or mouse is never captured.
 
+Restore exactness (gaming PC 2026-11-24, bug 5): the journal keeps the exact original
+package (INF, install section, version, provider, matching id and the extension INFs of
+`DEVPKEY_Device_ExtendedConfigurationIds`). The release installs that INF's matching driver
+node (fallback: the driver Windows ranks best, never a fixed `input.inf`), then re-applies
+the extension INFs that did not come back (`DiInstallDriverW`). Each restore is compared
+with the journal and logged as `restore check: exact` / `NOT exact` (note
+`usb_restore_inexact`). The start-up sweep only touches nodes that still carry the capture
+(`UsbSwap::still_captured`); Windows keeps the interface registration after a release, and
+the sweep used to reinstall `input.inf` over a restored vendor driver. The manager's restore
+holds captures off (`usb_capture_held`) until a seat starts or the input settings change.
+
 Clean room: written from Microsoft's SetupAPI, newdev and WinUSB documentation, the USB
 HID 1.11 specification, the HID Usage Tables and Microsoft's Keyboard Scan Code
 Specification. The OpenStreamMultiSeat project (MIT) was only used as a description of
@@ -44,9 +55,9 @@ the approach; none of its code is in this crate, so no notice is needed.
 
 **Untested on hardware (HYPOTHESIS):**
 
-- that `DiInstallDevice` installs the `winusb.inf` class driver on a HID interface whose ids
-  `winusb.inf` does not list, and that the journaled INF (or `input.inf`) goes back the
-  same way;
+- (capture and swap back of a Logitech receiver ran on the x64 gaming PC on 2026-11-24;
+  still open) the pick of the journaled section / version, the best-ranked fallback and
+  the extension re-apply through `DiInstallDriverW`;
 - that removing an unplugged captured node (`SetupDiRemoveDevice`) brings the device back on
   its own driver at the next plug-in;
 - the reader: `WinUsb_Initialize` on a HID interface, the interrupt-IN pipe, the
