@@ -87,7 +87,8 @@ pub const MINIFILTER_PORT_NAME: &str = r"\PulsarSeatStorageGate";
 pub const DRIVER_INTERFACE_MAJOR: u16 = 1;
 
 /// Coexistence: service keys of the reference product (interop identifiers, used for
-/// detection only, spec 90 §11 item 4).
+/// detection only, spec 90 §11 item 4). Every key the guard knows; the disabled state
+/// ([`crate::reference`]) needs every existing one disabled and stopped.
 pub const REFERENCE_SERVICE_KEYS: [&str; 2] = ["MUTESV_SERVICE", "MUTENX_SERVICE"];
 
 /// First Windows build with the per-app default audio endpoint (Windows 10 1803; the

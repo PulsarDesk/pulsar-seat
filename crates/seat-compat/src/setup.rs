@@ -602,6 +602,29 @@ mod tests {
         assert_eq!(r.exit_code(), EXIT_REFUSED);
     }
 
+    /// Reference product installed but every key disabled and stopped (2026-11-24): the
+    /// gate passes and install proceeds with a warning in the setup log.
+    #[test]
+    fn installs_with_warning_beside_disabled_reference_product() {
+        let mut env = Environment::default();
+        env.coexistence.reference_services.push("X".into());
+        env.coexistence.reference_disabled = true;
+        let checks = evaluate(&env);
+        assert_eq!(gate_exit_code(&checks, false), EXIT_OK);
+        let r = install_with(
+            &Journal::memory(),
+            &MemoryOps::new(),
+            &InstallOptions::default(),
+            checks,
+            &|_| Ok(1),
+        );
+        assert!(!r.refused);
+        assert_eq!(r.exit_code(), EXIT_OK);
+        let log = r.log_text();
+        assert!(log.contains("WARNING Another multiseat product"), "{log}");
+        assert!(log.contains("reference_product_disabled"), "{log}");
+    }
+
     #[test]
     fn install_then_uninstall_restores_everything() {
         let j = Journal::memory();

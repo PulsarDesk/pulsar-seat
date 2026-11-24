@@ -492,6 +492,49 @@ impl SystemOps for WinOps {
     fn feature_enable(&self, name: &str) -> OpsResult<bool> {
         crate::win_certs::feature_enable(name)
     }
+
+    fn service_active(&self, name: &str) -> OpsResult<bool> {
+        service_active(name)
+    }
+}
+
+/// SCM state of a service or driver (`QueryServiceStatus` works for both kinds; a loaded
+/// driver reports `SERVICE_RUNNING`). Query rights only, nothing is changed. A service the
+/// SCM does not know counts as stopped.
+fn service_active(name: &str) -> OpsResult<bool> {
+    use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
+        SERVICE_QUERY_STATUS, SERVICE_STATUS, SERVICE_STOPPED,
+    };
+    let n = wide(name);
+    // SAFETY: plain SCM calls with valid pointers; both handles are closed below.
+    unsafe {
+        let scm = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+        if scm.is_null() {
+            return Err(OpsError::win32("OpenSCManagerW", GetLastError()));
+        }
+        let svc = OpenServiceW(scm, n.as_ptr(), SERVICE_QUERY_STATUS);
+        if svc.is_null() {
+            let e = GetLastError();
+            CloseServiceHandle(scm);
+            return if e == ERROR_SERVICE_DOES_NOT_EXIST {
+                Ok(false)
+            } else {
+                Err(OpsError::win32("OpenServiceW", e))
+            };
+        }
+        let mut st: SERVICE_STATUS = std::mem::zeroed();
+        let ok = QueryServiceStatus(svc, &mut st) != 0;
+        let e = GetLastError();
+        CloseServiceHandle(svc);
+        CloseServiceHandle(scm);
+        if ok {
+            Ok(st.dwCurrentState != SERVICE_STOPPED)
+        } else {
+            Err(OpsError::win32("QueryServiceStatus", e))
+        }
+    }
 }
 
 pub use crate::win_certs::inspect_cert;

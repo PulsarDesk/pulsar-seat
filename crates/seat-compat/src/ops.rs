@@ -258,6 +258,12 @@ pub trait SystemOps: Send + Sync {
     fn feature_enable(&self, _name: &str) -> OpsResult<bool> {
         Err(unsupported("feature_enable"))
     }
+    /// The service control manager reports the service or driver `name` in any state
+    /// but stopped (a driver: loaded). Read-only (`SERVICE_QUERY_STATUS`). Added
+    /// 2026-11-24 (coexistence: reference product disabled state, `seat_core::reference`).
+    fn service_active(&self, _name: &str) -> OpsResult<bool> {
+        Err(unsupported("service_active"))
+    }
 }
 
 /// `S-1-5-21-…`-shaped string (digits and dashes only), so it can never name another key.
@@ -292,6 +298,10 @@ pub struct MemoryOps {
     pub certs: Mutex<BTreeMap<crate::certs::CertStore, Vec<MemoryCert>>>,
     /// Optional features by DISM name (absent = unavailable).
     pub features: Mutex<BTreeMap<String, crate::features::FeatureState>>,
+    /// Services / drivers the SCM reports as not stopped (lower-case names; absent =
+    /// stopped). A name in `scm_unknown` makes the query fail.
+    pub active_services: Mutex<std::collections::BTreeSet<String>>,
+    pub scm_unknown: Mutex<std::collections::BTreeSet<String>>,
 }
 
 /// (thumbprint, DER) of a certificate in a [`MemoryOps`] store.
@@ -552,6 +562,13 @@ impl SystemOps for MemoryOps {
         let st = g.get_mut(name).ok_or_else(|| OpsError::new("feature_enable", "unknown feature"))?;
         *st = crate::features::FeatureState::EnablePending;
         Ok(true)
+    }
+    fn service_active(&self, name: &str) -> OpsResult<bool> {
+        let n = name.to_ascii_lowercase();
+        if self.scm_unknown.lock().unwrap().contains(&n) {
+            return Err(OpsError::new("service_active", "query failed"));
+        }
+        Ok(self.active_services.lock().unwrap().contains(&n))
     }
     fn file_move(&self, from: &str, to: &str) -> OpsResult<()> {
         self.take_fail("file_move")?;

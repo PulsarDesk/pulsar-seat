@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Coexistence detection (spec 90 §11 item 4, spec 00 §3.3, spec 50 §4 item 6).
 //!
-//! - **Reference product**: its service keys ([`REFERENCE_SERVICE_KEYS`]) under
-//!   `HKLM\SYSTEM\CurrentControlSet\Services`. Install is **refused** while they exist.
-//!   The names are interop identifiers used only here.
+//! - **Reference product**: its service keys
+//!   ([`seat_core::consts::REFERENCE_SERVICE_KEYS`]) under
+//!   `HKLM\SYSTEM\CurrentControlSet\Services`. Install is **refused** while they exist,
+//!   except in the disabled state ([`seat_core::reference`], 2026-11-24): every existing
+//!   key has `Start` = 4 and the service control manager reports none of them running /
+//!   loaded. Then the check is a warning and install proceeds. The names are interop
+//!   identifiers used only here; their keys are read, never written.
 //! - **TermService**: a non-default `Parameters\ServiceDll` means another product wrapped
 //!   the terminal service. The RDS loopback backend is refused there; the installer warns.
 //! - **Foreign filters** in the keyboard / mouse / HID class lists and on device stacks:
@@ -12,8 +16,8 @@
 //! Read-only: nothing in this module writes.
 
 use crate::ops::{Hive, SystemOps};
-use seat_core::consts::REFERENCE_SERVICE_KEYS;
 use seat_core::pnp::{PnpTree, foreign_filters};
+use seat_core::reference::{self, ReferenceKey, ReferenceState};
 use seat_proto::messages::{Check, CheckOutcome};
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +74,13 @@ pub struct DeviceFilters {
 pub struct Coexistence {
     /// Reference product service keys found.
     pub reference_services: Vec<String>,
+    /// `Start` and SCM state of each key in `reference_services`. Added 2026-11-24.
+    #[serde(default)]
+    pub reference_keys: Vec<ReferenceKey>,
+    /// Every key in `reference_services` has `Start` = 4 and is not running / loaded
+    /// ([`ReferenceState::Disabled`]). Added 2026-11-24.
+    #[serde(default)]
+    pub reference_disabled: bool,
     /// `TermService\Parameters\ServiceDll` as stored (`None` = value absent).
     pub termservice_dll: Option<String>,
     pub termservice_stock: bool,
@@ -78,9 +89,20 @@ pub struct Coexistence {
 }
 
 impl Coexistence {
-    /// The installer refuses to install / upgrade.
+    pub fn reference_state(&self) -> ReferenceState {
+        if self.reference_services.is_empty() {
+            ReferenceState::Absent
+        } else if self.reference_disabled {
+            ReferenceState::Disabled
+        } else {
+            ReferenceState::Active
+        }
+    }
+
+    /// The installer refuses to install / upgrade (reference product present and not
+    /// fully disabled).
     pub fn blocks_install(&self) -> bool {
-        !self.reference_services.is_empty()
+        self.reference_state().blocks()
     }
 
     /// The RDS loopback session backend must not run here.
@@ -90,21 +112,32 @@ impl Coexistence {
 
     pub fn checks(&self) -> Vec<Check> {
         let mut v = Vec::new();
-        v.push(if self.reference_services.is_empty() {
-            Check {
+        let keys = if self.reference_keys.is_empty() {
+            self.reference_services.join(", ")
+        } else {
+            reference::describe(&self.reference_keys)
+        };
+        v.push(match self.reference_state() {
+            ReferenceState::Absent => Check {
                 id: "reference_product".into(),
                 outcome: CheckOutcome::Pass,
                 detail: "not installed".into(),
-            }
-        } else {
-            Check {
+            },
+            ReferenceState::Disabled => Check {
+                id: "reference_product".into(),
+                outcome: CheckOutcome::Warn,
+                detail: format!(
+                    "{}: another multiseat product is installed but disabled (service keys: {keys}); keep it disabled while Pulsar Seat is installed",
+                    reference::REFERENCE_PRODUCT_DISABLED
+                ),
+            },
+            ReferenceState::Active => Check {
                 id: "reference_product".into(),
                 outcome: CheckOutcome::Fail,
                 detail: format!(
-                    "another multiseat product is installed (service keys: {})",
-                    self.reference_services.join(", ")
+                    "another multiseat product is installed (service keys: {keys})"
                 ),
-            }
+            },
         });
         v.push(if self.termservice_stock {
             Check {
@@ -179,14 +212,24 @@ pub fn is_stock_termservice_dll(value: &str, system_root: &str) -> bool {
 /// `tree` + `instance_ids`: device stacks to inspect (input devices of the inventory).
 pub fn detect(ops: &dyn SystemOps, tree: Option<(&dyn PnpTree, &[String])>) -> Coexistence {
     let mut c = Coexistence::default();
-    for name in REFERENCE_SERVICE_KEYS {
-        if ops
-            .reg_key_exists(Hive::Hklm, &format!(r"{SERVICES_KEY}\{name}"))
-            .unwrap_or(false)
-        {
-            c.reference_services.push(name.to_string());
-        }
-    }
+    // Read-only: key existence, `Start`, SCM state. Never a write to these keys.
+    c.reference_keys = reference::probe(
+        |name| {
+            Some(
+                ops.reg_key_exists(Hive::Hklm, &format!(r"{SERVICES_KEY}\{name}"))
+                    .unwrap_or(false),
+            )
+        },
+        |name| {
+            ops.reg_read(Hive::Hklm, &format!(r"{SERVICES_KEY}\{name}"), "Start")
+                .ok()
+                .flatten()
+                .and_then(|d| d.as_u32())
+        },
+        |name| ops.service_active(name).ok(),
+    );
+    c.reference_services = c.reference_keys.iter().map(|k| k.name.clone()).collect();
+    c.reference_disabled = reference::classify(&c.reference_keys) == ReferenceState::Disabled;
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
     c.termservice_dll = ops
         .reg_read(Hive::Hklm, TERMSERVICE_PARAMS, "ServiceDll")
@@ -253,6 +296,7 @@ pub fn detect(ops: &dyn SystemOps, tree: Option<(&dyn PnpTree, &[String])>) -> C
 mod tests {
     use super::*;
     use crate::ops::{MemoryOps, RegData};
+    use seat_core::consts::REFERENCE_SERVICE_KEYS;
 
     #[test]
     fn stock_termsrv_forms() {
@@ -324,6 +368,79 @@ mod tests {
                 .outcome,
             CheckOutcome::Warn
         );
+    }
+
+    /// Both reference keys present with the given `Start` values (`None` = no value).
+    fn reference_ops(starts: [Option<u32>; 2]) -> MemoryOps {
+        let ops = MemoryOps::new();
+        for (name, start) in REFERENCE_SERVICE_KEYS.iter().zip(starts) {
+            let key = format!(r"{SERVICES_KEY}\{name}");
+            ops.add_key(Hive::Hklm, &key);
+            if let Some(s) = start {
+                ops.set(Hive::Hklm, &key, "Start", RegData::Dword(s));
+            }
+        }
+        ops
+    }
+
+    fn reference_check(c: &Coexistence) -> Check {
+        c.checks().into_iter().find(|x| x.id == "reference_product").unwrap()
+    }
+
+    #[test]
+    fn reference_fully_disabled_warns_instead_of_blocking() {
+        let ops = reference_ops([Some(4), Some(4)]);
+        let before = ops.reg.lock().unwrap().clone();
+        let c = detect(&ops, None);
+        assert_eq!(c.reference_state(), ReferenceState::Disabled);
+        assert!(c.reference_disabled);
+        assert_eq!(c.reference_services.len(), REFERENCE_SERVICE_KEYS.len());
+        assert!(!c.blocks_install());
+        let chk = reference_check(&c);
+        assert_eq!(chk.outcome, CheckOutcome::Warn);
+        assert!(chk.detail.starts_with("reference_product_disabled:"), "{}", chk.detail);
+        assert!(chk.detail.contains("start 4, stopped"), "{}", chk.detail);
+        // Pure detection: nothing written to the reference keys (or anywhere).
+        assert_eq!(*ops.reg.lock().unwrap(), before);
+        // Only one key left, disabled and stopped: still the disabled state.
+        let ops = MemoryOps::new();
+        let key = format!(r"{SERVICES_KEY}\{}", REFERENCE_SERVICE_KEYS[1]);
+        ops.set(Hive::Hklm, &key, "Start", RegData::Dword(4));
+        assert_eq!(detect(&ops, None).reference_state(), ReferenceState::Disabled);
+    }
+
+    #[test]
+    fn reference_not_fully_disabled_still_blocks() {
+        for starts in [[Some(4), Some(3)], [Some(2), Some(4)], [Some(4), Some(1)], [Some(4), None], [None, None]] {
+            let c = detect(&reference_ops(starts), None);
+            assert_eq!(c.reference_state(), ReferenceState::Active, "{starts:?}");
+            assert!(c.blocks_install(), "{starts:?}");
+            assert_eq!(reference_check(&c).outcome, CheckOutcome::Fail, "{starts:?}");
+        }
+        // Disabled in the registry but still running / loaded (a driver stays loaded
+        // until the next restart).
+        for (i, name) in REFERENCE_SERVICE_KEYS.iter().enumerate() {
+            let ops = reference_ops([Some(4), Some(4)]);
+            ops.active_services.lock().unwrap().insert(name.to_ascii_lowercase());
+            let c = detect(&ops, None);
+            assert!(c.blocks_install(), "{i}");
+            assert!(c.reference_keys[i].active == Some(true));
+            assert!(reference_check(&c).detail.contains("running"));
+        }
+        // SCM state unknown: fail closed.
+        let ops = reference_ops([Some(4), Some(4)]);
+        ops.scm_unknown.lock().unwrap().insert(REFERENCE_SERVICE_KEYS[0].to_ascii_lowercase());
+        assert!(detect(&ops, None).blocks_install());
+    }
+
+    #[test]
+    fn coexistence_without_new_fields_deserializes_as_active() {
+        // A snapshot from before 2026-11-24 has no reference_keys / reference_disabled.
+        let c: Coexistence = serde_json::from_str(
+            r#"{"reference_services":["X"],"termservice_dll":null,"termservice_stock":true,"class_filters":[],"device_filters":[]}"#,
+        )
+        .unwrap();
+        assert!(c.blocks_install());
     }
 
     #[test]

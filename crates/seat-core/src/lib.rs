@@ -37,6 +37,7 @@ pub mod i18n;
 pub mod ids;
 pub mod latency;
 pub mod pnp;
+pub mod reference;
 pub mod remote;
 pub mod secret;
 pub mod spawn;
