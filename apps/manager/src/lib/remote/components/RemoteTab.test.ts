@@ -44,7 +44,9 @@ describe('remote seats tab', () => {
 
     await user.click(within(list).getByRole('button', { name: /Salon/ }));
     expect(await screen.findByRole('combobox', { name: rt.seat.streamBackend })).toBeInTheDocument();
-  });
+    // First full App render of this file: ~1.7 s alone, over vitest's 5 s default when all
+    // 46 test files run in parallel on the ARM64 dev box (2026-11-24).
+  }, 15_000);
 
   it('docks the remote save bar in the shell and guards leaving with staged edits', async () => {
     const { api, user } = await setup();
