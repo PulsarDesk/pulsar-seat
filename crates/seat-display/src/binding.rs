@@ -261,7 +261,12 @@ impl Binding {
             log::error!("display: topology journal {} refused: {why}; seat targets stay in the console desktop", path.display());
         }
         if !j.entries.is_empty() {
-            log::info!("display: topology journal has {} target(s) taken out of the desktop", j.entries.len());
+            // Gaming PC E2E round 2 (bug H): an `attached` entry was counted as taken out.
+            let attached = j.entries.iter().filter(|e| e.attached).count();
+            log::info!(
+                "display: topology journal has {} target(s) taken out of the desktop and {attached} attached to it",
+                j.entries.len() - attached
+            );
         }
         let mut st = lock(&self.inner.state);
         st.journal = j;
