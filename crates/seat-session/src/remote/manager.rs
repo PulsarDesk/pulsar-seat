@@ -968,22 +968,32 @@ impl SessionManager for Manager {
             },
             _ => None,
         };
+        // The log-off is asked for before our client goes: once it is disconnected, Windows
+        // no longer reports the session as remote and the log-off guard refuses it (gaming
+        // PC E2E round 4: "session N is not a remote session", every stop left the session
+        // disconnected). Waiting for it to vanish comes after the kill.
+        let logging_off = match owned.map(|id| (id, self.logoff_same_user(id, &user))) {
+            Some((id, Ok(true))) => Some(id),
+            Some((id, Ok(false))) => {
+                log::info!("seat {seat_id}: session {id} already gone");
+                None
+            }
+            Some((_, Err(e))) => {
+                result = Err(e);
+                None
+            }
+            None => None,
+        };
         if let Some(mut c) = child {
             c.kill();
         }
         if let Err(e) = self.d.launcher.kill_job(seat_id) {
             log::warn!("seat {seat_id}: ending job failed: {e}");
         }
-        if let Some(id) = owned {
-            match self.logoff_same_user(id, &user) {
-                Ok(true) => {
-                    if !self.wait_session_gone(id, &user) {
-                        result = Err(SessionError::SessionTimeout(format!("session {id} did not log off in time")));
-                    }
-                }
-                Ok(false) => log::info!("seat {seat_id}: session {id} already gone"),
-                Err(e) => result = Err(e),
-            }
+        if let Some(id) = logging_off
+            && !self.wait_session_gone(id, &user)
+        {
+            result = Err(SessionError::SessionTimeout(format!("session {id} did not log off in time")));
         }
         {
             let mut seats = lock(&self.seats);

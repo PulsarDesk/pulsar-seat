@@ -473,8 +473,9 @@ pub struct FakeHelperSpawner {
     pub scripts: Mutex<VecDeque<HelperScript>>,
     pub spawned: Mutex<Vec<(HelperArgs, String)>>,
     pub children: Mutex<Vec<Arc<FakeChildState>>>,
-    /// Killing a helper blanks the client name + address of its session and leaves it
-    /// disconnected (what Windows may do; open question session-10).
+    /// Killing a helper blanks the client name + address of its session, leaves it
+    /// disconnected and no longer remote (what Windows does: open question session-10,
+    /// the remote flag seen on the gaming PC in E2E round 4).
     pub blank_client_on_kill: Arc<AtomicBool>,
     wts: Arc<FakeWts>,
     clock: Arc<FakeClock>,
@@ -560,6 +561,9 @@ impl HelperChild for FakeChild {
                 s.client_name.clear();
                 s.client_address = None;
                 s.state = crate::remote::discover::WtsState::Disconnected;
+                // Gaming PC E2E round 4: WTSIsRemoteSession reads false once the session
+                // is disconnected, so WindowsWts::logoff refuses it from then on.
+                s.is_remote = false;
             }
         }
         self.st.killed.store(true, Ordering::SeqCst);
