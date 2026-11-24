@@ -69,14 +69,19 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   `wait_session` takes the loopback remote session with our `PSEAT-NN` name **or** the newest
   loopback session that did not exist when the start began, not claimed by another seat, with
   the seat's user (if any). Seats start one at a time (service rule), which makes this safe.
-- **rebind** (2026-11-24, gaming PC E2E bug 1, untested on hardware): the host reported a
-  session other than the bound one (Windows reconnected its connection to the account's
-  existing session; the bound one was transient). The binding moves only when WTS confirms
-  the reported session (loopback, our client name, the account, not another seat's).
+  Never a session whose client name is another seat's `PSEAT-NN` (`wts::names_other_seat`;
+  round 2 of the gaming PC E2E saw seat 3's fallback take seat 2's still-connecting session).
+- **rebind** (2026-11-24, gaming PC E2E bug 1, proven in round 2: "rebound from session 6 to
+  session 4"): the host reported a session other than the bound one (Windows reconnected its
+  connection to the account's existing session; the bound one was transient). The binding
+  moves only when WTS confirms the reported session (loopback, our client name, the account,
+  not another seat's).
 - **log_off** only after an ownership check (bound id + same user + remote loopback session,
-  or the bound id + the seat's account user while the session is disconnected and so has no
-  client name or address, HYPOTHESIS); seat 1 / console sessions are never logged off by us.
-  Refusals are logged with the session's WTS view.
+  or the bound id + the seat's account user once the connection is gone and the session no
+  longer reads as remote: proven in round 2 as "state Active, remote false, client "", address
+  none", not only `Disconnected`); never a session bound to another seat or named for another
+  seat (a binding of this seat that names one is dropped); seat 1 / console sessions are never
+  logged off by us. Refusals are logged with the session's WTS view.
 - **adopt** after a service restart: same id, still remote loopback, same user SID.
 
 ### Remote seats (`remote`, merged from Pulsar Split's `split-session` at step 7)
