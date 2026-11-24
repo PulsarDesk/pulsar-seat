@@ -2876,9 +2876,12 @@ to its keys (read: key existence, `Start`, SCM state).
   warns in the full UI. The running / loaded state cannot be read by a launch condition: the
   deferred `install --msi` action's gate (SCM) refuses then (exit 4, the install rolls back).
   `Installed OR ...` as before, so a repair is never refused; a major upgrade is.
-- **setup.exe (NSIS hooks)**: PREINSTALL refuses unless every existing key has `Start` = 4,
-  then asks to continue (`PsCoexistenceDisabled`, `/SD IDOK`); the `preflight` gate from
-  `$PLUGINSDIR` checks the SCM state and refuses (exit 4) if one still runs.
+- **setup.exe**: the shipped `setup.exe` is the native `seat-bootstrap`, which runs the
+  embedded MSI (full UI unless `/quiet` / `/passive`), so it behaves as the MSI above. The
+  unshipped Tauri NSIS hooks (`installer/nsis/hooks.nsh`) got the same rule: PREINSTALL
+  refuses unless every existing key has `Start` = 4, then asks to continue
+  (`PsCoexistenceDisabled`, `/SD IDOK`); the `preflight` gate from `$PLUGINSDIR` checks the
+  SCM state and refuses (exit 4) if one still runs.
 - **Run time** (`seat_session`): `SessionDeps.reference_product` and
   `HostFacts::reference_product` return the state (Windows: `win::reference_product_state`,
   registry `Start` + `QueryServiceStatus`, evaluated at each probe). `rdp_readiness` refuses
