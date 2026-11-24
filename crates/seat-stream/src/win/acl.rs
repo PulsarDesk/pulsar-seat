@@ -15,7 +15,10 @@ use windows_sys::Win32::Security::{
 
 pub const SID_SYSTEM: &str = "S-1-5-18";
 pub const SID_ADMINS: &str = "S-1-5-32-544";
-pub const SID_TRUSTED_INSTALLER: &str = "S-1-5-80-956008885-3418522649-1831038044-1851658575-3002747228";
+/// `NT SERVICE\TrustedInstaller` (the service SID of `TrustedInstaller`). Gaming PC E2E
+/// round 4: a mistyped value here refused the installed stream server folder, whose
+/// inherited Program Files ACL grants TrustedInstaller full control.
+pub const SID_TRUSTED_INSTALLER: &str = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const INHERIT_ONLY_ACE: u8 = 0x08;
@@ -148,5 +151,14 @@ mod tests {
         bad.push(ace("S-1-5-32-545", 0x2, false));
         assert!(check_admin_only(SID_ADMINS, &bad).is_err());
         assert!(check_admin_only("S-1-5-21-1-2-3-1001", &pf).is_err(), "user-owned folder");
+    }
+
+    /// The real TrustedInstaller SID, as Windows writes it into Program Files ACLs (the
+    /// test above uses the constant, so it cannot catch a wrong value).
+    #[test]
+    fn trusted_installer_sid_is_the_real_one() {
+        assert_eq!(SID_TRUSTED_INSTALLER, "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
+        let pf = vec![ace("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464", 0x1f01ff, false)];
+        assert!(check_admin_only(SID_ADMINS, &pf).is_ok());
     }
 }
