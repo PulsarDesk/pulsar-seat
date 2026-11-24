@@ -171,7 +171,9 @@ impl Service {
             (seat, expected_scale(&st.config, seat))
         };
         let list: Vec<String> = monitors.iter().map(|m| format!("{} {} %", m.device, m.percent())).collect();
-        log::info(&format!("seat {seat}: effective DPI: {}", list.join(", ")));
+        // Device names are the session's own (an RDP seat session sees its virtual
+        // `\\.\DISPLAY1`, not the physical monitor's console name).
+        log::info(&format!("seat {seat}: effective DPI in session {session_id}: {}", list.join(", ")));
         let bad = dpi_mismatches(expected, monitors);
         if !bad.is_empty() {
             log::warn(&format!("seat {seat}: scale differs from the seat setting: {}", bad.join("; ")));
