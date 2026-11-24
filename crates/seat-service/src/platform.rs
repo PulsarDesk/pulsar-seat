@@ -822,7 +822,7 @@ pub mod mock {
         }
         fn execution_alias(&self, command: &str) -> Option<&'static str> {
             let c = command.to_lowercase();
-            self.aliases.lock().unwrap().iter().any(|a| *a == c).then_some("ifeo_alias_redirect")
+            self.aliases.lock().unwrap().contains(&c).then_some("ifeo_alias_redirect")
         }
         fn os_build(&self) -> u32 {
             self.build.load(Ordering::SeqCst)
