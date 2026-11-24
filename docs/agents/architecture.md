@@ -836,6 +836,24 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   `display-topology.json.untrusted-<ms>`, an untrusted folder refuses the journal and no
   target is taken out. The temporary file is written with `create_new`. Removing the primary shifts the remaining sources so one
   sits at (0, 0). `TopologyReport` gained `removed`, `restored`, `rolled_back` (additive).
+- *Attach (gaming PC E2E bug 9, 2026-11-24).* A plan target (console list, which is every
+  monitor in the wizard's extend step, or a seat target the plan does not take out) that
+  is connected (`targetAvailable`) but outside the desktop and not specialized gets a CCD
+  path: `plan_topology(.., console, attach, ..)` adds `RestoreTarget { activate: true }`
+  and journals `JournalEntry { attached: true }` first (serde default false, old journals
+  parse). `plan_paths` takes a free source on the target's own adapter first
+  (`PathCandidate { source_luid, available }`; `ActivePath.source_luid`), another
+  adapter's only as a last resort, never a path without a monitor; the apply is the same
+  validated, verified, rolled-back `SetDisplayConfig` (explicit paths,
+  `SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE`). Once no plan names an attached target, its
+  path is removed again (never the console's last monitor) and the entry dropped; a target
+  the user detached meanwhile just loses its entry. Not under `console_only` or with an
+  untrusted journal. Why: on the hybrid gaming PC the user's CCD database kept the DP
+  monitor detached, so `DisplaySwitch /extend` and `SDC_TOPOLOGY_EXTEND`
+  (`ccd::extend_desktop`, database driven, not used by the service) left it out, and the
+  wizard's extend step (`apply_topology` with every wizard monitor as console) only
+  reported it `missing`. HYPOTHESIS on hardware until round 2 sees seat 2 bind that monitor
+  without a manual `ccd.ps1` attach.
 - *Clone.* `AssignmentOptions::outputs` (target ids on the surface monitor's adapter,
   needs `OutputSettings::allow_clone`) reaches the binding through
   `DisplayBinding::configure_seat(seat, &SeatDisplayPrefs::from_config(&config, seat))`

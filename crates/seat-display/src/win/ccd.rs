@@ -210,7 +210,12 @@ pub fn set_specialization(adapter_luid: u64, target_id: u32, on: bool) -> Result
     }
 }
 
-/// Wizard: extend the desktop to every connected monitor (spec 40 §3.13).
+/// Extend the desktop to every connected monitor (spec 40 §3.13) with
+/// `SDC_TOPOLOGY_EXTEND`. That applies the extend topology Windows keeps in its CCD
+/// database, so a monitor the user disconnected there stays out (gaming PC E2E bug 9,
+/// 2026-11-24). The service's wizard step does not use this: it runs `apply_topology`
+/// with every wizard monitor as a console target, which attaches such a monitor with
+/// explicit paths ([`apply_request`], journaled by the binding).
 pub fn extend_desktop() -> BackendResult<()> {
     let r = unsafe { SetDisplayConfig(None, None, SDC_APPLY | SDC_TOPOLOGY_EXTEND) };
     if r != 0 {
@@ -221,7 +226,7 @@ pub fn extend_desktop() -> BackendResult<()> {
 
 // ---- topology changes (spec 40 §6.2) ------------------------------------------------
 
-use crate::topology::{plan_paths, verify_topology, ActivePath, PathPlan, TargetRef, TopologyOutcome, TopologyRequest};
+use crate::topology::{plan_paths, verify_topology, ActivePath, PathCandidate, PathPlan, TargetRef, TopologyOutcome, TopologyRequest};
 
 fn tref(ti: &DISPLAYCONFIG_PATH_TARGET_INFO) -> TargetRef {
     TargetRef { adapter_luid: luid_u64(ti.adapterId), target_id: ti.id }
@@ -268,8 +273,11 @@ fn build_arrays(
         p.targetInfo.Anonymous.modeInfoIdx = map_mode(t, &mut out_modes);
         out_paths.push(p);
     }
-    for (t, source) in &plan.add {
-        if let Some(c) = all.iter().find(|p| tref(&p.targetInfo) == *t && p.sourceInfo.id == *source) {
+    for a in &plan.add {
+        let same = |p: &&DISPLAYCONFIG_PATH_INFO| {
+            tref(&p.targetInfo) == a.target && luid_u64(p.sourceInfo.adapterId) == a.source_luid && p.sourceInfo.id == a.source_id
+        };
+        if let Some(c) = all.iter().find(same) {
             let mut p = *c;
             p.flags = PATH_ACTIVE;
             p.sourceInfo.Anonymous.modeInfoIdx = MODE_IDX_INVALID;
@@ -415,10 +423,18 @@ pub fn apply_request(req: &TopologyRequest) -> BackendResult<TopologyOutcome> {
             let origin = (smi != MODE_IDX_INVALID && (smi as usize) < modes.len() && modes[smi as usize].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
                 .then(|| unsafe { modes[smi as usize].Anonymous.sourceMode.position })
                 .map(|pt| (pt.x, pt.y));
-            ActivePath { target: tref(&p.targetInfo), source_id: p.sourceInfo.id, origin }
+            ActivePath { target: tref(&p.targetInfo), source_luid: luid_u64(p.sourceInfo.adapterId), source_id: p.sourceInfo.id, origin }
         })
         .collect();
-    let cands: Vec<(TargetRef, u32)> = all.iter().map(|p| (tref(&p.targetInfo), p.sourceInfo.id)).collect();
+    let cands: Vec<PathCandidate> = all
+        .iter()
+        .map(|p| PathCandidate {
+            target: tref(&p.targetInfo),
+            source_luid: luid_u64(p.sourceInfo.adapterId),
+            source_id: p.sourceInfo.id,
+            available: p.targetInfo.targetAvailable.as_bool(),
+        })
+        .collect();
     let fail_all = |out: &mut TopologyOutcome, why: &str| {
         for t in path_remove.iter().chain(&add) {
             out.failed.push((*t, why.to_string()));
@@ -434,6 +450,15 @@ pub fn apply_request(req: &TopologyRequest) -> BackendResult<TopologyOutcome> {
     };
     for t in &plan.no_source {
         out.failed.push((*t, "no_free_source".into()));
+    }
+    for a in &plan.add {
+        log::info!(
+            "display: attach target {} of adapter {:x} through source {} of adapter {:x}",
+            a.target.target_id,
+            a.target.adapter_luid,
+            a.source_id,
+            a.source_luid
+        );
     }
     let is_active = |t: &TargetRef| aps.iter().any(|a| &a.target == t);
     if !plan.changes {
