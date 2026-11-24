@@ -147,6 +147,12 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   agent's capture offer, `host_capture_ring` and `DuplicateHandle` from the agent into the
   contained seat host (HYPOTHESIS: a low-integrity host can use the duplicated texture,
   section and event handles). Unit-tested with the mock platform only.
+- Remote seats on an external termsrv wrapper (2026-11-25, `remote::engine`): the engine
+  maps the termwrap status with `TermwrapStatus::remote_wrapper()` for `host_info` /
+  `prepare_host`, and `set_termwrap` on an `External` state only stores / clears the remote
+  warning ack (`Termwrap::set_external_ack`). HYPOTHESIS until a gaming PC run: two remote
+  seats start through the reference product's wrapper. Test:
+  `remote::engine::tests::remote_seats_use_an_active_external_wrapper_after_the_ack`.
 
 Everything that needs LocalSystem or elevation: running under the SCM, install /
 uninstall, folder take-over as SYSTEM (owner `BA`, rename aside), LSA private data,

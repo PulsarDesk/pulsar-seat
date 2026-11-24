@@ -140,6 +140,20 @@ backend runs seats on it while `blocked` is `None` and the ack is given; `prepar
 `WinHostFacts::expand`, the Authenticode / ACL verdict on the test PC's DLL, seats on that
 wrapper).
 
+**Remote seats on the external wrapper (2026-11-25).** `TermwrapStatus::remote_wrapper()`
+(`RemoteWrapper::{None, Own, External { usable }}`) is the remote kind's view of the same
+status: `External { blocked: None }` counts once the stored `AckWarningVersion`
+(`TermwrapStatus.ack_warning_version`) equals `WARNING_VERSION`. `Termwrap::set_external_ack`
+stores / clears that ack (feature `experimental-client-sku` needed to store; refuses with
+`external_wrapper_inactive` on a stock / own ServiceDll, `foreign_wrapper` on an unknown one,
+the block reason while a check fails); it is the only write in this mode (our own state
+file). `remote::manager` `host_info` / `prepare_host` take `RemoteWrapper`: an active one gives
+the listener limit on client editions and lets `prepare_host` claim the documented RDP rows; a
+recognised external ServiceDll gives the host warning `wrapper_managed_externally` instead of
+`foreign_wrapper`. Tests: `termwrap::engine_tests::external::remote_ack_*`,
+`remote::manager::tests::external_wrapper_counts_for_remote_seats_once_usable`. **HYPOTHESIS**
+until a hardware run on the gaming PC.
+
 ### Second listener for passwordless seats (`loopback_listener`, `rds_loopback` only)
 
 RDP-Tcp keeps NLA on. Seats without a stored password (logon screen) connect to a second

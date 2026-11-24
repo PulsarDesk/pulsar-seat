@@ -27,7 +27,8 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
    already pointed TermService at its own wrapper (`%ProgramFiles%\Duo\TermWrap.dll`,
    spec/remote 30 §2.4), the same module only *reads* ServiceDll, the DLL's version /
    Authenticode / PE machine / ACL and the two rows above, and the `termsrv_wrapper`
-   backend uses that wrapper for seats. It never writes ServiceDll or the two rows for it,
+   backend uses that wrapper for seats, and since 2026-11-25 remote seats use it too (after
+   the remote kind's warning ack). It never writes ServiceDll or the two rows for it,
    never restarts TermService for it and never restores it (§10.4).
 4. **One abstraction per undecided question**: session, display, input, audio and device
    gating are swappable traits; the manager greys out what a backend cannot do.
@@ -2114,10 +2115,27 @@ or the experimental `termsrv_wrapper` kind (off by default;
   `prepare_host` (ack still required) claims only the documented RDP rows (`Claim::Local`)
   and adds note `termsrv_wrapper_external`; `restore_host` releases those rows only. An
   installed but inactive external wrapper with no other candidate gives
-  `unavailable{external_wrapper_inactive}` and is never turned on. Remote seats still look
-  at `On` only (`seat-service` remote engine `wrapper_active`): their ack is stored apart,
-  so using an external wrapper there is a separate decision. Manager: state `external`,
+  `unavailable{external_wrapper_inactive}` and is never turned on. Manager: state `external`,
   reason codes in `en.ts` / `tr.ts`.
+- **Remote seats on an external wrapper** (maintainer decision 2026-11-25). Same detection,
+  no second copy: `TermwrapStatus::remote_wrapper()` maps the status to
+  `RemoteWrapper::{None, Own, External { usable }}`; `usable` = `blocked: None` **and** the
+  remote kind's ack (`AckWarningVersion` in our termwrap state, shown as
+  `ack_warning_version` in `termwrap_status`) equals `EXPERIMENTAL_WARNING_VERSION`. The
+  remote engine passes it to `SessionManager::host_info` / `prepare_host` at service start,
+  `get_host_info`, `set_multi_session` (where it used `On` only before). Usable: `max_seats`
+  = the normal client-SKU limit (listener `MaxInstanceCount`), `prepare_host` claims the
+  documented RDP rows (`Claim::Remote`), seat sessions start through the wrapper. A
+  recognised external ServiceDll (usable or not) gives host warning
+  `wrapper_managed_externally`, never `foreign_wrapper`; not usable keeps `max_seats` 1.
+  `set_termwrap{enabled}` on `External` only stores (`enabled`, ack must be current) or
+  clears our ack (`Termwrap::set_external_ack`; no ServiceDll, wrapper rows, journal,
+  TermService restart or Duo key is written; the controller still stops the seats first);
+  `enable` / `disable` of the wrapper itself stay refused, uninstall leaves it alone. An ack
+  stored earlier by our own `enable` (same warning version) counts as well. Manager host
+  page: "Use for remote seats" (dialog: ack only, no wrapper choice, no restart) / "Stop
+  using" / the failing check; the remote tab shows the same state as a notice
+  (`externalWrapper.*`). HYPOTHESIS until a hardware run on the gaming PC.
 
 The `pulsar-host` pipe contract
 ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)) is
@@ -3113,8 +3131,8 @@ and seat start (`coexistence`), so `get_host_info` showed passive on the gaming 
   its tests stay for a future blocking condition.
 - **Unchanged:** ASTER (the local reference product) rules ("Coexistence: reference product
   installed but disabled"; `reference_product_present` while it is active). Nothing is
-  written into the remote reference product's keys or files. The remote engine still counts
-  only our own wrapper as active (`wrapper_active` = `On`), so on a client edition with the
-  reference product's wrapper `max_seats` stays 1 (`foreign_wrapper` host warning); using an
-  external wrapper for remote seats remains a separate decision.
+  written into the remote reference product's keys or files. Since 2026-11-25 the remote
+  engine also counts the reference product's active wrapper (external wrapper mode, after
+  the remote ack; §10.4 "Remote seats on an external wrapper"); before that `max_seats`
+  stayed 1 with a `foreign_wrapper` host warning.
 - HYPOTHESIS until a hardware run (no remote seat ran beside the reference product yet).

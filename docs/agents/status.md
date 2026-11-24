@@ -3544,3 +3544,20 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     or files. Open beside it: on a client edition the reference product's wrapper still counts
     as foreign for remote seats (`max_seats` 1, `foreign_wrapper`); external wrapper use for
     remote seats is a separate decision. HYPOTHESIS until a hardware run.
+- 2026-11-25 (maintainer decision: remote seats may use an operator-installed external
+  termsrv wrapper, exactly like local seats; on main).
+  - **Remote kind uses the external wrapper:** an active, unblocked external wrapper
+    (`TermwrapState::External { blocked: None }`, same read-only checks as the local mode:
+    fixed path, client edition, arch, signature policy, ACLs, both concurrent-session rows 1)
+    counts as concurrent sessions available once the remote kind acknowledged the current
+    experimental warning (`set_termwrap{enabled: true}` on `External` stores only our
+    `AckWarningVersion`; `enabled: false` clears it). Then `max_seats` = the normal client-SKU
+    limit, `prepare_host` claims the documented RDP rows, seat sessions start through it. The
+    host warning is `wrapper_managed_externally`, never `foreign_wrapper`, for a recognised
+    external wrapper. Detection shared with the local path
+    (`TermwrapStatus::remote_wrapper`, `Termwrap::set_external_ack`); still detect-only (no
+    ServiceDll / wrapper rows / Duo keys written, no TermService restart, uninstall leaves it).
+    Manager: host page "Use for remote seats" / "Stop using" / failing check, remote tab notice
+    (en + tr). Architecture §10.4 "Remote seats on an external wrapper".
+  - HYPOTHESIS until a hardware run on the gaming PC (remote seat on the reference product's
+    wrapper, `max_seats` > 1, two remote seats at once).
