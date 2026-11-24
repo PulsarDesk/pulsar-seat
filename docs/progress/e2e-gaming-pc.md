@@ -468,3 +468,21 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
 - PC state: LEFT-INSTALLED.txt of round 3 (product 7322db3 enabled, seats 2/3 stopped, no HostTokenCompat).
 - Next: maintainer runs the REPORT3.txt checklist; round 4: plain mstsc control for F, Q/I2 culprit, I3 token,
   P extension journal, K with a longer shutdown delay.
+
+## Round 4 (2026-11-25): gaming PC, fast loop on main (no full rounds)
+
+- Evidence: `target/e2e/gaming-pc-round4/` (`REPORT4.txt`, `changes.jsonl`, `logs/`, `shots/` = mstsc /
+  Moonlight windows only, `scripts/`). Hand-copied service exes during the loop (backup
+  `C:\ProgramData\tmpsshd\pse2e\r4-backup\`), then one fast x64 MSI of the final main as an upgrade.
+- F: plain mstsc to 127.0.0.2 black as well (with and without Pulsar services) = environment; host_info
+  shows Duo's `DuoIdd.dll` as the RDP IDD ImagePath. Not fixed further; `session_capture` stays the
+  workaround on the PC (code default unchanged, see journal).
+- P fixed + proven (26d969e). O not reproduced (the release ran inside the countdown).
+- I3: token proven fine in session 0 (throwaway probe, not committed); the failure is tied to opening
+  the endpoint inside the console user's session 1 (HYPOTHESIS). Next: a session-0 render helper.
+- Remote seats on the external wrapper: four bugs fixed (49a9bb3, 51ab316, b509cde, 4fe3c89), two seats
+  at once + Moonlight pair/stream proven. Open: two remote logons started together stay in `ConnQ`
+  (start them one after the other); `bluetooth: BluetoothUserService_*: ChangeServiceConfigW failed
+  with 0x57` warnings every minute while remote seats run; VDD display and virtual pads not exercised
+  (display backend `rdp_session`, Moonlight had no controller).
+- Next: hardware retest of 4fe3c89 (remote stop logs the session off), I3 helper design, ConnQ.

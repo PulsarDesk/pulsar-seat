@@ -3561,3 +3561,12 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     (en + tr). Architecture §10.4 "Remote seats on an external wrapper".
   - HYPOTHESIS until a hardware run on the gaming PC (remote seat on the reference product's
     wrapper, `max_seats` > 1, two remote seats at once).
+- 2026-11-25 (e2e round 4 on the x64 gaming PC, fast loop on main): commits 26d969e (P: USB extension
+  INFs read after the node restart + `extensions_seen` journal), 49a9bb3 (installer: stream-server.json
+  names the bare exe), 51ab316 (service fills a new remote seat's id / client name / port), b509cde
+  (seat-stream TrustedInstaller SID), 4fe3c89 (remote stop logs off before ending the client). Proven
+  on hardware: P, remote seats on Duo's wrapper (ack, max_seats null, two seats at once, Moonlight
+  pair + stream with video and audio capture). F is the environment (plain mstsc black too; Duo
+  redirects the RDP IDD, HYPOTHESIS). Open: I3 (render open in session 1 denied; token proven fine in
+  session 0), I2/Q, parallel remote logons stay in ConnQ, G3, K, R, S, T, U; the remote stop fix is
+  unit-tested only. Evidence and matrix: `target/e2e/gaming-pc-round4/REPORT4.txt`.
