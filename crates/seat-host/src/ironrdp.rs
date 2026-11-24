@@ -408,6 +408,30 @@ impl InputSink for SeatInputSink {
     }
 }
 
+/// Service `Reconfigure` (new assignment `new`): the presenter is configured again, the
+/// pointer re-mapped and the seat layout sent only when the seat's outputs changed. The
+/// service sends `Reconfigure` to every host on every ownership run (any seat's logon,
+/// logoff or state change); re-sending the same layout each time made the server re-mode
+/// the session's display about ten times a minute while RdpIdd crashed (gaming PC E2E
+/// round 2 bug F). Returns whether the outputs changed; logs either way.
+pub fn reconfigure_outputs(sink: &mut dyn FrameSink, handle: &Handle, current: &Mutex<SeatOutputs>, input: &SharedInput, new: &SeatOutputs) -> bool {
+    let lock = |m: &Mutex<SeatOutputs>| m.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    if lock(current) == *new {
+        eprintln!("seat host: reconfigure: outputs unchanged; presenter and layout kept");
+        return false;
+    }
+    if let Err(e) = sink.configure(new) {
+        eprintln!("seat host: presenter reconfigure failed: {e}");
+    }
+    *current.lock().unwrap_or_else(|p| p.into_inner()) = new.clone();
+    let mons = monitors_from_layout(&crate::display::layout_for(new));
+    input.0.lock().unwrap_or_else(|p| p.into_inner()).set_outputs(input_rects(new, &geometry(&mons).outputs));
+    eprintln!("seat host: reconfigure: outputs changed ({} output(s)); presenter configured, layout asked", new.outputs.len());
+    handle.set_layout(mons, "service reconfigure, outputs changed");
+    handle.redraw();
+    true
+}
+
 /// Shared input sink (the event thread re-maps outputs on reconfigure).
 #[derive(Clone)]
 pub struct SharedInput(pub Arc<Mutex<SeatInputSink>>);
@@ -804,7 +828,7 @@ mod win {
             Arc::new(move |l: RdpLayout| {
                 let mons = monitors_from_layout(&l);
                 lock(&si.0).set_outputs(input_rects(&lock(&outs), &geometry(&mons).outputs));
-                h.set_layout(mons);
+                h.set_layout(mons, "console display change");
             })
         };
         let display = match crate::display::SeatDisplay::new(display_kind(&asg.outputs), &asg.outputs, on_layout.clone()) {
@@ -1022,15 +1046,7 @@ mod win {
                             CommandStep::Reconfigure => match assignment(&ctl, &a) {
                                 Ok(n) => {
                                     let mut s = sink.clone();
-                                    if let Err(e) = s.configure(&n.outputs) {
-                                        eprintln!("seat host: presenter reconfigure failed: {e}");
-                                    }
-                                    *lock(&outputs) = n.outputs.clone();
-                                    let l = crate::display::layout_for(&n.outputs);
-                                    let mons = monitors_from_layout(&l);
-                                    lock(&seat_input.0).set_outputs(input_rects(&n.outputs, &geometry(&mons).outputs));
-                                    handle.set_layout(mons);
-                                    handle.redraw();
+                                    reconfigure_outputs(&mut s, &handle, &outputs, &seat_input, &n.outputs);
                                     bridge.set_route(n.audio.clone());
                                     if live.set((*n.redirection).clone()) {
                                         eprintln!("seat host: redirection updated (notes {:?})", n.redirection.notes);
@@ -1380,6 +1396,55 @@ mod tests {
         // Single-output fallback: everything maps onto it.
         let one = [FbRect { x: 0, y: 0, width: 1024, height: 768 }];
         assert!(input_rects(&outs, &one).iter().all(|x| x.width == 1024));
+    }
+
+    /// Counts presenter configures.
+    #[derive(Default, Clone)]
+    struct Configures(Arc<Mutex<usize>>);
+    impl FrameSink for Configures {
+        fn configure(&mut self, _o: &SeatOutputs) -> BackendResult<()> {
+            *self.0.lock().unwrap() += 1;
+            Ok(())
+        }
+        fn present(&mut self, _f: &FrameRef<'_>) -> BackendResult<()> {
+            Ok(())
+        }
+        fn cursor(&mut self, _c: &CursorState) -> BackendResult<()> {
+            Ok(())
+        }
+        fn blank(&mut self, _m: &str) -> BackendResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Gaming PC E2E round 2 bug F: a service `Reconfigure` with the same outputs (another
+    /// seat logged on) neither rebuilds the presenter nor sends a layout; changed outputs do
+    /// both.
+    #[test]
+    fn reconfigure_with_the_same_outputs_sends_no_layout() {
+        let a = asg();
+        let (handle, rx) = seat_rdp::session::channel((1920, 1080));
+        let current = Mutex::new(a.outputs.clone());
+        let input = SharedInput(Arc::new(Mutex::new(SeatInputSink::new(handle.clone(), vec![a.outputs.outputs[0].rect]))));
+        let rec = Configures::default();
+        let mut sink = SharedSink::new(Box::new(rec.clone()), &a.outputs);
+        for _ in 0..10 {
+            assert!(!reconfigure_outputs(&mut sink, &handle, &current, &input, &a.outputs));
+        }
+        assert_eq!(*rec.0.lock().unwrap(), 0);
+        assert!(rx.try_recv().is_err(), "no layout, no redraw");
+        // The seat's monitor moved: presenter configured once, one layout, one redraw.
+        let mut moved = a.outputs.clone();
+        moved.outputs[0].rect.width = 2560;
+        moved.outputs[0].rect.height = 1440;
+        assert!(reconfigure_outputs(&mut sink, &handle, &current, &input, &moved));
+        assert_eq!(*rec.0.lock().unwrap(), 1);
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::session::Command::Layout { ref monitors, .. }) if monitors[0].width() == 2560));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::session::Command::Redraw)));
+        assert_eq!(*current.lock().unwrap(), moved);
+        // Same again: kept.
+        assert!(!reconfigure_outputs(&mut sink, &handle, &current, &input, &moved));
+        assert!(rx.try_recv().is_err());
     }
 
     /// Records GPU frames; output 2 takes them on adapter 9.

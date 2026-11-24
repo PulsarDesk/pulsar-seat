@@ -87,6 +87,8 @@ pub const TEXT_NO_DISPLAY: seat_core::i18n::Text = seat_core::i18n::Text::new("N
 
 const WM_APP_RECONFIGURE: u32 = WM_APP + 1;
 const WM_APP_RELAYOUT: u32 = WM_APP + 2;
+/// `WM_APP_RELAYOUT` wParam for a DPI change (always reported).
+const RELAYOUT_DPI: usize = 1;
 const WM_APP_QUIT: u32 = WM_APP + 3;
 /// A GPU output has new content (posted at most once until the UI thread handles it).
 const WM_APP_FRAME: u32 = WM_APP + 4;
@@ -248,6 +250,8 @@ struct Shared {
     mode_changed: Vec<(String, (u64, u32))>,
     /// Counters per output at its last diagnostics line.
     logged: Vec<OutStats>,
+    /// Output rectangles the listener has (configured, or last `PresenterEvent::Layout`).
+    reported: Vec<Option<Rect>>,
 }
 
 fn lock(s: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -336,6 +340,7 @@ impl WindowPresenter {
                 })
                 .collect();
             s.logged = vec![OutStats::default(); s.outputs.len()];
+            s.reported = s.outputs.iter().map(|o| o.as_ref().map(|o| o.rect)).collect();
         }
         self.ensure_thread()?;
         unsafe {
@@ -750,7 +755,7 @@ fn ui_thread(shared: Arc<Mutex<Shared>>, tx: std::sync::mpsc::Sender<u32>) {
                 if msg.hwnd.is_invalid() || msg.hwnd.0.is_null() {
                     match msg.message {
                         WM_APP_RECONFIGURE => reconfigure(&shared, hinst.into(), &class),
-                        WM_APP_RELAYOUT => relayout(&shared),
+                        WM_APP_RELAYOUT => relayout(&shared, msg.wParam.0 == RELAYOUT_DPI),
                         WM_APP_QUIT => break 'run,
                         WM_APP_FRAME => lock(&shared).frame_posted = false,
                         WM_APP_MODE => follow_modes(&shared),
@@ -1209,8 +1214,21 @@ fn follow_modes(shared: &Arc<Mutex<Shared>>) {
     }
 }
 
-/// Re-resolve each output through CCD after a display change.
-fn relayout(shared: &Arc<Mutex<Shared>>) {
+/// The layout to report after a display change: `Some` when it differs from the last one
+/// the listener has, or always for a DPI change (`force`: the RDP layout carries the scale),
+/// and it becomes the reported one. `WM_DISPLAYCHANGE` and work-area changes come for many
+/// reasons that move no seat output (another session's display, an AppBar); each report
+/// used to become a display control layout (gaming PC E2E round 2 bug F).
+fn layout_to_report(reported: &mut Vec<Option<Rect>>, layout: Vec<Option<Rect>>, force: bool) -> Option<Vec<Option<Rect>>> {
+    if !force && *reported == layout {
+        return None;
+    }
+    *reported = layout.clone();
+    Some(layout)
+}
+
+/// Re-resolve each output through CCD after a display change (`dpi`: a DPI change).
+fn relayout(shared: &Arc<Mutex<Shared>>, dpi: bool) {
     let Ok(targets) = super::ccd::query() else { return };
     let mut layout = Vec::new();
     let mut moves = Vec::new();
@@ -1274,8 +1292,15 @@ fn relayout(shared: &Arc<Mutex<Shared>>) {
             }
         }
     }
-    if let Some(l) = listener {
-        l(PresenterEvent::Layout(layout));
+    let why = if dpi { "DPI change" } else { "display change" };
+    match layout_to_report(&mut lock(shared).reported, layout, dpi) {
+        Some(layout) => {
+            log::info!("presenter: {why}: layout reported {layout:?}");
+            if let Some(l) = listener {
+                l(PresenterEvent::Layout(layout));
+            }
+        }
+        None => log::info!("presenter: {why}: seat outputs unchanged; no layout"),
     }
     // A driver update / TDR also sends a display change: re-create lost flip chains now.
     retry_gpu(shared);
@@ -1412,8 +1437,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_ERASEBKGND => LRESULT(1),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            let kind = if msg == WM_DPICHANGED { RELAYOUT_DPI } else { 0 };
             unsafe {
-                let _ = PostThreadMessageW(GetCurrentThreadId(), WM_APP_RELAYOUT, WPARAM(0), LPARAM(0));
+                let _ = PostThreadMessageW(GetCurrentThreadId(), WM_APP_RELAYOUT, WPARAM(kind), LPARAM(0));
             }
             LRESULT(0)
         }
@@ -1604,6 +1630,23 @@ mod tests {
         assert_eq!(premultiply(&[200, 100, 50, 128, 1, 2, 3, 255]), vec![100, 50, 25, 128, 1, 2, 3, 255]);
         let c = CursorState { visible: true, x: 10, y: 10, hotspot_x: 2, hotspot_y: 3, width: 32, height: 32, ..Default::default() };
         assert_eq!(cursor_area(&c), Some(Rect { x: 8, y: 7, width: 32, height: 32 }));
+    }
+
+    /// Gaming PC E2E round 2 bug F: a display change that moves no seat output reports no
+    /// layout (each report became a display control layout); a move, a lost output and a
+    /// DPI change do.
+    #[test]
+    fn display_change_reports_a_layout_only_on_a_real_change() {
+        let a = Rect { x: -284, y: -1440, width: 2560, height: 1440 };
+        let mut reported = vec![Some(a), None];
+        assert_eq!(layout_to_report(&mut reported, vec![Some(a), None], false), None);
+        assert_eq!(layout_to_report(&mut reported, vec![Some(a), None], false), None);
+        let moved = Rect { x: 0, ..a };
+        assert_eq!(layout_to_report(&mut reported, vec![Some(moved), None], false), Some(vec![Some(moved), None]));
+        assert_eq!(reported, vec![Some(moved), None]);
+        assert_eq!(layout_to_report(&mut reported, vec![Some(moved), None], false), None, "reported once");
+        assert_eq!(layout_to_report(&mut reported, vec![None, None], false), Some(vec![None, None]), "output lost");
+        assert_eq!(layout_to_report(&mut reported, vec![None, None], true), Some(vec![None, None]), "DPI change: always");
     }
 
     #[test]
