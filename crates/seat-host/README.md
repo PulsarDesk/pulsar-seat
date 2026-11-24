@@ -14,6 +14,15 @@ cargo clippy -p seat-host --all-targets -- -D warnings
 cargo clippy -p seat-host --all-targets --target aarch64-pc-windows-msvc -- -D warnings
 ```
 
+## Log (host-NN.log)
+
+The host writes its own lines (`seat host: ...`, `seat-rdp: ...`) to stderr, which the
+service stores as `host-NN.log`. Since 2026-11-24 (gaming PC E2E bug 3) it also installs a
+stderr logger for the libraries' `log` records (`src/hostlog.rs`): the presenter's adapter
+per output, flip chain failures, the GDI fallback and its 10 s frame / present counters.
+`PULSAR_SEAT_HOST_LOG` = `off` / `error` / `warn` / `info` (default) / `debug` / `trace`.
+Not in `--display-helper` mode (its stdout carries the JSON reply).
+
 ## In-session capture (OSMS-parity G1, 2026-11-20)
 
 `local.frame_source = session_capture` (opt-in per local seat, default `rdp_decode`):

@@ -54,6 +54,8 @@ mod headless;
 // Start-up containment checks and the `--desktop-acl` helper (host-containment).
 mod containment;
 mod flow;
+// `log` records of the libraries to stderr (host-NN.log), see the module.
+mod hostlog;
 #[cfg(windows)]
 mod host;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -93,6 +95,9 @@ fn main() {
     if let Some(code) = display::dispatch_helper() {
         std::process::exit(code);
     }
+    // After the display helper (its stdout carries the reply): presenter / display records
+    // reach host-NN.log (gaming PC E2E bug 3).
+    hostlog::install();
     let args: Vec<String> = std::env::args().collect();
     // `--headless-hold …`: the service's per-remote-seat session hold (JSON Lines on stdout).
     if let Some(code) = headless::dispatch(args.get(1..).unwrap_or_default()) {
