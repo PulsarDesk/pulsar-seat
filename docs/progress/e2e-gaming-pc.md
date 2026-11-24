@@ -447,3 +447,24 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   seat's endpoint. Kiosk seat 3 with `C:\Windows\System32\notepad.exe`: apply refused with
   `kiosk_app_execution_alias`; with a config written before the fix the shell logs "is an app execution
   alias" and keeps running (no "session ended" loop, no Application 1000 events).
+
+## Round 3 run (2026-11-24): gaming PC, x64 test build of 7322db3
+
+- Evidence: `target/e2e/gaming-pc-round3/` (`REPORT3.txt` = matrix, remaining bugs, physical checklist;
+  `changes.jsonl` journal steps 0-7 + R1-R3; `before/`, `after/`, `restore-diff.tsv`, `LEFT-INSTALLED.txt`,
+  `logs/`, `shots/` = seat monitors only). Test 22:27-23:42 local. MSI built in this run (none was waiting).
+- PASS on hardware: A (per-seat host accounts, no HostTokenCompat), B (24/24 logons signed_in in 2-11 s via the
+  catch-up), C (11 joint starts, no cross-seat log-off), D/E (kept + rebound in ~9 s after a kill), H (detach
+  when no seat uses the target and at product off; no attach at enable), J, G (alias refused, shell stays up).
+- Refuted: bug F layout HYPOTHESIS (no layout sent at all, RdpIdd still crashes 0xc0000409, picture black in
+  avc444 / no-h264 / bitmap). Confirmed: bug I rdpdr gate (audio formats arrive), but only on the first logon
+  per boot (I2) and the seat endpoint open is denied to the per-seat host account (I3).
+- New: Q (session-change notifications minutes late after the first seat logoff; flushed at shutdown), O
+  (reboot with a capture seat: MI_01 reinstall fails 1115 and the fallback blocks the stop ~3 min), P (boot
+  recovery claims the Logitech extension is back; next capture journals MI_01 without it), G2 (kiosk plan
+  dropped AUMID apps with an empty command), G3 (packaged activation access denied in the desktops backend).
+- Fixed on main after the run: G2 (`seat-session/src/kiosk.rs` plan_for + test), O (`seat-input/src/win/
+  usb_swap.rs`: no fallback install on ERROR_SHUTDOWN_IN_PROGRESS). HYPOTHESIS until round 4.
+- PC state: LEFT-INSTALLED.txt of round 3 (product 7322db3 enabled, seats 2/3 stopped, no HostTokenCompat).
+- Next: maintainer runs the REPORT3.txt checklist; round 4: plain mstsc control for F, Q/I2 culprit, I3 token,
+  P extension journal, K with a longer shutdown delay.

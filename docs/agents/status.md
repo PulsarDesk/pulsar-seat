@@ -3484,3 +3484,45 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
   - **Physical checklist (maintainer, 5 min):** REPORT2.txt "5-MINUTE PHYSICAL CHECKLIST" (reboot
     first: bug B). Removal afterwards: LEFT-INSTALLED.txt "HOW TO REMOVE IT LATER".
   - Nothing pushed.
+- 2026-11-24 (e2e round 3 on the x64 gaming PC, on main). Evidence: `target/e2e/gaming-pc-round3/` (local):
+  `REPORT3.txt` (matrix, remaining bugs, physical checklist), `changes.jsonl` (steps 0-7 + restore R1-R3),
+  `restore-diff.tsv`, `LEFT-INSTALLED.txt`, `before/`, `after/`, `logs/`, `shots/` (seat monitors only).
+  Round 3 ran 22:27-23:42 local.
+  - **Build under test:** x64 fast test build of 7322db3 (unsigned, `release: false`), upgrade install over
+    293b049:
+
+    | File | SHA-256 |
+    | --- | --- |
+    | `PulsarSeat_0.1.0_x64.msi` | `91b76cb536235ad7649dd334d191f99642b3508d9ebc487b272589e11c2451b9` |
+    | `PulsarSeat_0.1.0_x64_setup.exe` | `cea1559c97bb244fbaee0aad91eca8083bbaf596eadf3dce193c01e9094ce681` |
+    | x64 service binary | `6c041405357aeb635fe6abd55c8cc5831ed57e49044b9cf426a392aec338d91d` |
+
+  - **Results on hardware:**
+
+    | Item | Round 2 | Round 3 |
+    | --- | --- | --- |
+    | Bug A per-seat host accounts | FAIL (blocker) | PASS (no HostTokenCompat) |
+    | Bug B existing-profile logons | FAIL | PASS (24/24 via the logon catch-up; see Q) |
+    | Bug C cross-seat log-off | FAIL | PASS |
+    | Bug D/E host exit recovery | FAIL | PASS (kept + rebound in ~9 s) |
+    | Bug H detach-back | FAIL | PASS |
+    | Bug J restore hold | FAIL | PASS |
+    | Bug G kiosk shell loop | FAIL | PASS (packaged activation: access denied, G3) |
+    | Bug F / 3 black rdp_decode picture | FAIL | FAIL (layout HYPOTHESIS refuted; RdpIdd still crashes) |
+    | Bug I / 4 seat audio | FAIL | PARTIAL (formats arrive; only first logon per boot; endpoint open denied) |
+    | Bug K reboot with seats | FAIL | OPEN (no relaunch seen, guard not proven); new O, P |
+
+  - **New:** Q session-change notifications minutes late after the first seat logoff (HYPOTHESIS: another
+    service blocks the SCM delivery), I2 audio formats only on the first logon per boot, I3 render open
+    denied to the per-seat host account, O reboot with a capture seat blocks the stop ~3 min (MI_01 reinstall
+    1115 + fallback), P Logitech extension lost after the boot recovery, G2 kiosk plan dropped AUMID apps,
+    G3 packaged activation denied under the desktops backend, S ActiveX control not found for the host account.
+  - **Fixed on main after the run:** G2 and O (HYPOTHESIS until round 4). Gates
+    (CARGO_TARGET_DIR=target\wf-e2e): clippy --workspace --all-targets -D warnings clean on aarch64 and
+    x86_64-pc-windows-msvc; cargo test --workspace 2170 passed / 7 ignored / 0 failed (logs
+    `target/e2e/gaming-pc-round3/gate-*.log`).
+  - **Gaming PC state now:** LEFT-INSTALLED.txt of round 3: Pulsar Seat 7322db3 installed + enabled, seats 2
+    and 3 configured and stopped (session_capture, winusb_capture), default per-seat host accounts, DP VG27A
+    attached for seat 2, Sunshine / Parsec Running + Auto, Logitech extension re-applied (R2).
+  - **Physical checklist (maintainer, 5 min):** REPORT3.txt "5-MINUTE PHYSICAL CHECKLIST". Unchanged
+    decisions: bug 7 (a1f9ce5), M (bug 10), N. Nothing pushed.
