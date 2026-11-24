@@ -1315,6 +1315,12 @@ pub fn run(
         params.monitors = layout.clone();
         connection += 1;
         let adapter = sink.gpu_adapter(0);
+        // Gaming PC E2E bug 3 (hybrid GPU): which adapter decodes H.264 and may run the
+        // zero-copy path; `default` = the presenter offered no GPU output (yet).
+        log_warn(&format!(
+            "connection {connection}: graphics adapter {} (H.264 decoder, zero-copy path)",
+            adapter.map_or_else(|| "default".to_string(), |l| format!("{l:x}"))
+        ));
         let end = match connect(&params, password.as_ref().map(|s| s.as_str()), media, &gfx, adapter, &handle.sender(), connection, hooks) {
             Err(e) => e,
             Ok(Connected { framed, result }) => {
