@@ -133,6 +133,21 @@ powershell -ExecutionPolicy Bypass -File installer\scripts\build-installer.ps1 -
 
 Release builds never set these variables.
 
+Cargo invocations of the script (step 1-3b): the main workspace's release binaries take two
+calls on purpose (`-p seat-service -p seat-wrds`, then `-p seat-host`): cargo unifies
+features across the packages of one call, and a joint call would build the service against
+`seat-rdp/client` (IronRDP) and the host against `seat-input/local-pads`, so the shipped
+binaries would change. Each call builds its packages in parallel and the second reuses the
+first one's dependencies. The API helper (own workspace, `<target>\apihelper`) and the shim
+(own workspace, `<target>\shim`) build every architecture in **one** call each
+(`--target a --target b ...`, parallel), into the same `<dir>\<triple>\release` folders as
+before. `build-setup.ps1` (seat-bootstrap: embeds the finished MSI, so it can only build after
+step 8, into its own `<target>\setup` away from the Tauri bundler's folder) and the Tauri
+manager build (`tauri build`, needs the frontend and the payload
+first) stay separate. The release scripts always link with MSVC `link.exe`: they drop any
+`CARGO_TARGET_<TRIPLE>_LINKER` (the opt-in rust-lld switch for debug builds,
+CONTRIBUTING.md "Faster local builds") for their run.
+
 ## Signing and release
 
 Full ordered list, including accounts and approvals: [docs/release/checklist.md](../docs/release/checklist.md).
