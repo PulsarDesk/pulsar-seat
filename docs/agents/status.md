@@ -3424,3 +3424,63 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     `cargo test --workspace` 2102 passed / 6 ignored / 0 failed (logs `final-clippy.log`,
     `final-cargo-test.log`). Manager unchanged since 223960c (gated there: `bun run check` 0
     errors, `bun run test` 376). Nothing pushed.
+- 2026-11-24 (e2e round 2 on the x64 gaming PC + restore, on main). Evidence:
+  `target/e2e/gaming-pc-round2/` (local): `REPORT2.txt` (matrix, bugs A-N, physical checklist),
+  `changes.jsonl` (journal, round 2 steps 0-14 + restore R1-R5), `restore-diff.tsv`,
+  `LEFT-INSTALLED.txt`, `before/`, `after-restore/`, `logs/`, `shots/` (shots with DISPLAY1 show the
+  owner's desktop: do not share). Round 2 ran 19:34-21:15 local, restore 21:14-21:30.
+  - **Build under test:** x64 fast test build of 293b049 (unsigned, `release: false`, upstream stream
+    server):
+
+    | File | SHA-256 |
+    | --- | --- |
+    | `PulsarSeat_0.1.0_x64.msi` | `d7d74beec9aba032d2060392d3223e48ba459e7eae827807a6a7310937570330` |
+    | `PulsarSeat_0.1.0_x64_setup.exe` | `7e60915531c8144f1cda8058c2bb755c07ff828a40643d876a2c2d60ec493af7` |
+    | x64 service binary | `ec38ffa3e675de198ba4d9c5dda7ec819adc3b3365b1043be7a4beb5bf3f6582` |
+
+  - **Results on hardware:**
+
+    | Item | Round 1 | Round 2 |
+    | --- | --- | --- |
+    | Install beside disabled ASTER, Duo TermWrap external `blocked: null` | PASS | PASS |
+    | Concurrent sessions (console + 2 seats) | PASS | PASS |
+    | Bug 5 capture journal (vendor INF + extension INFs), emergency restore, graceful reboot release | FAIL | PASS (`restore check: exact`, held; boot recovery with a hard power cut not exercised) |
+    | Bug 7 host account 0xc0000142 | FAIL | PASS (mask 0x120173); WINSTA_EXITWINDOWS grant still needs the maintainer's OK |
+    | Bug 8 leave FUS through apply_config | FAIL | PASS |
+    | Bug 11 refused preset leaves the owner's hive untouched | observation | PASS |
+    | G1 session_capture, G3 DWMFRAMEINTERVAL journal, G4 lock guard, G8 split placement | PASS | PASS |
+    | Bug 9 monitor outside the desktop | FAIL | PARTIAL: attach PASS, detach-back FAIL (bug H) |
+    | Bug 1 reconnect loop | FAIL | PARTIAL: no loop, rebind works; bugs C, D, E |
+    | Bug 6 kiosk shells | FAIL | seat 2 PASS, seat 3 FAIL (restart loop, bug G) |
+    | Bug 2 existing-profile logon | FAIL | FAIL (bug B, intermittent) |
+    | Bug 3 black rdp_decode picture | FAIL | FAIL (bug F: RdpIdd user-mode driver crash at each error_info 17) |
+    | Bug 4 / G7 seat audio | FAIL | FAIL (bug I, HYPOTHESIS rdpdr) |
+    | G5 DualSense, G6 engaging the preset, remote seat (bug 10) | BLOCKED | BLOCKED (pad asleep; on purpose; Duo installed) |
+
+  - **Remaining bugs (REPORT2.txt "REMAINING BUGS"):** A per-seat host accounts cannot query
+    TermService (fix e8463b9 below, not run on hardware; the PC keeps `HostTokenCompat=2`);
+    B existing-profile logons stay at_logon without an agent; C one seat's start can log off
+    another seat's connecting session; D after a host exit the real session reads "not the seat's"
+    (~2 min relaunch); E host-exit churn + crash window not reset by an operator stop/start;
+    F RDP image black, RdpIdd crashes (WUDFHost 0xc000000d), the host resends the same layout after
+    every graphics reset (HYPOTHESIS cause); G kiosk seat 3 shell restart loop (packaged Notepad stub,
+    access denied); H detach-back of an attached monitor; I seat audio (HYPOTHESIS: join rdpdr with
+    audio); J `restore_usb_input` hold not lifted by choosing the backend again; K host relaunch
+    during shutdown; L WinDisc DPI line (fixed ce29f6a); M bug 10 design gap; N open decision on the
+    seat-one guard under `dedicated_host`.
+  - **Fixed on main after the run (gates: clippy -D warnings clean, cargo test --workspace 2146
+    passed / 7 ignored / 0 failed, CARGO_TARGET_DIR=target\wf-e2e):** e8463b9 bug A (service passes
+    TermService's PID in `PULSAR_SEAT_TERMSERVICE_PID`, host SCM query first, stale value fails
+    closed; HYPOTHESIS until a hardware run), ce29f6a bug L (WinDisc skipped), 10b3a49 bug H log
+    wording only (the detach rule itself is still open).
+  - **Gaming PC state now:** restored to `before/` except what the physical checklist needs
+    (`LEFT-INSTALLED.txt`): Pulsar Seat installed + enabled, seats 2 (pstest-r2a, DP VG27A + Logitech)
+    and 3 (pstest-r2b, HDMI VG27A + VG27A audio) configured and stopped, session_capture,
+    winusb_capture; users pstest-r2a / r2b; PulsarSeatHost* accounts; `HostTokenCompat=2`;
+    `DWMFRAMEINTERVAL=6`; DP VG27A attached at 1920,0 for seat 2; helper scripts in
+    `C:\ProgramData\tmpsshd\pse2e`. Back to before: Sunshine / Parsec Running + Auto, OOBE policy key
+    gone, pstest-r2c and its profile gone, Winlogon / owner hive / policies / class filters / Duo /
+    ASTER (disabled) / Logitech drivers / environment equal (`restore-diff.tsv`).
+  - **Physical checklist (maintainer, 5 min):** REPORT2.txt "5-MINUTE PHYSICAL CHECKLIST" (reboot
+    first: bug B). Removal afterwards: LEFT-INSTALLED.txt "HOW TO REMOVE IT LATER".
+  - Nothing pushed.

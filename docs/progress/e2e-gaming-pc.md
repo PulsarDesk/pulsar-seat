@@ -385,8 +385,16 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
 - NEW blocker: per-seat host accounts (BATCH logon) cannot query TermService (DACL: SY, BA, IU, SU), so
   `service_pid` says "not running" and every seat fails `rdp_peer_untrusted`. The PC runs with
   `HostTokenCompat=2` (journaled) until this is fixed.
-- PC left on purpose: product enabled, seats 2 (DP + Logitech) and 3 (HDMI) configured, stopped,
-  session_capture, winusb_capture; not restored (maintainer's physical checklist first).
-- Next: fix bug A (service hands the TermService PID to the host), bug B (log every SessionChange with
-  the slot's session id), bug I (join rdpdr with audio), bug H (detach when no seat names the target),
-  bug C (claim connecting sessions); then the Restore phase from `changes.jsonl`.
+- Restore phase done (journal `changes.jsonl` R1-R5, `restore-diff.tsv`, `after-restore/`): back to
+  `before/` except what the maintainer's physical checklist needs, listed with removal steps in
+  `LEFT-INSTALLED.txt`: product installed + enabled, seats 2 (pstest-r2a, DP + Logitech) and 3
+  (pstest-r2b, HDMI) configured and stopped, `HostTokenCompat=2`, `DWMFRAMEINTERVAL=6`, PulsarSeatHost*
+  accounts, DP VG27A attached for seat 2, helper scripts in `C:\ProgramData\tmpsshd\pse2e`.
+  Sunshine / Parsec Running + Auto again, OOBE key and pstest-r2c gone, Winlogon / owner hive / Logitech
+  drivers equal to before.
+- Fixed on main after the run: e8463b9 bug A (TermService PID passed to hosts; HYPOTHESIS until a
+  hardware run), ce29f6a bug L, 10b3a49 bug H wording. Gates: clippy clean, cargo test 2146 passed.
+- Next: maintainer runs the REPORT2.txt physical checklist; then a round 3 test build with bug A fixed
+  (try without `HostTokenCompat`), and fixes for bug B (log every SessionChange with the slot's session
+  id), bug I (join rdpdr with audio), bug H (detach when no seat names the target), bug C (claim
+  connecting sessions), bug F (do not resend an unchanged layout). Final removal: LEFT-INSTALLED.txt.
