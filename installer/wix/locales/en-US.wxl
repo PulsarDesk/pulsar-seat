@@ -6,7 +6,7 @@
 <WixLocalization Culture="en-us" xmlns="http://schemas.microsoft.com/wix/2006/localization">
   <String Id="PsArchArm64Only">This installer is for ARM64 PCs. Please use the x64 package.</String>
   <String Id="PsArchX64Only">This installer is for x64 PCs. Please use the ARM64 package.</String>
-  <String Id="PsCoexistence">Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.&#13;&#10;&#13;&#10;To install Pulsar Seat, first uninstall that product and restart the PC. Pulsar Seat does not touch that product's files or settings.</String>
+  <String Id="PsCoexistence">Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.&#13;&#10;&#13;&#10;To install Pulsar Seat, first uninstall that product, or turn it off (startup type Disabled for its service and its driver), and restart the PC. Pulsar Seat does not touch that product's files or settings.</String>
   <String Id="PsOsTooOld">Pulsar Seat needs Windows 10 22H2 (build 19045) or newer.</String>
   <String Id="PsNeedsAdmin">Administrator rights are needed to install Pulsar Seat.</String>
   <String Id="PsBadTweaks">PSTWEAKS is invalid: only lowercase letters, underscores and commas are allowed.</String>
@@ -20,6 +20,7 @@
   <String Id="PsServiceDescription">Manages several seats (monitor, keyboard, mouse, sound) on one PC.</String>
   <String Id="PsStopSeatsText">The Pulsar Seat service will be updated, repaired or removed. All running seats will stop and the sessions on the seats will close.&#13;&#10;&#13;&#10;Continue?</String>
   <String Id="PsTermSrvText">The Remote Desktop service (TermService) was changed by other software:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat will be installed, but seats based on Remote Desktop will not be used on this PC. Pulsar Seat does not touch this setting.</String>
+  <String Id="PsRefDisabledText">Another multiseat product is installed on this PC, but it is turned off (its service and driver are disabled).&#13;&#10;&#13;&#10;Pulsar Seat can be installed beside it. Keep that product turned off while Pulsar Seat is installed: two multiseat products cannot run at the same time. If it is turned on again, seats based on Remote Desktop and Pulsar Seat updates are refused until it is turned off. Pulsar Seat does not touch that product's files or settings.</String>
   <String Id="PsSetupTitle">[ProductName] Setup</String>
   <String Id="PsOptionsTitle">{\WixUI_Font_Title}Optional system settings</String>
   <String Id="PsOptionsDescription">None of them is required. Every change is recorded and undone at uninstall.</String>

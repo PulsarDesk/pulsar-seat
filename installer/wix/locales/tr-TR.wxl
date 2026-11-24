@@ -6,7 +6,7 @@
 <WixLocalization Culture="tr-tr" xmlns="http://schemas.microsoft.com/wix/2006/localization">
   <String Id="PsArchArm64Only">Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın.</String>
   <String Id="PsArchX64Only">Bu kurulum paketi x64 bilgisayarlar içindir. Lütfen ARM64 paketini kullanın.</String>
-  <String Id="PsCoexistence">Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.&#13;&#10;&#13;&#10;Pulsar Seat'i kurmak için önce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.</String>
+  <String Id="PsCoexistence">Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.&#13;&#10;&#13;&#10;Pulsar Seat'i kurmak için önce o ürünü kaldırın ya da kapatın (hizmetinin ve sürücüsünün başlangıç türü Devre dışı) ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.</String>
   <String Id="PsOsTooOld">Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir.</String>
   <String Id="PsNeedsAdmin">Pulsar Seat'i kurmak için yönetici hakları gerekir.</String>
   <String Id="PsBadTweaks">PSTWEAKS geçersiz: yalnızca küçük harf, alt çizgi ve virgül kullanılabilir.</String>
@@ -20,6 +20,7 @@
   <String Id="PsServiceDescription">Bir bilgisayarda birden çok koltuğu (ekran, klavye, fare, ses) yönetir.</String>
   <String Id="PsStopSeatsText">Pulsar Seat hizmeti güncellenecek, onarılacak ya da kaldırılacak. Çalışan tüm koltuklar durdurulacak ve koltuklardaki oturumlar kapanacak.&#13;&#10;&#13;&#10;Devam edilsin mi?</String>
   <String Id="PsTermSrvText">Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:&#13;&#10;[PSTERMSRVDLL]&#13;&#10;&#13;&#10;Pulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz.</String>
+  <String Id="PsRefDisabledText">Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu, ancak kapalı (hizmeti ve sürücüsü devre dışı).&#13;&#10;&#13;&#10;Pulsar Seat onun yanına kurulabilir. Pulsar Seat kurulu olduğu sürece o ürünü kapalı tutun: iki çoklu koltuk ürünü aynı anda çalışamaz. Yeniden açılırsa, o ürün kapatılana kadar Uzak Masaüstü tabanlı koltuklar ve Pulsar Seat güncellemeleri engellenir. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.</String>
   <String Id="PsSetupTitle">[ProductName] Kurulumu</String>
   <String Id="PsOptionsTitle">{\WixUI_Font_Title}İsteğe bağlı sistem ayarları</String>
   <String Id="PsOptionsDescription">Hiçbiri zorunlu değil. Yapılan her değişiklik kaydedilir ve kaldırırken geri alınır.</String>

@@ -57,8 +57,10 @@ LangString PsArchArm64Only 1033 "This installer is for ARM64 PCs. Please use the
 LangString PsArchArm64Only 1055 "Bu kurulum paketi ARM64 bilgisayarlar içindir. Lütfen x64 paketini kullanın."
 LangString PsOsTooOld 1033 "Pulsar Seat needs Windows 10 22H2 (build 19045) or newer."
 LangString PsOsTooOld 1055 "Pulsar Seat için Windows 10 22H2 (derleme 19045) veya daha yeni bir Windows gerekir."
-LangString PsCoexistence 1033 "Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.$\r$\n$\r$\nFirst uninstall that product and restart the PC. Pulsar Seat does not touch that product's files or settings."
-LangString PsCoexistence 1055 "Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.$\r$\n$\r$\nÖnce o ürünü kaldırın ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz."
+LangString PsCoexistence 1033 "Another multiseat product is installed on this PC. Two multiseat products cannot run at the same time.$\r$\n$\r$\nFirst uninstall that product, or turn it off (startup type Disabled for its service and its driver), and restart the PC. Pulsar Seat does not touch that product's files or settings."
+LangString PsCoexistence 1055 "Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu. İki çoklu koltuk ürünü aynı anda çalışamaz.$\r$\n$\r$\nÖnce o ürünü kaldırın ya da kapatın (hizmetinin ve sürücüsünün başlangıç türü Devre dışı) ve bilgisayarı yeniden başlatın. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz."
+LangString PsCoexistenceDisabled 1033 "Another multiseat product is installed on this PC, but it is turned off (its service and driver are disabled).$\r$\n$\r$\nPulsar Seat can be installed beside it. Keep that product turned off while Pulsar Seat is installed: two multiseat products cannot run at the same time. If it is turned on again, seats based on Remote Desktop and Pulsar Seat updates are refused until it is turned off. Pulsar Seat does not touch that product's files or settings.$\r$\n$\r$\nContinue the installation?"
+LangString PsCoexistenceDisabled 1055 "Bu bilgisayarda başka bir çoklu koltuk ürünü kurulu, ancak kapalı (hizmeti ve sürücüsü devre dışı).$\r$\n$\r$\nPulsar Seat onun yanına kurulabilir. Pulsar Seat kurulu olduğu sürece o ürünü kapalı tutun: iki çoklu koltuk ürünü aynı anda çalışamaz. Yeniden açılırsa, o ürün kapatılana kadar Uzak Masaüstü tabanlı koltuklar ve Pulsar Seat güncellemeleri engellenir. Pulsar Seat o ürünün dosyalarına veya ayarlarına dokunmaz.$\r$\n$\r$\nKuruluma devam edilsin mi?"
 LangString PsTermSrv 1033 "The Remote Desktop service (TermService) was changed by other software:$\r$\n$1$\r$\n$\r$\nPulsar Seat will be installed, but seats based on Remote Desktop will not be used on this PC. Pulsar Seat does not touch this setting."
 LangString PsTermSrv 1055 "Uzak Masaüstü hizmeti (TermService) başka bir yazılım tarafından değiştirilmiş:$\r$\n$1$\r$\n$\r$\nPulsar Seat kurulacak, ancak Uzak Masaüstü tabanlı koltuklar bu bilgisayarda kullanılmayacak. Pulsar Seat bu ayara dokunmaz."
 LangString PsChecksBlocked 1033 "The pre-flight checks blocked the installation; nothing was installed.$\r$\n$\r$\n$1"
@@ -215,15 +217,37 @@ FunctionEnd
   ${EndIf}
 
   ; --- coexistence: refuse beside the reference product (interop identifiers) ----------
+  ; A key exists (it has a `Type` value) -> refused, unless every existing key has
+  ; Start = 4 (disabled): then a warning the user confirms (2026-11-24, "present but
+  ; disabled"). Whether a disabled key is still running / loaded is asked from the service
+  ; control manager by the `preflight` gate below (exit 4 then). Read only; nothing is
+  ; ever written to these keys.
+  StrCpy $5 "0"
   ClearErrors
   ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Services\MUTESV_SERVICE" "Type"
   ${IfNot} ${Errors}
-    Goto ps_reference_found
+    StrCpy $5 "1"
+    ClearErrors
+    ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Services\MUTESV_SERVICE" "Start"
+    ${If} ${Errors}
+    ${OrIf} $1 != "4"
+      Goto ps_reference_found
+    ${EndIf}
   ${EndIf}
   ClearErrors
   ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" "Type"
   ${IfNot} ${Errors}
-    Goto ps_reference_found
+    StrCpy $5 "1"
+    ClearErrors
+    ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" "Start"
+    ${If} ${Errors}
+    ${OrIf} $1 != "4"
+      Goto ps_reference_found
+    ${EndIf}
+  ${EndIf}
+  ${If} $5 == "1"
+    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "$(PsCoexistenceDisabled)" /SD IDOK IDOK ps_reference_done
+    Abort
   ${EndIf}
   Goto ps_reference_done
   ps_reference_found:

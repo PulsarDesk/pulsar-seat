@@ -53,7 +53,8 @@
       (installer/scripts/bundle-config.ts, ComponentGroup PulsarSeatDriverPackages; empty
       unless build-installer.ps1 ran with -SignedDrivers)
     * coexistence guard: refuses to install while the reference multi-seat product's
-      service keys exist (interop identifiers, spec 90 §11 item 4)
+      service keys exist (interop identifiers, spec 90 §11 item 4), except when every key
+      is disabled (Start = 4) and none is running: then a warning (PsRefDisabledDlg)
     * architecture guard: the x64 MSI refuses an ARM64 PC and vice versa.
 
   Public properties (command line, e.g. msiexec /i PulsarSeat.msi /qn PSRESTOREPOINT=1):
@@ -120,7 +121,13 @@
     </Condition>
 <?endif ?>
 
-    <!-- Coexistence: every service key has a `Type` value, so reading it proves the key. -->
+    <!-- Coexistence: every service key has a `Type` value, so reading it proves the key.
+         Refused while a key exists, unless every existing key has Start = 4 (disabled;
+         raw DWORD = "#4"): the "present but disabled" state (2026-11-24, maintainer keeps
+         the product installed for its licence). Whether a disabled key is still running /
+         loaded cannot be read here: the deferred `install` action's pre-flight gate asks
+         the service control manager and refuses then (exit 4, the install rolls back).
+         Read only; nothing is ever written to these keys. -->
     <Property Id="PSREFSEATSERVICE">
       <RegistrySearch Id="PsRefSeatService" Root="HKLM" Win64="yes" Type="raw"
                       Key="SYSTEM\CurrentControlSet\Services\MUTESV_SERVICE" Name="Type" />
@@ -129,8 +136,16 @@
       <RegistrySearch Id="PsRefDriverService" Root="HKLM" Win64="yes" Type="raw"
                       Key="SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" Name="Type" />
     </Property>
+    <Property Id="PSREFSEATSTART">
+      <RegistrySearch Id="PsRefSeatStart" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\MUTESV_SERVICE" Name="Start" />
+    </Property>
+    <Property Id="PSREFDRIVERSTART">
+      <RegistrySearch Id="PsRefDriverStart" Root="HKLM" Win64="yes" Type="raw"
+                      Key="SYSTEM\CurrentControlSet\Services\MUTENX_SERVICE" Name="Start" />
+    </Property>
     <Condition Message="!(loc.PsCoexistence)">
-      <![CDATA[Installed OR (NOT PSREFSEATSERVICE AND NOT PSREFDRIVERSERVICE)]]>
+      <![CDATA[Installed OR ((NOT PSREFSEATSERVICE OR PSREFSEATSTART = "#4") AND (NOT PSREFDRIVERSERVICE OR PSREFDRIVERSTART = "#4"))]]>
     </Condition>
 
     <!-- Windows 10 22H2 (19045) or newer. VersionNT is 603 on 10/11, so read the build. -->
@@ -494,6 +509,18 @@
           <Publish Event="EndDialog" Value="Exit">1</Publish>
         </Control>
       </Dialog>
+      <!-- Non-blocking warning: the reference product is installed but disabled (the launch
+           condition above refuses every other case). -->
+      <Dialog Id="PsRefDisabledDlg" Width="320" Height="160" Title="[ProductName]">
+        <Control Id="Text" Type="Text" X="15" Y="15" Width="290" Height="100"
+                 Text="!(loc.PsRefDisabledText)" />
+        <Control Id="Ok" Type="PushButton" X="160" Y="130" Width="70" Height="18" Default="yes" Text="!(loc.PsButtonContinue)">
+          <Publish Event="EndDialog" Value="Return">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="236" Y="130" Width="70" Height="18" Cancel="yes" Text="!(loc.PsButtonCancel)">
+          <Publish Event="EndDialog" Value="Exit">1</Publish>
+        </Control>
+      </Dialog>
       <!-- Spec 90 §1.4 / §11 item 7: restore point and system tweaks are explicit, optional
            choices (default off). Wizard (WixUI_InstallDir, Tauri's template):
            InstallDirDlg -> PsOptionsDlg -> VerifyReadyDlg. The later Publish (higher Order)
@@ -614,6 +641,9 @@
         </Show>
         <Show Dialog="PsTermSrvDlg" After="PsStopSeatsDlg">
           <![CDATA[NOT Installed AND UILevel >= 5 AND PSTERMSRVDLL AND (PSTERMSRVDLL ~<> "#%SystemRoot%\System32\termsrv.dll") AND (PSTERMSRVDLL ~<> "#%windir%\System32\termsrv.dll")]]>
+        </Show>
+        <Show Dialog="PsRefDisabledDlg" After="PsTermSrvDlg">
+          <![CDATA[NOT Installed AND UILevel >= 5 AND (PSREFSEATSERVICE OR PSREFDRIVERSERVICE)]]>
         </Show>
       </InstallUISequence>
     </UI>
