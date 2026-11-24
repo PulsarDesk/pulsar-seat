@@ -45,11 +45,15 @@ $SQOS_IDENTIFICATION = [uint32](0x00100000 -bor 0x00010000)
 
 function Open-Pipe {
     $name = "\\.\pipe\$Pipe"
+    # Service PID from the SCM, read before the pipe is opened and not through WMI: a WMI
+    # query took 60 s on the x64 test PC (E2E 2026-11-24), longer than the service waits for
+    # the first request, so every call failed with "No process is on the other end of the pipe".
+    $svcPid = [uint32]0
+    foreach ($l in (sc.exe queryex PulsarSeat)) { if ($l -match 'PID\s+:\s+(\d+)') { $svcPid = [uint32]$Matches[1] } }
     $h = [PulsarSeatTest.PipeNative]::CreateFileW($name, $PIPE_CLIENT_ACCESS, 0, [IntPtr]::Zero, 3, $SQOS_IDENTIFICATION, [IntPtr]::Zero)
     if ($h.IsInvalid) { throw "open $name failed: win32 $([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
     $spid = [uint32]0; [void][PulsarSeatTest.PipeNative]::GetNamedPipeServerProcessId($h, [ref]$spid)
-    $svc = Get-CimInstance Win32_Service -Filter "Name='PulsarSeat'" -ErrorAction SilentlyContinue
-    if ($svc -and $svc.ProcessId -and $svc.ProcessId -ne $spid) { throw "pipe server pid $spid is not the PulsarSeat service ($($svc.ProcessId))" }
+    if ($svcPid -and $svcPid -ne $spid) { throw "pipe server pid $spid is not the PulsarSeat service ($svcPid)" }
     New-Object IO.FileStream($h, [IO.FileAccess]::ReadWrite, 4096, $false)
 }
 
