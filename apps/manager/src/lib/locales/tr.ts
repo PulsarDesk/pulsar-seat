@@ -2119,6 +2119,7 @@ const issueText: Record<string, string> = {
   invalid_gpu_preference: 'Ekran kartı tercihindeki programlar geçersiz (en çok 64 program, her biri tam bir .exe yolu).',
   invalid_kiosk_shell: 'Kiosk koltuğunun ayarları geçersiz (en çok 16 uygulama, adı ve yolu dolu, boşta sıfırlama 0–1440 dakika).',
   kiosk_shell_ignored_on_seat_one: '1. koltuk normal masaüstü olarak kaldığı için kiosk ayarı bu koltukta kullanılmaz.',
+  kiosk_app_execution_alias: 'Bir kiosk uygulamasının yolu bu bilgisayarda yalnızca bir mağaza uygulamasının kısayolu (örneğin Windows 11’deki Not Defteri) ve yoluyla başlatılamaz. Bunun yerine uygulamanın mağaza uygulaması kimliğini (AUMID, örn. Microsoft.WindowsNotepad_8wekyb3d8bbwe!App) girin.',
   seat_kind_mismatch: 'Koltuğun türü (yerel / uzak) ayarlarıyla uyuşmuyor.',
   console_seat_remote: '1. koltuk her zaman yerel koltuktur.',
   device_on_remote_seat: 'Uzak koltuğa aygıt atanamaz.',

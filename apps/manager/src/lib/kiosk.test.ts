@@ -48,6 +48,8 @@ describe('kiosk shell config', () => {
     expect(localIssues(c, null).map((i) => i.code)).toContain('invalid_kiosk_shell');
     expect(issueText.invalid_kiosk_shell).toBeTruthy();
     expect(issueText.kiosk_shell_ignored_on_seat_one).toBeTruthy();
+    // Service-side check (bug G, 2026-11-24): an app path that is a Store app shortcut.
+    expect(issueText.kiosk_app_execution_alias).toContain('AUMID');
   });
 });
 

@@ -295,6 +295,13 @@ pub trait Platform: Send + Sync {
     }
     fn local_users(&self) -> BackendResult<Vec<LocalUser>>;
     fn cpu_sets(&self) -> Vec<CpuSetInfo>;
+    /// `Some(kind)` when a kiosk app's command is an app execution alias on this PC
+    /// (`seat_session::alias`, gaming PC E2E round 2 bug G); `kind` is the snake_case reason.
+    /// Default: never (fakes, other systems).
+    fn execution_alias(&self, command: &str) -> Option<&'static str> {
+        let _ = command;
+        None
+    }
     fn os_build(&self) -> u32;
     /// Unix seconds of the current boot.
     fn boot_unix_s(&self) -> u64;
@@ -548,6 +555,8 @@ pub mod mock {
         pub covered: Mutex<Vec<(u32, Vec<u32>, bool)>>,
         /// Seats whose kiosk user was removed (`remove_kiosk_user`).
         pub kiosk_users_removed: Mutex<Vec<seat_core::SeatNumber>>,
+        /// Commands that are app execution aliases (`execution_alias`, lower-case).
+        pub aliases: Mutex<Vec<String>>,
         pub fail_launch: AtomicBool,
         pub fail_rng: AtomicBool,
         /// PIDs whose identity changed (reused after a restart): adoption refuses them.
@@ -810,6 +819,10 @@ pub mod mock {
         }
         fn cpu_sets(&self) -> Vec<CpuSetInfo> {
             Vec::new()
+        }
+        fn execution_alias(&self, command: &str) -> Option<&'static str> {
+            let c = command.to_lowercase();
+            self.aliases.lock().unwrap().iter().any(|a| *a == c).then_some("ifeo_alias_redirect")
         }
         fn os_build(&self) -> u32 {
             self.build.load(Ordering::SeqCst)

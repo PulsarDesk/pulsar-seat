@@ -1240,6 +1240,11 @@ impl Platform for WinPlatform {
         Ok(out)
     }
 
+    /// IFEO alias redirect or APPEXECLINK reparse point (`seat_session::alias`, bug G).
+    fn execution_alias(&self, command: &str) -> Option<&'static str> {
+        seat_session::alias::execution_alias_here(command).map(seat_session::alias::ExecutionAlias::as_str)
+    }
+
     /// The compat package's reader (`GetSystemCpuSetInformation`, shared with the launcher).
     fn cpu_sets(&self) -> Vec<CpuSetInfo> {
         seat_compat::cpu::list_cpu_sets().unwrap_or_else(|e| {
