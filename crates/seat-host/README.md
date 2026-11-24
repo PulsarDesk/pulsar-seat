@@ -23,6 +23,17 @@ per output, flip chain failures, the GDI fallback and its 10 s frame / present c
 `PULSAR_SEAT_HOST_LOG` = `off` / `error` / `warn` / `info` (default) / `debug` / `trace`.
 Not in `--display-helper` mode (its stdout carries the JSON reply).
 
+## Kiosk shell app starts (round 2 bug G, 2026-11-24)
+
+`kiosk-shell-NN.log` shows each app start. A `command` that is an app execution alias
+(`seat_session::alias`) is refused before `CreateProcessW` ("is an app execution alias";
+bar: `copy::ALIAS_REFUSED`): on the gaming PC the Windows 11 Notepad stub failed with access
+denied and the shell died with it (Application event 1000, access violation in an unloaded
+`twinapi.appcore.dll`). `kiosk/launch_guard.rs` writes `%TEMP%\pulsar-seat-kiosk-NN.launch`
+(the seat user's temp folder) for each start and removes it 3 s later; a shell that finds
+it leaves those apps (the failed starts, or all when none failed) out of its autostart
+("crash guard: ..." / "not started automatically"). A tap on the tile still starts them.
+
 ## In-session capture (OSMS-parity G1, 2026-11-20)
 
 `local.frame_source = session_capture` (opt-in per local seat, default `rdp_decode`):

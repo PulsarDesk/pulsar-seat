@@ -398,3 +398,18 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   (try without `HostTokenCompat`), and fixes for bug B (log every SessionChange with the slot's session
   id), bug I (join rdpdr with audio), bug H (detach when no seat names the target), bug C (claim
   connecting sessions), bug F (do not resend an unchanged layout). Final removal: LEFT-INSTALLED.txt.
+
+## Round 3 fix e2e3-c (2026-11-24): bugs I (audio) and G (kiosk shell loop)
+
+- Branch `e2e3-c`. Done: I = device-less `rdpdr` joined with playback (`seat_rdp::channels::audio_gate`,
+  MS-RDPEA appendix A<1>), log `static channels offered: ...` and `audio notes [...] (render open X,
+  capture open Y)`. G = root cause proven by the gaming PC event log (21x Application 1000:
+  pulsar-seat-host.exe, `twinapi.appcore.dll_unloaded`, 0xc0000005, 20:17-20:19 local) after the
+  failed start of the Notepad stub (IFEO `notepad.exe` UseFilter=1, filter entries with
+  AppExecutionAliasRedirect=1); `seat_session::alias`, shell refusal + crash guard
+  (`kiosk/launch_guard.rs`), service error `kiosk_app_execution_alias`, manager copy.
+- Round 3 retest: seat with audio: host log has `static channels offered: rdpsnd (playback), rdpdr
+  (audio gate, no devices), drdynvc`, then `audio formats on ...`, `playback started`, and sound from the
+  seat's endpoint. Kiosk seat 3 with `C:\Windows\System32\notepad.exe`: apply refused with
+  `kiosk_app_execution_alias`; with a config written before the fix the shell logs "is an app execution
+  alias" and keeps running (no "session ended" loop, no Application 1000 events).
