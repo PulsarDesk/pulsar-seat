@@ -2783,6 +2783,10 @@ const rt = {
     stream_fallback: 'Bu akış sunucusu sürümünde bazı Pulsar özellikleri yok; koltuk bunlar için standart davranışı kullanıyor.',
     display_fallback: 'Pulsar ekranı kullanılamadı; koltuk Uzak Masaüstü ekranında çalışıyor.'
   } as Record<string, string>,
+  coexistNote: {
+    duo_service_running:
+      'Başka bir çoklu koltuk ürünü çalışıyor. Uzak koltuklara izin verilir, ancak iki ürün oturumlar, sanal ekranlar ve ağ bağlantı noktaları için çakışabilir. Uzak koltukları kullanırken diğer ürünü durdurun.'
+  } as Record<string, string>,
   signal: {
     ref_arp: 'Başka bir çoklu koltuk ürünü kurulu.',
     ref_service: 'Başka bir çoklu koltuk ürününün hizmeti var.',

@@ -2791,6 +2791,10 @@ const rt = {
     stream_fallback: 'This stream-server build lacks some Pulsar features; the seat uses the standard behaviour for them.',
     display_fallback: 'The Pulsar display could not be used; the seat runs on the Remote Desktop display.'
   } as Record<string, string>,
+  coexistNote: {
+    duo_service_running:
+      'Another multiseat product is running. Remote seats are allowed, but both products may conflict over sessions, virtual displays and network ports. Stop the other product while you use remote seats.'
+  } as Record<string, string>,
   signal: {
     ref_arp: 'Another multiseat product is installed.',
     ref_service: 'Another multiseat product has a service.',

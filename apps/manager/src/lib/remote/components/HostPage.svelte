@@ -29,6 +29,8 @@
   const tw = $derived(info?.termwrap ?? null);
   const twState = $derived(tw?.state.state ?? 'off');
   const findings = $derived(info?.coexistence?.findings ?? []);
+  /** Non-blocking coexistence warnings (bug 10, 2026-11-24). */
+  const coexistNotes = $derived(info?.coexistence?.notes ?? []);
   const classKind = $derived<StatusKind>(
     !info ? 'off' : info.class === 'server_rdsh' ? 'ok' : info.class === 'home' ? 'danger' : 'warn'
   );
@@ -68,9 +70,10 @@
     {#snippet actions()}<Button kind="secondary" icon="refresh" label={t.host.refresh} {busy} onclick={() => run(onRefresh)} />{/snippet}
   </PageHead>
 
-  {#if passive || error}
+  {#if passive || error || coexistNotes.length > 0}
     <div class="notes">
       {#if passive}<Notice kind="warn" text={t.host.passive} />{/if}
+      {#each coexistNotes as n (n)}<Notice kind="warn" text={t.coexistNote[n] ?? n} />{/each}
       {#if error}<Notice kind="danger" text={error} />{/if}
     </div>
   {/if}

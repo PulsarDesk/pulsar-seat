@@ -94,4 +94,23 @@ describe('remote seats tab', () => {
     expect(screen.getAllByText(t.adminNeeded).length).toBeGreaterThan(0);
     expect(api.calls.filter((c) => c.startsWith('get_host_info') || c === 'list_local_users')).toEqual([]);
   });
+
+  it('warns, without blocking, when the other multiseat product runs (bug 10)', async () => {
+    localStorage.clear();
+    const api = createDemoApi({ admin: true });
+    const hostInfo = api.remote.hostInfo.bind(api.remote);
+    api.remote.hostInfo = async () => ({
+      ...(await hostInfo()),
+      coexistence: { mode: 'alongside', reference_running: true, findings: [], upstream_ports: [], notes: ['duo_service_running'] }
+    });
+    const store = new ManagerStore(api);
+    await store.init();
+    render(App, { store });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
+    expect(await screen.findByText(rt.coexistNote.duo_service_running)).toBeInTheDocument();
+    expect(screen.queryByText(rt.host.passive)).toBeNull();
+    // Not passive: a new remote seat can still be created.
+    expect(screen.getByRole('button', { name: rt.nav.newSeat })).toBeEnabled();
+  }, 15_000);
 });

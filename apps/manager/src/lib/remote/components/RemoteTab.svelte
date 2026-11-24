@@ -101,6 +101,8 @@
   const statusOf = (n: SeatNumber) => store.status?.seats.find((r) => r.seat === n);
   const currentStatus = $derived(current ? seatStatus(current, statusOf(current.number), store.view, runtime) : undefined);
   const passive = $derived(hostInfo?.coexistence?.mode === 'passive');
+  /** Non-blocking coexistence warnings (bug 10, 2026-11-24). */
+  const coexistNotes = $derived(hostInfo?.coexistence?.notes ?? []);
   const settings = $derived(store.saved ? remoteSettingsOf(store.saved) : null);
   const serviceStatus = $derived(remoteServiceStatus(store.status, store.saved, store.view, passive));
   /** Remote seats cannot start here (`session_unavailable`): said on the rows up front. */
@@ -417,9 +419,10 @@
         {/snippet}
       </PageHead>
 
-      {#if banner || progress || passive}
+      {#if banner || progress || passive || coexistNotes.length > 0}
         <div class="notes">
           {#if passive}<Notice kind="warn" text={t.host.passive} />{/if}
+          {#each coexistNotes as n (n)}<Notice kind="warn" text={t.coexistNote[n] ?? n} />{/each}
           {#if banner}<Notice kind="danger" text={banner} />{/if}
           {#if progress}<Notice kind="neutral"><span class="line"><Spinner />{progress}</span></Notice>{/if}
         </div>

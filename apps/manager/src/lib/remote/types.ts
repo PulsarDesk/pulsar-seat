@@ -259,10 +259,15 @@ export interface CoexistFinding {
 }
 
 export interface CoexistReport {
-  mode: 'normal' | 'passive' | 'residue_only';
+  /** `alongside`: the other multiseat product is installed; nothing is blocked (bug 10,
+   *  2026-11-24). `passive` is no longer sent by the service. */
+  mode: 'normal' | 'alongside' | 'passive' | 'residue_only';
+  reference_running?: boolean;
   reason?: string;
   findings: CoexistFinding[];
   upstream_ports: number[];
+  /** Non-blocking warnings, e.g. `duo_service_running` (additive). */
+  notes?: string[];
 }
 
 export interface WrapperCandidate {
