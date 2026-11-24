@@ -246,6 +246,10 @@ impl SessionBackend for TermsrvWrapperBackend {
         self.rdp.host_hint(seat, hint);
     }
 
+    fn rebind(&self, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
+        self.rdp.rebind(seat, session_id)
+    }
+
     fn query(&self, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
         self.rdp.query(seat, session_id)
     }

@@ -168,7 +168,9 @@ otherwise:
   listener's account gets `WINSTA_EXITWINDOWS` on the console window station, as its own
   ACE only, removed when the listener stops and journaled for uninstall. Accepted risk:
   that account could log the console user off. The `ERROR_PIPE_BUSY` behind it is to be
-  found and fixed.
+  found and fixed. **Proposed 2026-11-24 (gaming PC E2E bug 7), needs the maintainer's
+  OK:** seat hosts get the same right on their own ACE (their account starts failed with
+  0xc0000142 without it and fell back to SYSTEM Low); same scope and accepted risk.
 - **Kiosk console apps in classic conhost** (VM round 3): console apps of kiosk seats open
   in conhost, not Windows Terminal, through the per-user default-terminal setting
   (`HKCU\Console\%%Startup` `DelegationConsole` / `DelegationTerminal`), only for kiosk

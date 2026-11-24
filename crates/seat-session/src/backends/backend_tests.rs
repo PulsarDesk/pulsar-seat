@@ -391,6 +391,115 @@ fn rds_binds_only_the_reported_session() {
     assert_eq!(b.wait_session(seat(3), "PSEAT-03", Duration::from_secs(2)).unwrap_err().reason, "session_timeout");
 }
 
+/// A disconnected RDP session as the gaming PC E2E (2026-11-24) suggests Windows reports
+/// it: no winstation name, client name or address (HYPOTHESIS for the remote flag too).
+fn disconnected(id: u32, user: &str) -> crate::wts::WtsSession {
+    crate::wts::WtsSession {
+        winstation: String::new(),
+        state: crate::wts::WtsState::Disconnected,
+        client_name: String::new(),
+        client_address: None,
+        is_remote: false,
+        ..FakeWts::rdp(id, "", user)
+    }
+}
+
+#[test]
+fn reconnect_to_the_old_session_rebinds_the_seat() {
+    // Gaming PC E2E 2026-11-24, bug 1: seat 2's session 3 was left disconnected; every new
+    // host connection got a transient session 5 that Windows then reconnected to session
+    // 3. wait_session bound 5, the host reported 3, and the seat looped.
+    let w = FakeWorld::server();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    let settings = GlobalSettings::default();
+    b.prepare_host(&settings).unwrap();
+    w.wts.add(disconnected(3, "ali"));
+    let s2 = seat_cfg(2, Some("ali"));
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(5, "PSEAT-02", ""));
+    assert_eq!(b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap().session_id, 5);
+    // Windows moves the connection to session 3; the transient session goes away.
+    lock_sessions(&w).retain(|s| s.id != 5);
+    w.wts.add(FakeWts::rdp(3, "PSEAT-02", "ali"));
+    b.host_hint(seat(2), HostHint { session_id: Some(3), legacy_client: false });
+    let i = b.rebind(seat(2), 3).unwrap();
+    assert_eq!((i.session_id, i.state), (3, SessionState::Active));
+    // The seat owns session 3 now: query and log-off accept it, and stop ends it.
+    assert_eq!(b.query(seat(2), 3).unwrap().session_id, 3);
+    b.log_off(seat(2), 3).unwrap();
+    assert_eq!(w.wts.logoffs.lock().unwrap().last(), Some(&(3, true)));
+}
+
+#[test]
+fn rebind_needs_wts_to_confirm_the_reported_session() {
+    let w = FakeWorld::server();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    let settings = GlobalSettings::default();
+    b.prepare_host(&settings).unwrap();
+    // Not bound yet: nothing to move.
+    assert_eq!(b.rebind(seat(2), 3).unwrap_err().kind, ErrorKind::NotFound);
+    let s2 = seat_cfg(2, Some("ali"));
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(5, "PSEAT-02", ""));
+    b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap();
+    // Another seat's client name, another user, a disconnected session, a missing one:
+    // refused, session 5 stays bound.
+    w.wts.add(FakeWts::rdp(6, "PSEAT-03", "ali"));
+    w.wts.add(FakeWts::rdp(7, "PSEAT-02", "veli"));
+    w.wts.add(disconnected(8, "ali"));
+    for id in [6, 7, 8, 9] {
+        assert_eq!(b.rebind(seat(2), id).unwrap_err().reason, "not_our_session", "{id}");
+    }
+    assert_eq!(b.query(seat(2), 5).unwrap().session_id, 5);
+    // A session bound to another seat is never taken.
+    let s3 = seat_cfg(3, Some("ali"));
+    b.start(&req(&s3, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(10, "PSEAT-03", "ali"));
+    b.host_hint(seat(3), HostHint { session_id: Some(10), legacy_client: false });
+    b.wait_session(seat(3), "PSEAT-03", Duration::from_secs(5)).unwrap();
+    w.wts.add(FakeWts::rdp(10, "PSEAT-02", "ali"));
+    assert_eq!(b.rebind(seat(2), 10).unwrap_err().reason, "not_our_session");
+}
+
+#[test]
+fn a_disconnected_bound_session_is_logged_off() {
+    // The host restart logs the seat's session off so the next connection gets a fresh
+    // one. Disconnected, the session has no client name or address any more (HYPOTHESIS),
+    // which made the log-off refuse it and left it for the next connection to reconnect.
+    let w = FakeWorld::server();
+    let b = create_backend(SessionBackendKind::RdsLoopback, w.deps());
+    let settings = GlobalSettings::default();
+    b.prepare_host(&settings).unwrap();
+    let s2 = seat_cfg(2, Some("ali"));
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(4, "PSEAT-02", "ali"));
+    b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap();
+    w.wts.add(disconnected(4, "ali"));
+    assert_eq!(b.query(seat(2), 4).unwrap().state, SessionState::Disconnected);
+    b.log_off(seat(2), 4).unwrap();
+    assert_eq!(w.wts.logoffs.lock().unwrap().last(), Some(&(4, false)));
+
+    // Never another user's disconnected session with that id, never the console, never
+    // for a seat without an account (only the id would identify it).
+    b.start(&req(&s2, &settings, Some("pw"))).unwrap();
+    w.wts.add(FakeWts::rdp(5, "PSEAT-02", "ali"));
+    b.wait_session(seat(2), "PSEAT-02", Duration::from_secs(5)).unwrap();
+    w.wts.add(disconnected(5, "veli"));
+    assert_eq!(b.log_off(seat(2), 5).unwrap_err().reason, "not_our_session");
+    w.wts.add(crate::wts::WtsSession { winstation: "Console".into(), ..disconnected(5, "ali") });
+    assert_eq!(b.log_off(seat(2), 5).unwrap_err().reason, "not_our_session");
+    // Seat 3 has no account (logon-screen seat; bound by its client name alone).
+    w.wts.add(FakeWts::rdp(6, "PSEAT-03", ""));
+    assert_eq!(b.wait_session(seat(3), "PSEAT-03", Duration::from_secs(2)).unwrap().session_id, 6);
+    w.wts.add(disconnected(6, "ali"));
+    assert_eq!(b.log_off(seat(3), 6).unwrap_err().reason, "not_our_session");
+    assert!(!w.wts.logoffs.lock().unwrap().iter().any(|(id, _)| *id == 5 || *id == 6));
+}
+
+fn lock_sessions(w: &FakeWorld) -> std::sync::MutexGuard<'_, Vec<crate::wts::WtsSession>> {
+    w.wts.sessions.lock().unwrap()
+}
+
 // ---------- termsrv_wrapper ----------
 
 #[test]

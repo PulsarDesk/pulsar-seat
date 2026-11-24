@@ -131,8 +131,17 @@ Console session (seat 1, or a dedicated host session)
       logon-SID ACE, journaled like every grant and revoked when the listener is gone and at
       uninstall. **Accepted risk:** a process holding that ACE could log the console user
       off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown / restart still need
-      `SeShutdownPrivilege`, which the hardened token does not have. Seat hosts do not get
-      it. The service also passes its PID in `PULSAR_SEAT_SERVICE_PID` to every process
+      `SeShutdownPrivilege`, which the hardened token does not have. **Seat hosts
+      (2026-11-24, gaming PC E2E bug 7; pending the maintainer's OK, untested on
+      hardware):** until then seat hosts did not get it, and on the gaming PC every seat
+      host start as `PulsarSeatHostNN` and then as the shared account exited 0xc0000142
+      while the console listener ran under the same shared account with it; the host only
+      ran on the third launch, as SYSTEM at Low integrity (about 7 s lost per seat start,
+      containment lost for the run). Seat hosts now get the same ACE right
+      (`LaunchSpec.host_exit_windows = true` in `launch_host`), with the same scope and
+      accepted risk. `win::containment` logs the token of every host launch (`host token =
+      account … window-station mask 0x…` or `host token = SYSTEM at Low integrity …`). The
+      service also passes its PID in `PULSAR_SEAT_SERVICE_PID` to every process
       it launches: the pipe server check of a contained host / listener used the SCM,
       which refuses a Low-integrity batch token (`OpenSCManagerW` access denied), and host
       clients retry `ERROR_PIPE_BUSY` with `WaitNamedPipeW` (the listener starts together
@@ -244,6 +253,24 @@ session id on the slot (`Slot.reported_session`) and passes a
 reported id, only that session and only if WTS confirms it (loopback, unclaimed, our
 `PSEAT-NN` client name, the account); without one, the exact client name; the "newest new
 loopback session" fallback only for the ActiveX client (`SeatMatch.newest_fallback`).
+
+Update 2026-11-24 (gaming PC E2E bug 1, reconnect loop), **untested on hardware:** a new
+connection of an account that already has a session first gets a transient session, and
+Windows then reconnects the connection to the account's existing one. `wait_session` binds
+the transient session (our `PSEAT-NN` name, user still empty) about 2 s before the host
+reports the real id, so the seat ended with the transient session and restarted every
+~11 s. Now `SessionBackend::rebind(seat, id)` (additive, default `Unsupported`;
+`RdpCore::rebind`) moves the binding to the reported session when WTS confirms it with the
+reported-id rules above; `Service::follow_reported_session` calls it from `on_host_report`
+and at the end of `run_start`, `reported_instead` right after `wait_session`, and the seat
+records the new id (run file included) and handles its logon. An unconfirmed report keeps
+the bound session (warning). `Slot.reported_session` is cleared at each host launch. Also
+(HYPOTHESIS: Windows blanks the client name and address of a **disconnected** session) the
+bound session of a seat with an account counts as the seat's while disconnected, by its
+bound id and the seat's user, never the console winstation: the host-exit log-off ends it
+(with `require_remote` off) instead of leaving it for the next connection to reconnect to.
+`log_off` refusals and failures are logged with the session's WTS view (state, remote flag,
+client name, address, user).
 
 Logon-screen seats (no stored password) on an NLA listener — **decision 2026-11-13
 (fix-rdp-client), HYPOTHESIS until tested:** `rds.rs` keeps RDP-Tcp `UserAuthentication=1`
