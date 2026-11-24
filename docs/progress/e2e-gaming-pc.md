@@ -285,3 +285,28 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   account 0xc0000142, 9 detached monitor attach, 10 Duo passive remote, 11 refused preset guard.
 - In progress: nothing. Task D done (status.md left to the final step).
 - Next: a new x64 test build with these fixes, then the physical checklist on the gaming PC.
+
+## Round 2 prep, fix agent b (2026-11-24): bugs 3 and 9
+
+- Branch `e2e2-b` (worktree), not merged, not pushed. Gates: clippy -D warnings for
+  seat-display, seat-rdp, seat-host on aarch64 (native) and x86_64-pc-windows-msvc; cargo test
+  of those crates green (`CARGO_TARGET_DIR=target\wf-fix-b`).
+- Bug 9 DONE (code): `topology::plan_topology` attaches connected, unspecialized plan targets
+  outside the desktop (journal `attached`), `plan_paths` prefers a source on the target's own
+  adapter; `binding.rs` passes the console targets; tests in topology.rs and binding.rs.
+- Bug 3 (diagnostics + most likely fix, root cause NOT proven): host stderr logger
+  (`seat-host/src/hostlog.rs`), flip chain on the DXGI owner of the monitor
+  (`win::dxgi_output_owner`, `model::pick_flip_adapter`), GDI fallback on a new window
+  (`gdi_only`), per-output stats lines in `presenter.rs` (`log_stats`), adapter line per RDP
+  connection in seat-rdp.
+- Round 2 checks:
+  - Bug 9: leave the VG27A DP detached (as restored), start seat 2 without `ccd.ps1`: service.log
+    shows `display: attached ... journaled`, seat 2 binds; `journal\display-topology.json` has the
+    entry with `"attached": true`; drop seat 2's monitor from the config (or disable): the DP goes
+    back out and the entry is gone. Restore: nothing extra if the entry is gone.
+  - Bug 3: in `host-02.log` / `host-03.log` read `presenter: output N ... flip chain on adapter`
+    (vs the CCD adapter), `first RDP frame ... X of Y samples not black`, the 10 s
+    `cpu frames / presents / present errors / occluded / gdi paints` lines and
+    `seat-rdp: connection N: graphics adapter`. Not black + monitor black: presentation, rerun
+    with `PULSAR_SEAT_PRESENTER=gdi`. Black: RDP composition, rerun with `PULSAR_SEAT_GFX=no-h264`
+    then `bitmap`.
