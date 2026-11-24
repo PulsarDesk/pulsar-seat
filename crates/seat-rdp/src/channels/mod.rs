@@ -197,6 +197,49 @@ pub struct Joined {
     pub rdpdr: bool,
     /// `rdpdr` needs `rdpsnd` advertised too (MS-RDPEFS appendix A<1>).
     pub needs_rdpsnd: bool,
+    /// `rdpdr` joined only so that the server talks `rdpsnd` ([`audio_gate`]): no device
+    /// capability, no device announced.
+    pub audio_gate: bool,
+}
+
+/// Joins a device-less `rdpdr` channel when playback is on and nothing else joined it.
+///
+/// [MS-RDPEA] appendix A<1> (section 2.1): "In Windows, the client advertises the static
+/// virtual channel named "RDPDR" ... If that channel is not advertised, the server will not
+/// issue any communication on the "RDPSND" channel." Gaming PC E2E round 2 (2026-11-24, bug
+/// 4 / I): only `rdpsnd` and `drdynvc` were offered, the server never sent its audio formats
+/// and never opened `AUDIO_PLAYBACK_DVC`. The gate channel runs IronRDP's no-op back-end:
+/// the [MS-RDPEFS] handshake (announce reply, client name, general capability only) and
+/// nothing announced, so no drive, printer, port or smart card reaches the session. Audio
+/// input (MS-RDPEAI, a dynamic channel) has no such documented gate and does not join it
+/// on its own. HYPOTHESIS until the round 3 retest shows "audio formats" in the host log.
+pub fn audio_gate(connector: &mut ClientConnector, p: &SessionParams, playback: bool, j: &mut Joined) {
+    if !playback || j.rdpdr {
+        return;
+    }
+    let name: String = p.client_name.chars().take(15).collect();
+    connector.attach_static_channel(Rdpdr::new(Box::new(ironrdp_rdpdr::NoopRdpdrBackend), name));
+    j.rdpdr = true;
+    j.audio_gate = true;
+    j.needs_rdpsnd = true;
+}
+
+/// The static channels offered, for the connection log (bug 4 / I diagnostics).
+pub fn offered_line(rdpsnd: Option<&str>, j: &Joined) -> String {
+    let mut v: Vec<String> = Vec::new();
+    if let Some(kind) = rdpsnd {
+        v.push(format!("rdpsnd ({kind})"));
+    }
+    if j.clipboard {
+        v.push("cliprdr".into());
+    }
+    if j.audio_gate {
+        v.push("rdpdr (audio gate, no devices)".into());
+    } else if j.rdpdr {
+        v.push("rdpdr (devices)".into());
+    }
+    v.push("drdynvc".into());
+    format!("static channels offered: {}", v.join(", "))
 }
 
 /// Join the channels the policy allows on connection `connection`.
@@ -464,6 +507,75 @@ mod tests {
             let off = Channels { readers: Some(Arc::new(NoReaders)), log, live, ..Default::default() };
             assert!(!attach(&mut connector(&sc), &sc, &off, &tx, 2).rdpdr);
         }
+    }
+
+    /// Bug 4 / I: playback alone joins a device-less rdpdr (MS-RDPEA appendix A<1>).
+    #[test]
+    fn playback_joins_the_rdpdr_audio_gate() {
+        let p = params();
+        let mut c = connector(&p);
+        let mut j = Joined::default();
+        audio_gate(&mut c, &p, true, &mut j);
+        assert!(j.rdpdr && j.audio_gate && j.needs_rdpsnd);
+        let names: Vec<String> = c.static_channels.values().map(|ch| ch.channel_name().as_str().unwrap_or("?").to_owned()).collect();
+        assert_eq!(names, vec!["rdpdr".to_owned()]);
+        let r = c.static_channels.get_by_type::<Rdpdr>().and_then(|s| s.channel_processor_downcast_ref::<Rdpdr>());
+        assert!(r.and_then(|r| r.downcast_backend::<ironrdp_rdpdr::NoopRdpdrBackend>()).is_some(), "no devices: the no-op back-end");
+        assert_eq!(offered_line(Some("playback"), &j), "static channels offered: rdpsnd (playback), rdpdr (audio gate, no devices), drdynvc");
+
+        // No playback: nothing joined.
+        let mut c = connector(&p);
+        let mut j = Joined::default();
+        audio_gate(&mut c, &p, false, &mut j);
+        assert_eq!(j, Joined::default());
+        assert_eq!(c.static_channels.values().count(), 0);
+        assert_eq!(offered_line(None, &j), "static channels offered: drdynvc");
+
+        // rdpdr already joined for devices: no second one.
+        let mut c = connector(&p);
+        let mut j = Joined { rdpdr: true, needs_rdpsnd: true, ..Default::default() };
+        audio_gate(&mut c, &p, true, &mut j);
+        assert!(!j.audio_gate);
+        assert_eq!(c.static_channels.values().count(), 0);
+        assert_eq!(offered_line(Some("playback"), &j), "static channels offered: rdpsnd (playback), rdpdr (devices), drdynvc");
+    }
+
+    /// The gate channel answers the MS-RDPEFS handshake with the general capability only and
+    /// announces no device, also when the server offers every device class.
+    #[test]
+    fn audio_gate_handshake_announces_nothing() {
+        use ironrdp_core::{decode, encode_vec};
+        use ironrdp_rdpdr::pdu::RdpdrPdu;
+        use ironrdp_rdpdr::pdu::efs::{CapabilityMessage, CoreCapability, CoreCapabilityKind, VERSION_MINOR_12, VersionAndIdPdu, VersionAndIdPduKind};
+        use ironrdp_svc::SvcProcessor as _;
+        let p = params();
+        let mut c = connector(&p);
+        let mut j = Joined::default();
+        audio_gate(&mut c, &p, true, &mut j);
+        let svc = c.static_channels.get_by_type_mut::<Rdpdr>().unwrap();
+        let r = svc.channel_processor_downcast_mut::<Rdpdr>().unwrap();
+        let id = |kind| VersionAndIdPdu { version_major: 1, version_minor: VERSION_MINOR_12, client_id: 9, kind };
+        let out = r.process(&encode_vec(&RdpdrPdu::VersionAndIdPdu(id(VersionAndIdPduKind::ServerAnnounceRequest))).unwrap()).unwrap();
+        assert_eq!(out.len(), 2, "announce reply + client name");
+        let all = vec![
+            CapabilityMessage::new_general(0),
+            CapabilityMessage::new_drive(),
+            CapabilityMessage::new_printer(),
+            CapabilityMessage::new_port(),
+            CapabilityMessage::new_smartcard(),
+        ];
+        let req = RdpdrPdu::CoreCapability(CoreCapability { capabilities: all, kind: CoreCapabilityKind::ServerCoreCapabilityRequest });
+        let out = r.process(&encode_vec(&req).unwrap()).unwrap();
+        assert_eq!(out.len(), 1);
+        let bytes = out[0].encode_unframed_pdu().unwrap();
+        let RdpdrPdu::CoreCapability(resp) = decode::<RdpdrPdu>(&bytes).unwrap() else { panic!("not a capability response") };
+        assert_eq!(resp.capabilities.len(), 1, "general only: {resp:?}");
+        assert!(!resp.supports_printer() && !resp.supports_port());
+        assert!(!resp.capabilities.contains(&CapabilityMessage::new_drive()) && !resp.capabilities.contains(&CapabilityMessage::new_smartcard()));
+        let out = r.process(&encode_vec(&RdpdrPdu::VersionAndIdPdu(id(VersionAndIdPduKind::ServerClientIdConfirm))).unwrap()).unwrap();
+        assert!(out.is_empty(), "no device announced at confirm");
+        let out = r.process(&encode_vec(&RdpdrPdu::UserLoggedon).unwrap()).unwrap();
+        assert!(out.is_empty(), "no device announced at logon");
     }
 
     #[test]

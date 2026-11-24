@@ -348,11 +348,24 @@ fn connect(
         rdpsnd = true;
     }
     // Clipboard / drives / smart cards, as far as the seat policy allows.
-    let joined = crate::channels::attach(&mut connector, p, &media.channels, uplink, connection);
+    let mut joined = crate::channels::attach(&mut connector, p, &media.channels, uplink, connection);
+    // And the reverse (MS-RDPEA appendix A<1>): the server talks rdpsnd only to a client
+    // that also has rdpdr (bug 4 / I).
+    crate::channels::audio_gate(&mut connector, p, rdpsnd, &mut joined);
+    let mut silent = false;
     if joined.needs_rdpsnd && !rdpsnd {
         // MS-RDPEFS: the server talks rdpdr only to a client that also has rdpsnd.
         connector.attach_static_channel(Rdpsnd::new(Box::new(PlaybackHandler::new(Arc::new(crate::channels::Silent)))));
+        silent = true;
     }
+    let kind = if rdpsnd {
+        Some("playback")
+    } else if silent {
+        Some("silent, for rdpdr")
+    } else {
+        None
+    };
+    eprintln!("seat-rdp: {}", crate::channels::offered_line(kind, &joined));
     let mut dvc = DrdynvcClient::new()
         .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new())))
         .with_dynamic_channel(RdpeiClient::new(MAX_TOUCH_CONTACTS, CsReadyFlags::empty(), RdpInputProtocolVersion::V300));
