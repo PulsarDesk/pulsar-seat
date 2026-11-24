@@ -469,6 +469,11 @@ impl PlaybackSink for BridgePlayback {
         let mut g = self.current.lock().unwrap_or_else(|p| p.into_inner());
         match self.bridge.start_playback(pcm(spec)) {
             Ok(()) => {
+                // Diagnostics (gaming PC E2E 2026-11-24, bug 4): the first wave of a format,
+                // and whether the seat's endpoint opened (the bridge's own warnings have no
+                // logger in the host).
+                let st = self.bridge.status();
+                eprintln!("seat host: {}", playback_start_line(spec, st.render_open, &st.notes));
                 *g = Some(pcm(spec));
                 true
             }
@@ -484,13 +489,25 @@ impl PlaybackSink for BridgePlayback {
     }
     fn stop(&self) {
         let mut g = self.current.lock().unwrap_or_else(|p| p.into_inner());
-        *g = None;
+        if g.take().is_some() {
+            eprintln!("seat host: playback stopped");
+        }
         self.bridge.stop_playback();
     }
     fn latency(&self) -> std::time::Duration {
         let fmt = *self.current.lock().unwrap_or_else(|p| p.into_inner());
         fmt.map_or(std::time::Duration::ZERO, |f| queued_latency(self.bridge.queued_bytes(), f))
     }
+    fn negotiated(&self, n: &seat_rdp::audio::Negotiation) {
+        eprintln!("seat host: {}", n.line());
+    }
+}
+
+/// Log line of a started playback stream (`notes` = the bridge's notes, e.g.
+/// `render_open_failed`).
+pub fn playback_start_line(spec: PcmSpec, render_open: bool, notes: &[String]) -> String {
+    let base = format!("playback started {} Hz x{} {}-bit", spec.sample_rate, spec.channels, spec.bits_per_sample);
+    if render_open { format!("{base} on the seat's endpoint") } else { format!("{base}, seat endpoint NOT open (notes {notes:?})") }
 }
 
 /// AUDIO_INPUT capture from the seat's microphone.
@@ -1108,6 +1125,62 @@ mod tests {
             redirection: Default::default(),
             frame_source: Default::default(),
         }
+    }
+
+    /// In-memory PCM backend: every endpoint id but `bad` opens.
+    struct FakePcm;
+    struct Live;
+    impl seat_media::bridge::StreamHandle for Live {
+        fn stop(self: Box<Self>) {}
+    }
+    impl seat_media::bridge::PcmBackend for FakePcm {
+        fn open_render(&self, id: &str, _: PcmFormat, _: Arc<seat_media::bridge::PcmRing>) -> BackendResult<Box<dyn seat_media::bridge::StreamHandle>> {
+            if id == "bad" {
+                return Err(seat_core::backend::BackendError::new(seat_core::backend::ErrorKind::Os, "x", "y"));
+            }
+            Ok(Box::new(Live))
+        }
+        fn open_capture(&self, _: &str, _: PcmFormat, _: seat_media::bridge::CaptureSink) -> BackendResult<Box<dyn seat_media::bridge::StreamHandle>> {
+            Ok(Box::new(Live))
+        }
+    }
+
+    fn bridge_on(render: Option<&str>) -> Arc<AudioBridge> {
+        let route = AudioRoute { render_endpoint_id: render.map(Into::into), ..AudioRoute::default() };
+        Arc::new(AudioBridge::new(Arc::new(FakePcm), route))
+    }
+
+    /// G7 / bug 4: once a wave reaches the sink, the bridge has a playback stream, so the
+    /// host's report carries jitter-buffer counters (`audio_playback` in status).
+    #[test]
+    fn a_wave_into_the_bridge_gives_playback_stats() {
+        let b = bridge_on(Some("{0.0.0.00000000}.{seat}"));
+        let sink = BridgePlayback::new(b.clone());
+        assert!(b.playback_stats().is_none(), "nothing before the server starts audio");
+        let spec = seat_rdp::audio::playback_specs()[1];
+        assert!(sink.start(spec));
+        sink.play(&[0u8; 16]);
+        assert!(b.playback_stats().is_some());
+        assert!(b.status().render_open);
+        assert!(playback_stats_moved(b.playback_stats().as_ref(), None), "the stream appearing is reported");
+        sink.stop();
+        assert!(b.playback_stats().is_none());
+    }
+
+    #[test]
+    fn playback_start_line_names_a_closed_endpoint() {
+        let spec = seat_rdp::audio::playback_specs()[0];
+        assert_eq!(playback_start_line(spec, true, &[]), "playback started 48000 Hz x2 16-bit on the seat's endpoint");
+        assert_eq!(
+            playback_start_line(spec, false, &["render_open_failed".to_string()]),
+            "playback started 48000 Hz x2 16-bit, seat endpoint NOT open (notes [\"render_open_failed\"])"
+        );
+        // A refused endpoint still starts (the format is fine) but is reported.
+        let b = bridge_on(Some("bad"));
+        let sink = BridgePlayback::new(b.clone());
+        assert!(sink.start(spec));
+        assert!(!b.status().render_open);
+        assert_eq!(b.status().notes, vec!["render_open_failed".to_string()]);
     }
 
     #[test]

@@ -12,7 +12,9 @@
 //! - [`dispatch_acl`]: `--desktop-acl grant|revoke --sid S [--clipboard]` adds / removes the
 //!   window station and desktop ACEs of a host's logon SID in this session (`--clipboard`,
 //!   grant only: the window-station ACE also allows the clipboard). The service runs it
-//!   as SYSTEM (no privileges) in the target session and waits for its exit code.
+//!   as SYSTEM (no privileges) in the target session and waits for its exit code. A kiosk
+//!   grant (`--kiosk`) also opens the session's `Local\` namespace to the logon SID, and
+//!   every revoke clears that ACE ([`named_objects_step`], bug 6 of the gaming PC E2E).
 
 #[cfg(windows)]
 use seat_session::host_account::{ACL_EXIT_FAILED, ACL_EXIT_OK, EXIT_ACCESS_DENIED, EXIT_CONTAINMENT_REFUSED, LOCAL_SYSTEM_SID};
@@ -30,18 +32,46 @@ pub fn dispatch_acl(args: &[String]) -> Option<i32> {
     };
     #[cfg(windows)]
     {
-        Some(match seat_session::win::host_account::edit_session_desktop_masks(&req.sid, req.op, req.masks().0, req.masks().1) {
-            Ok(()) => ACL_EXIT_OK,
-            Err(e) => {
-                eprintln!("pulsar-seat-host --desktop-acl {:?} {}: {e}", req.op, req.sid);
-                ACL_EXIT_FAILED
+        use seat_session::host_account::AclOp;
+        use seat_session::win::host_account::{edit_session_desktop_masks, edit_session_named_objects};
+        if let Err(e) = edit_session_desktop_masks(&req.sid, req.op, req.masks().0, req.masks().1) {
+            eprintln!("pulsar-seat-host --desktop-acl {:?} {}: {e}", req.op, req.sid);
+            return Some(ACL_EXIT_FAILED);
+        }
+        // Kiosk seat users also need the session's `Local\` namespace (bug 6, gaming PC E2E
+        // 2026-11-24). A grant that fails fails the helper (the service then falls back to
+        // the console user and revokes); a revoke always tries, for every SID, and never
+        // fails the helper: the ACE dies with the session and a logon SID is never reused.
+        match (named_objects_step(req.op, req.kiosk), req.op) {
+            (false, _) => {}
+            (true, AclOp::Grant) => {
+                if let Err(e) = edit_session_named_objects(&req.sid, AclOp::Grant) {
+                    eprintln!("pulsar-seat-host --desktop-acl grant {}: named objects: {e}", req.sid);
+                    return Some(ACL_EXIT_FAILED);
+                }
             }
-        })
+            (true, AclOp::Revoke) => {
+                if let Err(e) = edit_session_named_objects(&req.sid, AclOp::Revoke) {
+                    eprintln!("pulsar-seat-host --desktop-acl revoke {}: named objects (left to the session's end): {e}", req.sid);
+                }
+            }
+        }
+        Some(ACL_EXIT_OK)
     }
     #[cfg(not(windows))]
     {
         drop(req);
         Some(ACL_EXIT_USAGE)
+    }
+}
+
+/// Whether the helper also edits the session's named-object directory: a kiosk grant
+/// (`--kiosk`), and every revoke (it carries no `--kiosk`, so it cannot tell a kiosk logon
+/// from a host's; removing an absent ACE changes nothing).
+pub fn named_objects_step(op: seat_session::host_account::AclOp, kiosk: bool) -> bool {
+    match op {
+        seat_session::host_account::AclOp::Grant => kiosk,
+        seat_session::host_account::AclOp::Revoke => true,
     }
 }
 
@@ -115,6 +145,24 @@ mod tests {
         assert_eq!(dispatch_acl(&a(&["h", "--seat", "2", "--token-stdin"])), None);
         assert_eq!(dispatch_acl(&a(&["h", "--desktop-acl", "grant"])), Some(ACL_EXIT_USAGE));
         assert_eq!(dispatch_acl(&a(&["h", "--desktop-acl", "grant", "--sid", "S-1-5;x"])), Some(ACL_EXIT_USAGE));
+    }
+
+    /// Bug 6: only a kiosk grant adds the named-object ACE (host grants keep their narrow
+    /// desktop rights); every revoke clears it.
+    #[test]
+    fn named_object_step_for_kiosk_grants_and_every_revoke() {
+        use seat_session::host_account::{AclOp, kiosk_desktop_acl_args, parse_desktop_acl_args};
+        let sid = "S-1-5-5-0-4242";
+        let mut grant = vec!["h".to_string()];
+        grant.extend(kiosk_desktop_acl_args(AclOp::Grant, sid).unwrap());
+        let g = parse_desktop_acl_args(&grant).unwrap().unwrap();
+        assert!(g.kiosk && named_objects_step(g.op, g.kiosk));
+        let host = parse_desktop_acl_args(&a(&["h", "--desktop-acl", "grant", "--sid", sid, "--clipboard"])).unwrap().unwrap();
+        assert!(!named_objects_step(host.op, host.kiosk));
+        let mut revoke = vec!["h".to_string()];
+        revoke.extend(kiosk_desktop_acl_args(AclOp::Revoke, sid).unwrap());
+        let r = parse_desktop_acl_args(&revoke).unwrap().unwrap();
+        assert!(!r.kiosk && named_objects_step(r.op, r.kiosk));
     }
 
     #[test]
