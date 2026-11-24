@@ -43,3 +43,15 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   `pimoukbd`; if not, journal and remove `pimoukbd` from the four devices' UpperFilters for the
   test and restore afterwards.
 - Remote seats: decide whether the remote engine may use an External wrapper (own ack).
+
+## Task B (2026-11-24): release installers + ARM64 VM regression
+
+- Goal: build x64 + ARM64 MSI and setup.exe from main HEAD (`build-installer.ps1 -Arch <a>
+  -UpstreamStreamServer`, unsigned, `CARGO_TARGET_DIR=target\wf`), record SHA-256; VM
+  regression on `PulsarSeatTest-arm64` (tools/vm) against the VM round 2 PASS list in
+  docs/agents/status.md (2026-11-17): setup.exe install, service up, manager screenshot,
+  compat tweaks apply + revert, single-instance isolation, deny-logon, per-seat env, WRDS
+  register / unregister, uninstall leaves nothing. End: restore `clean-logged-on`, VM Off.
+- Evidence: `target/e2e/gaming-pc-2026-11-24/vm/`. Previous dist moved to
+  `target/installer/dist-prev-4f325ec/`.
+- Status: B1 build starting (HEAD 076451f).
