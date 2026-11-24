@@ -4090,6 +4090,28 @@ fn console_guard_host_is_undone_when_the_topology_changes() {
     assert!(h.p.console_guard.lock().unwrap().contains(&(GuardOwner::Host, None)), "{:?}", h.p.console_guard.lock().unwrap());
 }
 
+/// e2e gaming PC 2026-11-24, bug 11: `dedicated_host` with the host console preset wanted
+/// but the owner's own account at the console (preset refused, `other_autologon`): the host
+/// guard writes nothing for that account; Pulsar's console account gets it once signed in.
+#[test]
+fn console_guard_host_skips_a_personal_console_user_under_the_preset() {
+    use crate::platform::GuardOwner;
+    let mut c = two_seat_config();
+    c.settings.backends.host_topology = seat_core::backend::session::HostTopology::DedicatedHost;
+    c.settings.backends.host_autologon = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    h.p.sign_in(1, "ahmet");
+    h.s.tick();
+    let host_writes = |h: &Harness| {
+        h.p.console_guard.lock().unwrap().iter().filter(|(o, sid)| *o == GuardOwner::Host && sid.is_some()).cloned().collect::<Vec<_>>()
+    };
+    assert!(host_writes(&h).is_empty(), "{:?}", h.p.console_guard.lock().unwrap());
+    h.p.sign_in(1, seat_session::console_account::CONSOLE_ACCOUNT_NAME);
+    h.s.tick();
+    assert_eq!(host_writes(&h).last().map(|(_, s)| s.clone().unwrap()), Some(format!("S-1-5-21-9-{}", seat_session::console_account::CONSOLE_ACCOUNT_NAME)));
+}
+
 /// Seat 1's opt-in guard: engaged while seat 2 runs, released when it stops and on service
 /// stop; never without the opt-in.
 #[test]

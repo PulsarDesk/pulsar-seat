@@ -103,8 +103,9 @@ Elevated: `install [--exe PATH]`, `uninstall`, `enable`, `disable`, `reset`, `re
   to 256 characters. CLI output is localized (English default, Turkish locale; `cli::copy`).
 - Console lock guard (OSMS parity G4, `src/console_guard.rs`): decides whose per-user
   `DisableLockWorkstation` / `ScreenSaveActive` values `seat_compat::console_guard` writes
-  (the `dedicated_host` console account; seat 1's user only with the opt-in, while other
-  seats run), syncs `NoClose` for seats with `no_power_menu` and adds the `host_sleep_off` /
+  (the `dedicated_host` console account, only when it is the host account: with the host
+  console preset wanted only `PulsarSeatConsole`, otherwise never a seat's account; seat
+  1's user only with the opt-in, while other seats run), syncs `NoClose` for seats with `no_power_menu` and adds the `host_sleep_off` /
   `console_lock` checks to `Preflight`. All writes are compat-journal entries, undone on
   off, disable, the first sync after a crash (seat 1) and uninstall. Details in
   docs/agents/architecture.md "Console lock guard".
