@@ -27,7 +27,7 @@ one first.
 
 | Module | Contents |
 | --- | --- |
-| `coexist` | Spec 90 §8.1 signals 1–18 behind `SystemProbe`, `evaluate` / `evaluate_with_own` (our own journal targets are not residue), modes `Normal` / `Passive{ReferenceRunning\|ReferenceInstalled}` / `ResidueOnly`, opt-in `RepairItem`s from the §8.3 Windows-defaults table (TermService items last, "report only" rows never repaired), upstream Sunshine port block. |
+| `coexist` | Spec 90 §8.1 signals 1–18 behind `SystemProbe`, `evaluate` / `evaluate_with_own` (our own journal targets are not residue), modes `Normal` / `Alongside{reference_running}` / `ResidueOnly` (since 2026-11-24, bug 10: the reference product being installed blocks nothing; a running reference service adds the note `duo_service_running`; no repair while it is installed), opt-in `RepairItem`s from the §8.3 Windows-defaults table (TermService items last, "report only" rows never repaired), upstream Sunshine port block. |
 | `drivers` | `DriverPackage` manifest (+ validation), `verify_sha256`, `fetch_verified`, `pnputil_add/delete/enum` argv, `parse_enum_drivers` (English labels, shape fallback for localized Windows), `detect` (UpgradeCode, hardware id, published INF). |
 | `journal` | Record shape of contract §0.3 (`ValueState` adds `key` and `qword`), `FileJournal` (append + `sync_data` per record), `journaled(intent → change → done)`, `replay_all` / `replay_dir` (newest first; intent without done compares live state), `compact`, `retire`. |
 | `applier` | Generic `RestoreApplier` over the system traits: registry (values and keys we created), files (delete / backup copy / small content), firewall rules, our drivers (`inf:<name>`, `device-hwid:<id>`), accounts (only with remove-user-data). Other kinds are left to package hooks. |

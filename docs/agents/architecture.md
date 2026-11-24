@@ -132,8 +132,11 @@ Console session (seat 1, or a dedicated host session)
       uninstall. **Accepted risk:** a process holding that ACE could log the console user
       off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown / restart still need
       `SeShutdownPrivilege`, which the hardened token does not have. **Seat hosts
-      (2026-11-24, gaming PC E2E bug 7; pending the maintainer's OK, untested on
-      hardware):** until then seat hosts did not get it, and on the gaming PC every seat
+      (maintainer decision 2026-11-24, gaming PC E2E bug 7, commit a1f9ce5 kept):**
+      reason: without it USER32 initialisation of the host fails (0xc0000142), proven on
+      the gaming PC in round 3 (every seat host ran as its account, mask 0x120173). Risk
+      note (HYPOTHESIS): the host can log off only its own logon session. Before the
+      change seat hosts did not get it, and on the gaming PC every seat
       host start as `PulsarSeatHostNN` and then as the shared account exited 0xc0000142
       while the console listener ran under the same shared account with it; the host only
       ran on the third launch, as SYSTEM at Low integrity (about 7 s lost per seat start,
@@ -2697,7 +2700,9 @@ console user except a seat's configured account. Anybody else gets nothing writt
 earlier host entry is undone (gaming PC 2026-11-24, bug 11: preset refused for
 `other_autologon`, the owner's own hive got `DisableLockWorkstation` / `ScreenSaveActive`).
 A different host account takes it over and the old one is undone; while nobody is signed
-in the last state is kept. The service syncs from the tick
+in the last state is kept. **Decided 2026-11-24 (maintainer, gaming PC E2E item N):** with
+the preset off, a human console user under `dedicated_host` keeps getting this guard; this
+is intended, not a gap. The service syncs from the tick
 (only on a change) and after every config change (`Service::update_console_guard`,
 `seat-service/src/console_guard.rs`); `Platform::sync_console_guard` /
 `sync_no_power_menu` / `sleep_off_state` are the seams (fake in `platform::mock`).
@@ -2738,7 +2743,8 @@ Rules:
 - **When.** `RemoteSettings::display_backend = pulsar_idd`, or automatic with a signed own
   driver (`OWN_DRIVER_SIGNED`, false today). Then the registration is kept in place
   (`Engine::sync_wrds` at service start, on a display setting change and when a new seat
-  account starts), else removed. Coexistence passive mode never touches it.
+  account starts), else removed. The engine's passive gate never touches it (nothing sets
+  that gate since bug 10, see "Remote kind beside the reference remote product").
 - **Path.** `remote::wrds::plan`: provider status usable (registered, provider connected,
   listening, DLL native, no recovery switch) -> provider session (`WrdsPort::connect`,
   blocks until `LoggedOn`, 90 s) -> `PulsarIdd` attach on that session (retries
@@ -3081,3 +3087,34 @@ to its keys (read: key existence, `Start`, SCM state).
 - **Not handled**: the product turned back on while seats run. The next probe refuses the RDP
   backends (running seats are not stopped by this check); HYPOTHESIS that this is enough,
   because the product's own service then fights for the same sessions anyway.
+
+## Remote kind beside the reference remote product (bug 10, 2026-11-24)
+
+Maintainer decision 2026-11-24 ("always allow"; gaming PC E2E bug 10 / item M): the remote
+reference product being installed (ARP key, spec 90 §8.1 #1) or its service existing (#2,
+`REF_SERVICE`) no longer makes the remote kind passive. Before, `seat_setup::coexist`
+returned `passive` (`reference_installed` / `reference_running`): drivers (VDD etc.) were
+skipped at `remote-setup install` / `reconcile`, and the engine refused every system change
+and seat start (`coexistence`), so `get_host_info` showed passive on the gaming PC.
+
+- **Mode** (`seat_setup::CoexistMode`): `alongside { reference_running }` replaces `passive`
+  (wire `{"mode":"alongside","reference_running":bool}`). It blocks nothing. Residue signals
+  of the installed product (its TermService wrapper etc.) are still listed as findings but
+  never offered for repair while it is installed (they are its live configuration), and they
+  do not turn the mode into `residue_only`.
+- **Note** (`CoexistReport.notes`, additive, serde default): `duo_service_running` when the
+  reference service runs. Warning only: both products may conflict over sessions, virtual
+  displays and ports. The service logs it at start (`remote/win/wiring.rs`), `remote-setup`
+  writes it into the `coexistence` step of its log, the manager shows `coexistNote.*`
+  (en / tr) on the remote tab and the host page.
+- **Setup:** `install_drivers` has no passive skip any more; the driver choice applies as on
+  any PC.
+- **Engine:** the Windows wiring sets `CoexistOutcome.passive = false` always; the gate and
+  its tests stay for a future blocking condition.
+- **Unchanged:** ASTER (the local reference product) rules ("Coexistence: reference product
+  installed but disabled"; `reference_product_present` while it is active). Nothing is
+  written into the remote reference product's keys or files. The remote engine still counts
+  only our own wrapper as active (`wrapper_active` = `On`), so on a client edition with the
+  reference product's wrapper `max_seats` stays 1 (`foreign_wrapper` host warning); using an
+  external wrapper for remote seats remains a separate decision.
+- HYPOTHESIS until a hardware run (no remote seat ran beside the reference product yet).

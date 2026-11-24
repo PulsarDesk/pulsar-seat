@@ -293,6 +293,10 @@ reconcile | uninstall | check-coexistence`; remote spec 90 (`spec/remote/`).
   install, upgrade, repair). They make the remote journal / log folders (owner SYSTEM,
   the Seat DACLs), **stop and delete a leftover `PulsarSplit` service** (pre-merge Split
   installs), install third-party drivers from `remote\drivers\` and run the reconcile hooks.
+  An installed (or running) remote reference product no longer skips the drivers
+  (maintainer decision 2026-11-24, bug 10): the `coexistence` log step only says it is
+  there and, while its service runs, `duo_service_running` (both products may conflict over
+  sessions, virtual displays and ports; not blocked).
   Log: `%ProgramData%\Pulsar Seat\logs\remote-setup.log` (Seat's `setup.log` is separate).
 - **Drivers default: none.** A fresh install without `PULSARDRIVERS` sets it to `none`, so a
   local-only PC gets no virtual display or USB/IP driver. Opt in with

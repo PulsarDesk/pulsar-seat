@@ -168,9 +168,10 @@ otherwise:
   listener's account gets `WINSTA_EXITWINDOWS` on the console window station, as its own
   ACE only, removed when the listener stops and journaled for uninstall. Accepted risk:
   that account could log the console user off. The `ERROR_PIPE_BUSY` behind it is to be
-  found and fixed. **Proposed 2026-11-24 (gaming PC E2E bug 7), needs the maintainer's
-  OK:** seat hosts get the same right on their own ACE (their account starts failed with
-  0xc0000142 without it and fell back to SYSTEM Low); same scope and accepted risk.
+  found and fixed. **Decided 2026-11-24 (maintainer; gaming PC E2E bug 7, commit a1f9ce5
+  kept):** seat hosts get the same right on their own ACE; same scope and accepted risk.
+  Reason: without it USER32 init fails (0xc0000142), proven on the gaming PC in round 3.
+  Risk note (HYPOTHESIS): the host can log off only its own logon session.
 - **Kiosk console apps in classic conhost** (VM round 3): console apps of kiosk seats open
   in conhost, not Windows Terminal, through the per-user default-terminal setting
   (`HKCU\Console\%%Startup` `DelegationConsole` / `DelegationTerminal`), only for kiosk
@@ -210,3 +211,20 @@ otherwise:
   Integrity) on in the VM if this Hyper-V ARM64 guest can run them under test-signing
   (nested virtualization exposure allowed on the VM's configuration); nothing weakened to
   force it; checkpoint `testsigning-hvci` if it works.
+
+## Decisions (2026-11-24, maintainer, after gaming PC E2E round 3)
+
+- **Bug 7, seat hosts get `WINSTA_EXITWINDOWS`:** commit a1f9ce5 is kept. Reason: without
+  it USER32 init of the seat host fails (0xc0000142), proven on the gaming PC in round 3.
+  Risk note (HYPOTHESIS): the host can log off only its own logon session. Architecture §3
+  (host account).
+- **N, seat-one console guard under `dedicated_host`:** kept. With the host console preset
+  (auto-logon) off, a human console user under `dedicated_host` still gets the guard (lock
+  and screen saver off), as `console_guard::console_owner` does today. Architecture
+  "Console lock guard and seat power policies".
+- **Bug 10 / M, remote seats beside the remote reference product: always allow.** Its
+  presence (installed or running) no longer makes the remote kind passive: drivers install
+  and remote seats start normally. A running reference service gives the non-blocking note
+  `duo_service_running`. ASTER rules unchanged; nothing is written into the reference
+  product's keys or files. Architecture "Remote kind beside the reference remote product".
+  HYPOTHESIS until a hardware run.

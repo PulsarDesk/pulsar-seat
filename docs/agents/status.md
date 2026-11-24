@@ -3526,3 +3526,21 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     attached for seat 2, Sunshine / Parsec Running + Auto, Logitech extension re-applied (R2).
   - **Physical checklist (maintainer, 5 min):** REPORT3.txt "5-MINUTE PHYSICAL CHECKLIST". Unchanged
     decisions: bug 7 (a1f9ce5), M (bug 10), N. Nothing pushed.
+- 2026-11-25 (maintainer decisions of 2026-11-24 after round 3, on main; plan.md "Decisions
+  (2026-11-24, maintainer, after gaming PC E2E round 3)").
+  - **Bug 7 decided:** a1f9ce5 kept (seat hosts get `WINSTA_EXITWINDOWS` like the console
+    listener). Reason: USER32 init fails without it (0xc0000142), proven in round 3. Risk note
+    (HYPOTHESIS): the host can log off only its own logon session. Architecture §3 updated.
+  - **N decided:** the console guard stays for a human console user under `dedicated_host`
+    with the auto-logon preset off (architecture "Console lock guard").
+  - **Bug 10 / M implemented ("always allow"):** the remote reference product being installed
+    or running no longer makes the remote kind passive. `seat_setup::coexist` mode
+    `alongside { reference_running }` replaces `passive` (blocks nothing, residue listed but
+    never repaired while it is installed), `CoexistReport.notes` gets `duo_service_running`
+    while its service runs; `remote-setup install` / `reconcile` install the chosen drivers
+    (VDD etc.) and log the note; the service wiring never sets the engine's passive gate and
+    logs a warning; manager `coexistNote.duo_service_running` (en / tr) on the remote tab and
+    the host page. ASTER rules unchanged; nothing written into the reference product's keys
+    or files. Open beside it: on a client edition the reference product's wrapper still counts
+    as foreign for remote seats (`max_seats` 1, `foreign_wrapper`); external wrapper use for
+    remote seats is a separate decision. HYPOTHESIS until a hardware run.
