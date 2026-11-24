@@ -603,7 +603,10 @@ fn device_checks(config: &Config, inv: &[Device], out: &mut Vec<Issue>) {
     let has = |seat: SeatNumber, kind: DeviceKind| {
         eff.iter().any(|e| e.kind == kind && e.mask.contains(seat) && present.contains_key(&e.key))
     };
-    let any_monitor = inv.iter().any(|d| d.kind == DeviceKind::Monitor);
+    // Only a monitor that is there now counts: saved assignments of monitors the current
+    // display backend does not list (fast_user_switch lists none) stay in the inventory as
+    // non-present entries and must not make every config fail with seat_one_no_display.
+    let any_monitor = inv.iter().any(|d| d.kind == DeviceKind::Monitor && d.present);
     for s in config.seats.iter().filter(|s| s.is_local()) {
         let seat = s.number;
         if !has(seat, DeviceKind::Monitor) {
@@ -910,6 +913,20 @@ mod tests {
         assert!(cs.contains(&IssueCode::ChildOfOtherSeatHub));
         assert!(cs.contains(&IssueCode::SeatWithoutKeyboard));
         assert!(has_conflicts(&i));
+    }
+
+    #[test]
+    fn seat_one_display_check_ignores_absent_monitors() {
+        // Saved monitor assignments stay in the inventory as non-present entries when the
+        // display backend lists no monitor (fast_user_switch). They must not block a config.
+        let mut c = Config::default();
+        c.seats.push(SeatConfig::new(s(2)));
+        c.devices.push(assign("mon;1", DeviceKind::Monitor, s(2).mask()));
+        let mut gone = dev("mon;1", DeviceKind::Monitor);
+        gone.present = false;
+        assert!(!codes(&validate(&c, Some(&[gone.clone()]))).contains(&IssueCode::SeatOneNoDisplay));
+        gone.present = true;
+        assert!(codes(&validate(&c, Some(&[gone]))).contains(&IssueCode::SeatOneNoDisplay));
     }
 
     #[test]
