@@ -3346,3 +3346,81 @@ once it lands). In the `--split-seat` host (`pulsar-host`, contract
     eight worktrees (their `target\wf-G*` build dirs) freed it.
   - Worktrees `wf_1b078846-d81-1..8` and branches `osms-g1..g8` removed after the merge.
     Nothing pushed.
+- 2026-11-24 (e2e prep round: gaming PC probe, test installers, ARM64 VM regression, on
+  main). Merged from `docs/progress/e2e-gaming-pc.md` (Tasks A and B; Task G still owns its
+  own section there). Evidence: `target/e2e/gaming-pc-2026-11-24/` (local).
+  - **Code (Task A):** 2afc181 detect-only **external wrapper mode** for `termsrv_wrapper`
+    (`TermwrapState::External { wrapper, blocked }`, architecture §1.3, §2, §10.4): an
+    operator-installed Duo TermWrap at the expanded fixed path `%ProgramFiles%\Duo\TermWrap.dll`
+    is recognised; any other path stays a foreign wrapper. `blocked` names the first failing
+    check (reference product present, not a client edition, wrong arch, signature, folder ACL,
+    the two concurrent-session values). Never a ServiceDll / value / journal write or a
+    TermService restart for it; enable answers `external_wrapper`, disable `foreign_wrapper`.
+    Seats run on it with the experimental ack (`wrapper_managed_externally`,
+    `termsrv_wrapper_external`); Duo installed but inactive reports
+    `external_wrapper_inactive`. Remote seats unchanged (own wrapper only; separate decision).
+    223960c manager state `external` + en / tr copy. 47d3266 docs. c6bb058 VM README
+    (on-battery SYSTEM tasks). d87eead installer README (fast test build).
+  - **Gaming PC (Test PC, x64) e2e matrix:**
+
+    | Item | Result |
+    | --- | --- |
+    | Read-only probe: Duo TermWrap 1.6.0.0, signed, x64, admin-only ACL; both concurrent-session values 1; termsrv.dll 10.0.26100.9818; DuoService stopped | DONE (no change, no reboot) |
+    | Read-only probe: Pluralinput = `pimoukbd.sys` 0.15.17104.3, per-device UpperFilter on 4 kbdhid / mouhid nodes, no class filter, no user-mode part | DONE |
+    | `get_termwrap_status` = `external`, `blocked: null` | NOT RUN: blocked by `reference_product_present` (ASTER service keys exist) |
+    | MSI / setup.exe install | NOT RUN: same blocker |
+    | Local seats on the external wrapper, raw input through `pimoukbd`, `winusb_capture` swap + restore (Unifying MI_00 back to `unifhid.inf` oem128), DualSense, stream | NOT RUN |
+
+  - **ARM64 VM regression** (`PulsarSeatTest-arm64`, ARM64 test build below, against the VM
+    round 2 PASS list of 2026-11-17; evidence `vm/`, `vm/shots/`):
+
+    | Item | Result |
+    | --- | --- |
+    | `setup.exe /quiet` install (service Running / Auto, pipe up, binaries 0xAA64) | PASS |
+    | Manager opens (unelevated admin banner; elevated seat card) | PASS |
+    | Compat tweaks apply (only while the product is enabled, by design) | PASS |
+    | Compat tweaks revert (all off, product disable, uninstall) | PASS |
+    | Single-instance isolation (console first / second 183; seat 2 first, shim via launcher) | PASS |
+    | Per-seat env (`PSEAT_TEST_VAR=seat2-value`, gone after disable) | PASS |
+    | Deny-logon on a remote seat (4625 `0xc000015b`, then 4624 type 3; removed on disable / uninstall) | PASS |
+    | WRDS register / unregister without a TermService restart, RDP-Tcp untouched | PASS |
+    | Uninstall `REMOVEUSERDATA=1`, every option on, leaves nothing (deny back to `Guest`) | PASS |
+
+    No regression, no code change. VM restored to `clean-logged-on`, Off. Still not testable
+    in the VM (unchanged): DPI warning, Steam per seat, RDP drive redirection, Hyper-V seats,
+    real TermService restart.
+  - **HYPOTHESIS items now PASS:** none. No hardware run happened this round; the VM items
+    above were already PASS in VM round 2 and stay PASS on the new build. Still HYPOTHESIS:
+    the external wrapper on the real Duo install, `pimoukbd` pass-through without a client,
+    and every hardware item of the 2026-11-17 ship and 2026-11-20 OSMS entries.
+  - **Test installers** (TEST BUILDS: unsigned, `release: false`, `dirty: true` only from the
+    uncommitted progress note; `CARGO_PROFILE_RELEASE_LTO=false`,
+    `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`, `-UpstreamStreamServer`, HEAD d87eead,
+    `target/installer/dist`):
+
+    | File | SHA-256 |
+    | --- | --- |
+    | `PulsarSeat_0.1.0_x64.msi` | `e09015ef62c0877b0146ead3cae6ae40633585cf9dafd9148022b5a5ce948d81` |
+    | `PulsarSeat_0.1.0_x64_setup.exe` | `40a71752e44f9e8b2e7b04b8fe68db683788a7f6587e848d7e8e4d506296673f` |
+    | x64 service binary | `67c7558aa102eaf4eea0bf82c4f45b296cca94262b8dc7a855f8b768c215f8ba` |
+    | `PulsarSeat_0.1.0_arm64.msi` | `673a79bf239f002ee01d2b374c2fd67569b17c77ab09a227985636f0eb910171` |
+    | `PulsarSeat_0.1.0_arm64_setup.exe` (0xAA64) | `8da56332e665f528057980650e989f3ba6126b3ea48809b017831f59db199e7c` |
+    | ARM64 service binary | `75b45948f56077ed278b23647658cc9507a95b765b8d90b8dad977225ff03662` |
+
+  - **Remaining physical checks (maintainer):**
+    - Remove (or, after Task G lands, fully disable) ASTER's `MUTESV_SERVICE` /
+      `MUTENX_SERVICE`; until then every RDP backend and the MSI stop with
+      `reference_product_present`.
+    - Then install the x64 test MSI and check `get_termwrap_status` = `external`,
+      `blocked: null`. Keep DuoService and MUTESV stopped.
+    - Confirm raw input arrives through `pimoukbd` on the four devices; if not, journal and
+      remove it from their UpperFilters for the test and put it back afterwards.
+    - `winusb_capture` swap and restore on the Unifying receiver (MI_00 back to
+      `unifhid.inf`); the I2C touchpad stays on raw input.
+    - HidHide: no hiding active before the DualSense test. No UsbDk client during the test.
+      SunshineService may need stopping for the stream test.
+    - Decide whether remote seats may use an external wrapper (own ack).
+  - **Gates (HEAD, CARGO_TARGET_DIR=target\wf-e2e):** `cargo clippy --workspace --all-targets -- -D warnings` clean;
+    `cargo test --workspace` 2102 passed / 6 ignored / 0 failed (logs `final-clippy.log`,
+    `final-cargo-test.log`). Manager unchanged since 223960c (gated there: `bun run check` 0
+    errors, `bun run test` 376). Nothing pushed.
