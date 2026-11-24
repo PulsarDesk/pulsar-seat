@@ -23,6 +23,12 @@ types named here are defined (and doc-commented) in `crates/seat-core` and
    run time, and the module writes two registry values Microsoft does not document
    (`EnableConcurrentSessions`, `AllowMultipleTSSessions`). Pulsar ships no wrapper and no
    patch (plan.md decisions; spec 30 §6 needs the matching analyst note).
+   *External wrapper mode (detect-only, 2026-11-24):* when another installed product has
+   already pointed TermService at its own wrapper (`%ProgramFiles%\Duo\TermWrap.dll`,
+   spec/remote 30 §2.4), the same module only *reads* ServiceDll, the DLL's version /
+   Authenticode / PE machine / ACL and the two rows above, and the `termsrv_wrapper`
+   backend uses that wrapper for seats. It never writes ServiceDll or the two rows for it,
+   never restarts TermService for it and never restores it (§10.4).
 4. **One abstraction per undecided question**: session, display, input, audio and device
    gating are swappable traits; the manager greys out what a backend cannot do.
 5. **ARM64 and x64 natively**, same code, same layout.
@@ -214,7 +220,7 @@ Defined in `seat-core::backend`; all `Send + Sync`, synchronous, errors as
 | `SessionBackendKind` | Where | Default? | Seat sessions |
 | --- | --- | --- | --- |
 | `rds_loopback` | Windows Server + RD Session Host (x64 in practice) | **yes** | RDP loopback to `127.0.0.2`, client name `PSEAT-NN` |
-| `termsrv_wrapper` | client SKUs with an operator-installed TermService wrapper | **off; experimental**, needs `experimental_ack == EXPERIMENTAL_WARNING_VERSION` | same as above |
+| `termsrv_wrapper` | client SKUs with an operator-installed TermService wrapper (enabled by us, or another product's already active wrapper in detect-only external mode, §10.4) | **off; experimental**, needs `experimental_ack == EXPERIMENTAL_WARNING_VERSION` | same as above |
 | `fast_user_switch` | everywhere, ARM64 too | runtime fallback | one active seat at a time |
 | `desktops` | client SKUs, ARM64 | opt-in | kiosk apps on the seat's monitors in the console session (per-seat Windows users since 2026-11-17, one session) |
 
@@ -1900,6 +1906,30 @@ or the experimental `termsrv_wrapper` kind (off by default;
   feature `experimental-client-sku` (`TermwrapPolicy::enable_built_in`, a default of
   `seat-service`), an **x64 host** (ARM64 is refused, `wrapper_arch`) and the warning ack
   (`EXPERIMENTAL_WARNING_VERSION` = 2 for both kinds; Split's version-1 text is gone).
+- **External wrapper mode** (detect-only, 2026-11-24). `WrapperKind::External { product }`
+  = a wrapper another installed product set up itself; today only
+  `%ProgramFiles%\Duo\TermWrap.dll` (discovery location; the raw ServiceDll is expanded,
+  then must equal that location, so `D:\Duo\TermWrap.dll`, UNC, `..` and unknown `%VAR%`
+  stay `ForeignActive`). When ServiceDll points there, `status()` reports
+  `TermwrapState::External { wrapper, blocked }` instead of `ForeignActive`. `blocked` is
+  the first failing read-only check: host (`reference_product_present`, `not_client_sku`,
+  `edition_unsupported`), x64 host + PE machine (`wrapper_arch`), Authenticode
+  (`wrapper_unsigned`; `allow_unsigned` policy as for our own mode), ACL of the DLL and
+  every ancestor (`wrapper_insecure_acl`), `EnableConcurrentSessions` and
+  `AllowMultipleTSSessions` both already `1` (`concurrent_sessions_off`). No `termsrv.dll`
+  build gate (the product has no public support table; a broken wrapper shows up as seats
+  without a session). `TermwrapState::wrapper_usable()` = `On` or `External { blocked: None }`.
+  Writes: none. `enable` refuses (`external_wrapper`, also for the external DLL as the
+  target while ServiceDll is stock), `disable` answers `foreign_wrapper`, `boot_check` and
+  `restore_all` leave it alone, nothing is journaled. Backend `termsrv_wrapper`: probe =
+  RDP readiness with note `wrapper_managed_externally` (or `unavailable{<blocked code>}`);
+  `prepare_host` (ack still required) claims only the documented RDP rows (`Claim::Local`)
+  and adds note `termsrv_wrapper_external`; `restore_host` releases those rows only. An
+  installed but inactive external wrapper with no other candidate gives
+  `unavailable{external_wrapper_inactive}` and is never turned on. Remote seats still look
+  at `On` only (`seat-service` remote engine `wrapper_active`): their ack is stored apart,
+  so using an external wrapper there is a separate decision. Manager: state `external`,
+  reason codes in `en.ts` / `tr.ts`.
 
 The `pulsar-host` pipe contract
 ([../split/agents/pulsar-host-backend.md](../split/agents/pulsar-host-backend.md)) is

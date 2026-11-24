@@ -104,6 +104,19 @@ SKU, PE machine, Authenticode, local fixed path, allow-list ACLs; enable/disable
 journal (`journal\termwrap.jsonl`) and our state file `run\termwrap-state.json`; TermService is
 restarted through the SCM. Needs `experimental_ack == EXPERIMENTAL_WARNING_VERSION`.
 
+**External wrapper mode (detect-only, 2026-11-24).** If another installed product already
+pointed ServiceDll at its own wrapper at a fixed location (`%ProgramFiles%\Duo\TermWrap.dll`,
+`support::WrapperKind::External`), `status()` reports `TermwrapState::External { wrapper,
+blocked }`: read-only checks (client SKU, reference product absent, x64 host + PE machine,
+Authenticode, ACLs, `EnableConcurrentSessions` and `AllowMultipleTSSessions` already `1`),
+no `termsrv.dll` build gate, no write of any kind (no ServiceDll, rows, journal or
+TermService restart; `enable` refuses with `external_wrapper`). The `termsrv_wrapper`
+backend runs seats on it while `blocked` is `None` and the ack is given; `prepare_host` /
+`restore_host` touch only the documented RDP rows. Tests: `termwrap::engine_tests::external`,
+`backends::backend_tests::termsrv_wrapper_*external*`. **Untested on hardware** (the real
+`WinHostFacts::expand`, the Authenticode / ACL verdict on the test PC's DLL, seats on that
+wrapper).
+
 ### Second listener for passwordless seats (`loopback_listener`, `rds_loopback` only)
 
 RDP-Tcp keeps NLA on. Seats without a stored password (logon screen) connect to a second
