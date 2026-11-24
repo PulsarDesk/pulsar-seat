@@ -25,7 +25,7 @@ remote). Since merge step 10 this file holds the union of Seat's rules and Pulsa
 - **Never push a behaviour change the maintainer hasn't tested.** Docs and tests may be
   pushed. Push only on the maintainer's go.
 - All work lands on `main`; short branches only, merged the same day.
-- Tests stay green: `cargo test --workspace`, clippy with zero warnings (aarch64 and
+- Tests stay green: `cargo test --workspace` (or `cargo nextest run --workspace`), clippy with zero warnings (aarch64 and
   x86_64), `bun run test` / `check` / `build` in `apps/manager`, the `shim/` workspace,
   `bun test installer/scripts`. Test counts only go up, except tests deleted on purpose
   (say which and why).
