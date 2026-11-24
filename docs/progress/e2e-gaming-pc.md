@@ -370,3 +370,23 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
     the preset off, a console user under `dedicated_host` still gets the guard.
   - Not addressed in round 2 prep: bug 10 (remote kind passive beside Duo); the remote seat
     step stays BLOCKED while Duo is installed.
+
+## Round 2 run (2026-11-24): gaming PC, x64 test build of 293b049
+
+- Evidence: `target/e2e/gaming-pc-round2/` (`REPORT2.txt` = matrix, remaining bugs A-N, PC state,
+  restore notes, physical checklist; `changes.jsonl` = journal; `before/`, `after/`, `logs/`, `shots/`).
+- Fixed on hardware: bug 5 (capture journals the vendor INF + extensions, emergency restore exact and
+  held, graceful reboot releases exactly), bug 7 (no 0xc0000142, mask 0x120173), bug 8, bug 11,
+  bug 12 (mostly). Bug 9 attach works; detach-back does not (console plan names every monitor).
+- Still failing: bug 2 (existing-profile logons often stay at_logon, no agent), bug 3 (RDP image black
+  in every graphics mode; the session's Microsoft Remote Display Adapter crashes in WUDFHost at each
+  error_info 17), bug 4 (no rdpdr channel; HYPOTHESIS that the server then never starts audio), bug 6 on
+  seat 3 (shell restart loop), bug 1 partly (no endless loop; cross-seat logoff attempt, slow relaunch).
+- NEW blocker: per-seat host accounts (BATCH logon) cannot query TermService (DACL: SY, BA, IU, SU), so
+  `service_pid` says "not running" and every seat fails `rdp_peer_untrusted`. The PC runs with
+  `HostTokenCompat=2` (journaled) until this is fixed.
+- PC left on purpose: product enabled, seats 2 (DP + Logitech) and 3 (HDMI) configured, stopped,
+  session_capture, winusb_capture; not restored (maintainer's physical checklist first).
+- Next: fix bug A (service hands the TermService PID to the host), bug B (log every SessionChange with
+  the slot's session id), bug I (join rdpdr with audio), bug H (detach when no seat names the target),
+  bug C (claim connecting sessions); then the Restore phase from `changes.jsonl`.
