@@ -51,7 +51,7 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, QueryFullProcessImageNameW, SleepEx, TerminateProcess,
     WaitForSingleObject,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CLEANBOOT};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CLEANBOOT, SM_SHUTTINGDOWN};
 use winreg::RegKey;
 use windows_sys::Win32::System::Services::{
     NotifyServiceStatusChangeW, SERVICE_NOTIFY_2W, SERVICE_NOTIFY_RUNNING, SERVICE_NOTIFY_STATUS_CHANGE,
@@ -1262,6 +1262,11 @@ impl Platform for WinPlatform {
     fn windows_safe_mode(&self) -> bool {
         // SAFETY: trivially safe.
         unsafe { GetSystemMetrics(SM_CLEANBOOT) != 0 }
+    }
+
+    fn system_shutting_down(&self) -> bool {
+        // SAFETY: trivially safe.
+        unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
     }
 
     /// The compat package's probe (spec 90 §3): the same check ids the installer's

@@ -1361,6 +1361,9 @@ impl Service {
             st.seats.values().filter(|s| Self::managed(&st, s.seat) && s.is_active()).map(|s| s.seat).collect()
         };
         let total = seats.len();
+        // When the stop began (round 3 of the gaming PC E2E compares it with the host exits
+        // Windows causes before its pre-shutdown notice, bug K).
+        log::info(&format!("service stop requested: {total} seat(s) to stop"));
         progress(0, total);
         for (i, seat) in seats.into_iter().enumerate() {
             self.stop_seat_now(seat, true);

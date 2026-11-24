@@ -354,7 +354,14 @@ impl Running {
     /// (raw `WTS_*` reason, Pulsar Split's `SessionChange::from_raw`).
     pub fn on_session_change(&self, change: Option<crate::seats::SessionChange>, raw_reason: u32, session_id: u32) {
         if let Some(c) = change {
+            // One worker handles the notifications in order: a slow one delays every later
+            // one (gaming PC E2E round 2, bug B: a logon was handled ~17 s late).
+            let t0 = std::time::Instant::now();
             self.service.on_session_change(c, session_id);
+            let took = t0.elapsed();
+            if took >= std::time::Duration::from_secs(2) {
+                log::warn(&format!("session change {c:?} for session {session_id} took {} ms to handle", took.as_millis()));
+            }
         }
         if let Some(e) = &self.engine {
             e.on_session_change(seat_session::remote::manager::SessionChange::from_raw(raw_reason, session_id));

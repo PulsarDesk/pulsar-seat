@@ -299,6 +299,12 @@ pub trait Platform: Send + Sync {
     /// Unix seconds of the current boot.
     fn boot_unix_s(&self) -> u64;
     fn windows_safe_mode(&self) -> bool;
+    /// Windows is shutting down or restarting (`SM_SHUTTINGDOWN`). HYPOTHESIS: it already
+    /// reads true from the service while Windows logs the sessions off, before the SCM's
+    /// pre-shutdown notice (gaming PC E2E round 2, bug K). Default: no.
+    fn system_shutting_down(&self) -> bool {
+        false
+    }
     fn preflight(&self) -> Vec<Check>;
     fn driver_status(&self, driver: DriverId) -> DriverStatus;
     /// Baseline inventory from CfgMgr / CCD (used per kind when no backend covers it).
@@ -517,6 +523,8 @@ pub mod mock {
         pub devices: Mutex<Vec<Device>>,
         pub devices_changed: AtomicBool,
         pub safe_mode: AtomicBool,
+        /// `system_shutting_down` answer.
+        pub shutting_down: AtomicBool,
         pub build: AtomicU32,
         pub rebooted: AtomicBool,
         /// Last published reader rules.
@@ -819,6 +827,9 @@ pub mod mock {
         }
         fn windows_safe_mode(&self) -> bool {
             self.safe_mode.load(Ordering::SeqCst)
+        }
+        fn system_shutting_down(&self) -> bool {
+            self.shutting_down.load(Ordering::SeqCst)
         }
         fn preflight(&self) -> Vec<Check> {
             Vec::new()
