@@ -27,10 +27,13 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   (manager state `external` + en/tr copy). Manager check 0 errors, 376 tests.
 - Docs: architecture §1.3 + §2 table + §10.4, seat-session README, journal, local README.
 
+- Gates: `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test
+  --workspace` 2102 passed, 0 failed (`target/e2e/gaming-pc-2026-11-24/cargo-test.log`);
+  manager `bun run check` 0 errors, `bun run test` 376 passed. Docs commit 47d3266.
+
 ## In progress
 
-- Workspace gates (clippy passed after the code commit; cargo test log
-  `target/e2e/gaming-pc-2026-11-24/cargo-test.log`), docs commit.
+- Nothing. Task A done; hardware steps below wait for the maintainer.
 
 ## Next
 
