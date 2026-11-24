@@ -2127,6 +2127,7 @@ const issueText: Record<string, string> = {
   invalid_gpu_preference: 'The programs in the graphics card preference are invalid (at most 64 programs, each a full .exe path).',
   invalid_kiosk_shell: 'The kiosk seat settings are invalid (at most 16 apps, name and path filled, idle reset 0–1440 minutes).',
   kiosk_shell_ignored_on_seat_one: 'Seat 1 stays a normal desktop, so the kiosk setting is not used on this seat.',
+  kiosk_app_execution_alias: 'A kiosk app’s path is only a shortcut to a Store app on this PC (for example Notepad on Windows 11) and cannot be started by path. Fill in the app’s Store app ID (AUMID, e.g. Microsoft.WindowsNotepad_8wekyb3d8bbwe!App) instead.',
   seat_kind_mismatch: 'The seat’s kind (local / remote) does not match its settings.',
   console_seat_remote: 'Seat 1 is always a local seat.',
   device_on_remote_seat: 'Devices cannot be assigned to a remote seat.',

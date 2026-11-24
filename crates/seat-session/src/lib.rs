@@ -30,6 +30,7 @@
 
 pub mod accounts;
 pub mod acl;
+pub mod alias;
 pub mod autologon;
 pub mod backends;
 pub mod console_account;

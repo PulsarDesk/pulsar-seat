@@ -429,6 +429,8 @@ struct Shell {
     clip_pub: Option<super::win_track::ClipSection>,
     /// Our IddCx monitors' frames on the seat's targets (`pulsar_idd`, parity review).
     _idd: Option<crate::display::IddPresenter>,
+    /// App starts that may have ended the previous shell (bug G, `super::launch_guard`).
+    launch_guard: super::launch_guard::LaunchGuard,
 }
 
 /// Process / window snapshot interval of the hand-off tracker, in 250 ms ticks.
@@ -696,6 +698,13 @@ impl Shell {
     fn autostart(&mut self) {
         let idx: Vec<usize> = self.args.plan.apps.iter().enumerate().filter(|(_, a)| a.autostart).map(|(i, _)| i).collect();
         for i in idx {
+            if self.launch_guard.skip.contains(&i) {
+                // Bug G: the previous shell ended right after starting it; no loop.
+                let title = self.args.plan.apps.get(i).map_or("", |a| a.title.as_str()).to_owned();
+                klog!("app {title} not started automatically: the previous shell ended within {} ms of starting it", super::launch_guard::SETTLE_MS);
+                self.error_line = Some(format!("{}: {title}", copy::CRASH_SKIPPED.get()));
+                continue;
+            }
             self.launch(i);
         }
     }
@@ -716,6 +725,19 @@ impl Shell {
             self.launch_packaged(i, aumid, &app);
             return;
         }
+        // Bug G: an app execution alias (the Windows 11 Notepad stub) is never started with
+        // CreateProcessW; that start failed and took the shell down with it (round 2).
+        if let Some(kind) = seat_session::alias::execution_alias_here(&app.command) {
+            klog!(
+                "app {} not started: {} is an app execution alias ({}); set the packaged app's id (AUMID) instead",
+                app.title,
+                app.command,
+                kind.as_str()
+            );
+            self.error_line = Some(format!("{}: {}", copy::ALIAS_REFUSED.get(), app.title));
+            redraw(self.bar);
+            return;
+        }
         let Ok(cmd) = seat_session::launch::command_line(std::path::Path::new(&app.command), &app.args) else {
             self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             return;
@@ -732,6 +754,8 @@ impl Shell {
         si.dwYSize = work.height;
         si.wShowWindow = SW_SHOWNORMAL as u16;
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        let now = self.now();
+        self.launch_guard.starting(i, now);
         // SAFETY: valid strings; no inherited handles; started suspended so it is in the
         // job before it runs.
         let ok = unsafe {
@@ -749,7 +773,9 @@ impl Shell {
             )
         };
         if ok == 0 {
-            klog!("app {} not started: {}", app.title, std::io::Error::last_os_error());
+            let e = std::io::Error::last_os_error();
+            self.launch_guard.failed(i);
+            klog!("app {} not started: {e}", app.title);
             self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             redraw(self.bar);
             return;
@@ -805,6 +831,8 @@ impl Shell {
     /// for the same user is reused.
     fn launch_packaged(&mut self, i: usize, aumid: &str, app: &seat_core::config::KioskShellApp) {
         let args: Vec<String> = app.args.iter().map(|a| seat_session::launch::quote_arg(a)).collect();
+        let now = self.now();
+        self.launch_guard.starting(i, now);
         match super::win_track::activate_packaged(aumid, &args.join(" ")) {
             Ok(pid) => {
                 let created = super::win_track::created_of(pid);
@@ -828,6 +856,7 @@ impl Shell {
                 klog!("packaged app {aumid} activated (pid {pid})");
             }
             Err(e) => {
+                self.launch_guard.failed(i);
                 klog!("packaged app {aumid} not activated: {e}");
                 self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             }
@@ -1027,6 +1056,7 @@ impl Shell {
     fn on_tick(&mut self) {
         self.tick += 1;
         let now = self.now();
+        self.launch_guard.tick(now);
         let filter_on = self.filter == Some(true);
         if let Some(g) = self.guard.as_mut() {
             // With the input filter the kiosk devices never reach the console session, so
@@ -1263,6 +1293,7 @@ impl Shell {
     /// Graceful end: held input released, cursor clip, foreground lock and focus mutex
     /// freed, apps ended (job closed).
     fn shutdown(&mut self) {
+        self.launch_guard.clear();
         let a = self.router.release_all();
         self.run_actions(a);
         if self.leader {
@@ -1842,6 +1873,11 @@ fn run_shell(args: ShellArgs) -> i32 {
             None
         }
     });
+    // Bug G crash guard: the seat user's temp folder (per-seat users have their own).
+    let launch_guard = super::launch_guard::LaunchGuard::open(Some(super::launch_guard::marker_path(&std::env::temp_dir(), seat)));
+    if !launch_guard.skip.is_empty() {
+        klog!("crash guard: the previous shell ended within {} ms of starting app(s) {:?}; not started automatically", super::launch_guard::SETTLE_MS, launch_guard.skip);
+    }
     let shell = Shell {
         router,
         pen,
@@ -1893,6 +1929,7 @@ fn run_shell(args: ShellArgs) -> i32 {
         cursor_pub: super::win_track::CursorSection::create(u32::from(seat.get())),
         clip_pub: super::win_track::ClipSection::create(u32::from(seat.get())),
         _idd: idd,
+        launch_guard,
     };
     SHELL.with(|s| *s.borrow_mut() = Some(shell));
     if !monitors.is_empty() {

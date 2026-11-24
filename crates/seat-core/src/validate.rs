@@ -98,6 +98,12 @@ pub enum IssueCode {
     /// Kiosk shell of a seat (spec 35 §5.1): too many apps, an app without title or
     /// command, or an idle reset outside 1..=1440 minutes. Added 2026-11-13, error.
     InvalidKioskShell,
+    /// A kiosk app's command is an app execution alias on this PC (service check,
+    /// `seat_session::alias`), e.g. `C:\Windows\System32\notepad.exe` on Windows 11 with
+    /// the packaged Notepad. The shell refuses to start it (starting it took the shell
+    /// down, gaming PC E2E round 2 bug G); the packaged app's id (AUMID) is to be set
+    /// instead. `reason` = `ifeo_alias_redirect` or `appexeclink`. Added 2026-11-24, error.
+    KioskAppExecutionAlias,
     /// GPU preference of a seat (spec 40 §6.4): more than `MAX_GPU_PREF_APPS` programs, or
     /// a program that is not an absolute `.exe` path of at most 260 characters without
     /// control characters (the path is a registry value name in the seat user's hive).

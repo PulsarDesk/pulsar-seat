@@ -95,7 +95,10 @@ does not work against a real Server build (untested, see below).
 - `audio`: PCM only. rdpsnd goes to a `PlaybackSink`, on the static channel and on the
   dynamic `AUDIO_PLAYBACK_DVC` / `AUDIO_PLAYBACK_LOSSY_DVC` channels (`dvc_playback`, own
   handler, same sink; gaming PC E2E 2026-11-24 bug 4, HYPOTHESIS: Windows 11 sent no audio on
-  the static channel alone). Each format exchange is reported to the sink (`Negotiation`,
+  the static channel alone). Playback also joins a device-less `rdpdr` when no device
+  redirection did (`channels::audio_gate`, [MS-RDPEA] appendix A<1>: no `rdpsnd` traffic from
+  a Windows server without `rdpdr`; round 2 bug I, HYPOTHESIS until a hardware run); the
+  connection logs `static channels offered: ...`. Each format exchange is reported to the sink (`Negotiation`,
   `PlaybackSink::negotiated`; the host logs it). `AUDIO_INPUT` comes from a
   `CaptureSource`. The host connects both to `seat_media::bridge::AudioBridge`, by
   endpoint id. Playback goes through the bridge's jitter buffer (`PcmRing`, 2026-11-20,

@@ -506,7 +506,15 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
 - **Config (additive):** `SeatConfig.kiosk_shell {apps: [{title, command, args, autostart,
   monitor}], idle_reset_minutes}` (≤ 16 apps, idle 0 = off or 1..=1440) and
   `settings.kiosk.seat1_desktop` (default `true`). Issues `invalid_kiosk_shell` (error),
-  `kiosk_shell_ignored_on_seat_one` (warning). Manager: "Kiosk" column and dialog in the
+  `kiosk_shell_ignored_on_seat_one` (warning), `kiosk_app_execution_alias` (error, service
+  check, reason `ifeo_alias_redirect` / `appexeclink`: a `command` that is an app execution
+  alias on this PC, `seat_session::alias`, e.g. the Windows 11 Notepad stub
+  `C:\Windows\System32\notepad.exe`; set the app's `app_id` instead). The shell refuses such
+  a path itself (no `CreateProcessW`; round 2 bug G: the failed start killed the shell with an
+  access violation in an unloaded `twinapi.appcore.dll`, proven by the event log) and keeps a
+  crash guard (`kiosk::launch_guard`, marker `%TEMP%\pulsar-seat-kiosk-NN.launch` of the seat
+  user): an app that ended the previous shell within 3 s of its start is left out of the next
+  autostart (bar notice), so one failing app cannot loop the shell. Manager: "Kiosk" column and dialog in the
   basic tab (only with the `desktops` method; with another method and a seat that has a
   kiosk config, the hint `kiosk.backendOnly` explains why it is ignored), seat-1 toggle
   under the seat table. `command` must be an absolute, trimmed Windows path
@@ -1492,7 +1500,12 @@ monitor's same-container hub keeps a seat the monitor is not on.
   drive / WinSCard back-end; system drive refused, read-only per policy, reader list
   filtered, other readers `SCARD_E_UNKNOWN_READER`, reader admin `SCARD_E_NO_ACCESS`,
   card cache not shared). `rdpsnd` is advertised with a silent sink when `rdpdr` needs it
-  and audio is off. Printers (round 4 local-gaps, opt-in `SeatRedirect.printers` =
+  and audio is off. The reverse holds too ([MS-RDPEA] appendix A<1>: a Windows server issues
+  nothing on `rdpsnd` unless the client also advertises `rdpdr`): with playback on and no
+  device redirection, `channels::audio_gate` joins a device-less `rdpdr` (IronRDP's no-op
+  back-end: general capability only, no device announced; e2e3-c, round 2 bug 4 / I,
+  HYPOTHESIS until a hardware run). Each connection logs `seat-rdp: static channels
+  offered: ...`. Printers (round 4 local-gaps, opt-in `SeatRedirect.printers` =
   `off` / `seat` / `all`): the service resolves `seat` to the queues of printers whose
   effective mask is exactly this seat (`seat_media::printer_queues_for_device`, USB port
   match) into `HostRedirection.printers`, `all` into `all_printers`; the host builds the

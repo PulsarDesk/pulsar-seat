@@ -956,7 +956,9 @@ mod win {
                     let notes_changed = last.as_ref() != Some(&now);
                     if notes_changed || stats_moved {
                         if notes_changed {
-                            eprintln!("seat host: audio notes {:?}", now.2);
+                            // Endpoint state too (bug 4 / I): "render open false" with an
+                            // endpoint assigned = no playback stream on the seat's device.
+                            eprintln!("seat host: audio notes {:?} (render open {}, capture open {})", now.2, now.0, now.1);
                         }
                         if stats_moved && let Some(s) = &stats {
                             eprintln!(

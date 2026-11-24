@@ -19,7 +19,11 @@ stdin), kill-on-close job `PulsarSeat.Seat.NN`, `autologon::{credentials_for,
 classify_disconnect, after_session_end}` (re-logon policy, never a retry loop after a logon
 failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users`),
 `wts::client_name_for` (`PSEAT-NN`), `experimental_warning(lang)` (warning in English or Turkish),
-`backends::termsrv_wrapper::TermsrvWrapperBackend::boot_check()`.
+`backends::termsrv_wrapper::TermsrvWrapperBackend::boot_check()`, `alias::execution_alias`
+(2026-11-24, round 2 bug G: a program path that is an app execution alias, either an IFEO
+filter entry with `AppExecutionAliasRedirect` such as the Windows 11 Notepad stub, or an
+`IO_REPARSE_TAG_APPEXECLINK` reparse point; the IFEO value names were read on the gaming PC
+and are not documented by Microsoft, the reparse tag is in MS-FSCC 2.1.2.1).
 
 ## Backends
 

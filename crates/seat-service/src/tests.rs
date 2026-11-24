@@ -4407,3 +4407,38 @@ fn no_host_restart_while_windows_shuts_down() {
     h.s.tick();
     assert_eq!(hosts(&h), 2);
 }
+
+// ---- kiosk apps that are app execution aliases (gaming PC E2E round 2, bug G) ----------
+
+/// The Windows 11 Notepad stub as a kiosk app: refused by validation (error, reason the
+/// alias kind), so apply_config never hands it to the shell; an app id (AUMID) is fine.
+#[test]
+fn kiosk_alias_app_is_refused_by_validation() {
+    use crate::platform::Platform as _;
+    use seat_core::validate::{IssueCode, Severity};
+    let h = harness();
+    h.p.aliases.lock().unwrap().push(r"c:\windows\system32\notepad.exe".into());
+    let mut cfg = seat1_kiosk_config(false);
+    let shell = cfg.seats[0].local.as_mut().unwrap().kiosk_shell.as_mut().unwrap();
+    let mut not = shell.apps[0].clone();
+    not.title = "Not".into();
+    not.command = r"C:\Windows\System32\notepad.exe".into();
+    shell.apps.push(not);
+    let mut c = admin();
+    let Ok(ResponseBody::Issues(v)) = call(&h, &mut c, RequestBody::ValidateConfig { config: Box::new(cfg.clone()) }) else {
+        panic!("no issues answer")
+    };
+    let i = v.iter().find(|i| i.code == IssueCode::KioskAppExecutionAlias).expect("alias issue");
+    assert_eq!(i.severity, Severity::Error);
+    assert_eq!(i.seat, Some(s(1)));
+    assert_eq!(i.reason.as_deref(), Some("ifeo_alias_redirect"));
+    assert_eq!(i.field.as_deref(), Some("local.kiosk_shell"));
+
+    // The same app as a packaged app (app id set): activated, not checked by path.
+    let a = &mut cfg.seats[0].local.as_mut().unwrap().kiosk_shell.as_mut().unwrap().apps[1];
+    a.app_id = Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App".into());
+    let issues = crate::requests::kiosk_alias_issues(&cfg, &|c| h.p.execution_alias(c));
+    assert!(issues.is_empty(), "{issues:?}");
+    // No alias on this PC: nothing.
+    assert!(crate::requests::kiosk_alias_issues(&seat1_kiosk_config(false), &|_| None).is_empty());
+}

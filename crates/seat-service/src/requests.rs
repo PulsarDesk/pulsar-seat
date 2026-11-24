@@ -598,10 +598,12 @@ impl Service {
     }
 
     /// seat-core validation plus the service-side checks that need this PC: cores per seat
-    /// (seat-compat `cpu::validate_sets`, spec 80 §11.2).
+    /// (seat-compat `cpu::validate_sets`, spec 80 §11.2) and kiosk apps that are app
+    /// execution aliases (bug G).
     pub(crate) fn validate_full(&self, cfg: &Config, inv: &[seat_core::device::Device]) -> Vec<seat_core::validate::Issue> {
         let mut issues = validate(cfg, Some(inv));
         issues.extend(cpu_issues(cfg, &self.platform.cpu_sets()));
+        issues.extend(kiosk_alias_issues(cfg, &|c| self.platform.execution_alias(c)));
         issues
     }
 
@@ -1230,6 +1232,29 @@ pub(crate) fn cpu_issues(cfg: &Config, infos: &[seat_proto::CpuSetInfo]) -> Vec<
                 CpuIssueCode::HardLimitMultiGroup | CpuIssueCode::SharedCore => return None,
             };
             Some(Issue { severity, code, seat: Some(i.seat), device: None, field: Some("seats.cpu_sets".into()), reason: None })
+        })
+        .collect()
+}
+
+/// Kiosk apps started by path whose path is an app execution alias here (gaming PC E2E
+/// round 2 bug G: the Windows 11 Notepad stub took the kiosk shell down). One error per
+/// seat, `reason` = the alias kind. Apps with an app id (AUMID) are activated, not started
+/// by path, and are not checked.
+pub(crate) fn kiosk_alias_issues(cfg: &Config, alias: &dyn Fn(&str) -> Option<&'static str>) -> Vec<seat_core::validate::Issue> {
+    use seat_core::validate::{Issue, IssueCode};
+    cfg.seats
+        .iter()
+        .filter_map(|s| {
+            let k = s.local.as_ref()?.kiosk_shell.as_ref()?;
+            let kind = k.apps.iter().filter(|a| a.app_id.is_none()).find_map(|a| alias(&a.command))?;
+            Some(Issue {
+                severity: Severity::Error,
+                code: IssueCode::KioskAppExecutionAlias,
+                seat: Some(s.number),
+                device: None,
+                field: Some("local.kiosk_shell".into()),
+                reason: Some(kind.into()),
+            })
         })
         .collect()
 }
