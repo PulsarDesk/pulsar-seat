@@ -36,7 +36,7 @@ use seat_stream::backend::{PeerEvent, Prepared, SeatStream, SeatStreamSpec, Stre
 use seat_stream::control::ServerEvent;
 use seat_stream::seatdir::{SecureFs, SeatDir};
 use seat_stream::supervise::StreamNotice;
-use seat_session::termwrap::{Termwrap, TermwrapState};
+use seat_session::termwrap::{RemoteWrapper, Termwrap, TermwrapState, TermwrapStatus};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -459,24 +459,25 @@ impl Engine {
             log::warn!("coexistence: passive mode, no system changes and no seat starts");
             return;
         }
-        let wrapper_active = match self.d().termwrap.boot_check() {
+        let wrapper = match self.d().termwrap.boot_check() {
             Ok(st) => {
                 if let TermwrapState::Blocked { reason } = &st.state {
                     log::warn!("experimental multi-session switched off at boot: {reason:?}");
                 }
-                matches!(st.state, TermwrapState::On { .. })
+                log_external(&st);
+                st.remote_wrapper()
             }
             Err(e) => {
                 log::warn!("termwrap boot check: {e}");
-                false
+                RemoteWrapper::None
             }
         };
-        match self.d().session.host_info(wrapper_active) {
+        match self.d().session.host_info(wrapper) {
             Ok(h) => *lock(&self.0.host_class) = serde_json::to_value(h.class).ok().and_then(|v| v.as_str().map(String::from)),
             Err(e) => log::warn!("host info: {e}"),
         }
         if global.multi_session {
-            match self.d().session.prepare_host(wrapper_active) {
+            match self.d().session.prepare_host(wrapper) {
                 Ok(r) => log::info!("RDS settings prepared: {r:?}"),
                 Err(e) => log::error!("RDS settings not prepared: {e}"),
             }
@@ -1570,7 +1571,7 @@ impl Engine {
 
     pub fn host_info(&self, global: &RemoteSettings) -> HostInfo {
         let tw = self.d().termwrap.status().ok();
-        let wrapper_active = tw.as_ref().is_some_and(|s| matches!(s.state, TermwrapState::On { .. }));
+        let wrapper = tw.as_ref().map(TermwrapStatus::remote_wrapper).unwrap_or_default();
         let mut out = HostInfo {
             coexistence: lock(&self.0.coexist).clone(),
             termwrap: tw.as_ref().map(termwrap_json),
@@ -1584,7 +1585,7 @@ impl Engine {
             }),
             ..Default::default()
         };
-        match self.d().session.host_info(wrapper_active) {
+        match self.d().session.host_info(wrapper) {
             Ok(h) => {
                 out.edition = h.edition.edition_id.clone();
                 out.build = h.edition.build;
@@ -1604,7 +1605,7 @@ impl Engine {
     pub fn set_multi_session(&self, enabled: bool) -> Result<(), ProtoError> {
         let s = &self.d().session;
         if enabled {
-            let wrapper = self.d().termwrap.status().is_ok_and(|s| matches!(s.state, TermwrapState::On { .. }));
+            let wrapper = self.d().termwrap.status().map(|s| s.remote_wrapper()).unwrap_or_default();
             s.prepare_host(wrapper).map_err(perr)?;
         } else {
             if !self.wait_idle(STOP_WAIT) {
@@ -1625,10 +1626,20 @@ impl Engine {
             return Err(ProtoError::new(ErrorCode::SeatRunning, "seats are still stopping"));
         }
         let tw = &self.d().termwrap;
-        let st = if enabled {
-            if ack != seat_session::termwrap::WARNING_VERSION {
-                return Err(err(ErrorCode::WarningNotAcknowledged, "warning_not_acknowledged", "read and accept the warning first"));
+        if enabled && ack != seat_session::termwrap::WARNING_VERSION {
+            return Err(err(ErrorCode::WarningNotAcknowledged, "warning_not_acknowledged", "read and accept the warning first"));
+        }
+        // External wrapper mode (detect-only, 2026-11-25): "on" / "off" only store / clear
+        // the remote kind's acknowledgement; the wrapper itself is its owner's.
+        if matches!(tw.status().map_err(perr)?.state, TermwrapState::External { .. }) {
+            let st = tw.set_external_ack(enabled.then_some(ack)).map_err(perr)?;
+            // Refresh the session manager's seat cap for the next start.
+            if let Err(e) = self.d().session.host_info(st.remote_wrapper()) {
+                log::warn!("host info: {e}");
             }
+            return Ok(termwrap_json(&st));
+        }
+        let st = if enabled {
             let path = match wrapper {
                 Some(p) if !p.trim().is_empty() => PathBuf::from(p),
                 _ => tw
@@ -2072,6 +2083,20 @@ pub fn redact(l: &str) -> String {
     // Whole words only: "otp" is also inside "hotplug".
     let pin_word = lower.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "pin" | "pins" | "otp" | "totp"));
     if pin_word || MARKERS.iter().any(|m| lower.contains(m)) { seat_stream::seatdir::REDACTED_LINE.to_string() } else { l.trim_end().to_string() }
+}
+
+/// One log line for an external wrapper (the reason it is not used, if any).
+fn log_external(st: &TermwrapStatus) {
+    match (&st.state, st.remote_wrapper()) {
+        (TermwrapState::External { .. }, RemoteWrapper::External { usable: true }) => {
+            log::info!("remote seats use the external wrapper (managed by its owner)")
+        }
+        (TermwrapState::External { blocked: Some(r), .. }, _) => {
+            log::warn!("external wrapper not used for remote seats: {}", r.code())
+        }
+        (TermwrapState::External { .. }, _) => log::info!("external wrapper not used for remote seats: warning not acknowledged"),
+        _ => {}
+    }
 }
 
 fn termwrap_json(s: &seat_session::termwrap::TermwrapStatus) -> serde_json::Value {

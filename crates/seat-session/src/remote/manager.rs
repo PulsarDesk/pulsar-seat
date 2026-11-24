@@ -17,6 +17,7 @@ use crate::remote::sweep::{OwnedSessionRecord, ProcessTable, RunState, SweepPlan
 use crate::remote::users::{Accounts, Profiles, UserCheck, check_password};
 use crate::remote::wait::poll_until;
 use crate::remote::{Clock, FailureReason, SessionError, Sleeper};
+pub use crate::termwrap::RemoteWrapper;
 use serde::{Deserialize, Serialize};
 use seat_core::Secret;
 use seat_core::remote::mic::MicFrame;
@@ -100,6 +101,9 @@ pub enum HostWarning {
     PolicyOverride { value: String },
     SeatUserIsAdmin { user: String },
     ForeignWrapper { service_dll: String },
+    /// ServiceDll points at a recognised external wrapper (another installed product's,
+    /// detect-only): Pulsar Seat never changes it. Replaces `ForeignWrapper` for it.
+    WrapperManagedExternally { service_dll: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,9 +171,11 @@ pub enum SessionNotice {
 }
 
 pub trait SessionManager: Send + Sync {
-    fn host_info(&self, wrapper_active: bool) -> Result<HostInfo, SessionError>;
-    /// Refuses Home (`edition_unsupported`) and foreign ServiceDll (`coexistence`) before any write.
-    fn prepare_host(&self, include_wrapper_rows: bool) -> Result<ApplyReport, SessionError>;
+    /// `wrapper` = the termwrap module's view ([`crate::termwrap::TermwrapStatus::remote_wrapper`]).
+    fn host_info(&self, wrapper: RemoteWrapper) -> Result<HostInfo, SessionError>;
+    /// Refuses Home (`edition_unsupported`) and a ServiceDll that is neither stock nor an
+    /// active wrapper (`coexistence`) before any write. Never writes the wrapper rows.
+    fn prepare_host(&self, wrapper: RemoteWrapper) -> Result<ApplyReport, SessionError>;
     fn restore_host(&self) -> Result<RestoreReport, SessionError>;
     fn wait_rds_ready(&self) -> Result<(), SessionError>;
     /// Facts, RDU membership, profile.
@@ -449,7 +455,7 @@ impl Manager {
         if let Some(m) = *lock(&self.host_max_seats) {
             return Ok(m);
         }
-        Ok(self.host_info(false)?.max_seats)
+        Ok(self.host_info(RemoteWrapper::None)?.max_seats)
     }
 
     /// Spawn + wait for `Connected` + discover the session. Runs without the seats lock.
@@ -742,7 +748,8 @@ fn new_slot(generation: u64, req: &SessionRequest<'_>, user_sid: String, passwor
 }
 
 impl SessionManager for Manager {
-    fn host_info(&self, wrapper_active: bool) -> Result<HostInfo, SessionError> {
+    fn host_info(&self, wrapper: RemoteWrapper) -> Result<HostInfo, SessionError> {
+        let wrapper_active = wrapper.active();
         let edition = self.d.edition.edition().map_err(edition_err)?;
         let rdsh = edition.product_type.is_server() && self.d.edition.rdsh_role_installed().unwrap_or(false);
         let class = classify(&edition, rdsh);
@@ -764,8 +771,16 @@ impl SessionManager for Manager {
                 warnings.push(HostWarning::GraceEnds { days });
             }
         }
-        if !stock && !wrapper_active {
-            warnings.push(HostWarning::ForeignWrapper { service_dll: service_dll.clone() });
+        if !stock {
+            match wrapper {
+                // A recognised external wrapper (usable or not) is named as such, never as
+                // a foreign one; why it is not usable is in the termwrap status.
+                RemoteWrapper::External { .. } => {
+                    warnings.push(HostWarning::WrapperManagedExternally { service_dll: service_dll.clone() })
+                }
+                RemoteWrapper::None => warnings.push(HostWarning::ForeignWrapper { service_dll: service_dll.clone() }),
+                RemoteWrapper::Own => {}
+            }
         }
         // Policy overrides are detected read-only (no write here).
         for w in self.applier().verify_policy(self.set_gpu_realtime) {
@@ -788,7 +803,8 @@ impl SessionManager for Manager {
         Ok(HostInfo { edition, class, listener, licensing, termservice_stock: stock, service_dll, rds_ready, max_seats, warnings })
     }
 
-    fn prepare_host(&self, wrapper_active: bool) -> Result<ApplyReport, SessionError> {
+    fn prepare_host(&self, wrapper: RemoteWrapper) -> Result<ApplyReport, SessionError> {
+        let wrapper_active = wrapper.active();
         let e = self.d.edition.edition().map_err(edition_err)?;
         if crate::edition::is_home_edition(&e.edition_id) {
             return Err(SessionError::EditionUnsupported(format!(
@@ -1141,10 +1157,10 @@ mod win_mgr {
     }
 
     impl SessionManager for WindowsSessionManager {
-        fn host_info(&self, w: bool) -> Result<HostInfo, SessionError> {
+        fn host_info(&self, w: RemoteWrapper) -> Result<HostInfo, SessionError> {
             self.0.host_info(w)
         }
-        fn prepare_host(&self, w: bool) -> Result<ApplyReport, SessionError> {
+        fn prepare_host(&self, w: RemoteWrapper) -> Result<ApplyReport, SessionError> {
             self.0.prepare_host(w)
         }
         fn restore_host(&self) -> Result<RestoreReport, SessionError> {

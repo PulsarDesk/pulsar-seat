@@ -227,9 +227,9 @@ fn host_class_limits_seats() {
     // Licensed RDSH: no host cap; host_info refreshes the cached cap.
     let (m, h) = mgr();
     h.edition.set_edition("Professional", ProductType::WinNt);
-    m.host_info(false).unwrap();
+    m.host_info(RemoteWrapper::None).unwrap();
     h.edition.set_edition("ServerDatacenter", ProductType::ServerNt);
-    m.host_info(false).unwrap();
+    m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!(second_seat_code(&m, &h), "ok");
 }
 
@@ -460,7 +460,7 @@ fn sweep_spares_running_seats_and_foreign_sessions() {
 #[test]
 fn host_info_for_each_class() {
     let (m, h) = mgr();
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!(i.class, HostClass::ServerRdsh);
     assert_eq!(i.max_seats, None);
     assert!(i.termservice_stock && i.rds_ready);
@@ -468,35 +468,74 @@ fn host_info_for_each_class() {
 
     h.rds.listener.lock().unwrap().as_mut().unwrap().max_instance_count = Some(5);
     *h.rds.licensing.lock().unwrap() = LicensingInfo { mode: Some(5), grace_days_left: Some(42) };
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!(i.max_seats, Some(1), "RDSH without licensing: one test seat (spec 30 §2.5)");
     assert!(i.warnings.contains(&HostWarning::LicensingNotConfigured));
     *h.rds.licensing.lock().unwrap() = LicensingInfo { mode: Some(2), grace_days_left: None };
-    assert_eq!(m.host_info(false).unwrap().max_seats, Some(5));
+    assert_eq!(m.host_info(RemoteWrapper::None).unwrap().max_seats, Some(5));
     assert!(i.warnings.contains(&HostWarning::GraceEnds { days: 42 }));
 
     h.edition.rdsh.store(false, Ordering::SeqCst);
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!((i.class, i.max_seats), (HostClass::ServerWithoutRdsh, Some(1)));
     assert!(i.warnings.contains(&HostWarning::RdshMissing));
 
     h.edition.set_edition("Professional", ProductType::WinNt);
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!((i.class, i.max_seats), (HostClass::Client, Some(1)));
     assert!(!i.warnings.contains(&HostWarning::LicensingNotConfigured), "client SKUs have no RDS licensing");
 
     *h.rds.service_dll.lock().unwrap() = r"%ProgramFiles%\X\wrap.dll".into();
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert!(!i.termservice_stock);
     assert!(i.warnings.contains(&HostWarning::ForeignWrapper { service_dll: r"%ProgramFiles%\X\wrap.dll".into() }));
-    let i = m.host_info(true).unwrap();
+    let i = m.host_info(RemoteWrapper::Own).unwrap();
     assert_eq!(i.max_seats, Some(5), "with an active wrapper the listener limit applies");
     assert!(!i.warnings.iter().any(|w| matches!(w, HostWarning::ForeignWrapper { .. })));
 
     h.edition.set_edition("Core", ProductType::WinNt);
     h.rds.ready.store(false, Ordering::SeqCst);
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert_eq!((i.class, i.max_seats, i.rds_ready), (HostClass::Home, Some(0), false));
+}
+
+/// Maintainer decision 2026-11-25: an active external wrapper (another product's, detect-only)
+/// gives remote seats the client-SKU limit like our own wrapper; it is never "foreign".
+#[test]
+fn external_wrapper_counts_for_remote_seats_once_usable() {
+    let (m, h) = mgr();
+    h.edition.set_edition("Professional", ProductType::WinNt);
+    h.rds.listener.lock().unwrap().as_mut().unwrap().max_instance_count = Some(4);
+    let duo = r"%ProgramFiles%\Duo\TermWrap.dll";
+    *h.rds.service_dll.lock().unwrap() = duo.into();
+    let named = HostWarning::WrapperManagedExternally { service_dll: duo.into() };
+
+    let i = m.host_info(RemoteWrapper::External { usable: true }).unwrap();
+    assert_eq!((i.class, i.max_seats), (HostClass::Client, Some(4)), "the normal client-SKU limit");
+    assert!(!i.termservice_stock);
+    assert!(i.warnings.contains(&named));
+    assert!(!i.warnings.iter().any(|w| matches!(w, HostWarning::ForeignWrapper { .. })));
+    let json = serde_json::to_value(&named).unwrap();
+    assert_eq!(json["kind"], "wrapper_managed_externally");
+    // prepare_host claims only the documented rows; ServiceDll stays the owner's.
+    m.prepare_host(RemoteWrapper::External { usable: true }).unwrap();
+    assert_eq!(*h.rds.service_dll.lock().unwrap(), duo);
+    assert!(!h.journal.all().is_empty());
+    for r in h.journal.all() {
+        let t = r.target.to_ascii_lowercase();
+        assert!(
+            !t.contains("servicedll") && !t.contains("enableconcurrentsessions") && !t.contains("allowmultipletssessions"),
+            "{t}"
+        );
+    }
+
+    // Blocked or not acknowledged: one seat, still named as external, no writes.
+    m.restore_host().unwrap();
+    let i = m.host_info(RemoteWrapper::External { usable: false }).unwrap();
+    assert_eq!(i.max_seats, Some(1));
+    assert!(i.warnings.contains(&named));
+    assert!(!i.warnings.iter().any(|w| matches!(w, HostWarning::ForeignWrapper { .. })));
+    assert_eq!(m.prepare_host(RemoteWrapper::External { usable: false }).unwrap_err().code(), "coexistence");
 }
 
 #[test]
@@ -504,15 +543,15 @@ fn prepare_host_refuses_home_and_foreign_wrapper_before_writing() {
     let (m, h) = mgr();
     h.registry.put(TS, "fDenyTSConnections", RegData::Dword(1));
     h.edition.set_edition("CoreSingleLanguage", ProductType::WinNt);
-    assert_eq!(m.prepare_host(false).unwrap_err().code(), "edition_unsupported");
+    assert_eq!(m.prepare_host(RemoteWrapper::None).unwrap_err().code(), "edition_unsupported");
     h.edition.set_edition("ServerStandard", ProductType::ServerNt);
     *h.rds.service_dll.lock().unwrap() = r"C:\Program Files\Other\TermWrap.dll".into();
-    assert_eq!(m.prepare_host(false).unwrap_err().code(), "coexistence");
+    assert_eq!(m.prepare_host(RemoteWrapper::None).unwrap_err().code(), "coexistence");
     assert_eq!(h.registry.get(TS, "fDenyTSConnections").unwrap(), RegData::Dword(1));
     assert!(h.journal.all().is_empty());
 
     *h.rds.service_dll.lock().unwrap() = r"%SystemRoot%\System32\termsrv.dll".into();
-    let rep = m.prepare_host(false).unwrap();
+    let rep = m.prepare_host(RemoteWrapper::None).unwrap();
     assert!(rep.changed.iter().any(|c| c.ends_with("fDenyTSConnections")));
     assert_eq!(h.registry.get(TS, "fDenyTSConnections").unwrap(), RegData::Dword(0));
     let r = m.restore_host().unwrap();
@@ -524,7 +563,7 @@ fn prepare_host_refuses_home_and_foreign_wrapper_before_writing() {
 fn policy_override_shows_in_host_info() {
     let (m, h) = mgr();
     h.registry.put(crate::rds::POL, "Shadow", RegData::Dword(2));
-    let i = m.host_info(false).unwrap();
+    let i = m.host_info(RemoteWrapper::None).unwrap();
     assert!(i.warnings.iter().any(|w| matches!(w, HostWarning::PolicyOverride { value } if value.ends_with(r"\Shadow"))));
 }
 

@@ -567,6 +567,63 @@ fn termwrap_enable_needs_the_current_warning_ack() {
     assert_eq!(w.termwrap.service_dll().to_ascii_lowercase(), seat_session::termwrap::fake::FakeWorld::default().service_dll().to_ascii_lowercase());
 }
 
+/// Maintainer decision 2026-11-25: remote seats use an operator-installed external wrapper
+/// like local seats do, detect-only, once the remote kind acknowledged the warning.
+#[test]
+fn remote_seats_use_an_active_external_wrapper_after_the_ack() {
+    use seat_session::edition::ProductType;
+    use seat_session::termwrap::WARNING_VERSION;
+    use seat_session::termwrap::fake::FAKE_EXTERNAL_SERVICE_DLL;
+    let w = world();
+    // A client edition where another product's own setup activated its wrapper.
+    w.termwrap.activate_external();
+    w.session.edition.set_edition("Professional", ProductType::WinNt);
+    *w.session.rds.service_dll.lock().unwrap() = FAKE_EXTERNAL_SERVICE_DLL.into();
+    w.session.rds.listener.lock().unwrap().as_mut().unwrap().max_instance_count = Some(4);
+    let untouched = |w: &World| {
+        assert_eq!(w.termwrap.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+        assert_eq!(w.termwrap.scm.restarts.load(Ordering::SeqCst), 0);
+        assert!(w.termwrap.journal.records.lock().unwrap().is_empty());
+    };
+    let kinds = |i: &HostInfo| i.warnings.iter().map(|v| v["kind"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+
+    // Not acknowledged yet: one seat, the wrapper named as external (never "foreign").
+    let info = w.engine.host_info(&global());
+    let tw = info.termwrap.as_ref().unwrap();
+    assert_eq!(tw["state"]["state"], "external");
+    assert_eq!(tw["ack_warning_version"], 0);
+    assert_eq!(info.max_seats, Some(1));
+    assert!(kinds(&info).contains(&"wrapper_managed_externally".to_string()), "{:?}", info.warnings);
+    assert!(!kinds(&info).contains(&"foreign_wrapper".to_string()));
+
+    // The experimental ack is still required.
+    let e = w.engine.set_termwrap(true, None, 0).unwrap_err();
+    assert_eq!(e.code, ErrorCode::WarningNotAcknowledged);
+    let tw = w.engine.set_termwrap(true, None, WARNING_VERSION).unwrap();
+    assert_eq!(tw["state"]["state"], "external");
+    assert_eq!(tw["ack_warning_version"], WARNING_VERSION);
+    let info = w.engine.host_info(&global());
+    assert_eq!(info.max_seats, Some(4), "the normal client-SKU limit");
+    assert!(!kinds(&info).contains(&"foreign_wrapper".to_string()));
+    untouched(&w);
+
+    // Service start prepares the documented RDP rows and starts a seat through it.
+    w.engine.service_start(&global(), &[]);
+    assert!(!w.session.registry.snapshot().is_empty(), "RDS rows written");
+    assert_eq!(*w.session.rds.service_dll.lock().unwrap(), FAKE_EXTERNAL_SERVICE_DLL);
+    start_ok(&w);
+    untouched(&w);
+    w.engine.stop_seat(&seat()).unwrap();
+    wait_for(&w, |e| *e == SeatEvent::Stopped);
+
+    // "Off" only clears our acknowledgement; the wrapper stays on.
+    let tw = w.engine.set_termwrap(false, None, 0).unwrap();
+    assert_eq!(tw["state"]["state"], "external");
+    assert_eq!(tw["ack_warning_version"], 0);
+    assert_eq!(w.engine.host_info(&global()).max_seats, Some(1));
+    untouched(&w);
+}
+
 #[test]
 fn seat_removal_drops_firewall_rules() {
     let w = world();
