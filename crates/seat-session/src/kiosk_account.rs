@@ -90,6 +90,23 @@ pub const KIOSK_WINSTA_ACCESS: u32 = 0x037F | 0x0002_0000 | 0x0010_0000;
 /// and `SYNCHRONIZE`: what an interactive user's logon SID has on `Default`.
 pub const KIOSK_DESKTOP_ACCESS: u32 = 0x01FF | 0x0002_0000 | 0x0010_0000;
 
+/// `DIRECTORY_QUERY | DIRECTORY_TRAVERSE | DIRECTORY_CREATE_OBJECT |
+/// DIRECTORY_CREATE_SUBDIRECTORY` plus `READ_CONTROL`: what the session user's logon SID has
+/// on the session's named-object directory (`\Sessions\<id>\BaseNamedObjects`, the `Local\`
+/// namespace). Everyone else only gets query + traverse there, so without this grant a kiosk
+/// seat user cannot create any `Local\` object in the console session (gaming PC E2E
+/// 2026-11-24, bug 6: the shell's stop event failed with access denied; read from the
+/// directory's DACL on Windows 11, `(A;;CCDCLCSWRC;;;<logon SID>)` vs `(A;CI;CCDC;;;WD)`).
+/// Objects the seat user creates there inherit the directory's inheritable ACEs (SYSTEM,
+/// creator owner, the console user's logon SID), so the service can still open them.
+pub const KIOSK_BNO_ACCESS: u32 = 0x000F | 0x0002_0000;
+
+/// NT path of a session's named-object directory (`Local\` of that session). Session 0 uses
+/// the global directory.
+pub fn session_bno_path(session_id: u32) -> String {
+    if session_id == 0 { r"\BaseNamedObjects".into() } else { format!(r"\Sessions\{session_id}\BaseNamedObjects") }
+}
+
 /// Optional flag of `--desktop-acl grant`: the full interactive-user masks above instead of
 /// the contained host's. Never combined with `--clipboard` / `--exit-windows` (it includes
 /// both).
@@ -198,6 +215,18 @@ mod tests {
 
     fn s(n: u8) -> SeatNumber {
         SeatNumber::new(n).unwrap()
+    }
+
+    /// Bug 6: the named-object grant is the session owner's directory mask (query, traverse,
+    /// create object, create subdirectory, read control) and nothing more (no WRITE_DAC,
+    /// no DELETE, no generic rights).
+    #[test]
+    fn named_object_grant_matches_the_session_owner() {
+        assert_eq!(KIOSK_BNO_ACCESS, 0x0002_000F);
+        assert_eq!(KIOSK_BNO_ACCESS & (0x0004_0000 | 0x0001_0000 | 0x0008_0000 | 0xF000_0000), 0);
+        assert_eq!(session_bno_path(1), r"\Sessions\1\BaseNamedObjects");
+        assert_eq!(session_bno_path(12), r"\Sessions\12\BaseNamedObjects");
+        assert_eq!(session_bno_path(0), r"\BaseNamedObjects");
     }
 
     #[test]

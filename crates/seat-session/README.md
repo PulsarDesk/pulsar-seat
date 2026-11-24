@@ -38,6 +38,12 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   (Windows: duplicated primary token, same job and spawn path) and
   `win::host_account::interactive_token_in_session`. The Windows logon (password, grant,
   profile) is seat-service `win::kiosk_logon`. **Untested on hardware.**
+  The grant also covers the session's named-object directory (`KIOSK_BNO_ACCESS`,
+  `session_bno_path`, `win::host_account::edit_session_named_objects`; 2026-11-24, gaming
+  PC E2E bug 6: without it the seat user cannot create `Local\` objects in the console
+  session). Proven on the dev box: the directory DACL gives everyone but the session's
+  user, SYSTEM and elevated admins only query + traverse; the grant / revoke round trip
+  (`--ignored` test) leaves the DACL identical. That the shell then runs is HYPOTHESIS.
 
 - **Probe** (`HostProbe.availability`): edition / RDSH role (`TSAppCompat`), ServiceDll stock
   (else `foreign_service_dll`), reference product (`reference_product_present` while active;

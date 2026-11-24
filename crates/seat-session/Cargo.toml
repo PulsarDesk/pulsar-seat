@@ -30,6 +30,10 @@ zeroize.workspace = true
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true
 windows-sys = { workspace = true, features = [
+    # `NtOpenDirectoryObject` + `OBJECT_ATTRIBUTES` (WDK-documented): the kiosk seat user's
+    # grant on the session's named-object directory (win/host_account.rs).
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",

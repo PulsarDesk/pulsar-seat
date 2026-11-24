@@ -357,6 +357,53 @@ pub fn edit_session_desktop_masks(sid: &str, op: AclOp, winsta: u32, desktop: u3
     r.and(d)
 }
 
+/// The caller's session's named-object directory (`Local\`), opened with `access`.
+fn open_session_named_objects(access: u32) -> Result<OwnedHandle, SysError> {
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows_sys::Wdk::Storage::FileSystem::NtOpenDirectoryObject;
+    use windows_sys::Win32::Foundation::{OBJ_CASE_INSENSITIVE, UNICODE_STRING};
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    let mut session = 0u32;
+    // SAFETY: out pointer valid.
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) } == 0 {
+        return Err(SysError::last_win32("ProcessIdToSessionId"));
+    }
+    let path = crate::kiosk_account::session_bno_path(session);
+    let mut w: Vec<u16> = path.encode_utf16().collect();
+    let bytes = u16::try_from(w.len() * 2).map_err(|_| SysError::Other("object path too long".into()))?;
+    let name = UNICODE_STRING { Length: bytes, MaximumLength: bytes, Buffer: w.as_mut_ptr() };
+    let oa = OBJECT_ATTRIBUTES {
+        Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: std::ptr::null_mut(),
+        ObjectName: &name,
+        Attributes: OBJ_CASE_INSENSITIVE,
+        SecurityDescriptor: std::ptr::null(),
+        SecurityQualityOfService: std::ptr::null(),
+    };
+    let mut h: HANDLE = std::ptr::null_mut();
+    // SAFETY: valid OBJECT_ATTRIBUTES whose name buffer (`w`) outlives the call.
+    let status = unsafe { NtOpenDirectoryObject(&mut h, access, &oa) };
+    if status < 0 {
+        return Err(SysError::Other(format!("NtOpenDirectoryObject({path}): NTSTATUS 0x{:08X}", status as u32)));
+    }
+    owned(h, "NtOpenDirectoryObject")
+}
+
+/// The helper's work for a kiosk seat logon (bug 6, gaming PC E2E 2026-11-24): grant
+/// (`crate::kiosk_account::KIOSK_BNO_ACCESS`) or revoke (every ACE of `sid`) on the
+/// caller's session's named-object directory, so the seat user can create `Local\` objects
+/// in the console session like the session's own user. Run as SYSTEM in the target session
+/// (SYSTEM has `WRITE_DAC` there). The edit lives in memory only: the directory, and the
+/// ACE with it, goes away with the session, and a logon SID is never reused.
+pub fn edit_session_named_objects(sid: &str, op: AclOp) -> Result<(), SysError> {
+    use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+    /// `READ_CONTROL | WRITE_DAC`.
+    const ACCESS: u32 = 0x0002_0000 | 0x0004_0000;
+    let dir = open_session_named_objects(ACCESS)?;
+    edit_dacl(raw(&dir), SE_KERNEL_OBJECT, sid, crate::kiosk_account::KIOSK_BNO_ACCESS, op)
+}
+
 /// The calling thread is attached to a desktop (user32 attached the process to the one the
 /// service named). `false` = the desktop refused the token.
 pub fn has_thread_desktop() -> bool {
@@ -387,6 +434,47 @@ mod tests {
         let out = unsafe { super::super::from_wide_ptr(s) };
         let _s = LocalMem(s.cast());
         out
+    }
+
+    fn kernel_dacl_sddl(h: HANDLE) -> String {
+        use windows_sys::Win32::Security::Authorization::SE_KERNEL_OBJECT;
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid handle opened with READ_CONTROL.
+        let rc = unsafe {
+            GetSecurityInfo(h, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut sd)
+        };
+        assert_eq!(rc, 0);
+        let _m = LocalMem(sd);
+        let mut s: *mut u16 = std::ptr::null_mut();
+        // SAFETY: valid descriptor.
+        assert!(unsafe { ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &mut s, std::ptr::null_mut()) } != 0);
+        // SAFETY: NUL-terminated string from the API.
+        let out = unsafe { super::super::from_wide_ptr(s) };
+        let _s = LocalMem(s.cast());
+        out
+    }
+
+    /// Bug 6: the test's own session directory opens by its NT path and its DACL is
+    /// readable (read only: nothing is changed). In an interactive session the session's
+    /// logon SID holds the create-object right the kiosk grant copies.
+    #[test]
+    fn the_session_named_object_directory_opens() {
+        let dir = open_session_named_objects(0x0002_0000).expect("READ_CONTROL on the own session's directory");
+        let sddl = kernel_dacl_sddl(raw(&dir));
+        assert!(sddl.starts_with("D:"), "{sddl}");
+    }
+
+    /// Grant + revoke a never-used logon SID on the live session directory (changes the
+    /// session's in-memory DACL for a moment; run by hand: `--ignored`).
+    #[test]
+    #[ignore]
+    fn named_object_grant_round_trip_on_the_live_session() {
+        let sid = "S-1-5-5-0-987656";
+        edit_session_named_objects(sid, AclOp::Grant).unwrap();
+        let dir = open_session_named_objects(0x0002_0000).unwrap();
+        assert!(kernel_dacl_sddl(raw(&dir)).contains(sid));
+        edit_session_named_objects(sid, AclOp::Revoke).unwrap();
+        assert!(!kernel_dacl_sddl(raw(&dir)).contains(sid));
     }
 
     #[test]
