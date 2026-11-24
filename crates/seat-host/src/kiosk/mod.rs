@@ -84,6 +84,7 @@ pub mod pen_win;
 #[cfg(windows)]
 pub mod guard_win;
 pub mod guard;
+pub mod launch_guard;
 pub mod track;
 #[cfg(windows)]
 pub mod win_track;
@@ -120,6 +121,16 @@ pub mod copy {
     );
     pub const NO_DEVICES: Text = Text::new("No keyboard or mouse is assigned to this seat", "Bu koltuğa klavye veya fare atanmamış");
     pub const START_FAILED: Text = Text::new("The app could not start", "Uygulama başlatılamadı");
+    /// The command is an app execution alias (bug G): refused, the operator sets the app id.
+    pub const ALIAS_REFUSED: Text = Text::new(
+        "This program is a shortcut to a Store app; set the app's id in the Pulsar Seat manager",
+        "Bu program bir Store uygulamasının kısayolu; uygulama kimliğini Pulsar Seat yöneticisinde girin",
+    );
+    /// The previous shell ended while this app started (bug G crash guard).
+    pub const CRASH_SKIPPED: Text = Text::new(
+        "The app was not started automatically: the seat closed while starting it last time",
+        "Uygulama otomatik başlatılmadı: koltuk son başlatmada kapandı",
+    );
     pub const AUDIO_UNAVAILABLE: Text = Text::new(
         "This Windows version has no per-app sound device: sound comes from seat 1's default device",
         "Bu Windows sürümünde uygulama başına ses aygıtı yok: ses 1. koltuğun varsayılan aygıtından çıkar",
@@ -137,6 +148,7 @@ pub mod copy {
     #[cfg(test)]
     pub const ALL: &[(&str, &Text)] = seat_core::text_table![
         HOME, LOGOUT, SEAT, NO_APPS, IDLE, NOT_ISOLATED, FILTER_STREAM_LOST, NO_SERVICE, NO_DEVICES, START_FAILED,
+        ALIAS_REFUSED, CRASH_SKIPPED,
         AUDIO_UNAVAILABLE, AUDIO_FAILED, HINT
     ];
 }
