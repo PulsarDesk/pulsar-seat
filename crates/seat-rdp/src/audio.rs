@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Audio channels of the seat connection (spec 60 §8 point 3):
 //!
-//! - playback, [MS-RDPEA] static `rdpsnd` channel: [`PlaybackHandler`] offers plain PCM and
-//!   hands every wave block to a [`PlaybackSink`] (the seat host's `seat_media` audio bridge
-//!   on the seat's render endpoint, opened by endpoint id);
+//! - playback, [MS-RDPEA] static `rdpsnd` channel **and** the `AUDIO_PLAYBACK_DVC` /
+//!   `AUDIO_PLAYBACK_LOSSY_DVC` dynamic channels (gaming PC E2E 2026-11-24, bug 4: no wave
+//!   ever reached the host with only the static channel; Windows 8 and later try the dynamic
+//!   channels first, HYPOTHESIS that this Windows 11 build did not fall back):
+//!   [`PlaybackHandler`] offers plain PCM and hands every wave block to a [`PlaybackSink`]
+//!   (the seat host's `seat_media` audio bridge on the seat's render endpoint, opened by
+//!   endpoint id). Each transport has its own handler on the same sink; Windows uses one.
+//!   Every format exchange is reported to the sink ([`Negotiation`], logged by the host),
+//!   so a log shows whether the server ever opened audio and which formats were kept;
 //! - microphone, [MS-RDPEAI] `AUDIO_INPUT` dynamic channel: [`CaptureHandler`] starts a
 //!   [`CaptureSource`] (the bridge on the seat's capture endpoint) and cuts its PCM into the
 //!   packets the server asked for.
@@ -66,6 +72,49 @@ pub fn capture_specs() -> Vec<PcmSpec> {
         .collect()
 }
 
+/// Transport label of the static channel (logs).
+pub const STATIC_TRANSPORT: &str = "rdpsnd";
+/// Transport label of the dynamic channels (logs).
+pub const DVC_TRANSPORT: &str = "AUDIO_PLAYBACK_DVC";
+
+/// One playback format exchange: the server's Audio Formats PDU and what the client keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Negotiation {
+    /// [`STATIC_TRANSPORT`] or [`DVC_TRANSPORT`].
+    pub transport: &'static str,
+    /// Formats the server offered (every codec).
+    pub offered: usize,
+    /// The integer PCM formats among them.
+    pub offered_pcm: Vec<PcmSpec>,
+    /// What the client advertises back (our PCM formats the server offered). Empty = the
+    /// server cannot send this client any audio.
+    pub kept: Vec<PcmSpec>,
+}
+
+impl Negotiation {
+    /// One log line (no secrets; formats only).
+    pub fn line(&self) -> String {
+        let list = |v: &[PcmSpec]| v.iter().map(|s| format!("{}x{}x{}", s.sample_rate, s.channels, s.bits_per_sample)).collect::<Vec<_>>().join(" ");
+        if self.kept.is_empty() {
+            format!(
+                "audio formats on {}: server offered {} ({} PCM: [{}]), none of ours matches; no playback",
+                self.transport,
+                self.offered,
+                self.offered_pcm.len(),
+                list(&self.offered_pcm)
+            )
+        } else {
+            format!(
+                "audio formats on {}: server offered {} ({} PCM), advertised [{}]",
+                self.transport,
+                self.offered,
+                self.offered_pcm.len(),
+                list(&self.kept)
+            )
+        }
+    }
+}
+
 /// Where playback PCM goes (the seat host: `seat_media::bridge::AudioBridge`).
 pub trait PlaybackSink: Send + Sync {
     /// The server started (or switched to) this format. `false`: cannot play it.
@@ -76,6 +125,8 @@ pub trait PlaybackSink: Send + Sync {
     fn latency(&self) -> std::time::Duration {
         std::time::Duration::ZERO
     }
+    /// The server sent its format list on one transport (diagnostics only).
+    fn negotiated(&self, _n: &Negotiation) {}
 }
 
 /// Captured PCM callback.
@@ -92,12 +143,25 @@ pub struct PlaybackHandler {
     sink: Arc<dyn PlaybackSink>,
     formats: Vec<AudioFormat>,
     current: Option<PcmSpec>,
+    transport: &'static str,
 }
 
 impl PlaybackHandler {
+    /// Handler of the static `rdpsnd` channel.
     pub fn new(sink: Arc<dyn PlaybackSink>) -> Self {
-        Self { sink, formats: playback_specs().into_iter().map(PcmSpec::to_format).collect(), current: None }
+        Self::on(sink, STATIC_TRANSPORT)
     }
+
+    /// Handler of one transport ([`STATIC_TRANSPORT`] / [`DVC_TRANSPORT`]).
+    pub fn on(sink: Arc<dyn PlaybackSink>, transport: &'static str) -> Self {
+        Self { sink, formats: playback_specs().into_iter().map(PcmSpec::to_format).collect(), current: None, transport }
+    }
+}
+
+/// The dynamic playback channels (`AUDIO_PLAYBACK_DVC` + `AUDIO_PLAYBACK_LOSSY_DVC`, one
+/// shared state) over `sink`. Register both processors on the `drdynvc` client.
+pub fn dvc_playback(sink: Arc<dyn PlaybackSink>) -> ironrdp_rdpsnd::client::RdpsndDvcState {
+    ironrdp_rdpsnd::client::RdpsndDvcState::new(Box::new(PlaybackHandler::on(sink, DVC_TRANSPORT)))
 }
 
 impl std::fmt::Debug for PlaybackHandler {
@@ -109,6 +173,19 @@ impl std::fmt::Debug for PlaybackHandler {
 impl RdpsndClientHandler for PlaybackHandler {
     fn get_formats(&self) -> &[AudioFormat] {
         &self.formats
+    }
+
+    /// Same choice as the default (IronRDP keeps only what the server offered); reports the
+    /// exchange to the sink first.
+    fn choose_formats(&self, server_formats: &[AudioFormat]) -> Vec<AudioFormat> {
+        let kept = ironrdp_rdpsnd::pdu::retain_offered(self.formats.clone(), server_formats);
+        self.sink.negotiated(&Negotiation {
+            transport: self.transport,
+            offered: server_formats.len(),
+            offered_pcm: server_formats.iter().filter_map(PcmSpec::from_format).collect(),
+            kept: kept.iter().filter_map(PcmSpec::from_format).collect(),
+        });
+        self.formats.clone()
     }
 
     fn wave(&mut self, format: &AudioFormat, _ts: u32, data: Cow<'_, [u8]>) {
@@ -263,6 +340,10 @@ pub(crate) mod tests {
         fn stop(&self) {
             self.log.lock().unwrap().push("stop".into());
         }
+        fn negotiated(&self, n: &Negotiation) {
+            let kept: Vec<String> = n.kept.iter().map(|s| format!("{}x{}", s.sample_rate, s.channels)).collect();
+            self.log.lock().unwrap().push(format!("negotiated {} offered {} kept [{}]", n.transport, n.offered, kept.join(" ")));
+        }
     }
 
     #[derive(Default)]
@@ -311,6 +392,65 @@ pub(crate) mod tests {
         let mut h = PlaybackHandler::new(sink.clone());
         h.wave(&f48, 0, Cow::Borrowed(&[0u8; 8]));
         assert_eq!(*sink.log.lock().unwrap(), vec!["start 48000x2"]);
+    }
+
+    fn encode(pdu: &ironrdp_rdpsnd::pdu::ServerAudioOutputPdu<'_>) -> Vec<u8> {
+        ironrdp_core::encode_vec(pdu).unwrap()
+    }
+
+    /// A server format list: ADPCM, PCM 44.1 kHz stereo 16-bit (ours) and PCM 8 kHz mono 8-bit
+    /// (not ours).
+    fn server_list() -> Vec<AudioFormat> {
+        let mut adpcm = playback_specs()[1].to_format();
+        adpcm.format = WaveFormat::ADPCM;
+        vec![adpcm, playback_specs()[1].to_format(), PcmSpec { sample_rate: 8000, channels: 1, bits_per_sample: 8 }.to_format()]
+    }
+
+    /// Bug 4 (gaming PC E2E 2026-11-24): the dynamic `AUDIO_PLAYBACK_DVC` channel negotiates
+    /// PCM, reports the exchange and plays a Wave2 block into the same sink as the static
+    /// channel would.
+    #[test]
+    fn dvc_channel_negotiates_reports_and_plays_pcm() {
+        use ironrdp_dvc::DvcProcessor as _;
+        use ironrdp_rdpsnd::pdu::{ServerAudioFormatPdu, ServerAudioOutputPdu, TrainingPdu, Version, Wave2Pdu};
+        let sink = Arc::new(RecPlayback::default());
+        let state = dvc_playback(sink.clone());
+        let mut ch = state.channel();
+        assert_eq!(ch.channel_name(), ironrdp_rdpsnd::client::DVC_CHANNEL_NAME);
+        assert_eq!(state.lossy_channel().channel_name(), ironrdp_rdpsnd::client::LOSSY_DVC_CHANNEL_NAME);
+        assert!(ch.start(7).unwrap().is_empty());
+        let formats = ServerAudioOutputPdu::AudioFormat(ServerAudioFormatPdu { version: Version::V8, formats: server_list() });
+        // Client formats + quality mode (version 6 and later).
+        assert_eq!(ch.process(7, &encode(&formats)).unwrap().len(), 2);
+        let training = ServerAudioOutputPdu::Training(TrainingPdu { timestamp: 1, data: vec![0; 4] });
+        assert_eq!(ch.process(7, &encode(&training)).unwrap().len(), 1, "training confirm");
+        let wave = ServerAudioOutputPdu::Wave2(Wave2Pdu { timestamp: 2, format_no: 0, block_no: 0, audio_timestamp: 0, data: Cow::Borrowed(&[0u8; 8]) });
+        assert_eq!(ch.process(7, &encode(&wave)).unwrap().len(), 1, "wave confirm");
+        assert_eq!(
+            *sink.log.lock().unwrap(),
+            vec!["negotiated AUDIO_PLAYBACK_DVC offered 3 kept [44100x2]", "start 44100x2", "play 8"]
+        );
+    }
+
+    /// The static channel reports its exchange too; a server without any of our PCM formats
+    /// is named in the log line (round 2 reads it).
+    #[test]
+    fn static_negotiation_is_reported_and_an_empty_match_is_named() {
+        let sink = Arc::new(RecPlayback::default());
+        let h = PlaybackHandler::new(sink.clone());
+        let chosen = h.choose_formats(&server_list());
+        assert_eq!(chosen.len(), playback_specs().len(), "IronRDP filters; the handler offers all of its formats");
+        assert_eq!(*sink.log.lock().unwrap(), vec!["negotiated rdpsnd offered 3 kept [44100x2]"]);
+
+        let n = Negotiation {
+            transport: STATIC_TRANSPORT,
+            offered: 2,
+            offered_pcm: vec![PcmSpec { sample_rate: 8000, channels: 1, bits_per_sample: 8 }],
+            kept: vec![],
+        };
+        assert_eq!(n.line(), "audio formats on rdpsnd: server offered 2 (1 PCM: [8000x1x8]), none of ours matches; no playback");
+        let n = Negotiation { kept: vec![playback_specs()[1]], ..n };
+        assert_eq!(n.line(), "audio formats on rdpsnd: server offered 2 (1 PCM), advertised [44100x2x16]");
     }
 
     #[test]

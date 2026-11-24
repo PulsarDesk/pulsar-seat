@@ -15,7 +15,7 @@ on its own, because the control cannot pin the listener certificate.
 | aarch64-pc-windows-msvc | builds natively, no C toolchain | builds, but needs its own CMake/vcpkg pipeline |
 | NLA / CredSSP | `sspi` crate (NTLM) | yes |
 | Certificate pinning | ours: we own the TLS step | callback |
-| Audio out / mic | `ironrdp-rdpsnd` (static channel), `ironrdp-rdpeai` (`AUDIO_INPUT`) with pluggable back-ends | yes |
+| Audio out / mic | `ironrdp-rdpsnd` (static channel + `AUDIO_PLAYBACK_DVC` / `_LOSSY_DVC`, 2026-11-24), `ironrdp-rdpeai` (`AUDIO_INPUT`) with pluggable back-ends | yes |
 | Touch / pen | `ironrdp-rdpei` (MS-RDPEI v3) | yes |
 | Relative mouse | fast-path `TS_FP_RELPOINTER_EVENT` (RDP 10.12) | yes |
 | Multi-monitor / resize | GCC monitor blocks, `ironrdp-displaycontrol` | yes |
@@ -92,7 +92,11 @@ does not work against a real Server build (untested, see below).
     updates at most every 8 ms and when the socket goes quiet.
 - `input`: keys, pointer, wheel and X buttons go out as fast-path events. Relative motion
   goes out as `TS_FP_RELPOINTER_EVENT`. Touch and pen go out as MS-RDPEI frames. Pen contacts carry the optional `RDPINPUT_PEN_CONTACT` fields when the pen reports them (2026-11-17): `penFlags` (barrel, eraser, inverted), `rotation` (0..359), `tiltX` / `tiltY` (-90..90, each on its own), `pressure` (0..1024). HYPOTHESIS: never sent to a real RDP server.
-- `audio`: PCM only. rdpsnd goes to a `PlaybackSink`. `AUDIO_INPUT` comes from a
+- `audio`: PCM only. rdpsnd goes to a `PlaybackSink`, on the static channel and on the
+  dynamic `AUDIO_PLAYBACK_DVC` / `AUDIO_PLAYBACK_LOSSY_DVC` channels (`dvc_playback`, own
+  handler, same sink; gaming PC E2E 2026-11-24 bug 4, HYPOTHESIS: Windows 11 sent no audio on
+  the static channel alone). Each format exchange is reported to the sink (`Negotiation`,
+  `PlaybackSink::negotiated`; the host logs it). `AUDIO_INPUT` comes from a
   `CaptureSource`. The host connects both to `seat_media::bridge::AudioBridge`, by
   endpoint id. Playback goes through the bridge's jitter buffer (`PcmRing`, 2026-11-20,
   OSMS parity G7): 30 ms prebuffer, 100 ms cap with a drop back to 30 ms, 5 ms fades on

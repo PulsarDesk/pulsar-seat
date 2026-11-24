@@ -356,6 +356,15 @@ fn connect(
     let mut dvc = DrdynvcClient::new()
         .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new())))
         .with_dynamic_channel(RdpeiClient::new(MAX_TOUCH_CONTACTS, CsReadyFlags::empty(), RdpInputProtocolVersion::V300));
+    // Playback on the dynamic channels too (gaming PC E2E 2026-11-24, bug 4): Windows 8 and
+    // later open `AUDIO_PLAYBACK_DVC` first; with only `rdpsnd` no wave ever arrived there
+    // (HYPOTHESIS: no fallback to the static channel). Same sink, own negotiation state.
+    if p.audio_playback
+        && let Some(sink) = &media.playback
+    {
+        let audio = crate::audio::dvc_playback(sink.clone());
+        dvc = dvc.with_dynamic_channel(audio.channel()).with_dynamic_channel(audio.lossy_channel());
+    }
     if p.audio_capture
         && let Some(src) = &media.capture
     {
