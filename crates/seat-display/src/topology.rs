@@ -15,8 +15,9 @@
 //! its entry dropped. Targets the user specialized in Settings are never journaled and
 //! never touched.
 //!
-//! Attach (gaming PC E2E bug 9, 2026-11-24): a plan target (console or seat) that is
-//! connected but outside the desktop (the user's CCD database keeps it detached, so
+//! Attach (gaming PC E2E bug 9, 2026-11-24): a plan target (a seat's, or a console target
+//! the plan asks to attach: seat 1's explicit monitors, the wizard's extend step; round 2
+//! bug H) that is connected but outside the desktop (the user's CCD database keeps it detached, so
 //! neither `DisplaySwitch /extend` nor `SDC_TOPOLOGY_EXTEND` brings it back) and that the
 //! plan does not take out gets a CCD path of its own (explicit paths, a free source on the
 //! target's own adapter first), journaled first as `attached`. Once no plan names it any
@@ -230,14 +231,18 @@ pub struct TopologyActions {
     /// their path is removed (`request.remove`), or the entry is dropped when the target
     /// is out of the desktop already.
     pub detaching: Vec<(usize, TargetRef)>,
+    /// Attached targets no plan names any more stay, because detaching them would leave
+    /// the console without a monitor (their entries stay for later).
+    pub detach_kept_for_console: bool,
 }
 
 /// Plan the change.
 ///
 /// - `takes_out`: the backend presents reserved targets outside the desktop.
 /// - `reserved`: live targets of seats 2..N (not shared with the console).
-/// - `console`: live targets the console desktop must show (seat 1, the wizard's extend
-///   step).
+/// - `console`: live targets the console desktop must gain (`TopologyPlan::attach`: seat
+///   1's explicit monitors, the wizard's extend step). A console target the user keeps
+///   outside the desktop and the plan does not list here is left alone.
 /// - `attach`: plan targets outside the desktop may be attached (journal trusted, not
 ///   `console_only`).
 /// - `live`: every live target (console safety check, journal lookup).
@@ -341,6 +346,7 @@ pub fn plan_topology(
         if !live.iter().any(|c| c.active && !gone.contains(&c.target)) {
             detach.clear();
             a.detaching.clear();
+            a.detach_kept_for_console = true;
         }
     }
     a.request.remove.extend(detach.into_iter().map(|target| RemoveTarget { target, specialize: false }));
@@ -782,6 +788,7 @@ mod tests {
         let only = vec![attached.clone()];
         let d = plan_topology(false, &[], &[], true, &only, &j);
         assert!(d.request.is_empty() && d.detaching.is_empty());
+        assert!(d.detach_kept_for_console && !b.detach_kept_for_console);
         // Old journals without the field still parse.
         let old = br#"{"version":1,"entries":[{"key":"mon;loc=PCIROOT(0);sub=t3","specialized":true,"deactivated":false}]}"#;
         assert!(!TopologyJournal::parse(old, std::path::Path::new("x")).entries[0].attached);

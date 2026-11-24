@@ -779,14 +779,23 @@ impl Service {
     /// seats with areas, G8) are reserved for nobody: they stay in the console desktop,
     /// where each seat's window presenter covers its part, and Pulsar never takes them out
     /// of it (several seat hosts cannot share one specialized scan-out).
+    ///
+    /// Only a monitor the user gave seat 1 (explicitly, or through its container / port) is
+    /// attached to the console desktop when it is connected outside it (`attach`). An
+    /// unassigned monitor (default mask) stays where the user put it (gaming PC E2E round 2
+    /// bug H: the product attached a user-detached monitor at enable, before any seat used
+    /// it, and never detached it again).
     pub(crate) fn display_plan(eff: &[seat_core::assign::Effective], dedicated: bool) -> TopologyPlan {
-        let mut plan = TopologyPlan { console: Vec::new(), seats: Vec::new() };
+        let mut plan = TopologyPlan { console: Vec::new(), seats: Vec::new(), attach: Vec::new() };
         let mut per_seat: BTreeMap<SeatNumber, Vec<DeviceKey>> = BTreeMap::new();
         for e in eff.iter().filter(|e| e.kind == DeviceKind::Monitor) {
             if dedicated && e.mask.single() == Some(SeatNumber::CONSOLE) {
                 // dedicated_host: seat 1 is a session of its own; its monitors are bound.
                 per_seat.entry(SeatNumber::CONSOLE).or_default().push(e.key.clone());
             } else if e.mask.contains(SeatNumber::CONSOLE) {
+                if e.source != seat_core::assign::MaskSource::Default {
+                    plan.attach.push(e.key.clone());
+                }
                 plan.console.push(e.key.clone());
             } else if let Some(s) = e.mask.single() {
                 per_seat.entry(s).or_default().push(e.key.clone());
@@ -869,7 +878,7 @@ impl Service {
 
     pub fn apply_ownership(&self) {
 
-        let (eff, settings, logons, dedicated, revision) = {
+        let (eff, settings, logons, dedicated, revision, wizard_extend) = {
             let mut st = self.lock();
             st.ownership_dirty = false;
             if !st.config.settings.enabled || st.safe_reason == Some(SafeModeReason::WindowsSafeMode) {
@@ -879,7 +888,9 @@ impl Service {
                 return;
             }
             let eff = st.inventory.effective(&st.config);
-            (eff, st.config.settings.clone(), Self::logons(&st), Self::dedicated(&st), st.config.revision)
+            // The wizard's extend step keeps its monitors attached while it runs.
+            let wizard_extend = st.wizard.as_ref().filter(|w| w.extended).map(|w| w.monitors.clone()).unwrap_or_default();
+            (eff, st.config.settings.clone(), Self::logons(&st), Self::dedicated(&st), st.config.revision, wizard_extend)
         };
         let b = self.backends();
         if let Some(c) = self.factory.input_control(b.input.kind()) {
@@ -963,7 +974,12 @@ impl Service {
         let audio_masks: Vec<(DeviceKey, seat_core::SeatMask)> =
             eff.iter().filter(|e| matches!(e.kind, DeviceKind::AudioRender | DeviceKind::AudioCapture)).map(|e| (e.key.clone(), e.mask)).collect();
         self.factory.set_audio_masks(b.audio.kind(), audio_masks);
-        let plan = Self::display_plan(&eff, dedicated);
+        let mut plan = Self::display_plan(&eff, dedicated);
+        for k in wizard_extend {
+            if !plan.attach.contains(&k) {
+                plan.attach.push(k);
+            }
+        }
         if let Err(e) = b.display.apply_topology(&plan) {
             log::error_id(eventid::OWNERSHIP_FAILED, &format!("display topology: {e}"));
         }
@@ -1031,7 +1047,9 @@ impl Service {
         if let Err(e) = b.input.apply_routes(&[]) {
             log::warn(&format!("input routes reset: {e}"));
         }
-        if let Err(e) = b.display.apply_topology(&TopologyPlan { console: monitors, seats: Vec::new() }) {
+        // Nothing to attach: monitors the product attached go back out of the desktop
+        // (gaming PC E2E round 2 bug H).
+        if let Err(e) = b.display.apply_topology(&TopologyPlan { console: monitors, seats: Vec::new(), attach: Vec::new() }) {
             log::warn(&format!("display topology reset: {e}"));
         }
         for g in &b.gates {
@@ -1587,6 +1605,18 @@ mod kiosk_map_tests {
         let p = Service::display_plan(&devs, false);
         assert_eq!(p.console, vec![DeviceKey::new("split12").unwrap()]);
         assert_eq!(p.seats, vec![(s(2), vec![DeviceKey::new("mon2").unwrap()])]);
+    }
+
+    /// Gaming PC E2E round 2 bug H: only a monitor the user gave seat 1 is attached to the
+    /// console desktop; an unassigned one (default mask) stays where the user put it.
+    #[test]
+    fn only_assigned_console_monitors_are_attached() {
+        let unassigned = Effective { source: MaskSource::Default, ..eff("mon-free", DeviceKind::Monitor, SeatMask::CONSOLE) };
+        let devs = vec![eff("mon1", DeviceKind::Monitor, SeatMask::CONSOLE), unassigned];
+        let p = Service::display_plan(&devs, false);
+        assert_eq!(p.console, vec![DeviceKey::new("mon1").unwrap(), DeviceKey::new("mon-free").unwrap()]);
+        assert_eq!(p.attach, vec![DeviceKey::new("mon1").unwrap()]);
+        assert!(p.seats.is_empty());
     }
 }
 

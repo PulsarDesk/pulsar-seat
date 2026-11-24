@@ -86,6 +86,10 @@ const MAX_TOUCH_CONTACTS: u16 = 10;
 /// A layout waiting for display control longer than this is applied by reconnecting with
 /// the new monitor data.
 const PENDING_LAYOUT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Shortest time between two display control layouts: a newer layout waits out the rest,
+/// and only the newest of those that came meanwhile is sent (gaming PC E2E round 2 bug F:
+/// 10 identical layouts and 11 graphics resets a minute while RdpIdd crashed).
+pub const LAYOUT_MIN_INTERVAL: Duration = Duration::from_secs(2);
 /// Longest wait between two `SessionEvent::Graphics` reports while the counters change.
 pub const GFX_STATS_INTERVAL: Duration = Duration::from_secs(10);
 /// Shortest time between two graphics resyncs (lost H.264 pictures, dropped updates).
@@ -104,7 +108,9 @@ pub enum Command {
     /// relative event without motion, so the click does not warp the pointer.
     RelativeButton { bit: u8, down: bool },
     /// New seat monitor layout (display control resize; applied when the server accepts).
-    Layout(Vec<MonitorDef>),
+    /// Sent only when it differs from the layout in effect, at most every
+    /// [`LAYOUT_MIN_INTERVAL`]; `reason` names the caller in the log.
+    Layout { monitors: Vec<MonitorDef>, reason: &'static str },
     /// Present whole frames again (presenter reconfigured) and ask the server to redraw.
     Redraw,
     /// DRDYNVC messages from a channel thread (microphone data), tagged with the connection
@@ -154,8 +160,9 @@ impl Handle {
     pub fn relative_button(&self, bit: u8, down: bool) -> bool {
         self.send(Command::RelativeButton { bit, down })
     }
-    pub fn set_layout(&self, monitors: Vec<MonitorDef>) -> bool {
-        self.send(Command::Layout(monitors))
+    /// `reason`: why the host asks (logged with the layout, sent or not).
+    pub fn set_layout(&self, monitors: Vec<MonitorDef>, reason: &'static str) -> bool {
+        self.send(Command::Layout { monitors, reason })
     }
     pub fn redraw(&self) -> bool {
         self.send(Command::Redraw)
@@ -457,7 +464,8 @@ struct Active<'a> {
     gpu_slots: Vec<OutputSlot>,
     /// A CPU present is being put off for the presenter (counted once per stretch).
     deferring: bool,
-    pending_layout: Option<Vec<MonitorDef>>,
+    /// A layout (and why) waiting for display control to open.
+    pending_layout: Option<(Vec<MonitorDef>, &'static str)>,
     /// When `pending_layout` started waiting for display control.
     pending_since: Option<Instant>,
     /// Layout the session should have (ours as sent, or the server's last report): what
@@ -466,6 +474,12 @@ struct Active<'a> {
     /// The seat's own layout (last one asked for), with its scale and orientation; the
     /// next connect's monitor data.
     requested_layout: Vec<MonitorDef>,
+    /// When the last display control layout went out on this connection.
+    layout_sent_at: Option<Instant>,
+    /// A changed layout (and why) waiting out [`LAYOUT_MIN_INTERVAL`]; the newest wins.
+    held_layout: Option<(Vec<MonitorDef>, &'static str)>,
+    /// Graphics resets (EGFX `ResetGraphics`) on this connection, for the log.
+    resets: u32,
     /// Connection number; uplink messages of other connections are dropped.
     connection: u64,
     slots: ContactSlots,
@@ -536,6 +550,40 @@ pub fn display_layout(monitors: &[MonitorDef]) -> Option<(DisplayControlMonitorL
         return None;
     }
     DisplayControlMonitorLayout::new(&entries).ok().map(|l| (l, sent))
+}
+
+/// What to do with a seat layout (as [`display_layout`] would send it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutVerdict {
+    /// Differs from the layout in effect: send it now.
+    Send,
+    /// Same as the layout in effect: nothing to send. Every display control layout makes
+    /// the server re-mode the session's display (a graphics reset follows), also when
+    /// nothing changed (gaming PC E2E round 2 bug F).
+    Unchanged,
+    /// Differs, but the last layout went out less than [`LAYOUT_MIN_INTERVAL`] ago: hold it
+    /// for the time left.
+    Hold(Duration),
+}
+
+/// `in_effect`: the session's layout as [`display_layout`] would send it (`None` before
+/// the session reported one); `sent_at`: when the last layout went out on this connection.
+pub fn layout_verdict(layout: &[MonitorDef], in_effect: Option<&[MonitorDef]>, sent_at: Option<Instant>, now: Instant) -> LayoutVerdict {
+    if in_effect == Some(layout) {
+        return LayoutVerdict::Unchanged;
+    }
+    match sent_at.map(|t| now.saturating_duration_since(t)) {
+        Some(age) if age < LAYOUT_MIN_INTERVAL => LayoutVerdict::Hold(LAYOUT_MIN_INTERVAL - age),
+        _ => LayoutVerdict::Send,
+    }
+}
+
+/// `2560x1440@0,0 p 125% 0deg; ...` for the layout log lines.
+fn describe_layout(l: &[MonitorDef]) -> String {
+    l.iter()
+        .map(|m| format!("{}x{}@{},{}{} {}% {}deg", m.width(), m.height(), m.left, m.top, if m.primary { " p" } else { "" }, m.scale, m.orientation))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Monitors reported by the server (`TS_MONITOR_DEF` list) as our monitor list. The
@@ -869,6 +917,16 @@ impl Active<'_> {
     fn follow_output_size(&mut self) {
         let reset = self.gfx.take_reset();
         let (w, h) = (self.image.width(), self.image.height());
+        if let Some((rw, rh)) = reset {
+            // Round 3 evidence for bug F: each reset next to the layout that preceded it.
+            self.resets += 1;
+            log_warn(&format!(
+                "connection {}: graphics reset {rw}x{rh} (#{} on this connection; last layout sent {})",
+                self.connection,
+                self.resets,
+                self.layout_sent_at.map_or_else(|| "never".to_string(), |t| format!("{} ms before", t.elapsed().as_millis()))
+            ));
+        }
         let layout = self.splitter_layout.clone().unwrap_or_default();
         let Some(g) = follow_size(self.splitter.geometry(), &layout, w, h) else {
             if reset.is_some() {
@@ -945,10 +1003,11 @@ impl Active<'_> {
         if before != after {
             self.hooks.event(SessionEvent::Channels(after));
         }
-        if dc && let Some(l) = self.pending_layout.take() {
+        if dc && let Some((l, reason)) = self.pending_layout.take() {
             self.pending_since = None;
-            self.send_layout(l)?;
+            self.send_layout(l, reason)?;
         }
+        self.send_held_layout()?;
         self.gfx_resync()?;
         self.flush_acks()?;
         self.report_gfx(false);
@@ -969,18 +1028,47 @@ impl Active<'_> {
         }
     }
 
-    /// `Err` only for a failed socket write (the connection is gone).
-    fn send_layout(&mut self, l: Vec<MonitorDef>) -> Result<(), End> {
+    /// Send the seat layout when it differs from the one in effect, at most every
+    /// [`LAYOUT_MIN_INTERVAL`] (see [`layout_verdict`]); every decision is logged with
+    /// `reason`. `Err` only for a failed socket write (the connection is gone).
+    fn send_layout(&mut self, l: Vec<MonitorDef>, reason: &'static str) -> Result<(), End> {
         self.requested_layout = l.clone();
         let Some((layout, sent)) = display_layout(&l) else {
             log_warn("seat layout cannot be expressed for display control");
             return Ok(());
         };
+        let in_effect = self.splitter_layout.as_deref().and_then(display_layout).map(|(_, s)| s);
+        match layout_verdict(&sent, in_effect.as_deref(), self.layout_sent_at, Instant::now()) {
+            LayoutVerdict::Unchanged => {
+                // Also drops a layout still waiting: the session has this one already.
+                self.pending_layout = None;
+                self.pending_since = None;
+                self.held_layout = None;
+                log_warn(&format!("connection {}: layout not sent ({reason}): unchanged {}", self.connection, describe_layout(&sent)));
+                return Ok(());
+            }
+            LayoutVerdict::Hold(left) => {
+                if self.held_layout.is_none() {
+                    log_warn(&format!("connection {}: layout held {} ms ({reason}): {}", self.connection, left.as_millis(), describe_layout(&sent)));
+                }
+                self.held_layout = Some((l, reason));
+                return Ok(());
+            }
+            LayoutVerdict::Send => {}
+        }
         match self.stage.encode_monitor_layout(&layout) {
             Some(Ok(frame)) => {
                 self.pending_layout = None;
                 self.pending_since = None;
+                self.held_layout = None;
                 self.write(&frame)?;
+                log_warn(&format!(
+                    "connection {}: layout sent ({reason}): {} (was {})",
+                    self.connection,
+                    describe_layout(&sent),
+                    in_effect.as_deref().map_or_else(|| "unknown".to_string(), describe_layout)
+                ));
+                self.layout_sent_at = Some(Instant::now());
                 // The server answers with a deactivation-reactivation of the new size; the
                 // geometry follows there, cut by the layout exactly as sent.
                 self.splitter_layout = Some(sent);
@@ -989,8 +1077,18 @@ impl Active<'_> {
             None => {
                 // Display control not open yet: wait (bounded, see `PENDING_LAYOUT_TIMEOUT`).
                 self.pending_since.get_or_insert_with(Instant::now);
-                self.pending_layout = Some(l);
+                self.pending_layout = Some((l, reason));
             }
+        }
+        Ok(())
+    }
+
+    /// A held layout whose [`LAYOUT_MIN_INTERVAL`] is over goes out now (checked again).
+    fn send_held_layout(&mut self) -> Result<(), End> {
+        if self.layout_sent_at.is_none_or(|t| t.elapsed() >= LAYOUT_MIN_INTERVAL)
+            && let Some((l, reason)) = self.held_layout.take()
+        {
+            self.send_layout(l, reason)?;
         }
         Ok(())
     }
@@ -1045,7 +1143,7 @@ impl Active<'_> {
                     self.fastpath(&[e])?;
                 }
             }
-            Command::Layout(l) => self.send_layout(l)?,
+            Command::Layout { monitors, reason } => self.send_layout(monitors, reason)?,
             Command::Redraw => {
                 self.splitter.invalidate();
                 self.mark_dirty(crate::config::FbRect { x: 0, y: 0, width: u32::from(self.image.width()), height: u32::from(self.image.height()) });
@@ -1244,6 +1342,7 @@ impl Active<'_> {
                 self.present_with(true);
                 return Ok(End::Relayout);
             }
+            self.send_held_layout()?;
             // Channel timers (rate-limited inside): deferred smart-card completions and
             // clipboard time-outs, also while the server keeps sending.
             let frame = self.channel_ticker.tick(&mut self.stage, &self.channel_log).map_err(session_err)?;
@@ -1381,6 +1480,9 @@ pub fn run(
                     pending_since: None,
                     splitter_layout: Some(used),
                     requested_layout: layout.clone(),
+                    layout_sent_at: None,
+                    held_layout: None,
+                    resets: 0,
                     connection,
                     slots: ContactSlots::new(MAX_TOUCH_CONTACTS),
                     logged_on: false,
@@ -1401,7 +1503,7 @@ pub fn run(
                         Err(e) => e,
                     }
                 } else {
-                    match queued.layout.map(|l| active.send_layout(l)) {
+                    match queued.layout.map(|l| active.send_layout(l, "asked while connecting")) {
                         Some(Err(e)) => e,
                         _ => active.run(rx),
                     }
@@ -1476,7 +1578,7 @@ fn drain_queued(rx: &Receiver<Command>) -> Queued {
                 q.shutdown = true;
                 return q;
             }
-            Ok(Command::Layout(l)) => q.layout = Some(l),
+            Ok(Command::Layout { monitors, .. }) => q.layout = Some(monitors),
             Ok(_) => {}
             Err(TryRecvError::Empty) => return q,
         }
@@ -1494,7 +1596,7 @@ fn wait_or_shutdown(rx: &Receiver<Command>, d: Duration, layout: &mut Vec<Monito
         }
         match rx.recv_timeout(left) {
             Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => return true,
-            Ok(Command::Layout(l)) => *layout = l,
+            Ok(Command::Layout { monitors, .. }) => *layout = monitors,
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => return false,
         }
@@ -1583,8 +1685,8 @@ mod tests {
         let (mut h, rx) = channel((1920, 1080));
         RdpInputChannel::send(&mut h, &[RdpInputEvent::Scancode { flags: 0, code: 0x1E }]).unwrap();
         h.relative(1, 1);
-        h.set_layout(vec![mon(0, 0, 800, 600, true)]);
-        h.set_layout(vec![mon(0, 0, 1024, 768, true)]);
+        h.set_layout(vec![mon(0, 0, 800, 600, true)], "test");
+        h.set_layout(vec![mon(0, 0, 1024, 768, true)], "test");
         h.send(Command::Uplink { connection: 1, msgs: Vec::new() });
         let q = drain_queued(&rx);
         assert!(!q.shutdown);
@@ -1592,11 +1694,42 @@ mod tests {
         assert!(rx.try_recv().is_err(), "everything else dropped");
         // The retry wait keeps a layout too.
         let mut l = vec![mon(0, 0, 800, 600, true)];
-        h.set_layout(vec![mon(0, 0, 1280, 720, true)]);
+        h.set_layout(vec![mon(0, 0, 1280, 720, true)], "test");
         assert!(!wait_or_shutdown(&rx, Duration::from_millis(20), &mut l));
         assert_eq!(l[0].width(), 1280);
     }
 
+    /// Gaming PC E2E round 2 bug F: the host re-sent the same layout after every service
+    /// reconfigure, and each one made the server re-mode the session's display. A layout
+    /// equal to the one in effect is never sent; a changed one waits out
+    /// `LAYOUT_MIN_INTERVAL` after the last one.
+    #[test]
+    fn layout_is_sent_only_when_changed_and_rate_capped() {
+        let now = Instant::now();
+        let qhd = display_layout(&[mon(0, 0, 2560, 1440, true)]).unwrap().1;
+        let fhd = display_layout(&[mon(0, 0, 1920, 1080, true)]).unwrap().1;
+        // The server's report of the same monitor (inclusive edges, same values) is "in
+        // effect": the identical layout is not sent, however long ago the last one was.
+        assert_eq!(layout_verdict(&qhd, Some(&qhd), None, now), LayoutVerdict::Unchanged);
+        assert_eq!(layout_verdict(&qhd, Some(&qhd), Some(now - Duration::from_secs(60)), now), LayoutVerdict::Unchanged);
+        // A real change goes out at once when nothing was sent lately ...
+        assert_eq!(layout_verdict(&fhd, Some(&qhd), None, now), LayoutVerdict::Send);
+        assert_eq!(layout_verdict(&fhd, None, None, now), LayoutVerdict::Send);
+        assert_eq!(layout_verdict(&fhd, Some(&qhd), Some(now - LAYOUT_MIN_INTERVAL), now), LayoutVerdict::Send);
+        // ... and is held for the rest of the interval otherwise.
+        let sent = now - Duration::from_millis(500);
+        assert_eq!(layout_verdict(&fhd, Some(&qhd), Some(sent), now), LayoutVerdict::Hold(LAYOUT_MIN_INTERVAL - Duration::from_millis(500)));
+        // A scale (DPI) change alone is a change.
+        let mut scaled = qhd.clone();
+        scaled[0].scale = 125;
+        assert_eq!(layout_verdict(&scaled, Some(&qhd), None, now), LayoutVerdict::Send);
+        // The normalised form of the layout in effect equals what the host asks again
+        // (odd width made even the same way both times).
+        let odd = [mon(0, 0, 1921, 1080, true)];
+        let once = display_layout(&odd).unwrap().1;
+        assert_eq!(display_layout(&once).unwrap().1, once);
+        assert!(describe_layout(&qhd).starts_with("2560x1440@0,0 p 100%"), "{}", describe_layout(&qhd));
+    }
     #[test]
     fn finalize_errors_with_a_password_are_never_network() {
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");

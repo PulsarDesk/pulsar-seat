@@ -413,3 +413,22 @@ Machine access: `docs/local/README.md` (Test PC, LAN address). Evidence:
   `has signed-in user ... but no logon was seen` (catch-up fired), `session N kept after the host exit`,
   `log-off of session N ... took N ms`, `restart held, Windows is shutting down`,
   `host exited (pid N) while Windows shuts down`, `service stop requested`, `USB capture resumed`.
+
+## Round 3 prep, fix agent b (branch e2e3-b, 2026-11-24): bugs F and H
+
+- Bug F (bug 3, black RDP picture / RdpIdd crash): the engine sends a layout only when it differs
+  from the one in effect and at most every 2 s; the host keeps presenter + layout on a `Reconfigure`
+  with unchanged outputs; the presenter reports a layout only on a move / loss / DPI change.
+  Retest: host log has `seat host: reconfigure: outputs unchanged` at other seats' logons, at most a
+  few `connection N: layout sent (...)` per connection and many `layout not sent (...): unchanged`;
+  `graphics reset` count per connection small (1-2); System log without DriverFrameworks-UserMode
+  10111 for the Remote Display Adapter; no `error_info 17`; `first RDP frame ... N of 14400 samples
+  not black` with N > 0 in `rdp_decode` (avc444, then no-h264, then bitmap). If the adapter still
+  crashes with no layout churn: the duplicate-layout HYPOTHESIS is wrong; next suspect Duo TermWrap
+  1.6 with termsrv 10.0.26100.9818 on build 26300 (test with one seat only, then a plain RDP client).
+- Bug H (bug 9 detach-back): only `TopologyPlan::attach` (seat 1's assigned monitors, wizard extend)
+  and seat targets are attached. Retest with the DP VG27A detached by the user first: product enable
+  with no seat using it logs no `display: attached`; assigning it to seat 2 logs `attached ... (a seat
+  presents it through the desktop); journaled`; dropping it from seat 2 and, separately, `set_enabled
+  false` each log `target 4352 of adapter ... detached again (no seat uses it)`, the journal
+  `display-topology.json` is empty and `ccd-list` shows only t256 and t4354 active.

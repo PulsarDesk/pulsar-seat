@@ -10,12 +10,15 @@
 //! | `pulsar_idd` | as `display_core`, plus one virtual monitor per output from our IddCx driver | as `display_core` |
 //! | `console_only` | none (fast user switching) | seat 1 `native` only |
 //!
-//! The binding adds a monitor to the console desktop only when the plan names it (seat 1,
-//! a seat that presents it through the desktop, or every monitor in the wizard's extend
-//! step) and it is connected but outside the desktop: one CCD path with explicit paths,
-//! journaled first as `attached`, removed again once no plan names it (gaming PC E2E bug
-//! 9, 2026-11-24: Windows' extend topology kept a user-detached monitor out). It never
-//! touches graphics-kernel state.
+//! The binding adds a monitor to the console desktop only when the plan asks for it (a seat
+//! that presents it through the desktop, or `TopologyPlan::attach`: seat 1's explicitly
+//! assigned monitors and every monitor in the wizard's extend step) and it is connected but
+//! outside the desktop: one CCD path with explicit paths, journaled first as `attached`,
+//! removed again once neither a seat nor `attach` names it (gaming PC E2E bug 9,
+//! 2026-11-24: Windows' extend topology kept a user-detached monitor out; round 2 bug H:
+//! an unassigned monitor merely listed in `console` is never attached, and a monitor the
+//! product attached goes back out when its seat lets it go or the product is turned off).
+//! It never touches graphics-kernel state.
 //!
 //! - `apply_topology` takes the seat targets of `display_core` / `pulsar_idd` out of the
 //!   console desktop where Windows offers monitor specialization (feature-detected; see
@@ -546,17 +549,25 @@ impl DisplayBinding for Binding {
                 .collect();
             let all: Vec<Candidate> = live.iter().map(cand).collect();
             let journal = lock(&inner.state).journal.clone();
-            // Console targets (seat 1, the wizard's extend step) outside the desktop are
-            // attached too; never under console_only (its seat agent owns the topology).
+            // Console targets the plan asks for (`attach`: seat 1's explicit monitors, the
+            // wizard's extend step) outside the desktop are attached too; never under
+            // console_only (its seat agent owns the topology). Other console targets stay
+            // where the user put them, and a target Pulsar attached that neither `attach`
+            // nor a seat names any more is detached again (gaming PC E2E round 2 bug H).
+            let attach_keys: HashSet<DeviceKey> =
+                inner.resolve_all(&plan.attach, &live).into_iter().filter_map(|(_, m)| m.map(|m| m.device.key.clone())).collect();
             let console_cands: Vec<Candidate> = if inner.kind == DisplayBackendKind::ConsoleOnly {
                 Vec::new()
             } else {
-                live.iter().filter(|m| console.contains(&m.device.key)).map(cand).collect()
+                live.iter().filter(|m| attach_keys.contains(&m.device.key)).map(cand).collect()
             };
             let attach = inner.kind != DisplayBackendKind::ConsoleOnly && lock(&inner.state).journal_refused.is_none();
             let actions = plan_topology(takes_out, &reserved, &console_cands, attach, &all, &journal);
             if actions.kept_for_console {
                 log::warn!("display: seat targets stay in the console desktop: seat 1 would have no monitor left");
+            }
+            if actions.detach_kept_for_console {
+                log::warn!("display: monitors Pulsar attached stay in the console desktop for now: seat 1 would have no monitor left");
             }
             if !actions.request.is_empty() {
                 // Journal first: a crash during the change still leaves a record to undo.
@@ -571,7 +582,12 @@ impl DisplayBinding for Binding {
                         for t in &actions.attaching {
                             let key = all.iter().find(|c| &c.target == t).map(|c| c.key.to_string()).unwrap_or_default();
                             if outcome.activated.contains(t) {
-                                log::info!("display: attached {key} (target {} of adapter {:x}) to the console desktop; journaled", t.target_id, t.adapter_luid);
+                                let why = if reserved.iter().any(|c| &c.target == t) { "a seat presents it through the desktop" } else { "seat 1 or the wizard needs it" };
+                                log::info!(
+                                    "display: attached {key} (target {} of adapter {:x}) to the console desktop ({why}); journaled",
+                                    t.target_id,
+                                    t.adapter_luid
+                                );
                             } else {
                                 log::warn!("display: {key} (target {} of adapter {:x}) is connected but could not be attached", t.target_id, t.adapter_luid);
                             }
@@ -1209,7 +1225,7 @@ mod tests {
         // Bug 9 (gaming PC E2E): the connected target outside the desktop is attached by the
         // seat's plan (explicit CCD paths, journaled), then binds as a desktop target.
         let k3 = devs[2].key.clone();
-        let plan = TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()]), (s(3), vec![k3.clone()])] };
+        let plan = TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()]), (s(3), vec![k3.clone()])], attach: vec![] };
         let r = b.apply_topology(&plan).unwrap();
         assert!(r.changed);
         assert!(r.missing.is_empty(), "{:?}", r.missing);
@@ -1228,7 +1244,7 @@ mod tests {
         // Same plan again: nothing to do.
         assert!(!b.apply_topology(&plan).unwrap().changed);
         // Seat 3 no longer uses it: the path goes again and the journal is empty.
-        let r = b.apply_topology(&TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()])] }).unwrap();
+        let r = b.apply_topology(&TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![k2.clone()])], attach: vec![] }).unwrap();
         assert!(r.changed && r.removed.is_empty());
         assert!(b.topology_journal().entries.is_empty());
         assert_eq!(b.bind_seat(s(3), std::slice::from_ref(&k3)).unwrap_err().reason, "no_display");
@@ -1237,9 +1253,47 @@ mod tests {
         // console_only never attaches (its seat agent owns the topology).
         let (b, c) = setup(DisplayBackendKind::ConsoleOnly, vec![target(5, 1, true, 0), target(5, 3, false, 0)]);
         let devs = b.enumerate().unwrap();
-        let r = b.apply_topology(&TopologyPlan { console: devs.iter().map(|d| d.key.clone()).collect(), seats: vec![] }).unwrap();
+        let all: Vec<DeviceKey> = devs.iter().map(|d| d.key.clone()).collect();
+        let r = b.apply_topology(&TopologyPlan { console: all.clone(), seats: vec![], attach: all }).unwrap();
         assert!(!r.changed && r.missing == vec![devs[1].key.clone()]);
         assert!(lock(&c.cmds).is_empty());
+    }
+
+    /// Gaming PC E2E round 2 bug H: an unassigned monitor the user keeps out of the desktop
+    /// is not attached at product enable; a monitor attached for a seat goes back out when
+    /// no seat needs it (seat config dropped it, product turned off).
+    #[test]
+    fn attached_monitor_is_detached_when_no_seat_needs_it() {
+        let (b, c) = setup(DisplayBackendKind::WindowPresenter, vec![target(5, 1, true, 0), target(5, 3, false, 0)]);
+        let devs = b.enumerate().unwrap();
+        let (k1, k3) = (devs[0].key.clone(), devs[1].key.clone());
+        let active = |c: &FakeConsole| lock(&c.snap).targets.iter().find(|t| t.target_id == 3).unwrap().active;
+        let both = vec![k1.clone(), k3.clone()];
+        // Product enabled, no seat uses the monitor: the service lists it as a console
+        // monitor (default mask) without `attach`. Left alone.
+        let idle = TopologyPlan { console: both.clone(), seats: vec![], attach: vec![] };
+        assert!(!b.apply_topology(&idle).unwrap().changed);
+        assert!(!active(&c) && b.topology_journal().entries.is_empty());
+        // Seat 2 gets it: attached and journaled.
+        let seat2 = TopologyPlan { console: vec![k1.clone()], seats: vec![(s(2), vec![k3.clone()])], attach: vec![] };
+        assert!(b.apply_topology(&seat2).unwrap().changed);
+        assert!(active(&c) && b.topology_journal().entries[0].attached);
+        // Dropped from the seat config (unassigned again): detached, journal empty.
+        let r = b.apply_topology(&idle).unwrap();
+        assert!(r.changed && r.removed.is_empty() && r.restored.is_empty());
+        assert!(!active(&c) && b.topology_journal().entries.is_empty());
+        // Product off (`release_ownership`: every monitor a console monitor, nothing to
+        // attach): detached the same way.
+        b.apply_topology(&seat2).unwrap();
+        assert!(active(&c));
+        b.apply_topology(&TopologyPlan { console: both.clone(), seats: vec![], attach: vec![] }).unwrap();
+        assert!(!active(&c) && b.topology_journal().entries.is_empty());
+        // Seat 1's explicit monitor (or the wizard's extend step) is attached, and detached
+        // again once the plan stops asking.
+        b.apply_topology(&TopologyPlan { console: both.clone(), seats: vec![], attach: vec![k3.clone()] }).unwrap();
+        assert!(active(&c) && b.topology_journal().entries[0].attached);
+        b.apply_topology(&idle).unwrap();
+        assert!(!active(&c) && b.topology_journal().entries.is_empty());
     }
 
     #[test]
@@ -1450,7 +1504,7 @@ mod tests {
         b.set_journal_path_unchecked(path.clone());
         let devs = b.enumerate().unwrap();
         let (k1, k2) = (devs[0].key.clone(), devs[1].key.clone());
-        let plan = TopologyPlan { console: vec![k1.clone()], seats: vec![(s(2), vec![k2.clone()])] };
+        let plan = TopologyPlan { console: vec![k1.clone()], seats: vec![(s(2), vec![k2.clone()])], attach: vec![] };
         let r = b.apply_topology(&plan).unwrap();
         assert!(r.changed && !r.rolled_back);
         assert_eq!(r.removed, vec![k2.clone()]);
@@ -1464,7 +1518,7 @@ mod tests {
         let r = b.apply_topology(&plan).unwrap();
         assert!(!r.changed);
         // Everything back to seat 1 (disable): restored and journal empty.
-        let r = b.apply_topology(&TopologyPlan { console: vec![k1.clone(), k2.clone()], seats: vec![] }).unwrap();
+        let r = b.apply_topology(&TopologyPlan { console: vec![k1.clone(), k2.clone()], seats: vec![], attach: vec![] }).unwrap();
         assert_eq!(r.restored, vec![k2.clone()]);
         assert!(r.missing.is_empty());
         assert!(b.topology_journal().entries.is_empty());
@@ -1476,7 +1530,7 @@ mod tests {
         t2.specialization_available = None;
         let (b, c) = setup(DisplayBackendKind::DisplayCore, vec![target(5, 1, true, 0), t2]);
         let devs = b.enumerate().unwrap();
-        let r = b.apply_topology(&TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![devs[1].key.clone()])] }).unwrap();
+        let r = b.apply_topology(&TopologyPlan { console: vec![devs[0].key.clone()], seats: vec![(s(2), vec![devs[1].key.clone()])], attach: vec![] }).unwrap();
         assert!(!r.changed);
         assert_eq!(r.fallback, vec![devs[1].key.clone()]);
         assert!(lock(&c.cmds).is_empty());

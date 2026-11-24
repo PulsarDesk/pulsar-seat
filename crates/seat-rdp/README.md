@@ -106,7 +106,14 @@ does not work against a real Server build (untested, see below).
   endpoint (architecture.md, "Seat audio jitter buffer").
 - `session`: one engine thread owns the socket. A `Handle` (also the seat's
   `RdpInputChannel`) sends commands over a channel. Layout changes go through display
-  control. Deactivation-reactivation is handled. The engine reconnects in the host only
+  control: `Handle::set_layout(monitors, reason)` sends a layout only when it differs
+  from the one in effect (ours as last sent, or the server's last report), and at most
+  every `LAYOUT_MIN_INTERVAL` (2 s; a newer one waits out the rest, the newest wins).
+  Every layout decision is logged (`connection N: layout sent / not sent / held (reason)`)
+  and so is every graphics reset with the time since the last layout (gaming PC E2E
+  round 2 bug F: the same layout after every service reconfigure made the server re-mode
+  the session display about ten times a minute while RdpIdd crashed; HYPOTHESIS that the
+  re-modes cause the crash). Deactivation-reactivation is handled. The engine reconnects in the host only
   for transient network failures, at most 4 times (1, 2, 4, 8 s). Every attempt runs
   the listener check, the peer check and the pin again.
 

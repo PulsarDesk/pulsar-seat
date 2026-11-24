@@ -272,10 +272,12 @@ impl Service {
                 let picked_before = w.picked;
                 let action = w.command(&command, inventory, now).map_err(|r| err(ErrorCode::InvalidValue, r).with_reason(r))?;
                 let monitors: Vec<DeviceKey> = if extend { w.monitors.clone() } else { Vec::new() };
+                // Kept attached by every ownership run until the wizard ends.
+                w.extended |= extend;
                 let relabel = (!picked_before && w.picked).then(|| w.overlay_labels());
                 drop(st);
                 if extend {
-                    let plan = seat_core::backend::display::TopologyPlan { console: monitors, seats: Vec::new() };
+                    let plan = seat_core::backend::display::TopologyPlan { console: monitors.clone(), seats: Vec::new(), attach: monitors };
                     self.backends().display.apply_topology(&plan)?;
                 }
                 if let Some(labels) = relabel {
