@@ -203,12 +203,36 @@ pub struct CaptureJournal {
     pub version: u32,
     #[serde(default)]
     pub entries: Vec<CaptureEntry>,
+    /// Extension INF entries (`DEVPKEY_Device_ExtendedConfigurationIds` lines) ever journaled
+    /// for a node (key: instance id, upper case). Kept after the node's entry is gone, so a
+    /// later capture that reads fewer extensions on the node (gaming PC round 3, bug P: the
+    /// boot recovery lost the Logitech `oem185.inf`) still journals them and the release
+    /// re-applies them. Additive (older journals load it empty).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions_seen: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for CaptureJournal {
     fn default() -> Self {
-        Self { version: 1, entries: Vec::new() }
+        Self { version: 1, entries: Vec::new(), extensions_seen: BTreeMap::new() }
     }
+}
+
+/// `original` with every extension of `seen` whose INF it lacks added back; the INF names
+/// added are returned (empty = nothing was missing).
+pub fn merge_seen_extensions(original: &mut OriginalDriver, seen: &[String]) -> Vec<String> {
+    let have = original.extension_infs();
+    let mut added: Vec<String> = Vec::new();
+    for e in seen {
+        let Some((inf, _)) = e.split_once(':') else { continue };
+        let inf = inf.trim();
+        if !is_bare_inf_name(inf) || have.iter().chain(added.iter()).any(|h| h.eq_ignore_ascii_case(inf)) {
+            continue;
+        }
+        original.extensions.push(e.clone());
+        added.push(inf.to_string());
+    }
+    added
 }
 
 /// Where the journal lives.
@@ -603,6 +627,8 @@ pub struct UsbCapture {
     /// `<node>: <differences>` of restores that did not bring back the exact original
     /// driver ([`restore_differences`]), newest last, at most [`MAX_INEXACT`].
     inexact: Mutex<Vec<String>>,
+    /// [`CaptureJournal::extensions_seen`], loaded at start and written with every save.
+    extensions_seen: Mutex<BTreeMap<String, Vec<String>>>,
 }
 
 /// How many inexact restores [`UsbCapture::inexact_restores`] keeps.
@@ -617,7 +643,9 @@ impl UsbCapture {
         // What an earlier run (or instance) journaled and nobody restored yet is pending
         // from the start: it is retried with the next sync and never dropped from the
         // journal by a later save.
-        let pending = journal.load().entries;
+        let doc = journal.load();
+        let pending = doc.entries;
+        let extensions_seen = doc.extensions_seen;
         Arc::new(Self {
             swap,
             source,
@@ -630,6 +658,7 @@ impl UsbCapture {
             op: Mutex::new(()),
             held: AtomicBool::new(false),
             inexact: Mutex::new(Vec::new()),
+            extensions_seen: Mutex::new(extensions_seen),
         })
     }
 
@@ -776,7 +805,8 @@ impl UsbCapture {
         entries.extend(lock(&self.pending).iter().cloned());
         entries.sort_by(|a, b| a.node.cmp(&b.node));
         entries.dedup_by(|a, b| a.node == b.node);
-        self.journal.save(&CaptureJournal { version: 1, entries })
+        let extensions_seen = lock(&self.extensions_seen).clone();
+        self.journal.save(&CaptureJournal { version: 1, entries, extensions_seen })
     }
 
     /// Make the captured set equal `want` (node → seat, units). Returns errors per node.
@@ -835,7 +865,22 @@ impl UsbCapture {
     }
 
     fn capture_one(&self, node: &str, seat: SeatNumber, units: &[Device]) -> BackendResult<()> {
-        let original = self.swap.original(node)?;
+        let mut original = self.swap.original(node)?;
+        {
+            // Never journal fewer extensions than an earlier capture of this node saw (bug P).
+            let mut seen = lock(&self.extensions_seen);
+            let key = node.to_ascii_uppercase();
+            let added = merge_seen_extensions(&mut original, seen.get(&key).map(Vec::as_slice).unwrap_or_default());
+            if !added.is_empty() {
+                log::warn!(
+                    "USB input node {node}: extension {} journaled earlier but not on the node now; kept in the journal so the release re-applies it",
+                    added.join(", ")
+                );
+            }
+            if !original.extensions.is_empty() {
+                seen.insert(key, original.extensions.clone());
+            }
+        }
         let entry = CaptureEntry { node: node.into(), seat: seat.get(), original: original.clone(), units: units.to_vec(), at_ms: self.clock.now_ms() };
         lock(&self.active).insert(node.into(), Active { entry, worker: None });
         // Journal before the swap: a crash in between leaves an entry to restore.
@@ -1615,7 +1660,7 @@ mod tests {
         // A previous run's entry with its own INF, plus an orphan without a journal entry.
         let orig = OriginalDriver { class_guid: HID_CLASS.into(), inf_path: "oem7.inf".into(), ..OriginalDriver::default() };
         *lock(&e.journal.doc) =
-            CaptureJournal { version: 1, entries: vec![CaptureEntry { node: KBD_NODE.into(), seat: 2, original: orig.clone(), units: Vec::new(), at_ms: 1 }] };
+            CaptureJournal { version: 1, entries: vec![CaptureEntry { node: KBD_NODE.into(), seat: 2, original: orig.clone(), units: Vec::new(), at_ms: 1 }], ..Default::default() };
         e.swap.capture(KBD_NODE).unwrap();
         e.swap.capture(MOU_NODE).unwrap();
         assert!(e.c.restore_all().is_empty());
@@ -1629,7 +1674,7 @@ mod tests {
     fn a_new_instance_keeps_and_restores_an_earlier_runs_entries() {
         let e = env();
         let old = CaptureEntry { node: MOU_NODE.into(), seat: 2, original: OriginalDriver::hid_default(), units: Vec::new(), at_ms: 1 };
-        *lock(&e.journal.doc) = CaptureJournal { version: 1, entries: vec![old.clone()] };
+        *lock(&e.journal.doc) = CaptureJournal { version: 1, entries: vec![old.clone()], ..Default::default() };
         e.swap.capture(MOU_NODE).unwrap();
         lock(&e.swap.absent).insert(MOU_NODE.into());
         let c = UsbCapture::with_clock(e.swap.clone(), e.src.clone(), e.journal.clone(), Arc::new(seat_core::mock::MockClock::default()));
@@ -1653,7 +1698,7 @@ mod tests {
         assert!(e.journal.load().entries.is_empty());
         // restore_all releases each node once.
         e.swap.calls.lock().unwrap().clear();
-        *lock(&e.journal.doc) = CaptureJournal { version: 1, entries: vec![old] };
+        *lock(&e.journal.doc) = CaptureJournal { version: 1, entries: vec![old], ..Default::default() };
         e.swap.capture(MOU_NODE).unwrap();
         let c = UsbCapture::with_clock(e.swap.clone(), e.src.clone(), e.journal.clone(), Arc::new(seat_core::mock::MockClock::default()));
         assert!(c.restore_all().is_empty());
@@ -1726,6 +1771,7 @@ mod tests {
         let doc = CaptureJournal {
             version: 1,
             entries: vec![CaptureEntry { node: KBD_NODE.into(), seat: 2, original: OriginalDriver::hid_default(), units: units(), at_ms: 5 }],
+            extensions_seen: BTreeMap::from([(MOU_NODE.to_ascii_uppercase(), logitech_mouse().extensions)]),
         };
         j.save(&doc).unwrap();
         j.save(&doc).unwrap();
@@ -1816,6 +1862,41 @@ mod tests {
         assert!(boot.restore_all().is_empty());
         assert!(e.swap.calls().is_empty(), "{:?}", e.swap.calls());
         assert_eq!(e.swap.driver(KBD_NODE), logitech_kbd());
+    }
+
+    /// Gaming PC round 3, bug P: after a reboot with seat 2 capturing, the boot recovery put
+    /// MI_01 back on `input.inf` but the Logitech extension `oem185.inf` was gone; the next
+    /// capture journaled MI_01 without it, so no later release re-applied it. Now the journal
+    /// remembers the extensions of a node across service starts, and a capture that reads
+    /// fewer journals the remembered ones too.
+    #[test]
+    fn a_capture_never_journals_fewer_extensions_than_an_earlier_one() {
+        let e = env();
+        lock(&e.swap.drivers).insert(MOU_NODE.into(), logitech_mouse());
+        e.src.plug(MOU_NODE, None);
+        assert!(e.c.sync(&want(MOU_NODE, 2, DeviceKind::Mouse)).is_empty());
+        // The release (the boot recovery) leaves the core driver without the extension.
+        let lost = OriginalDriver { extensions: Vec::new(), ..logitech_mouse() };
+        lock(&e.swap.release_leaves).insert(MOU_NODE.into(), lost.clone());
+        assert!(e.c.release_all().is_empty());
+        assert_eq!(e.swap.driver(MOU_NODE), lost);
+        assert!(e.journal.load().entries.is_empty());
+        assert_eq!(e.journal.load().extensions_seen[&MOU_NODE.to_ascii_uppercase()], logitech_mouse().extensions, "kept after the entry");
+        lock(&e.swap.release_leaves).clear();
+        // The next service start captures again: the journal still names oem185.inf.
+        let c = UsbCapture::with_clock(e.swap.clone(), e.src.clone(), e.journal.clone(), Arc::new(seat_core::mock::MockClock::default()));
+        assert!(!c.needs_restore(), "remembered extensions alone are nothing to restore");
+        assert!(c.sync(&want(MOU_NODE, 2, DeviceKind::Mouse)).is_empty());
+        let j = e.journal.load();
+        assert_eq!(j.entries[0].original.extension_infs(), vec!["oem185.inf".to_string()]);
+        // So the release asks for it, and the node gets it back.
+        assert!(c.release_all().is_empty());
+        assert_eq!(e.swap.driver(MOU_NODE), logitech_mouse());
+        // A node without extensions is never given one.
+        let mut plain = OriginalDriver::hid_default();
+        assert!(merge_seen_extensions(&mut plain, &[]).is_empty());
+        assert!(merge_seen_extensions(&mut plain, &["not-an-inf".into(), r"C:\x\a.inf:y".into()]).is_empty());
+        assert!(plain.extensions.is_empty());
     }
 
     /// The same incident: `restore_usb_input` while seat 2 still runs was undone 1-3 s later

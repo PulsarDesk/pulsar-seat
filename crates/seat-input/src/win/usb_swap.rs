@@ -30,7 +30,7 @@ use crate::usb_capture::{INTERFACE_GUID, OriginalDriver, USB_DEVICE_CLASS, UsbSw
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES, CM_Get_Device_Interface_List_SizeW, CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_PropertyW,
-    CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CR_BUFFER_SMALL, CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DICS_FLAG_GLOBAL, DIREG_DEV,
+    CM_Get_DevNode_Status, CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, DN_STARTED, CR_BUFFER_SMALL, CR_SUCCESS, DI_ENUMSINGLEINF, DI_FLAGSEX_ALLOWEXCLUDEDDRVS, DICS_FLAG_GLOBAL, DIREG_DEV,
     DIREG_DRV, DiInstallDevice, HDEVINFO, SETUP_DI_DRIVER_TYPE, SP_DEVINFO_DATA, SP_DEVINSTALL_PARAMS_W, SP_DRVINFO_DATA_V2_W, SPDIT_CLASSDRIVER,
     SPDIT_COMPATDRIVER, SPDRP_CLASSGUID, SetupDiBuildDriverInfoList, SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList, SetupDiDestroyDriverInfoList,
     DiInstallDriverW, SP_DRVINFO_DETAIL_DATA_W, SetupDiEnumDriverInfoW, SetupDiGetDeviceInstallParamsW, SetupDiGetDevicePropertyW,
@@ -387,8 +387,18 @@ impl DevInfo {
         if infs.is_empty() {
             return;
         }
-        let now = OriginalDriver { extensions: self.prop_strings(&DEVPKEY_Device_ExtendedConfigurationIds).unwrap_or_default(), ..OriginalDriver::default() };
+        // Gaming PC round 3 (bug P): read right after the core install, the property still
+        // named the extension ("back by itself") and the node came up without it. Read it
+        // once the node has restarted on the new driver, through a fresh device info set
+        // (round 4: the extension was then missing and re-applied).
+        let started = wait_started(node, EXTENSION_WAIT);
+        let fresh = DevInfo::open(node).ok();
+        let props = fresh.as_ref().unwrap_or(self).prop_strings(&DEVPKEY_Device_ExtendedConfigurationIds).unwrap_or_default();
+        let now = OriginalDriver { extensions: props, ..OriginalDriver::default() };
         let have = now.extension_infs();
+        if !started {
+            log::info!("USB release of {node}: node not started within {} s; extensions read anyway", EXTENSION_WAIT.as_secs());
+        }
         for inf in infs {
             if have.iter().any(|h| h.eq_ignore_ascii_case(&inf)) {
                 log::info!("USB release of {node}: extension {inf} is back by itself");
@@ -430,6 +440,38 @@ impl Drop for RegKey {
     fn drop(&mut self) {
         // SAFETY: key opened by SetupDiOpenDevRegKey.
         unsafe { RegCloseKey(self.0) };
+    }
+}
+
+/// How long [`DevInfo::reapply_extensions`] waits for the node to run on its driver again.
+const EXTENSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Wait until the node is started (`DN_STARTED`, no problem code) and has stayed so for
+/// half a second, at most `max`. `false` on timeout or when the node is gone.
+fn wait_started(node: &str, max: std::time::Duration) -> bool {
+    let id = wide(node);
+    let t0 = std::time::Instant::now();
+    let mut since: Option<std::time::Instant> = None;
+    loop {
+        let mut inst = 0u32;
+        let (mut status, mut problem) = (0u32, 0u32);
+        // SAFETY: NUL-terminated id, out values.
+        let ok = unsafe {
+            CM_Locate_DevNodeW(&mut inst, id.as_ptr(), CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS
+                && CM_Get_DevNode_Status(&mut status, &mut problem, inst, 0) == CR_SUCCESS
+        };
+        if ok && status & DN_STARTED != 0 && problem == 0 {
+            let s = *since.get_or_insert_with(std::time::Instant::now);
+            if s.elapsed() >= std::time::Duration::from_millis(500) {
+                return true;
+            }
+        } else {
+            since = None;
+        }
+        if t0.elapsed() >= max {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
