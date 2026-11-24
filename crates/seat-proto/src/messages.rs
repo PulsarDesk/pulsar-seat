@@ -746,6 +746,12 @@ pub struct UsbInputRestore {
     /// journaled and are tried again at the next start). Empty = everything restored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<String>,
+    /// `winusb_capture` captures nothing again until a seat starts or the input backend /
+    /// its settings are chosen again (added 2026-11-24 after the gaming PC test, where the
+    /// restore was undone 1-3 s later while a seat still ran; additive). Always written, so
+    /// the answer is never an empty object.
+    #[serde(default)]
+    pub capture_held: bool,
 }
 
 /// Result of `restart_term_service`.

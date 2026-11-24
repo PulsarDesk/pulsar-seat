@@ -1105,8 +1105,19 @@ a hub) is moved to the **inbox** `winusb.inf` while that seat has a session:
 - *Swap* (`win::usb_swap::WinUsbSwap`): `Device Parameters\DeviceInterfaceGUIDs` = our own
   GUID `{6f1d3a52-9c47-4b8e-a5d0-2e7c41b98f36}`, `SPDRP_CLASSGUID` = `USBDevice`, then
   `DI_ENUMSINGLEINF` with `%windir%\INF\winusb.inf`, `SetupDiBuildDriverInfoList`,
-  `newdev!DiInstallDevice` on that one devnode. Release reinstalls the journaled class +
-  INF (fallback `input.inf`), then deletes the GUID value. A node that is not present is
+  `newdev!DiInstallDevice` on that one devnode. The journal records the exact original
+  package (`DEVPKEY_Device_DriverInfPath` / `DriverInfSection` / `DriverVersion` /
+  `DriverProvider` / `MatchingDeviceId`, and the extension INFs of
+  `DEVPKEY_Device_ExtendedConfigurationIds`). Release sets the journaled class, installs the
+  driver node of the journaled INF whose section and version match (fallback: the driver
+  Windows ranks best, `SetupDiSelectBestCompatDrv`, never a fixed `input.inf`), deletes the
+  GUID value, then re-applies each journaled extension INF the node did not get back by
+  itself (`DiInstallDriverW`, like `pnputil /add-driver /install`; its software components
+  come back with it). After every restore `UsbCapture` compares the node with the journal
+  and logs `restore check: exact` or `restore check: NOT exact: …` (note
+  `usb_restore_inexact`). Gaming PC 2026-11-24 (bug 5): the old restore put `input.inf` on a
+  Logitech interface that ran `oem128.inf` and lost the extension `oem185.inf`; extension
+  re-apply and section pick are HYPOTHESIS until round 2. A node that is not present is
   removed (`SetupDiRemoveDevice`) so Windows enumerates it fresh on its own driver when it is
   plugged in again. windows-sys structs sized with `size_of` (same code on x64 / ARM64;
   `DiInstallDevice` on ARM64 not yet run).
@@ -1119,8 +1130,16 @@ a hub) is moved to the **inbox** `winusb.inf` while that seat has a session:
   deselected and at service stop (`release_usb_input`), on arrival of a captured node
   (`CM_Register_Notification` on our GUID retries pending releases), on the admin request
   `restore_usb_input{confirm}` (manager: Advanced > methods) and at uninstall
-  (`seat-service uninstall`, `usb_capture::restore_at_start`). Nodes that still carry our GUID
-  but are not journaled (lost journal) are restored with `input.inf`.
+  (`seat-service uninstall`, `usb_capture::restore_at_start`). Nodes that still carry our
+  capture but are not journaled (lost journal) get the driver Windows ranks best. "Still
+  carry" = our GUID in `DeviceInterfaceGUIDs` or the `USBDevice` class
+  (`UsbSwap::still_captured`): Windows keeps the interface registration after the release,
+  so the interface list alone also names nodes restored long ago (proven on the gaming PC:
+  the sweep reinstalled `input.inf` over the just-restored vendor driver, then at every
+  start). The journal entry stays (as pending) until its swap-back is done. The operator's
+  `restore_usb_input` first holds captures off (`UsbCapture::hold`, note `usb_capture_held`,
+  answer `capture_held: true`) until a seat starts or the input backend / its settings are
+  chosen again (a new router); before, the next route apply captured again 1-3 s later.
 - *Reader* (`win::winusb_reader`, one thread per captured node, in the service):
   `CM_Get_Device_Interface_List` on our GUID, `CreateFile` + `WinUsb_Initialize`, the first
   interrupt-IN pipe, the HID report descriptor by `GET_DESCRIPTOR(0x22)` (boot-protocol
@@ -1135,7 +1154,8 @@ a hub) is moved to the **inbox** `winusb.inf` while that seat has a session:
   stay on raw input (note `input_not_isolated_non_usb` under `seat_one_console`); about a
   second of PnP restart per capture; a seat-start capture follows the next ownership apply
   (hot-plug: a new USB keyboard on a running seat is captured when the inventory refresh
-  re-applies routes). Notes: `usb_input_captured`, `usb_capture_failed`. VM test with USB
+  re-applies routes). Notes: `usb_input_captured`, `usb_capture_failed`, `usb_capture_held`,
+  `usb_restore_inexact`. VM test with USB
   passthrough first (docs/progress/osms-local-parity.md G2 point 8).
 
 ### 4.4 Audio (`AudioRouter`; seat-media)
@@ -2588,9 +2608,14 @@ the compat journal (no journal of their own) and undone through it.
 Rules: nothing is written to HKLM `DisableLockWorkstation` (Windows reads it per user only,
 OSMS notes the same). A value the user already holds is never recorded and never undone;
 a value changed by someone else since our write is left alone (`ChangedSince`). The host
-guard follows the account signed in at the console under `dedicated_host` (the auto-logon
-host account by design); a different console account takes it over and the old one is
-undone; while nobody is signed in the last state is kept. The service syncs from the tick
+guard follows the account signed in at the console under `dedicated_host` only when it is
+the host account (`console_guard::console_owner`): with the host console preset wanted
+(`host_autologon`) only Pulsar's console account `PulsarSeatConsole`; without it any
+console user except a seat's configured account. Anybody else gets nothing written and an
+earlier host entry is undone (gaming PC 2026-11-24, bug 11: preset refused for
+`other_autologon`, the owner's own hive got `DisableLockWorkstation` / `ScreenSaveActive`).
+A different host account takes it over and the old one is undone; while nobody is signed
+in the last state is kept. The service syncs from the tick
 (only on a change) and after every config change (`Service::update_console_guard`,
 `seat-service/src/console_guard.rs`); `Platform::sync_console_guard` /
 `sync_no_power_menu` / `sleep_off_state` are the seams (fake in `platform::mock`).

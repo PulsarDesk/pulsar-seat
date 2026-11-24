@@ -1061,7 +1061,7 @@ const t = {
       'Çalışan bir koltuğun USB klavye ve fareleri 1. koltuktan alınır (koltuk çalışırken Windows WinUSB sürücüsüne taşınır). Bu düzende diğer koltukların Bluetooth, yerleşik ve USB olmayan klavye ve fareleri 1. koltuğun öndeki penceresine yine ulaşabilir. Henüz gerçek donanımda denenmedi.',
     restoreUsb: 'USB klavye ve fareleri Windows’a geri ver',
     restoreUsbHint:
-      'Bir koltuğun tuttuğu tüm USB klavye ve fareleri şimdi kendi Windows sürücülerine geri koyar; bir çökmeden sonra da. Çalışan koltuklar kendi aygıtlarını bir sonraki koltuk başlangıcında ya da değişiklikte yeniden alır; almamaları için başka bir giriş yöntemi seçin.',
+      'Bir koltuğun tuttuğu tüm USB klavye ve fareleri şimdi kendi Windows sürücülerine geri koyar; bir çökmeden sonra da. Çalışan koltuklar kendi aygıtlarını ancak bir koltuk başladığında ya da giriş ayarları değiştiğinde yeniden alır; almamaları için başka bir giriş yöntemi seçin.',
     restoreUsbTitle: 'USB klavye ve fareler geri verilsin mi?',
     restoreUsbBody: 'Çalışan koltukların klavye ve fareleri, koltuk onları yeniden alana kadar o koltuklarda çalışmaz. Her aygıt yeniden kurulur; bu yaklaşık bir saniye sürer.',
     restoreUsbConfirm: 'Geri ver',
@@ -1228,6 +1228,8 @@ const t = {
     usb_capture_last_console_input: '1. koltukta klavye ya da fare kalmayacağı için bir USB aygıtı 1. koltukta kalıyor',
     usb_capture_unsupported_collection: 'Oyun kumandası, dokunma ya da kalem parçası da olan bir USB aygıtı 1. koltuktan alınmaz',
     usb_capture_failed: 'Bir USB klavye ya da fare taşınamadı (hizmet günlüğüne bakın)',
+    usb_capture_held: 'USB klavye ve fareler Windows’a geri verildi; bir koltuk başlayana kadar 1. koltukta kalır',
+    usb_restore_inexact: 'Bir USB klavye ya da fare tam olarak eski sürücüsüne dönmedi (hizmet günlüğüne bakın)',
     driver_not_signed: 'Sürücü imzalı değil',
     input_not_routed: 'Giriş aygıtları koltuklara yönlendirilmiyor',
     rdp_listener_on_all_interfaces: 'Uzak Masaüstü bütün ağ bağdaştırıcılarında dinliyor (ağ düzeyinde kimlik doğrulaması açık)',

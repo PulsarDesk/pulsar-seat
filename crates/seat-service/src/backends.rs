@@ -55,6 +55,11 @@ pub trait BackendFactory: Send + Sync {
     fn restore_usb_input(&self) -> Vec<String> {
         Vec::new()
     }
+    /// The operator's restore: hold `winusb_capture` off (nothing is captured again) until a
+    /// seat starts or the input backend is chosen again. `true` = held. Default: nothing.
+    fn hold_usb_capture(&self) -> bool {
+        false
+    }
     /// Release what this run captured (service stop, input backend deselected), without
     /// touching anything else. Returns error texts. Default: nothing.
     fn release_usb_input(&self) -> Vec<String> {
@@ -671,6 +676,8 @@ pub mod testing {
         pub usb_restores: std::sync::atomic::AtomicU32,
         pub usb_releases: std::sync::atomic::AtomicU32,
         pub usb_failures: std::sync::Mutex<Vec<String>>,
+        /// Calls of `hold_usb_capture` and the order relative to restores (`hold`, `restore`).
+        pub usb_order: std::sync::Mutex<Vec<&'static str>>,
     }
 
     impl Default for MockFactory {
@@ -687,6 +694,7 @@ pub mod testing {
                 usb_restores: Default::default(),
                 usb_releases: Default::default(),
                 usb_failures: Default::default(),
+                usb_order: Default::default(),
             }
         }
     }
@@ -717,7 +725,12 @@ pub mod testing {
         }
         fn restore_usb_input(&self) -> Vec<String> {
             self.usb_restores.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.usb_order.lock().unwrap_or_else(|e| e.into_inner()).push("restore");
             self.usb_failures.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+        fn hold_usb_capture(&self) -> bool {
+            self.usb_order.lock().unwrap_or_else(|e| e.into_inner()).push("hold");
+            true
         }
         fn release_usb_input(&self) -> Vec<String> {
             self.usb_releases.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

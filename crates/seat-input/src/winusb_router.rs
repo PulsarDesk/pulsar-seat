@@ -107,6 +107,9 @@ impl WinusbCaptureRouter {
         });
         let weak: Weak<dyn CaptureHandler> = Arc::downgrade(&(shared.clone() as Arc<dyn CaptureHandler>));
         capture.set_handler(weak);
+        // A new router = the input backend (or its settings) was chosen again: an operator's
+        // hold ends here.
+        capture.resume();
         Arc::new(Self {
             raw,
             inv,
@@ -236,7 +239,14 @@ impl InputControl for WinusbCaptureRouter {
         self.raw.set_seat_sessions(sessions)
     }
     fn set_running_seats(&self, seats: &[SeatNumber]) {
-        *lock(&self.running) = seats.iter().copied().collect();
+        let next: BTreeSet<SeatNumber> = seats.iter().copied().collect();
+        let mut running = lock(&self.running);
+        // A seat that starts ends the operator's hold (`restore_usb_input`); seats that kept
+        // running since do not.
+        if next.iter().any(|s| !running.contains(s)) {
+            self.capture.resume();
+        }
+        *running = next;
     }
     fn set_emergency_sink(&self, sink: EmergencySink) {
         *lock(&self.shared.emergency) = Some(sink);
@@ -260,6 +270,12 @@ impl InputControl for WinusbCaptureRouter {
         }
         if !self.capture.captured().is_empty() {
             n.push("usb_input_captured".into());
+        }
+        if self.capture.is_held() {
+            n.push("usb_capture_held".into());
+        }
+        if !self.capture.inexact_restores().is_empty() {
+            n.push("usb_restore_inexact".into());
         }
         let mut why: Vec<&'static str> = lock(&self.refused).iter().map(|(_, r)| r.note()).collect();
         why.sort_unstable();
@@ -422,6 +438,36 @@ mod tests {
         assert!(e.swap.is_captured(KBD_NODE));
         assert!(e.r.release_captures().is_empty());
         assert!(!e.swap.is_captured(KBD_NODE));
+    }
+
+    /// e2e gaming PC 2026-11-24: the operator's restore while seat 2 runs stays in force at
+    /// the following route applies; a seat start ends it.
+    #[test]
+    fn operator_hold_survives_applies_until_a_seat_starts() {
+        let e = env(HostTopology::SeatOneConsole);
+        add_second_keyboard(&e);
+        let k = kbd(&e);
+        e.src.plug(KBD_NODE, None);
+        let routes = [InputRoute { key: k.clone(), mask: s(2).mask() }];
+        e.r.set_running_seats(&[s(2)]);
+        e.r.apply_routes(&routes).unwrap();
+        assert!(e.swap.is_captured(KBD_NODE));
+        e.r.capture.hold();
+        assert!(e.r.capture.restore_all().is_empty());
+        // Hot-plug / tick applies with seat 2 still running.
+        e.r.set_running_seats(&[s(2)]);
+        e.r.apply_routes(&routes).unwrap();
+        e.r.apply_routes(&routes).unwrap();
+        assert!(!e.swap.is_captured(KBD_NODE));
+        assert!(e.r.notes().contains(&"usb_capture_held".to_string()));
+        // Seat 2 stops and starts again.
+        e.r.set_running_seats(&[]);
+        e.r.apply_routes(&routes).unwrap();
+        e.r.set_running_seats(&[s(2)]);
+        e.r.apply_routes(&routes).unwrap();
+        assert!(e.swap.is_captured(KBD_NODE));
+        assert!(!e.r.notes().contains(&"usb_capture_held".to_string()));
+        e.r.release_captures();
     }
 
     #[test]

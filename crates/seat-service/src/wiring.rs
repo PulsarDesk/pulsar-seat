@@ -181,6 +181,11 @@ impl BackendFactory for PackageFactory {
         c.restore_all()
     }
 
+    fn hold_usb_capture(&self) -> bool {
+        self.usb_capture().hold();
+        true
+    }
+
     fn release_usb_input(&self) -> Vec<String> {
         let c = lock(&self.usb).clone();
         c.map(|c| c.release_all()).unwrap_or_default()
