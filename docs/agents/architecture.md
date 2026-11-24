@@ -876,6 +876,27 @@ per-monitor DPI and re-sends it after `WM_DISPLAYCHANGE` / `WM_DPICHANGED`).
   change or every 2 s (at most 5 losses, 3 failed creations in a row, then GDI for good).
   At most 32 dirty rects are queued per GPU output, more = full upload.
   `PULSAR_SEAT_PRESENTER=gdi` forces GDI.
+- *Hybrid GPU and presenter diagnostics (gaming PC E2E bug 3, 2026-11-24).* On the x64
+  hybrid laptop the rdp_decode picture stayed black on both dGPU monitors while the host
+  counted frames and presents; `session_capture` frames (same flip chain, `take_shared`)
+  showed. Root cause not proven: the host had **no `log` logger**, so every presenter
+  warning (flip chain adapter fallback, flip failure, GDI fallback) was dropped. Changes:
+  (1) the seat host installs a stderr logger (`seat-host/src/hostlog.rs`,
+  `PULSAR_SEAT_HOST_LOG`, default `info`; not in `--display-helper` mode); (2) the flip
+  chain device goes on the adapter DXGI lists the window's monitor under
+  (`win::dxgi_output_owner`, `model::pick_flip_adapter`), not blindly on the CCD target's
+  adapter, logged when they differ; an `EnumAdapterByLuid` fallback to the default adapter
+  is a warning now; (3) a flip chain that fails for good is dropped and the output gets a
+  **new window** for the GDI blit (HYPOTHESIS: GDI on a window that had a flip-model swap
+  chain shows nothing; `gdi_only`, re-created through `WM_APP_RECONFIGURE`, which now
+  resets every output's GPU state first); (4) diagnostics: per output the adapter choice,
+  the first RDP frame's sampled brightness (`model::nonblack_samples`, step 16, B+G+R >
+  30), and every 10 s when a counter moved: CPU / GPU frames in, flip presents, present
+  errors, `DXGI_STATUS_OCCLUDED` presents, GDI paints, last frame brightness; seat-rdp
+  logs the graphics adapter per connection. Reading them: frames not black + monitor
+  black = presentation (try `PULSAR_SEAT_PRESENTER=gdi`); frames black = the RDP client's
+  EGFX composition (try `PULSAR_SEAT_GFX=no-h264` or `bitmap`). Round 1 stats had
+  `h264=0` with hundreds of EGFX frames, so no H.264 picture was decoded at all.
 - *Mode follow.* `OutputPlacement::follow_mode` (default: presenter targets only;
   `SeatDisplayPrefs::follow_session_mode` overrides, from the additive
   `OutputSettings::follow_session_mode: Option<bool>`, manager "Görüntü çıkışları" dialog). When the frame size differs from the

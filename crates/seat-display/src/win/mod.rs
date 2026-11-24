@@ -116,6 +116,32 @@ pub fn gpu_ranks() -> (Option<u64>, Option<u64>) {
     (first(DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE), first(DXGI_GPU_PREFERENCE_MINIMUM_POWER))
 }
 
+/// The adapter DXGI enumerates the monitor under that covers the centre of `r` (desktop
+/// coordinates): `(adapter LUID, adapter description, output device name)`. On a hybrid
+/// laptop this is the GPU that scans the output out; it may differ from the adapter the
+/// CCD target names. `None` when no attached output covers that point.
+pub fn dxgi_output_owner(r: &seat_core::device::Rect) -> Option<(u64, String, String)> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    let (cx, cy) = crate::model::centre(r);
+    // SAFETY: COM calls on live interfaces; descriptors are plain out-structs.
+    unsafe {
+        let f: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        for i in 0..16u32 {
+            let Ok(a) = f.EnumAdapters1(i) else { break };
+            let Ok(ad) = a.GetDesc1() else { continue };
+            for j in 0..16u32 {
+                let Ok(o) = a.EnumOutputs(j) else { break };
+                let Ok(d) = o.GetDesc() else { continue };
+                let c = d.DesktopCoordinates;
+                if d.AttachedToDesktop.as_bool() && cx >= c.left && cx < c.right && cy >= c.top && cy < c.bottom {
+                    return Some((luid_u64(ad.AdapterLuid), from_wide(&ad.Description), from_wide(&d.DeviceName)));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Session id of this process (0 = services session).
 pub fn current_session_id() -> u32 {
     use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;

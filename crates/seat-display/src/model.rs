@@ -928,6 +928,64 @@ impl ModeFollower {
 /// Seconds the session resolution must be stable before the presenter follows it.
 pub const MODE_FOLLOW_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// How the presenter picked the adapter of an output's flip chain device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterChoice {
+    /// DXGI lists the window's monitor under the adapter the CCD target names.
+    Same(u64),
+    /// DXGI lists the monitor under another adapter than the CCD target's (hybrid GPU):
+    /// the device goes on the DXGI owner, the adapter that scans the output out.
+    Owner { ccd: u64, dxgi: u64 },
+    /// No DXGI output covers the window: the CCD target's adapter (0 = default).
+    CcdOnly(u64),
+}
+
+impl AdapterChoice {
+    /// LUID to create the device on (0 = default adapter).
+    pub fn luid(self) -> u64 {
+        match self {
+            Self::Same(l) | Self::CcdOnly(l) => l,
+            Self::Owner { dxgi, .. } => dxgi,
+        }
+    }
+}
+
+/// Adapter for an output's flip chain device: the adapter DXGI enumerates the window's
+/// monitor under (`dxgi_owner`, from `IDXGIAdapter::EnumOutputs`), else the CCD target's
+/// (`ccd`). A swap chain whose device is on another adapter than the one that owns the
+/// output is presented through a cross-adapter copy (gaming PC E2E bug 3, 2026-11-24:
+/// HYPOTHESIS that this is where the hybrid laptop's black picture comes from).
+pub fn pick_flip_adapter(ccd: u64, dxgi_owner: Option<u64>) -> AdapterChoice {
+    match dxgi_owner.filter(|&l| l != 0) {
+        Some(d) if d == ccd => AdapterChoice::Same(d),
+        Some(d) => AdapterChoice::Owner { ccd, dxgi: d },
+        None => AdapterChoice::CcdOnly(ccd),
+    }
+}
+
+/// Sampled brightness of a tight BGRA frame: `(samples, non-black samples)`, one sample
+/// every `step` pixels in both directions; a pixel is non-black when B + G + R > 30 (the
+/// threshold the E2E Desktop Duplication probe uses). Diagnostics: tells a black picture
+/// from the RDP client apart from a picture the presenter loses.
+pub fn nonblack_samples(frame: &[u8], w: u32, h: u32, step: u32) -> (u32, u32) {
+    let step = step.max(1) as usize;
+    let (w, h) = (w as usize, h as usize);
+    if frame.len() < w * h * 4 {
+        return (0, 0);
+    }
+    let (mut n, mut lit) = (0u32, 0u32);
+    for y in (0..h).step_by(step) {
+        for x in (0..w).step_by(step) {
+            let p = &frame[(y * w + x) * 4..(y * w + x) * 4 + 3];
+            n += 1;
+            if u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]) > 30 {
+                lit += 1;
+            }
+        }
+    }
+    (n, lit)
+}
+
 #[cfg(test)]
 pub(crate) mod tests_support {
     pub(crate) use super::tests::{target, tree};
@@ -1363,5 +1421,34 @@ pub(crate) mod tests {
         let sdr_only = [(m(60_000), false, false)];
         assert_eq!(pick_presenter_mode(&sdr_only, 0, true, true), (0, false), "no HDR mode: SDR");
         assert_eq!(pick_presenter_mode(&[], 3, true, false), (3, false));
+    }
+
+    /// Gaming PC (bug 3): the VG27As are CCD targets of the dGPU; the flip chain goes on
+    /// whatever adapter DXGI lists the monitor under.
+    #[test]
+    fn flip_adapter_follows_the_dxgi_owner_of_the_monitor() {
+        let (amd, nv) = (0x1_0000_9a3d, 0x1_0000_b2f1);
+        assert_eq!(pick_flip_adapter(nv, Some(nv)), AdapterChoice::Same(nv));
+        let c = pick_flip_adapter(nv, Some(amd));
+        assert_eq!(c, AdapterChoice::Owner { ccd: nv, dxgi: amd });
+        assert_eq!(c.luid(), amd);
+        assert_eq!(pick_flip_adapter(nv, None).luid(), nv);
+        assert_eq!(pick_flip_adapter(nv, Some(0)), AdapterChoice::CcdOnly(nv), "LUID 0 is no owner");
+        assert_eq!(pick_flip_adapter(0, None).luid(), 0, "default adapter");
+    }
+
+    #[test]
+    fn nonblack_sampling() {
+        let (w, h) = (64u32, 32u32);
+        let mut f = vec![0u8; (w * h * 4) as usize];
+        assert_eq!(nonblack_samples(&f, w, h, 16), (8, 0), "4 x 2 samples, all black");
+        // Alpha alone does not count; a dim pixel neither.
+        f[3] = 255;
+        f[4 * 16..4 * 16 + 3].copy_from_slice(&[10, 10, 10]);
+        assert_eq!(nonblack_samples(&f, w, h, 16).1, 0);
+        f[0..3].copy_from_slice(&[0, 0, 200]);
+        assert_eq!(nonblack_samples(&f, w, h, 16), (8, 1));
+        assert_eq!(nonblack_samples(&f[..10], w, h, 16), (0, 0), "short buffer");
+        assert_eq!(nonblack_samples(&f, w, h, 0).0, w * h, "step 0 = every pixel");
     }
 }
