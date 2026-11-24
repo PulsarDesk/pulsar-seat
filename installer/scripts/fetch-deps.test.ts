@@ -7,6 +7,7 @@ import {
   type DriverPackage,
   type StreamManifest,
   decodeInf,
+  exeFileName,
   globMatch,
   infProblems,
   isDroppedPath,
@@ -35,7 +36,10 @@ describe("fetch-deps local Pulsar build (--stream-local)", () => {
 
   test("accepts the output of build-sunshine.ps1", () => {
     expect(validateLocalBuild(m, local, sha)).toEqual([]);
-    expect(localServerDist(local, "stream-server/sunshine.exe")).toEqual({ ...local, file: "stream-server\\sunshine.exe" });
+    // The service resolves `file` inside remote\stream-server\ and refuses a path (gaming PC
+    // round 4: "stream-server\\sunshine.exe" failed every remote seat with bad_manifest).
+    expect(localServerDist(local, "stream-server/sunshine.exe")).toEqual({ ...local, file: "sunshine.exe" });
+    expect(exeFileName("stream-server\\sunshine.exe")).toBe("sunshine.exe");
   });
 
   test("refuses a changed exe, another version or flavour", () => {
@@ -98,7 +102,7 @@ describe("fetch-deps helpers", () => {
     expect(d).toEqual({
       flavour: "upstream",
       version: "v2026.516.143833",
-      file: "stream-server\\sunshine.exe",
+      file: "sunshine.exe",
       sha256: "a".repeat(64),
       source_url: stream.source_url,
       licence: "GPL-3.0-only",

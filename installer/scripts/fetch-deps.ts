@@ -183,16 +183,26 @@ export function validateLocalBuild(m: StreamManifest, local: ServerDist, exeSha2
   return errs;
 }
 
+/**
+ * `file` of the runtime manifest: the exe's bare file name. The service resolves it inside
+ * `remote\<install_dir>\` and refuses any path (`seat_stream::dist::validate_parts`); gaming
+ * PC round 4 (2026-11-25): `stream-server\sunshine.exe` made every remote seat fail with
+ * `bad_manifest` ("sunshine stream backend not installed").
+ */
+export function exeFileName(exeRelPath: string): string {
+  return exeRelPath.split(/[\\/]/).pop() ?? exeRelPath;
+}
+
 /** Runtime manifest of the payload with the local Pulsar build's exe. */
 export function localServerDist(local: ServerDist, exeRelPath: string): ServerDist {
-  return { ...local, file: exeRelPath.replace(/\//g, "\\") };
+  return { ...local, file: exeFileName(exeRelPath) };
 }
 
 export function serverDist(m: StreamManifest, exeRelPath: string, exeSha256: string): ServerDist {
   return {
     flavour: m.flavour,
     version: m.version,
-    file: exeRelPath.replace(/\//g, "\\"),
+    file: exeFileName(exeRelPath),
     sha256: exeSha256,
     source_url: m.source_url,
     licence: m.licence,
