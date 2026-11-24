@@ -81,6 +81,12 @@ function Get-PeMachine([string] $Path) {
 }
 
 $msbuild = Find-MSBuild
+# Driver binaries (cargo split-pad, Release and Debug) link with MSVC link.exe only: drop the
+# opt-in rust-lld switch for debug builds (scripts/fast-link.ps1) for this run.
+Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_TARGET_.+_LINKER$' } | ForEach-Object {
+    Write-Warning "ignoring $($_.Name)=$($_.Value) for the driver builds (link.exe only)"
+    Remove-Item "Env:$($_.Name)"
+}
 $infverif = Join-Path $kits "Tools\$Sdk\$hostArch\infverif.exe"
 if (-not (Test-Path $infverif)) { $infverif = Join-Path $kits "Tools\$Sdk\x64\infverif.exe" }
 $apivalidator = Join-Path $kits "bin\$Sdk\$hostArch\apivalidator.exe"
