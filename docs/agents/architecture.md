@@ -131,8 +131,17 @@ Console session (seat 1, or a dedicated host session)
       logon-SID ACE, journaled like every grant and revoked when the listener is gone and at
       uninstall. **Accepted risk:** a process holding that ACE could log the console user
       off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown / restart still need
-      `SeShutdownPrivilege`, which the hardened token does not have. Seat hosts do not get
-      it. The service also passes its PID in `PULSAR_SEAT_SERVICE_PID` to every process
+      `SeShutdownPrivilege`, which the hardened token does not have. **Seat hosts
+      (2026-11-24, gaming PC E2E bug 7; pending the maintainer's OK, untested on
+      hardware):** until then seat hosts did not get it, and on the gaming PC every seat
+      host start as `PulsarSeatHostNN` and then as the shared account exited 0xc0000142
+      while the console listener ran under the same shared account with it; the host only
+      ran on the third launch, as SYSTEM at Low integrity (about 7 s lost per seat start,
+      containment lost for the run). Seat hosts now get the same ACE right
+      (`LaunchSpec.host_exit_windows = true` in `launch_host`), with the same scope and
+      accepted risk. `win::containment` logs the token of every host launch (`host token =
+      account … window-station mask 0x…` or `host token = SYSTEM at Low integrity …`). The
+      service also passes its PID in `PULSAR_SEAT_SERVICE_PID` to every process
       it launches: the pipe server check of a contained host / listener used the SCM,
       which refuses a Low-integrity batch token (`OpenSCManagerW` access denied), and host
       clients retry `ERROR_PIPE_BUSY` with `WaitNamedPipeW` (the listener starts together

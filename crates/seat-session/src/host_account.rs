@@ -144,12 +144,16 @@ pub fn winsta_access(clipboard: bool) -> u32 {
     if clipboard { WINSTA_ACCESS | WINSTA_ACCESSCLIPBOARD } else { WINSTA_ACCESS }
 }
 
-/// `WINSTA_EXITWINDOWS`: added only for the **console listener's** ACE (`--exit-windows`,
-/// maintainer decision 2026-11-15). USER32 initialisation of a process under the host
-/// account fails with `STATUS_DLL_INIT_FAILED` (0xc0000142) without it (bisected in the VM
-/// test: 0x4, 0x8 and 0x200 do not help, 0x40 does). Accepted risk: with it the listener's
-/// process could log the console user off (`ExitWindowsEx(EWX_LOGOFF)`); shutdown and
-/// restart still need `SeShutdownPrivilege`, which the hardened token does not have.
+/// `WINSTA_EXITWINDOWS`: added for the **console listener's** ACE (`--exit-windows`,
+/// maintainer decision 2026-11-15) and, since the gaming PC E2E 2026-11-24 (bug 7, pending
+/// the maintainer's OK), for **seat hosts'** ACEs. USER32 initialisation of a process under
+/// a host account fails with `STATUS_DLL_INIT_FAILED` (0xc0000142) without it (bisected in
+/// the VM test: 0x4, 0x8 and 0x200 do not help, 0x40 does; on the gaming PC every seat host
+/// start as an account failed so, while the listener under the same shared account with
+/// 0x40 ran). Accepted risk: with it the process could log the console user off
+/// (`ExitWindowsEx(EWX_LOGOFF)`; HYPOTHESIS: it ends only the caller's own logon session);
+/// shutdown and restart still need `SeShutdownPrivilege`, which the hardened token does not
+/// have.
 pub const WINSTA_EXITWINDOWS: u32 = 0x0040;
 
 /// Window-station mask with the optional rights of one host launch.
@@ -284,7 +288,7 @@ pub const DESKTOP_ACL_FLAG: &str = "--desktop-acl";
 /// Optional last flag of `--desktop-acl grant`: also `WINSTA_ACCESSCLIPBOARD`.
 pub const CLIPBOARD_FLAG: &str = "--clipboard";
 /// Optional flag of `--desktop-acl grant` (after `--clipboard` when both): also
-/// `WINSTA_EXITWINDOWS` (console listener only).
+/// `WINSTA_EXITWINDOWS` (console listener and seat hosts).
 pub const EXIT_WINDOWS_FLAG: &str = "--exit-windows";
 
 /// One run of the helper.

@@ -583,6 +583,10 @@ fn hosts_run_as_system_agents_as_the_user() {
     let l = h.p.launched();
     assert!(l.iter().any(|x| x.exe.ends_with("pulsar-seat-host.exe") && x.as_system));
     assert!(l.iter().any(|x| x.exe.ends_with("pulsar-seat-agent.exe") && !x.as_system));
+    // Gaming PC E2E 2026-11-24, bug 7: a seat host under its account needs
+    // WINSTA_EXITWINDOWS for USER32 init, like the console listener; nothing else gets it.
+    assert!(l.iter().filter(|x| x.exe.ends_with("pulsar-seat-host.exe")).all(|x| x.host_exit_windows));
+    assert!(l.iter().filter(|x| !x.as_system).all(|x| !x.host_exit_windows));
 }
 
 #[test]

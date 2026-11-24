@@ -183,8 +183,9 @@ pub struct HostRequest {
     pub session_id: u32,
     /// The seat redirects the clipboard (window-station clipboard right).
     pub clipboard: bool,
-    /// Console listener only: `WINSTA_EXITWINDOWS` on its window-station ACE (USER32 init
-    /// needs it; see `seat_session::host_account::WINSTA_EXITWINDOWS`).
+    /// `WINSTA_EXITWINDOWS` on the account's window-station ACE (USER32 init needs it; see
+    /// `seat_session::host_account::WINSTA_EXITWINDOWS`): the console listener and, since
+    /// the gaming PC E2E 2026-11-24 (bug 7), seat hosts.
     pub exit_windows: bool,
     /// The seat whose host this is (`None` = console listener: shared account).
     pub seat: Option<SeatNumber>,
@@ -517,6 +518,13 @@ impl<S: HostSys> Containment<S> {
         }
         // Seat hosts parse what the seat session's RDP server sends: Low integrity and
         // Administrators deny-only even without the account.
+        if mode != HostTokenMode::HardenedSystem {
+            crate::log::info(&format!(
+                "{}: host token = SYSTEM at Low integrity in session {} (no usable host account)",
+                req.seat.map_or_else(|| "console listener".to_string(), |s| format!("seat {s}")),
+                req.session_id
+            ));
+        }
         let t = self.sys.hardened_system_token(req.session_id).map_err(|e| os("token_failed", e))?;
         Ok(HostToken { token: t, grant_sid: None })
     }
@@ -565,6 +573,15 @@ impl<S: HostSys> Containment<S> {
         } else {
             None
         };
+        // Which token each launch got, for the logs (gaming PC E2E 2026-11-24, bug 7: the
+        // account starts failed with 0xc0000142 and only the SYSTEM Low fallback ran).
+        crate::log::info(&format!(
+            "{}: host token = account {name} in session {}, logon SID {sid}, window-station mask {:#x}{}",
+            seat.map_or_else(|| "console listener".to_string(), |s| format!("seat {s}")),
+            req.session_id,
+            seat_session::host_account::winsta_mask(req.clipboard, req.exit_windows),
+            if profile.is_some() { ", profile loaded" } else { "" },
+        ));
         self.lock().pending.insert(sid.clone(), (seat, profile));
         Ok(HostToken { token, grant_sid: Some(sid) })
     }
@@ -899,6 +916,22 @@ mod tests {
         c.exited(&[(101, Some(0))]);
         assert!(c.grant_sids().is_empty());
         assert_eq!(c.sys.calls().last(), Some(&format!("Revoke 1 {sid2}")));
+    }
+
+    #[test]
+    fn seat_host_grant_carries_exit_windows_on_its_own_account() {
+        // Gaming PC E2E 2026-11-24, bug 7: without WINSTA_EXITWINDOWS the seat account and
+        // then the shared account exited 0xc0000142, and the host ran as SYSTEM Low.
+        let (_d, c, _) = per_seat(Mock::default(), &[]);
+        let t = c.host_token(&HostRequest { exit_windows: true, seat: Some(seat(2)), ..rq(1, false) }).unwrap();
+        assert_eq!(t.token, "account");
+        let sid = t.grant_sid.unwrap();
+        assert!(c.sys.calls().contains(&"logon PulsarSeatHost02 1".to_string()), "{:?}", c.sys.calls());
+        assert!(c.sys.calls().contains(&format!("Grant 1 {sid} exit")), "{:?}", c.sys.calls());
+        // Launched and running: the seat keeps its own account for the next launch.
+        c.launched(&sid, 200, 9);
+        c.sys.alive.lock().unwrap().insert(200);
+        assert!(c.seat_account(seat(2)).is_some());
     }
 
     #[test]

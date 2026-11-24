@@ -833,7 +833,12 @@ impl Service {
             stdin_secret: Some(token.clone()),
             service_child: true,
             host_clipboard: self.seat_redirects_clipboard(seat),
-            host_exit_windows: false,
+            // USER32 init under a host account needs WINSTA_EXITWINDOWS (VM bisect
+            // 2026-11-15). Without it every account start failed with 0xc0000142 and the
+            // seat host ran as SYSTEM at Low integrity after two failed starts (gaming PC
+            // E2E 2026-11-24, bug 7). Same scope and accepted risk as the console
+            // listener's exception; needs the maintainer's OK (architecture §3).
+            host_exit_windows: true,
             host_seat: Some(seat),
             host_profile: self.seat_redirects_printers(seat),
         };
