@@ -64,11 +64,20 @@ pub fn plan_for(seat: SeatNumber, config: &SeatConfig, settings: &GlobalSettings
         // Trimmed, absolute commands only: the shell launches `command` as
         // `lpApplicationName` (no PATH search). Validation refuses the others; a config
         // that skipped validation loses those apps instead of starting the wrong file.
+        // A packaged app (valid AUMID) is activated by its id and needs no command, as in
+        // validation (gaming PC E2E round 3: an AUMID app with an empty command was dropped
+        // here, so the shell never saw it).
         apps: k
             .apps
             .iter()
             .map(|a| KioskShellApp { command: a.command.trim().to_string(), ..a.clone() })
-            .filter(|a| seat_core::validate::is_absolute_windows_path(&a.command))
+            .filter(|a| match a.app_id.as_deref() {
+                Some(id) => {
+                    seat_core::validate::is_app_user_model_id(id)
+                        && (a.command.is_empty() || seat_core::validate::is_absolute_windows_path(&a.command))
+                }
+                None => seat_core::validate::is_absolute_windows_path(&a.command),
+            })
             .take(seat_core::config::MAX_KIOSK_APPS)
             .collect(),
         idle_reset_minutes: k.idle_reset_minutes.min(1440),
@@ -256,6 +265,20 @@ mod tests {
         c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![rel, pad], idle_reset_minutes: 0 });
         let p2 = plan_for(seat(2), &c, &GlobalSettings::default(), vec![]).unwrap();
         assert_eq!(p2.apps.iter().map(|a| a.command.as_str()).collect::<Vec<_>>(), vec![r"C:\a.exe"]);
+        // A packaged app (AUMID) stays without a command; a bad AUMID or a relative
+        // command beside it is dropped (gaming PC E2E round 3).
+        let mut pkg = app("n");
+        pkg.command = String::new();
+        pkg.app_id = Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App".into());
+        let mut bad_id = pkg.clone();
+        bad_id.app_id = Some("not an aumid".into());
+        let mut rel_id = pkg.clone();
+        rel_id.command = "notepad.exe".into();
+        c.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![pkg, bad_id, rel_id], idle_reset_minutes: 0 });
+        let p3 = plan_for(seat(2), &c, &GlobalSettings::default(), vec![]).unwrap();
+        assert_eq!(p3.apps.len(), 1);
+        assert_eq!(p3.apps[0].app_id.as_deref(), Some("Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"));
+        assert!(p3.apps[0].command.is_empty());
         let mut big = p.clone();
         big.apps[0].args = vec!["x".repeat(MAX_PLAN_HEX)];
         assert!(encode_plan(&big).is_err());
