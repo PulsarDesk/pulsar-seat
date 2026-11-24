@@ -40,7 +40,9 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   profile) is seat-service `win::kiosk_logon`. **Untested on hardware.**
 
 - **Probe** (`HostProbe.availability`): edition / RDSH role (`TSAppCompat`), ServiceDll stock
-  (else `foreign_service_dll`), reference product (`reference_product_present`), TermService
+  (else `foreign_service_dll`), reference product (`reference_product_present` while active;
+  installed but every key disabled and stopped = note `reference_product_disabled`, no block,
+  `seat_core::reference`), TermService
   running, listener port, `fDenyTSConnections` policy (`rdp_denied_by_policy`), licensing
   notes (`rds_licensing_not_configured`), listener cap → `caps().max_seats`.
 - **prepare_host** (RDP backends): claims the one Terminal Server writer (`rds`,
@@ -107,7 +109,7 @@ restarted through the SCM. Needs `experimental_ack == EXPERIMENTAL_WARNING_VERSI
 **External wrapper mode (detect-only, 2026-11-24).** If another installed product already
 pointed ServiceDll at its own wrapper at a fixed location (`%ProgramFiles%\Duo\TermWrap.dll`,
 `support::WrapperKind::External`), `status()` reports `TermwrapState::External { wrapper,
-blocked }`: read-only checks (client SKU, reference product absent, x64 host + PE machine,
+blocked }`: read-only checks (client SKU, reference product absent or fully disabled, x64 host + PE machine,
 Authenticode, ACLs, `EnableConcurrentSessions` and `AllowMultipleTSSessions` already `1`),
 no `termsrv.dll` build gate, no write of any kind (no ServiceDll, rows, journal or
 TermService restart; `enable` refuses with `external_wrapper`). The `termsrv_wrapper`

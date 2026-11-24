@@ -1912,7 +1912,9 @@ or the experimental `termsrv_wrapper` kind (off by default;
   then must equal that location, so `D:\Duo\TermWrap.dll`, UNC, `..` and unknown `%VAR%`
   stay `ForeignActive`). When ServiceDll points there, `status()` reports
   `TermwrapState::External { wrapper, blocked }` instead of `ForeignActive`. `blocked` is
-  the first failing read-only check: host (`reference_product_present`, `not_client_sku`,
+  the first failing read-only check: host (`reference_product_present` only while the
+  reference product is active, see "Coexistence: reference product installed but disabled";
+  `not_client_sku`,
   `edition_unsupported`), x64 host + PE machine (`wrapper_arch`), Authenticode
   (`wrapper_unsigned`; `allow_unsigned` policy as for our own mode), ACL of the DLL and
   every ancestor (`wrapper_insecure_acl`), `EnableConcurrentSessions` and
@@ -2848,3 +2850,43 @@ our spec still cites "unavailable on RDP indirect displays"); the default stays
   decodes them (they are decoded, then dropped at the presenter), `TS_SUPPRESS_OUTPUT_PDU`
   (a second, measured experiment: it may starve Desktop Duplication), reusing the agent for
   the split-screen console path.
+
+## Coexistence: reference product installed but disabled (2026-11-24)
+
+Maintainer decision: the reference multi-seat product may stay **installed** (for example to
+keep its licence) as long as it is fully turned off. Pure detection; Pulsar Seat never writes
+to its keys (read: key existence, `Start`, SCM state).
+
+- **States** (`seat_core::reference`, pure): `Absent` (no key of
+  `consts::REFERENCE_SERVICE_KEYS` exists), `Disabled` (at least one exists and **every**
+  existing key has `Start` = 4 **and** the service control manager reports it stopped; for the
+  driver key: not loaded), `Active` (anything else). Every fact that cannot be read
+  (`Start` missing or not a DWORD, SCM query failure, key existence unknown) counts against
+  `Disabled` (fail closed). The keys are the two the guard already knew (`MUTESV_SERVICE`,
+  `MUTENX_SERVICE`, spec 90 §11 item 4); there are no other interop identifiers for it.
+- **Install gate** (`seat_compat::coexist`): `Coexistence.reference_keys` (name, start, active)
+  and `reference_disabled` (additive, serde default false). Check `reference_product`: pass /
+  **warn** (`Disabled`, detail starts with `reference_product_disabled:`) / fail (`Active`).
+  `gate_exit_code` and `install_with` refuse only on fail, so `preflight`, `install --msi` and
+  the setup log carry the warning. SCM state through the new read-only
+  `SystemOps::service_active` (`QueryServiceStatus` with `SERVICE_QUERY_STATUS`; works for
+  services and drivers; a name the SCM does not know counts as stopped).
+- **MSI**: the launch condition also reads `Start` of both keys (`PSREFSEATSTART`,
+  `PSREFDRIVERSTART`, raw `#4`) and passes when every existing key is 4; `PsRefDisabledDlg`
+  warns in the full UI. The running / loaded state cannot be read by a launch condition: the
+  deferred `install --msi` action's gate (SCM) refuses then (exit 4, the install rolls back).
+  `Installed OR ...` as before, so a repair is never refused; a major upgrade is.
+- **setup.exe (NSIS hooks)**: PREINSTALL refuses unless every existing key has `Start` = 4,
+  then asks to continue (`PsCoexistenceDisabled`, `/SD IDOK`); the `preflight` gate from
+  `$PLUGINSDIR` checks the SCM state and refuses (exit 4) if one still runs.
+- **Run time** (`seat_session`): `SessionDeps.reference_product` and
+  `HostFacts::reference_product` return the state (Windows: `win::reference_product_state`,
+  registry `Start` + `QueryServiceStatus`, evaluated at each probe). `rdp_readiness` refuses
+  only `Active` (`reference_product_present`, unchanged) and adds the note
+  `reference_product_disabled` for `Disabled`; the termsrv wrapper host gate blocks only on
+  `Active`. The service's preflight list (manager Status / diagnostics) shows the warn check.
+- **Manager**: `checkText.reference_product.warn`, `notes.reference_product_disabled` (en, tr);
+  the fail text says how to turn the product off.
+- **Not handled**: the product turned back on while seats run. The next probe refuses the RDP
+  backends (running seats are not stopped by this check); HYPOTHESIS that this is enough,
+  because the product's own service then fights for the same sessions anyway.
