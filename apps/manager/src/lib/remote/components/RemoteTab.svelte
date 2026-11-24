@@ -42,6 +42,7 @@
   import { discardRemoteStage, remoteDirty, saveRemoteStage } from '#lib/remote/stage.svelte.ts';
   import { Avatar, Button, ConfirmDialog, Group, LinkRow, Modal, Notice, PageHead, Section, Spinner, Status } from '#lib/ui/index.ts';
   import { avatarSrc, initial, picturesToLoad } from '#lib/remote/avatar.ts';
+  import { externalUse, externalUseText } from '#lib/remote/externalWrapper.ts';
   import type { StatusKind } from '#lib/ui/index.ts';
   import DxvkPage from './DxvkPage.svelte';
   import HostPage from './HostPage.svelte';
@@ -103,6 +104,8 @@
   const passive = $derived(hostInfo?.coexistence?.mode === 'passive');
   /** Non-blocking coexistence warnings (bug 10, 2026-11-24). */
   const coexistNotes = $derived(hostInfo?.coexistence?.notes ?? []);
+  /** Another program's Remote Desktop wrapper (detect-only, 2026-11-25). */
+  const ext = $derived(externalUse(hostInfo?.termwrap));
   const settings = $derived(store.saved ? remoteSettingsOf(store.saved) : null);
   const serviceStatus = $derived(remoteServiceStatus(store.status, store.saved, store.view, passive));
   /** Remote seats cannot start here (`session_unavailable`): said on the rows up front. */
@@ -419,10 +422,11 @@
         {/snippet}
       </PageHead>
 
-      {#if banner || progress || passive || coexistNotes.length > 0}
+      {#if banner || progress || passive || coexistNotes.length > 0 || ext}
         <div class="notes">
           {#if passive}<Notice kind="warn" text={t.host.passive} />{/if}
           {#each coexistNotes as n (n)}<Notice kind="warn" text={t.coexistNote[n] ?? n} />{/each}
+          {#if ext}<Notice kind={ext.use === 'in_use' ? 'info' : 'warn'} text={externalUseText(ext)} />{/if}
           {#if banner}<Notice kind="danger" text={banner} />{/if}
           {#if progress}<Notice kind="neutral"><span class="line"><Spinner />{progress}</span></Notice>{/if}
         </div>

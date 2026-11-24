@@ -2757,6 +2757,8 @@ const rt = {
     twEnable: 'Aç',
     twDisable: 'Kapat',
     twNoCandidate: 'Kurulu bir sarmalayıcı bulunamadı.',
+    twExternalUse: 'Uzak koltuklarda kullan',
+    twExternalStop: 'Kullanmayı bırak',
     refresh: 'Yenile'
   },
   hostClass: {
@@ -2773,6 +2775,7 @@ const rt = {
     policy_override: 'Bir grup ilkesi Pulsar Seat’in ayarını geçersiz kılıyor.',
     seat_user_is_admin: 'Koltuk kullanıcısı yönetici; normal bir kullanıcı önerilir.',
     foreign_wrapper: 'Uzak Masaüstü hizmeti başka bir sarmalayıcıya yönlendirilmiş.',
+    wrapper_managed_externally: 'Uzak Masaüstü hizmeti başka bir programın kurduğu sarmalayıcıyı kullanıyor; Pulsar Seat onu değiştirmez.',
     autostart_run_as_system_ignored: '“SYSTEM olarak çalıştır” yok sayıldı; uygulama koltuk kullanıcısıyla başlatıldı.',
     autostart_failed: 'Otomatik başlayan bir uygulama başlatılamadı.',
     adapter_fallback: 'Seçilen ekran kartı bulunamadı; varsayılan kullanılıyor.',
@@ -2783,6 +2786,12 @@ const rt = {
     stream_fallback: 'Bu akış sunucusu sürümünde bazı Pulsar özellikleri yok; koltuk bunlar için standart davranışı kullanıyor.',
     display_fallback: 'Pulsar ekranı kullanılamadı; koltuk Uzak Masaüstü ekranında çalışıyor.'
   } as Record<string, string>,
+  externalWrapper: {
+    inUse: 'Uzak koltuklar başka bir programın kurduğu Uzak Masaüstü sarmalayıcısını kullanıyor. Pulsar Seat onu değiştirmez; Windows güncellemelerinden sonra çalışır tutmak o programın işidir.',
+    needsAck: 'Başka bir programın Uzak Masaüstü sarmalayıcısı etkin. Uzak koltuklar onu, “Ana bilgisayar” sayfasında deneysel uyarıyı kabul ettikten sonra kullanır.',
+    blocked: (why: string) => `Başka bir programın Uzak Masaüstü sarmalayıcısı etkin, ancak uzak koltuklar onu kullanamıyor: ${why}`,
+    stopHint: 'Uzak koltuklar onu kullanmayı bırakır; sarmalayıcının kendisi açık kalır.'
+  },
   coexistNote: {
     duo_service_running:
       'Başka bir çoklu koltuk ürünü çalışıyor. Uzak koltuklara izin verilir, ancak iki ürün oturumlar, sanal ekranlar ve ağ bağlantı noktaları için çakışabilir. Uzak koltukları kullanırken diğer ürünü durdurun.'
@@ -2904,6 +2913,7 @@ const rt = {
     foreign_wrapper: 'Uzak Masaüstü hizmeti başka bir araç tarafından yönlendirilmiş.',
     external_wrapper: 'Bu sarmalayıcı başka bir programa ait; Pulsar Seat onu hiçbir zaman açıp kapatmaz.',
     concurrent_sessions_off: 'Sarmalayıcıyı kuran program çoklu oturumu açmamış.',
+    external_wrapper_inactive: 'Başka bir programın etkin sarmalayıcısı yok.',
     unknown_termsrv_build: 'Bu Windows güncellemesi sarmalayıcı tarafından henüz desteklenmiyor.',
     wrapper_missing: 'Sarmalayıcı bulunamadı.',
     wrapper_unsigned: 'Sarmalayıcının imzası kabul edilmedi.',
@@ -2922,7 +2932,8 @@ const rt = {
     ack: 'Riskleri okudum ve anladım; sorumluluğu kabul ediyorum.',
     enable: 'Aç ve Uzak Masaüstü hizmetini yeniden başlat',
     cancel: 'Vazgeç',
-    working: 'Koltuklar durduruluyor ve hizmet yeniden başlatılıyor…'
+    working: 'Koltuklar durduruluyor ve hizmet yeniden başlatılıyor…',
+    external: { enable: 'Uzak koltuklarda kullan', working: 'Koltuklar durduruluyor…' }
   },
   newSeat: {
     title: 'Yeni uzak koltuk',

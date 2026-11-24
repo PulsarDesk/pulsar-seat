@@ -113,4 +113,21 @@ describe('remote seats tab', () => {
     // Not passive: a new remote seat can still be created.
     expect(screen.getByRole('button', { name: rt.nav.newSeat })).toBeEnabled();
   }, 15_000);
+
+  it('says when remote seats use another program’s wrapper (2026-11-25)', async () => {
+    localStorage.clear();
+    const api = createDemoApi({ admin: true });
+    const hostInfo = api.remote.hostInfo.bind(api.remote);
+    const wrapper = { kind: 'external', service_dll: 'C:\\Program Files\\Duo\\TermWrap.dll', config_file: null, dll_version: null, signed: 'trusted' as const };
+    api.remote.hostInfo = async () => {
+      const h = await hostInfo();
+      return { ...h, termwrap: { ...h.termwrap!, state: { state: 'external', wrapper, blocked: null }, ack_warning_version: h.termwrap!.warning_version } };
+    };
+    const store = new ManagerStore(api);
+    await store.init();
+    render(App, { store });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('link', { name: new RegExp(`^${t.nav.remote}`) }));
+    expect(await screen.findByText(rt.externalWrapper.inUse)).toBeInTheDocument();
+  }, 15_000);
 });

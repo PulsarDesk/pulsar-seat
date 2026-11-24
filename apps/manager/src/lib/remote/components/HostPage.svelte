@@ -8,6 +8,7 @@
   import { Breadcrumb, Button, ConfirmDialog, Group, Icon, LockedValue, Notice, PageHead, Row, Section, Status, Switch } from '#lib/ui/index.ts';
   import type { StatusKind } from '#lib/ui/index.ts';
   import ExperimentalDialog from '#lib/components/ExperimentalDialog.svelte';
+  import { externalUse, externalUseText } from '#lib/remote/externalWrapper.ts';
 
   interface Props {
     info: HostInfo | null;
@@ -28,6 +29,9 @@
 
   const tw = $derived(info?.termwrap ?? null);
   const twState = $derived(tw?.state.state ?? 'off');
+  /** Another program's wrapper (detect-only): used once acknowledged and unblocked. */
+  const ext = $derived(externalUse(tw));
+  const extHelp = $derived(!ext ? '' : ext.use === 'in_use' ? `${externalUseText(ext)} ${t.externalWrapper.stopHint}` : externalUseText(ext));
   const findings = $derived(info?.coexistence?.findings ?? []);
   /** Non-blocking coexistence warnings (bug 10, 2026-11-24). */
   const coexistNotes = $derived(info?.coexistence?.notes ?? []);
@@ -149,9 +153,18 @@
     {#if tw}
       <Section title={t.view.experimental}>
         <Group>
-          <Row label={t.host.experimental} help={`${t.host.experimentalHint} ${t.view.twHelp(t.host.twState[twState] ?? twState)}`}>
+          <Row
+            label={t.host.experimental}
+            help={ext ? `${extHelp} ${ext.path ?? ''}`.trim() : `${t.host.experimentalHint} ${t.view.twHelp(t.host.twState[twState] ?? twState)}`}
+          >
             {#snippet control()}
-              {#if twState === 'on'}
+              {#if ext?.use === 'in_use'}
+                <Button kind="secondary" compact label={t.host.twExternalStop} disabled={busy || passive} onclick={() => run(() => onTermwrap(false, null, 0))} />
+              {:else if ext?.use === 'needs_ack'}
+                <Button kind="secondary" compact label={t.host.twExternalUse} disabled={busy || passive} onclick={() => (showExperimental = true)} />
+              {:else if ext}
+                <Status kind="warn" text={t.failure[ext.reason] ?? ext.reason} />
+              {:else if twState === 'on'}
                 <Button kind="secondary" compact label={t.host.twDisable} aria-label={t.view.twDisableLabel} disabled={busy || passive} onclick={() => run(() => onTermwrap(false, null, 0))} />
               {:else if twState === 'off' || twState === 'blocked'}
                 <Button kind="secondary" compact label={t.host.twEnable} aria-label={t.view.twEnableLabel} disabled={busy || passive} onclick={() => (showExperimental = true)} />

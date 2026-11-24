@@ -292,6 +292,8 @@ export interface TermwrapStatus {
   supported: boolean;
   candidates: WrapperCandidate[];
   warning_version: number;
+  /** Warning version stored by the service (remote kind's ack; external wrapper mode uses it). Older services omit it. */
+  ack_warning_version?: number;
   /** English warning text, verbatim from the service. */
   warning_text?: string;
   /** Turkish copy of `warning_text` (the manager shows its own copy in the UI language). */

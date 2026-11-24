@@ -2765,6 +2765,8 @@ const rt = {
     twEnable: 'Turn on',
     twDisable: 'Turn off',
     twNoCandidate: 'No installed wrapper was found.',
+    twExternalUse: 'Use for remote seats',
+    twExternalStop: 'Stop using',
     refresh: 'Refresh'
   },
   hostClass: {
@@ -2781,6 +2783,7 @@ const rt = {
     policy_override: 'A group policy overrides a Pulsar Seat setting.',
     seat_user_is_admin: 'The seat user is an administrator; a normal user is recommended.',
     foreign_wrapper: 'The Remote Desktop service is redirected to another wrapper.',
+    wrapper_managed_externally: 'The Remote Desktop service uses a wrapper another program installed; Pulsar Seat does not change it.',
     autostart_run_as_system_ignored: '“Run as SYSTEM” was ignored; the app started as the seat user.',
     autostart_failed: 'An app that starts automatically could not start.',
     adapter_fallback: 'The chosen graphics card was not found; the default is used.',
@@ -2791,6 +2794,12 @@ const rt = {
     stream_fallback: 'This stream-server build lacks some Pulsar features; the seat uses the standard behaviour for them.',
     display_fallback: 'The Pulsar display could not be used; the seat runs on the Remote Desktop display.'
   } as Record<string, string>,
+  externalWrapper: {
+    inUse: 'Remote seats use the Remote Desktop wrapper another program installed. Pulsar Seat does not change it; that program keeps it working after Windows updates.',
+    needsAck: 'Another program’s Remote Desktop wrapper is active. Remote seats use it after you accept the experimental warning on the “Host PC” page.',
+    blocked: (why: string) => `Another program’s Remote Desktop wrapper is active, but remote seats cannot use it: ${why}`,
+    stopHint: 'Remote seats stop using it; the wrapper itself stays on.'
+  },
   coexistNote: {
     duo_service_running:
       'Another multiseat product is running. Remote seats are allowed, but both products may conflict over sessions, virtual displays and network ports. Stop the other product while you use remote seats.'
@@ -2912,6 +2921,7 @@ const rt = {
     foreign_wrapper: 'The Remote Desktop service is redirected by another tool.',
     external_wrapper: 'This wrapper belongs to another program; Pulsar Seat never turns it on or off.',
     concurrent_sessions_off: 'The program that installed the wrapper has not turned on multiple sessions.',
+    external_wrapper_inactive: 'No wrapper of another program is active.',
     unknown_termsrv_build: 'This Windows update is not supported by the wrapper yet.',
     wrapper_missing: 'The wrapper was not found.',
     wrapper_unsigned: 'The wrapper’s signature was not accepted.',
@@ -2930,7 +2940,8 @@ const rt = {
     ack: 'I have read and understood the risks; I accept the responsibility.',
     enable: 'Turn on and restart the Remote Desktop service',
     cancel: 'Cancel',
-    working: 'Stopping the seats and restarting the service…'
+    working: 'Stopping the seats and restarting the service…',
+    external: { enable: 'Use it for remote seats', working: 'Stopping the seats…' }
   },
   newSeat: {
     title: 'New remote seat',

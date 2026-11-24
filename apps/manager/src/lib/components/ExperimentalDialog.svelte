@@ -6,7 +6,10 @@
      - `local` (default): the Advanced page's session method; `onAccept(ackVersion)`.
      - `remote`: the remote seats' host page; picks one of the wrappers the operator installed
        (`status.candidates`) and calls `onEnable(path, ackVersion)` (P6 switches its import
-       here). The wrapper support itself is unchanged: Pulsar Seat never ships a wrapper. -->
+       here). The wrapper support itself is unchanged: Pulsar Seat never ships a wrapper.
+       With another program's wrapper active (`state: external`, detect-only, 2026-11-25) the
+       remote variant only acknowledges the warning for remote seats: no wrapper choice, no
+       service restart. -->
 <script lang="ts">
   import { Button, Checkbox, Field, Modal, Notice, Select, Spinner } from '#lib/ui/index.ts';
   import { remoteErrorMessage, rt, t } from '#lib/i18n.ts';
@@ -22,12 +25,15 @@
   }
   let { variant = 'local', onAccept, status, onEnable, onCancel }: Props = $props();
   const remote = $derived(variant === 'remote');
+  const external = $derived(remote && status?.state.state === 'external');
   let acknowledged = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let wrapper = $state('');
   const lines = warningText().split('\n').filter((l) => l.trim() !== '');
-  const candidates = $derived(status?.candidates ?? []);
+  const candidates = $derived(
+    external ? (status?.state.wrapper ? [status.state.wrapper] : []) : (status?.candidates ?? [])
+  );
   const version = $derived(status?.warning_version || WARNING_VERSION);
   const blocked = $derived(!acknowledged || (remote && candidates.length === 0));
   const reason = $derived(!acknowledged ? t.experimental.ackFirst : remote && candidates.length === 0 ? rt.host.twNoCandidate : '');
@@ -65,6 +71,8 @@
   {#if remote}
     {#if candidates.length === 0}
       <Notice kind="danger" text={rt.host.twNoCandidate} />
+    {:else if external}
+      <Notice kind="info" text={`${rt.host.twState.external} ${candidates[0].service_dll}`} />
     {:else}
       <Field label={rt.experimental.wrapper}>
         {#snippet children({ id, describedby })}
@@ -74,11 +82,11 @@
     {/if}
   {/if}
   <Checkbox label={remote ? rt.experimental.ack : t.experimental.ack} bind:checked={acknowledged} />
-  {#if busy}<Spinner label={rt.experimental.working} />{/if}
+  {#if busy}<Spinner label={external ? rt.experimental.external.working : rt.experimental.working} />{/if}
   {#if error}<Notice kind="danger" text={error} />{/if}
   {#snippet footStart()}{reason}{/snippet}
   {#snippet foot({ reasonId })}
-    <Button kind="primary" label={remote ? rt.experimental.enable : t.experimental.enable} disabled={blocked} {busy} reasonId={reason ? reasonId : undefined} onclick={accept} />
+    <Button kind="primary" label={external ? rt.experimental.external.enable : remote ? rt.experimental.enable : t.experimental.enable} disabled={blocked} {busy} reasonId={reason ? reasonId : undefined} onclick={accept} />
     <Button label={remote ? rt.experimental.cancel : t.experimental.cancel} disabled={busy} onclick={onCancel} />
   {/snippet}
 </Modal>
