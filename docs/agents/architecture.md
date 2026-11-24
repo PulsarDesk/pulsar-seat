@@ -245,6 +245,24 @@ reported id, only that session and only if WTS confirms it (loopback, unclaimed,
 `PSEAT-NN` client name, the account); without one, the exact client name; the "newest new
 loopback session" fallback only for the ActiveX client (`SeatMatch.newest_fallback`).
 
+Update 2026-11-24 (gaming PC E2E bug 1, reconnect loop), **untested on hardware:** a new
+connection of an account that already has a session first gets a transient session, and
+Windows then reconnects the connection to the account's existing one. `wait_session` binds
+the transient session (our `PSEAT-NN` name, user still empty) about 2 s before the host
+reports the real id, so the seat ended with the transient session and restarted every
+~11 s. Now `SessionBackend::rebind(seat, id)` (additive, default `Unsupported`;
+`RdpCore::rebind`) moves the binding to the reported session when WTS confirms it with the
+reported-id rules above; `Service::follow_reported_session` calls it from `on_host_report`
+and at the end of `run_start`, `reported_instead` right after `wait_session`, and the seat
+records the new id (run file included) and handles its logon. An unconfirmed report keeps
+the bound session (warning). `Slot.reported_session` is cleared at each host launch. Also
+(HYPOTHESIS: Windows blanks the client name and address of a **disconnected** session) the
+bound session of a seat with an account counts as the seat's while disconnected, by its
+bound id and the seat's user, never the console winstation: the host-exit log-off ends it
+(with `require_remote` off) instead of leaving it for the next connection to reconnect to.
+`log_off` refusals and failures are logged with the session's WTS view (state, remote flag,
+client name, address, user).
+
 Logon-screen seats (no stored password) on an NLA listener — **decision 2026-11-13
 (fix-rdp-client), HYPOTHESIS until tested:** `rds.rs` keeps RDP-Tcp `UserAuthentication=1`
 (NLA on) for password seats, so a TLS-only connection gets `HYBRID_REQUIRED_BY_SERVER` and

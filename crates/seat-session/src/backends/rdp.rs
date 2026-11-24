@@ -49,8 +49,8 @@ impl RdpCore {
     }
 
     /// Merge a host hint: a reported session id is kept once known. A bound seat whose
-    /// host reports a different session id is only logged (the binding stays; `query`
-    /// keeps checking ownership).
+    /// host reports a different session id is logged here; the service then asks for
+    /// [`Self::rebind`] (the binding moves only when WTS confirms the reported session).
     pub(crate) fn host_hint(&self, seat: SeatNumber, hint: HostHint) {
         let mut hints = lock(&self.hints);
         let h = hints.entry(seat).or_default();
@@ -63,6 +63,40 @@ impl RdpCore {
         {
             log::warn!("seat {seat}: host reports session {id}, but session {} is bound", b.session_id);
         }
+    }
+
+    /// The seat host reported `session_id` while the seat is bound to another session:
+    /// Windows reconnected the host's connection to the account's existing session and
+    /// the bound one was only the connection's transient session (gaming PC E2E
+    /// 2026-11-24: after `error_info 17` every new connection went back to the old
+    /// session 3 while session 5 was bound, `not_our_session`, relaunch every ~11 s). The
+    /// binding moves only when WTS confirms the reported session with the `wait_session`
+    /// rules for a reported id (loopback, the seat's client name, the seat's account, not
+    /// bound to another seat).
+    pub(crate) fn rebind(&self, d: &SessionDeps, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
+        let Some(b) = lock(&self.bound).get(&seat).cloned() else {
+            return Err(err(ErrorKind::NotFound, reason::SESSION_GONE, format!("seat {seat} has no bound session")));
+        };
+        let all = d.wts.sessions()?;
+        let claimed = self.claimed_except(seat);
+        let m = SeatMatch {
+            client_name: &b.client_name,
+            account: b.account.as_ref().map(|(a, u)| (a.as_str(), u.as_str())),
+            before: &[],
+            claimed: &claimed,
+            reported: Some(session_id),
+            newest_fallback: false,
+        };
+        let Some(s) = find_rdp_seat_session(&all, &m).and_then(|id| all.iter().find(|s| s.id == id)) else {
+            let seen = all.iter().find(|s| s.id == session_id).map(describe).unwrap_or_else(|| "no such session".into());
+            log::warn!("seat {seat}: host reports session {session_id}, not confirmed as the seat's ({seen}); session {} stays bound", b.session_id);
+            return Err(err(ErrorKind::Policy, reason::NOT_OUR_SESSION, format!("session {session_id} is not seat {seat}'s")));
+        };
+        if b.session_id != s.id {
+            log::info!("seat {seat}: rebound from session {} to session {} (the host's connection was reconnected to it)", b.session_id, s.id);
+            lock(&self.bound).insert(seat, Bound { session_id: s.id, ..b });
+        }
+        Ok(s.info(d.wts.user_sid(s.id)))
     }
 
     fn claimed_except(&self, seat: SeatNumber) -> Vec<u32> {
@@ -205,10 +239,10 @@ impl RdpCore {
     }
 
     fn is_ours(&self, seat: SeatNumber, s: &WtsSession) -> bool {
-        if !s.is_loopback_remote() {
-            return false;
-        }
         let b = lock(&self.bound).get(&seat).cloned();
+        if !s.is_loopback_remote() {
+            return b.is_some_and(|b| Self::bound_disconnected(&b, s));
+        }
         match b {
             Some(b) if b.session_id == s.id => match &b.account {
                 // Windows may blank the user of a session that is logging off: only a
@@ -219,6 +253,19 @@ impl RdpCore {
             Some(b) => s.client_name.eq_ignore_ascii_case(&b.client_name) && b.client_name.starts_with(seat_core::consts::RDP_CLIENT_NAME_PREFIX),
             None => crate::wts::seat_of_client_name(&s.client_name) == Some(seat),
         }
+    }
+
+    /// The seat's bound session, disconnected. HYPOTHESIS (gaming PC E2E 2026-11-24):
+    /// Windows blanks the client name and address of a disconnected session, so it no
+    /// longer reads as loopback; the host restart's log-off of the bound session 3 left it
+    /// in place, and the next connection was reconnected to it. Ours only by its bound id,
+    /// when it is not the console winstation and its user is the seat's account (a seat
+    /// without an account never qualifies: nothing but the id would identify it).
+    fn bound_disconnected(b: &Bound, s: &WtsSession) -> bool {
+        b.session_id == s.id
+            && s.state == crate::wts::WtsState::Disconnected
+            && !s.is_never_seat()
+            && b.account.as_ref().is_some_and(|(dom, user)| s.user_matches(dom, user))
     }
 
     pub(crate) fn query(&self, d: &SessionDeps, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
@@ -246,9 +293,16 @@ impl RdpCore {
             return Ok(());
         };
         if !self.is_ours(seat, s) {
+            log::warn!("seat {seat}: session {session_id} not logged off, not the seat's ({})", describe(s));
             return Err(err(ErrorKind::Policy, reason::NOT_OUR_SESSION, format!("session {session_id} is not seat {seat}'s")));
         }
-        d.wts.logoff(session_id, true)?;
+        // A disconnected bound session may no longer read as remote (HYPOTHESIS, see
+        // `bound_disconnected`); it was matched by its bound id and the seat's account.
+        let require_remote = s.is_loopback_remote();
+        if let Err(e) = d.wts.logoff(session_id, require_remote) {
+            log::warn!("seat {seat}: session {session_id} not logged off: {e} ({})", describe(s));
+            return Err(e.into());
+        }
         lock(&self.bound).remove(&seat);
         log::info!("seat {seat}: logged off session {session_id}");
         Ok(())
@@ -281,4 +335,17 @@ impl RdpCore {
     pub(crate) fn enumerate(&self, d: &SessionDeps) -> BackendResult<Vec<SessionInfo>> {
         Ok(d.wts.sessions()?.iter().filter(|s| s.is_interactive()).map(|s| s.info(d.wts.user_sid(s.id))).collect())
     }
+}
+
+/// WTS view of a session for the logs (round 2 of the gaming PC E2E reads these lines):
+/// state, remote flag, client name and address, user. Never a secret.
+fn describe(s: &WtsSession) -> String {
+    format!(
+        "state {:?}, remote {}, client {:?}, address {}, user {:?}",
+        s.state,
+        s.is_remote,
+        s.client_name,
+        s.client_address.map(|a| a.to_string()).unwrap_or_else(|| "none".into()),
+        if s.domain.is_empty() { s.user.clone() } else { format!(r"{}\{}", s.domain, s.user) },
+    )
 }

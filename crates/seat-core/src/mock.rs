@@ -258,6 +258,21 @@ impl SessionBackend for MockSessionBackend {
             .cloned()
             .ok_or_else(|| BackendError::new(crate::backend::ErrorKind::NotFound, "no_session", "no session"))
     }
+    /// Moves the seat's session to `session_id` (state and user kept); a test makes it
+    /// fail with `rec.fail_next`.
+    fn rebind(&self, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
+        self.rec.hit(format!("rebind {seat} {session_id}"))?;
+        let mut s = lock(&self.sessions);
+        let info = s.entry(seat).or_insert_with(|| SessionInfo {
+            session_id,
+            state: SessionState::AtLogon,
+            user_sid: None,
+            user_name: None,
+            client_name: None,
+        });
+        info.session_id = session_id;
+        Ok(info.clone())
+    }
     fn log_off(&self, seat: SeatNumber, _id: u32) -> BackendResult<()> {
         self.rec.hit(format!("log_off {seat}"))?;
         lock(&self.sessions).remove(&seat);

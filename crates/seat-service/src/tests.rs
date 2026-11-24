@@ -256,6 +256,50 @@ fn start_seat_sees_a_logon_that_beat_the_session_record() {
 }
 
 #[test]
+fn host_reconnected_to_the_old_session_rebinds_the_seat() {
+    // Gaming PC E2E 2026-11-24, bug 1: the start bound the transient session of the new
+    // connection (10 here), Windows reconnected the connection to the account's existing
+    // session (3), the host reported 3, and the seat restarted when 10 ended, for ever.
+    let h = harness();
+    h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(10));
+    h.p.sign_in(3, "ali");
+    h.s.on_host_report(s(2), &seat_proto::HostState::SignedIn { session_id: Some(3) }, Some("ironrdp"));
+    assert!(h.f.session.rec.calls().contains(&"rebind 2 3".to_string()));
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(3));
+    assert_eq!(state(&h, s(2)), SeatState::SignedIn { user: "PC\\ali".into() });
+    assert!(h.p.launched().iter().any(|l| l.exe.ends_with("pulsar-seat-agent.exe") && l.session_id == 3));
+    // The run file names the session the seat owns now (adoption after a restart).
+    let run = RunStore::new(&h.dir.join("run")).load();
+    assert_eq!(run.known_sessions.iter().map(|k| (k.seat, k.session_id)).collect::<Vec<_>>(), vec![(s(2), 3)]);
+    // The transient session ending is not the seat's session ending.
+    h.s.on_session_change(SessionChange::Logoff, 10);
+    assert_eq!(state(&h, s(2)), SeatState::SignedIn { user: "PC\\ali".into() });
+    // The same report again changes nothing.
+    let rebinds = |h: &Harness| h.f.session.rec.calls().iter().filter(|c| c.starts_with("rebind")).count();
+    h.s.on_host_report(s(2), &seat_proto::HostState::SignedIn { session_id: Some(3) }, Some("ironrdp"));
+    assert_eq!(rebinds(&h), 1);
+}
+
+#[test]
+fn unconfirmed_host_report_keeps_the_recorded_session() {
+    let h = harness();
+    h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::StartSeats { seats: None }).unwrap();
+    h.f.session.rec.fail_next(seat_core::backend::BackendError::new(
+        seat_core::backend::ErrorKind::Policy,
+        "not_our_session",
+        "session 7 is not seat 2's",
+    ));
+    h.s.on_host_report(s(2), &seat_proto::HostState::SignedIn { session_id: Some(7) }, Some("ironrdp"));
+    assert_eq!(h.s.lock().seats.get(&s(2)).and_then(|x| x.rt.session_id), Some(10));
+    assert_eq!(state(&h, s(2)), SeatState::AtLogon);
+}
+
+#[test]
 fn start_seat_full_flow_with_host_handshake() {
     let h = harness();
     h.s.secrets.set(s(2), Some(&Secret::new("hunter2"))).unwrap();

@@ -63,8 +63,14 @@ failure), `accounts::Accounts` + `win::accounts::NetAccounts` (`list_local_users
   `wait_session` takes the loopback remote session with our `PSEAT-NN` name **or** the newest
   loopback session that did not exist when the start began, not claimed by another seat, with
   the seat's user (if any). Seats start one at a time (service rule), which makes this safe.
-- **log_off** only after an ownership check (bound id + same user + remote loopback session);
-  seat 1 / console sessions are never logged off by us.
+- **rebind** (2026-11-24, gaming PC E2E bug 1, untested on hardware): the host reported a
+  session other than the bound one (Windows reconnected its connection to the account's
+  existing session; the bound one was transient). The binding moves only when WTS confirms
+  the reported session (loopback, our client name, the account, not another seat's).
+- **log_off** only after an ownership check (bound id + same user + remote loopback session,
+  or the bound id + the seat's account user while the session is disconnected and so has no
+  client name or address, HYPOTHESIS); seat 1 / console sessions are never logged off by us.
+  Refusals are logged with the session's WTS view.
 - **adopt** after a service restart: same id, still remote loopback, same user SID.
 
 ### Remote seats (`remote`, merged from Pulsar Split's `split-session` at step 7)

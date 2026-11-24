@@ -668,7 +668,9 @@ impl Service {
                 }
                 let timeout = Duration::from_secs(u64::from(settings.timings.seat_start_timeout_s));
                 match b.session.wait_session(seat, &client_name(seat), timeout) {
-                    Ok(i) => i,
+                    // The host may already have reported a reconnect to another session
+                    // (`follow_reported_session` covers a report that comes later).
+                    Ok(i) => self.reported_instead(seat, i),
                     Err(e) => return self.fail(seat, generation, &e),
                 }
             }
@@ -764,6 +766,27 @@ impl Service {
         // Pulsar credential provider (spec 35 §5.4).
         self.maybe_arm_credprov(seat, info.session_id, at_logon);
         self.lock().ownership_dirty = true;
+        // A host report that arrived between the wait and the recording above.
+        self.follow_reported_session(seat);
+    }
+
+    /// The session `wait_session` bound, or the one the seat host already reported when
+    /// the backend confirms that one as the seat's (reconnect to an existing session).
+    fn reported_instead(&self, seat: SeatNumber, info: SessionInfo) -> SessionInfo {
+        let reported = self.lock().seats.get(&seat).and_then(|s| s.reported_session);
+        match reported {
+            Some(r) if r != info.session_id => match self.backends().session.rebind(seat, r) {
+                Ok(i) => {
+                    log::info(&format!("seat {seat}: session {r} is the seat's (host reconnected to it; session {} was transient)", info.session_id));
+                    i
+                }
+                Err(e) => {
+                    log::warn(&format!("seat {seat}: host reports session {r}; session {} kept: {e}", info.session_id));
+                    info
+                }
+            },
+            _ => info,
+        }
     }
 
     /// The seat's policy redirects the clipboard (some direction on), as the host's
@@ -824,6 +847,8 @@ impl Service {
         };
         slot.host = Some(HostProc { pid, created, token, creds_taken: false, connected: false });
         slot.launch = Some(hl);
+        // A report of an earlier host (before a crash restart) is not this launch's.
+        slot.reported_session = None;
         let rec = st.seats.get(&seat).and_then(|s| s.host.clone());
         st.run.set_host(seat, rec);
         self.save_run(&st);
@@ -1550,8 +1575,12 @@ impl Service {
                     let s = st.seats.get(&seat);
                     (s.and_then(|s| s.rt.session_id), s.and_then(|s| s.retry_at), s.map(|s| s.generation))
                 };
-                if let Some(id) = session {
-                    let _ = self.backends().session.log_off(seat, id);
+                if let Some(id) = session
+                    && let Err(e) = self.backends().session.log_off(seat, id)
+                {
+                    // A session left here is what the next connection reconnects to
+                    // (gaming PC E2E 2026-11-24, bug 1).
+                    log::warn(&format!("seat {seat}: session {id} not logged off after the host exit: {e}"));
                 }
                 self.cleanup_seat(seat, false, g);
                 if let Some(s) = self.lock().seats.get_mut(&seat).filter(|s| Some(s.generation) == g) {
@@ -1607,6 +1636,9 @@ impl Service {
             }
             self.backends().session.host_hint(seat, seat_core::backend::session::HostHint { session_id: reported, legacy_client });
         }
+        if reported.is_some() {
+            self.follow_reported_session(seat);
+        }
         match state {
             H::Connected | H::SignedIn { .. } => {
                 if let Some(h) = self.lock().seats.get_mut(&seat).and_then(|s| s.host.as_mut()) {
@@ -1619,6 +1651,64 @@ impl Service {
                 let kind = if reason == "logon_failed" { ErrorKind::Logon } else { ErrorKind::Internal };
                 self.fail(seat, generation, &BackendError::new(kind, reason.clone(), "seat host reported a failure"));
             }
+        }
+    }
+
+    /// The seat's host reported a session other than the one recorded for the seat:
+    /// Windows reconnected the host's new connection to the account's existing session,
+    /// and the recorded one was only that connection's transient session. Without this the
+    /// transient session ended, the seat restarted, and the next connection was reconnected
+    /// again, every ~11 s for ever (gaming PC E2E 2026-11-24, bug 1). The backend moves its
+    /// binding only when WTS confirms the reported session as the seat's; the seat then
+    /// records it (run file included) and handles its logon. A no-op while nothing is
+    /// recorded yet (`run_start` calls this again after recording) or when both agree.
+    pub(crate) fn follow_reported_session(&self, seat: SeatNumber) {
+        let (current, reported, generation) = {
+            let st = self.lock();
+            let Some(s) = st.seats.get(&seat) else { return };
+            (s.rt.session_id, s.reported_session, s.generation)
+        };
+        let (Some(current), Some(reported)) = (current, reported) else { return };
+        if current == reported {
+            return;
+        }
+        let info = match self.backends().session.rebind(seat, reported) {
+            Ok(i) => i,
+            Err(e) => {
+                log::warn(&format!("seat {seat}: host reports session {reported}; session {current} kept: {e}"));
+                return;
+            }
+        };
+        let user = self.platform.session_user(info.session_id);
+        {
+            let mut st = self.lock();
+            let Some(slot) = st.seats.get_mut(&seat).filter(|s| s.generation == generation && s.rt.session_id == Some(current)) else {
+                return;
+            };
+            slot.rt.session_id = Some(info.session_id);
+            slot.rt.user_sid = info.user_sid.clone();
+            slot.logon = user.clone();
+            let starting = matches!(slot.rt.state, SeatState::Starting { .. } | SeatState::Error { .. });
+            st.run.known_sessions.retain(|k| k.seat != seat);
+            st.run.known_sessions.push(KnownSession {
+                seat,
+                session_id: info.session_id,
+                client_name: client_name(seat),
+                user_sid: info.user_sid.clone(),
+            });
+            self.save_run(&st);
+            if !starting {
+                let state = match (&user, info.state) {
+                    (Some(u), SessionState::AtLogon) => SeatState::SignedIn { user: u.display() },
+                    _ => map_session_state(info.state, user.as_ref()),
+                };
+                self.set_seat_state(&mut st, seat, state);
+            }
+            st.ownership_dirty = true;
+        }
+        log::info(&format!("seat {seat}: session {} is the seat's (host reconnected to it; session {current} was transient)", info.session_id));
+        if let Some(u) = user {
+            self.on_seat_logon(seat, info.session_id, u);
         }
     }
 

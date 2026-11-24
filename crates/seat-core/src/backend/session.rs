@@ -326,6 +326,16 @@ pub trait SessionBackend: Send + Sync {
     /// The seat host reported its client and / or session id (see [`HostHint`]). RDP
     /// backends use it in `wait_session`; others ignore it.
     fn host_hint(&self, _seat: SeatNumber, _hint: HostHint) {}
+    /// The seat host reported session `session_id`, but the seat is bound to another one:
+    /// Windows reconnected the host's new connection to the account's existing
+    /// (disconnected) session, and the session `wait_session` bound was only the
+    /// transient one of that connection (gaming PC E2E 2026-11-24, reconnect loop). RDP
+    /// backends move the binding to `session_id` when WTS confirms it is the seat's
+    /// (loopback, the seat's client name, the seat's account, not another seat's) and
+    /// return it; others answer `Unsupported`. Added 2026-11-24 (additive).
+    fn rebind(&self, _seat: SeatNumber, _session_id: u32) -> BackendResult<SessionInfo> {
+        Err(super::BackendError::unsupported("session rebind"))
+    }
     /// Who may use the second, loopback-only listener for passwordless seats and whether
     /// one is needed at all (`rds_loopback`, architecture §4.1 design (a); added
     /// 2026-11-13). The service calls it before `prepare_host` and whenever seat accounts

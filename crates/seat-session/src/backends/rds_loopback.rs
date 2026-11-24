@@ -468,6 +468,10 @@ impl SessionBackend for RdsLoopbackBackend {
         self.core.host_hint(seat, hint);
     }
 
+    fn rebind(&self, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
+        self.core.rebind(&self.d, seat, session_id)
+    }
+
     fn query(&self, seat: SeatNumber, session_id: u32) -> BackendResult<SessionInfo> {
         self.core.query(&self.d, seat, session_id)
     }
