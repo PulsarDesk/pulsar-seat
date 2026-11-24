@@ -65,6 +65,10 @@ impl HostFacts for WinHostFacts {
     fn system_root(&self) -> Option<String> {
         std::env::var("SystemRoot").ok().or_else(|| super::expand_env("%SystemRoot%"))
     }
+
+    fn expand(&self, value: &str) -> Option<String> {
+        super::expand_env(value)
+    }
 }
 
 #[cfg(test)]

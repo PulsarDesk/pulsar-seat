@@ -10,6 +10,8 @@
 //!   ServiceDll changed, and only then clear `RestorePending`. A crash anywhere in between
 //!   leaves `Enabled=0`, so a boot check never re-enables what the operator disabled; the
 //!   next disable / boot check / uninstall finishes the job.
+//! - External wrapper mode is read-only: [`WindowsTermwrap::external_state`] only reads
+//!   ServiceDll, the DLL's metadata and the two rows; no path here writes for it.
 //! - A ServiceDll we did not write is never touched (hands off). "We wrote it" comes only
 //!   from our own HKLM state (`Enabled` or `RestorePending`, plus `WrapperPath`), never from
 //!   the journal file.
@@ -142,6 +144,41 @@ impl WindowsTermwrap {
         if cand.kind == WrapperKind::Unknown {
             return Err((BlockReason::WrapperConfigInvalid, format!("{shown}: unknown wrapper, no support table")));
         }
+        if cand.kind.is_external() {
+            return Err((BlockReason::ExternalWrapper, format!("{shown}: managed by the product that installed it")));
+        }
+        self.check_binary(dll, &cand)?;
+        let Some(config) = cand.config_file.clone() else {
+            return Err((BlockReason::WrapperConfigInvalid, format!("{shown}: support file missing")));
+        };
+        for p in [dll, config.as_path()] {
+            Self::check_acl(f, p)?;
+        }
+        let text = f
+            .read_text(&config)
+            .map_err(|e| (BlockReason::WrapperConfigInvalid, format!("{}: {e}", config.display())))?;
+        let table = parse_support_table(&cand.kind, &text)
+            .map_err(|e| (BlockReason::WrapperConfigInvalid, format!("{}: {e}", config.display())))?;
+        let version = termsrv.clone().map_err(|e| (BlockReason::TermsrvVersionUnreadable, e))?;
+        match gate(version, &table) {
+            GateResult::Supported => Ok(cand),
+            GateResult::Unknown => Err((BlockReason::UnknownTermsrvBuild { version }, String::new())),
+        }
+    }
+
+    /// `p` (and every ancestor) can be replaced only by administrators.
+    fn check_acl(f: &dyn crate::termwrap::system::FileInspector, p: &Path) -> Result<(), Block> {
+        match f.writable_by_non_admins(p) {
+            Ok(false) => Ok(()),
+            Ok(true) => Err((BlockReason::WrapperInsecureAcl, p.display().to_string())),
+            Err(e) => Err((BlockReason::WrapperInsecureAcl, format!("{}: ACL unreadable: {e}", p.display()))),
+        }
+    }
+
+    /// Host architecture, PE machine and Authenticode of a wrapper DLL (both modes).
+    fn check_binary(&self, dll: &Path, cand: &WrapperCandidate) -> Result<(), Block> {
+        let f = self.d.files.as_ref();
+        let shown = dll.display().to_string();
         let host = self.d.host.native_machine();
         // x64 only (merge-plan.md step 7): the operator-installed wrappers are x64 / x86
         // builds; an ARM64 host is refused before any file of the wrapper is trusted.
@@ -171,28 +208,55 @@ impl WindowsTermwrap {
                 return Err((BlockReason::WrapperUnsigned, format!("{shown}: signature does not verify")));
             }
         }
-        let Some(config) = cand.config_file.clone() else {
-            return Err((BlockReason::WrapperConfigInvalid, format!("{shown}: support file missing")));
+        Ok(())
+    }
+
+    /// External wrapper mode (detect-only): `sd` (raw ServiceDll, not stock, not ours) is
+    /// another product's wrapper at one of the fixed discovery locations. `None` = not
+    /// recognised (the caller reports `ForeignActive`). Read-only: nothing is written.
+    fn external_state(&self, sd: &str) -> Result<Option<TermwrapState>, TermwrapError> {
+        let expanded = if sd.contains('%') { self.d.host.expand(sd) } else { Some(sd.to_owned()) };
+        let Some(Ok(path)) = expanded.map(|e| validate_wrapper_path(Path::new(e.trim()))) else {
+            return Ok(None);
         };
-        for p in [dll, config.as_path()] {
-            match f.writable_by_non_admins(p) {
-                Ok(false) => {}
-                Ok(true) => return Err((BlockReason::WrapperInsecureAcl, p.display().to_string())),
-                Err(e) => {
-                    return Err((BlockReason::WrapperInsecureAcl, format!("{}: ACL unreadable: {e}", p.display())));
-                }
+        let dll = Path::new(&path);
+        if !WrapperKind::for_dll(dll).is_external() {
+            return Ok(None);
+        }
+        let known = self.d.discovery.candidates().into_iter().any(|c| {
+            c.kind.is_external() && c.service_dll.to_str().is_some_and(|s| paths_equal(s, &path))
+        });
+        if !known {
+            return Ok(None);
+        }
+        let wrapper = describe_candidate(self.d.files.as_ref(), dll);
+        let blocked = match self.host_block()? {
+            Some((reason, _)) => Some(reason),
+            None => self.check_external(dll, &wrapper).err().map(|(reason, detail)| {
+                log::warn!("termwrap: external wrapper not usable ({reason:?} {detail})");
+                reason
+            }),
+        };
+        Ok(Some(TermwrapState::External { wrapper, blocked }))
+    }
+
+    /// Every read-only check of an external wrapper, fail closed: present, architecture,
+    /// signature, ACL of the DLL and its ancestors, both concurrent-session rows already 1.
+    fn check_external(&self, dll: &Path, cand: &WrapperCandidate) -> Result<(), Block> {
+        let f = self.d.files.as_ref();
+        if !f.exists(dll) {
+            return Err((BlockReason::WrapperMissing, dll.display().to_string()));
+        }
+        self.check_binary(dll, cand)?;
+        Self::check_acl(f, dll)?;
+        for (path, name) in [(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS), (WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS)] {
+            match self.d.registry.get(path, name) {
+                Ok(RegValue::Dword(1)) => {}
+                Ok(other) => return Err((BlockReason::ConcurrentSessionsOff, format!("{name} = {other:?}"))),
+                Err(e) => return Err((BlockReason::ConcurrentSessionsOff, format!("{name}: {e}"))),
             }
         }
-        let text = f
-            .read_text(&config)
-            .map_err(|e| (BlockReason::WrapperConfigInvalid, format!("{}: {e}", config.display())))?;
-        let table = parse_support_table(&cand.kind, &text)
-            .map_err(|e| (BlockReason::WrapperConfigInvalid, format!("{}: {e}", config.display())))?;
-        let version = termsrv.clone().map_err(|e| (BlockReason::TermsrvVersionUnreadable, e))?;
-        match gate(version, &table) {
-            GateResult::Supported => Ok(cand),
-            GateResult::Unknown => Err((BlockReason::UnknownTermsrvBuild { version }, String::new())),
-        }
+        Ok(())
     }
 
     fn termsrv(&self) -> Result<FileVersion, String> {
@@ -219,10 +283,14 @@ impl WindowsTermwrap {
         } else if self.owned(&st, &sd)? {
             TermwrapState::On { wrapper: describe_candidate(self.d.files.as_ref(), Path::new(&sd)) }
         } else {
-            TermwrapState::ForeignActive { service_dll: sd }
+            match self.external_state(&sd)? {
+                Some(external) => external,
+                None => TermwrapState::ForeignActive { service_dll: sd },
+            }
         };
-        let supported = self.host_block()?.is_none()
-            && candidates.iter().any(|c| self.check_wrapper(&c.service_dll, &termsrv).is_ok());
+        let supported = matches!(state, TermwrapState::External { blocked: None, .. })
+            || (self.host_block()?.is_none()
+                && candidates.iter().any(|c| self.check_wrapper(&c.service_dll, &termsrv).is_ok()));
         Ok(TermwrapStatus {
             state,
             termsrv_version: termsrv.ok(),
@@ -465,6 +533,9 @@ impl Termwrap for WindowsTermwrap {
         let sd = self.d.scm.service_dll()?;
         let owned = self.owned(&st, &sd)?;
         if !self.is_stock(&sd) && !owned {
+            if self.external_state(&sd)?.is_some() {
+                return Err(TermwrapError::ExternalWrapper(sd));
+            }
             return Err(TermwrapError::ForeignWrapper(sd));
         }
         self.check_wrapper(Path::new(&wrapper), &self.termsrv()).map_err(|(r, d)| r.into_error(d))?;

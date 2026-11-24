@@ -529,3 +529,183 @@ fn works_with_the_jsonl_journal() {
     assert!(!journal.path().exists());
     assert_eq!(w.service_dll(), STOCK_SERVICE_DLL);
 }
+
+// ---------- external wrapper mode (detect-only) ----------
+
+mod external {
+    use super::*;
+    use crate::termwrap::fake::{FAKE_EXTERNAL, FAKE_EXTERNAL_SERVICE_DLL, FAKE_INI_TEXT};
+    use crate::termwrap::state::{StoredState, load, save};
+    use crate::termwrap::support::WrapperKind;
+
+    fn state(w: &FakeWorld) -> TermwrapState {
+        tw(w).status().unwrap().state
+    }
+
+    fn blocked(w: &FakeWorld) -> Option<BlockReason> {
+        match state(w) {
+            TermwrapState::External { blocked, .. } => blocked,
+            other => panic!("expected External, got {other:?}"),
+        }
+    }
+
+    /// Nothing of ours was written: ServiceDll, rows, journal, restarts, our state.
+    fn assert_hands_off(w: &FakeWorld) {
+        assert_eq!(w.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+        assert_eq!(restarts(w), 0);
+        assert!(w.journal.records.lock().unwrap().is_empty());
+        assert_eq!(rows(w), (RegValue::Dword(1), RegValue::Dword(1)));
+        assert_eq!(load(w.registry.as_ref()).unwrap(), StoredState::default());
+    }
+
+    #[test]
+    fn active_external_wrapper_is_detected_and_usable() {
+        let w = FakeWorld::with_external_active();
+        let s = tw(&w).status().unwrap();
+        match &s.state {
+            TermwrapState::External { wrapper, blocked: None } => {
+                assert_eq!(wrapper.kind, WrapperKind::duo());
+                assert_eq!(wrapper.service_dll, Path::new(FAKE_EXTERNAL));
+                assert_eq!(wrapper.config_file, None);
+                assert_eq!(wrapper.signed, SignatureState::Trusted);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(s.state.wrapper_usable());
+        assert!(s.supported);
+        assert!(s.candidates.iter().any(|c| c.kind.is_external()));
+        assert_hands_off(&w);
+    }
+
+    #[test]
+    fn external_wrapper_is_never_written_or_restored() {
+        let w = FakeWorld::with_external_active();
+        // An RDP Wrapper is installed too: it is still never enabled over the external one.
+        w.files.put(FAKE_WRAPPER, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+        w.files.put(FAKE_INI, FakeFile::text(FAKE_INI_TEXT));
+        let t = tw(&w);
+        assert_eq!(code(t.enable(Path::new(FAKE_WRAPPER), WARNING_VERSION)), "external_wrapper");
+        assert_eq!(code(t.enable(Path::new(FAKE_EXTERNAL), WARNING_VERSION)), "external_wrapper");
+        assert_eq!(code(t.disable()), "foreign_wrapper");
+        assert!(matches!(t.boot_check().unwrap().state, TermwrapState::External { blocked: None, .. }));
+        t.restore_all().unwrap();
+        assert_hands_off(&w);
+    }
+
+    #[test]
+    fn stale_own_state_never_claims_the_external_wrapper() {
+        let w = FakeWorld::with_external_active();
+        let stale = StoredState {
+            enabled: true,
+            wrapper_path: Some(FAKE_WRAPPER.into()),
+            ack_warning_version: WARNING_VERSION,
+            blocked: None,
+            restore_pending: false,
+        };
+        save(w.registry.as_ref(), &stale).unwrap();
+        let t = tw(&w);
+        t.boot_check().unwrap();
+        t.restore_all().unwrap();
+        assert_eq!(w.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+        assert_eq!(restarts(&w), 0);
+        assert_eq!(rows(&w), (RegValue::Dword(1), RegValue::Dword(1)));
+    }
+
+    type Setup = Box<dyn Fn(&FakeWorld)>;
+
+    #[test]
+    fn every_read_only_check_fails_closed() {
+        let cases: Vec<(Setup, BlockReason)> = vec![
+            (Box::new(|w| w.files.edit(FAKE_EXTERNAL, |f| f.signature = SignatureState::Unsigned)), BlockReason::WrapperUnsigned),
+            (Box::new(|w| w.files.edit(FAKE_EXTERNAL, |f| f.signature = SignatureState::Untrusted)), BlockReason::WrapperUnsigned),
+            (
+                Box::new(|w| w.files.edit(FAKE_EXTERNAL, |f| f.machine = Some(pe::IMAGE_FILE_MACHINE_ARM64))),
+                BlockReason::WrapperWrongArchitecture,
+            ),
+            (
+                Box::new(|w| w.host.machine.store(u32::from(pe::IMAGE_FILE_MACHINE_ARM64), Ordering::SeqCst)),
+                BlockReason::WrapperWrongArchitecture,
+            ),
+            (Box::new(|w| w.files.edit(FAKE_EXTERNAL, |f| f.writable_by_users = true)), BlockReason::WrapperInsecureAcl),
+            (
+                Box::new(|w| w.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(0))),
+                BlockReason::ConcurrentSessionsOff,
+            ),
+            (
+                Box::new(|w| w.registry.put(WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS, RegValue::Absent)),
+                BlockReason::ConcurrentSessionsOff,
+            ),
+            (Box::new(|w| w.host.reference_present.store(true, Ordering::SeqCst)), BlockReason::ReferenceProductPresent),
+            (
+                Box::new(|w| *w.host.edition.lock().unwrap() = HostEdition::Home { edition_id: "Core".into() }),
+                BlockReason::EditionUnsupported,
+            ),
+            (
+                Box::new(|w| *w.host.edition.lock().unwrap() = HostEdition::Server { edition_id: "ServerStandard".into() }),
+                BlockReason::NotClientSku,
+            ),
+        ];
+        for (i, (setup, want)) in cases.into_iter().enumerate() {
+            let w = FakeWorld::with_external_active();
+            setup(&w);
+            assert_eq!(blocked(&w), Some(want), "case {i}");
+            let s = tw(&w).status().unwrap();
+            assert!(!s.state.wrapper_usable() && !s.supported, "case {i}");
+            tw(&w).boot_check().unwrap();
+            tw(&w).restore_all().unwrap();
+            assert_eq!(w.service_dll(), FAKE_EXTERNAL_SERVICE_DLL, "case {i}");
+            assert_eq!(restarts(&w), 0, "case {i}");
+            assert!(w.journal.records.lock().unwrap().is_empty(), "case {i}");
+        }
+    }
+
+    #[test]
+    fn unsigned_is_accepted_only_by_policy() {
+        let w = FakeWorld::with_external_active();
+        w.files.edit(FAKE_EXTERNAL, |f| f.signature = SignatureState::Unsigned);
+        let s = w.termwrap(TermwrapPolicy { allow_unsigned: true, ..TermwrapPolicy::default() }).status().unwrap();
+        assert!(s.state.wrapper_usable(), "{:?}", s.state);
+    }
+
+    #[test]
+    fn missing_dll_is_plain_foreign() {
+        let w = FakeWorld::with_external_active();
+        w.files.remove(FAKE_EXTERNAL);
+        // Not at a discovered location any more: plain foreign redirection.
+        assert_eq!(state(&w), TermwrapState::ForeignActive { service_dll: FAKE_EXTERNAL_SERVICE_DLL.into() });
+    }
+
+    #[test]
+    fn only_the_known_location_counts() {
+        for sd in [
+            r"%ProgramFiles%\Other\TermWrap.dll",
+            r"D:\Duo\TermWrap.dll",
+            r"%ProgramFiles%\Duo\Other.dll",
+            r"\\server\share\Duo\TermWrap.dll",
+            r"%ProgramFiles%\Duo\..\Duo\TermWrap.dll",
+            r"%Unknown%\Duo\TermWrap.dll",
+        ] {
+            let w = FakeWorld::with_external_active();
+            w.files.put(r"D:\Duo\TermWrap.dll", FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+            *w.scm.service_dll.lock().unwrap() = sd.into();
+            assert_eq!(state(&w), TermwrapState::ForeignActive { service_dll: sd.into() }, "{sd}");
+        }
+        // The expanded form of the known location is recognised too.
+        let w = FakeWorld::with_external_active();
+        *w.scm.service_dll.lock().unwrap() = FAKE_EXTERNAL.into();
+        assert!(state(&w).wrapper_usable());
+    }
+
+    #[test]
+    fn inactive_external_wrapper_is_only_a_candidate() {
+        let w = FakeWorld::default();
+        w.files.put(FAKE_EXTERNAL, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+        let s = tw(&w).status().unwrap();
+        assert_eq!(s.state, TermwrapState::Off);
+        assert!(!s.supported);
+        assert_eq!(s.candidates.len(), 1);
+        assert!(s.candidates[0].kind.is_external());
+        assert_eq!(code(tw(&w).enable(Path::new(FAKE_EXTERNAL), WARNING_VERSION)), "external_wrapper");
+        assert_untouched(&w);
+    }
+}

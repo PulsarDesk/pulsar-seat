@@ -155,6 +155,15 @@ impl HostFacts for FakeHost {
     fn system_root(&self) -> Option<String> {
         Some(r"C:\Windows".into())
     }
+    fn expand(&self, value: &str) -> Option<String> {
+        let mut out = value.to_owned();
+        for (var, val) in [("%ProgramFiles%", r"C:\Program Files"), ("%SystemRoot%", r"C:\Windows"), ("%windir%", r"C:\Windows")] {
+            while let Some(i) = out.to_ascii_lowercase().find(&var.to_ascii_lowercase()) {
+                out.replace_range(i..i + var.len(), val);
+            }
+        }
+        Some(out)
+    }
 }
 
 #[derive(Default)]
@@ -211,6 +220,10 @@ pub struct FakeWorld {
 pub const FAKE_WRAPPER: &str = r"C:\Program Files\RDP Wrapper\rdpwrap.dll";
 pub const FAKE_INI: &str = r"C:\Program Files\RDP Wrapper\rdpwrap.ini";
 pub const FAKE_INI_TEXT: &str = "[Main]\nUpdated=2026-11-01\n[10.0.26100.9818]\nx=1\n[10.0.26100.9818-SLInit]\ny=1\n";
+/// The external (detect-only) wrapper's install location and the raw ServiceDll its owner
+/// writes (REG_EXPAND_SZ, unexpanded).
+pub const FAKE_EXTERNAL: &str = r"C:\Program Files\Duo\TermWrap.dll";
+pub const FAKE_EXTERNAL_SERVICE_DLL: &str = r"%ProgramFiles%\Duo\TermWrap.dll";
 
 impl Default for FakeWorld {
     fn default() -> Self {
@@ -232,6 +245,19 @@ impl FakeWorld {
         let w = Self::default();
         w.files.put(FAKE_WRAPPER, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
         w.files.put(FAKE_INI, FakeFile::text(FAKE_INI_TEXT));
+        w
+    }
+
+    /// x64 client host where another product installed its signed wrapper, pointed
+    /// ServiceDll at it and set both concurrent-session rows (as on the test PC).
+    pub fn with_external_active() -> Self {
+        use crate::journal::RegValue;
+        use crate::termwrap::system::{ALLOW_MULTIPLE_TS_SESSIONS, ENABLE_CONCURRENT_SESSIONS, LICENSING_CORE, WINLOGON};
+        let w = Self::default();
+        w.files.put(FAKE_EXTERNAL, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+        *w.scm.service_dll.lock().unwrap() = FAKE_EXTERNAL_SERVICE_DLL.into();
+        w.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(1));
+        w.registry.put(WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS, RegValue::Dword(1));
         w
     }
 

@@ -31,6 +31,18 @@
 //!   SCM.
 //!   Disable / uninstall / failed boot gate = guarded journal replay back to stock.
 //! - A `ServiceDll` someone else set is never touched (`ForeignActive`).
+//! - **External wrapper mode (detect-only, 2026-11-24).** When another installed product
+//!   already pointed ServiceDll at its own wrapper at a fixed location (today
+//!   `%ProgramFiles%\Duo\TermWrap.dll`, [`support::WrapperKind::External`]), the state is
+//!   `External` instead of `ForeignActive`. The engine runs read-only checks on it (client
+//!   SKU, reference product absent, x64 host, PE machine, Authenticode, ACL of the DLL and
+//!   every ancestor, both concurrent-session rows already `1`) and reports the first that
+//!   fails as `blocked`. It never writes ServiceDll, the wrapper rows or a journal entry for
+//!   it and never restarts TermService for it; enable / disable / boot check / uninstall
+//!   leave it alone. The `termsrv_wrapper` backend runs seats on it when `blocked` is
+//!   `None` (the experimental ack is still required). There is no `termsrv.dll` build gate:
+//!   the product has no public support table, keeping it working across Windows updates is
+//!   its owner's job, and a broken wrapper shows up as seats that do not get a session.
 //!
 //! **Untested on hardware**: every Windows path in [`win`].
 
@@ -105,6 +117,10 @@ pub enum TermwrapState {
     On { wrapper: WrapperCandidate },
     /// Someone else redirected TermService: hands off.
     ForeignActive { service_dll: String },
+    /// Another installed product redirected TermService to its own wrapper at a known
+    /// location (external wrapper mode): hands off, but usable for seats while `blocked`
+    /// is `None`. `blocked` = the first read-only check that fails.
+    External { wrapper: WrapperCandidate, blocked: Option<BlockReason> },
     /// Enabled by us but a gate failed, so we restored stock.
     Blocked { reason: BlockReason },
 }
@@ -128,6 +144,19 @@ pub enum BlockReason {
     WrapperWrongArchitecture,
     /// Wrapper DLL, its directory or its config is writable by non-administrators.
     WrapperInsecureAcl,
+    /// External wrapper: `EnableConcurrentSessions` / `AllowMultipleTSSessions` are not
+    /// both `1`, so its owner has not turned concurrent sessions on (we never write them).
+    ConcurrentSessionsOff,
+    /// The wrapper belongs to another product: Pulsar Seat never enables it.
+    ExternalWrapper,
+}
+
+impl TermwrapState {
+    /// ServiceDll points at a wrapper that seats may use now: ours (`On`) or an external
+    /// one that passes every read-only check.
+    pub fn wrapper_usable(&self) -> bool {
+        matches!(self, TermwrapState::On { .. } | TermwrapState::External { blocked: None, .. })
+    }
 }
 
 impl BlockReason {
@@ -143,6 +172,8 @@ impl BlockReason {
             BlockReason::WrapperConfigInvalid => TermwrapError::WrapperConfig(detail),
             BlockReason::WrapperWrongArchitecture => TermwrapError::WrapperArch(detail),
             BlockReason::WrapperInsecureAcl => TermwrapError::WrapperInsecureAcl(detail),
+            BlockReason::ConcurrentSessionsOff => TermwrapError::ConcurrentSessionsOff(detail),
+            BlockReason::ExternalWrapper => TermwrapError::ExternalWrapper(detail),
         }
     }
 
@@ -172,6 +203,10 @@ pub enum TermwrapError {
     EditionUnsupported(String),
     #[error("TermService ServiceDll is redirected by someone else: {0}")]
     ForeignWrapper(String),
+    #[error("the wrapper is installed and managed by another product: {0}")]
+    ExternalWrapper(String),
+    #[error("concurrent sessions are not turned on by the wrapper's owner: {0}")]
+    ConcurrentSessionsOff(String),
     #[error("termsrv.dll build {0} is not listed by the wrapper's support file")]
     UnknownTermsrvBuild(FileVersion),
     #[error("termsrv.dll version could not be read: {0}")]
@@ -217,6 +252,8 @@ impl TermwrapError {
             TermwrapError::NotClientSku => "not_client_sku",
             TermwrapError::EditionUnsupported(_) => "edition_unsupported",
             TermwrapError::ForeignWrapper(_) => "foreign_wrapper",
+            TermwrapError::ExternalWrapper(_) => "external_wrapper",
+            TermwrapError::ConcurrentSessionsOff(_) => "concurrent_sessions_off",
             TermwrapError::UnknownTermsrvBuild(_) | TermwrapError::TermsrvVersionUnreadable(_) => "unknown_termsrv_build",
             TermwrapError::WrapperMissing(_) => "wrapper_missing",
             TermwrapError::WrapperUnsigned(_) => "wrapper_unsigned",
@@ -250,7 +287,10 @@ impl From<TermwrapError> for seat_core::error::ProtoError {
             | TermwrapError::UnknownTermsrvBuild(_)
             | TermwrapError::TermsrvVersionUnreadable(_)
             | TermwrapError::Unsupported(_) => ErrorCode::NotImplemented,
-            TermwrapError::ForeignWrapper(_) | TermwrapError::ReferenceProductPresent => ErrorCode::ServiceUnavailable,
+            TermwrapError::ForeignWrapper(_)
+            | TermwrapError::ExternalWrapper(_)
+            | TermwrapError::ConcurrentSessionsOff(_)
+            | TermwrapError::ReferenceProductPresent => ErrorCode::ServiceUnavailable,
             _ => ErrorCode::Internal,
         };
         let field = matches!(e, TermwrapError::WrapperPath(_) | TermwrapError::WrapperMissing(_)).then_some("wrapper_path");
@@ -277,7 +317,10 @@ impl From<TermwrapError> for BackendError {
             | TermwrapError::WrapperInsecureAcl(_)
             | TermwrapError::WrapperPath(_)
             | TermwrapError::WrapperConfig(_) => ErrorKind::Policy,
-            TermwrapError::ForeignWrapper(_) | TermwrapError::ReferenceProductPresent => ErrorKind::Coexistence,
+            TermwrapError::ForeignWrapper(_)
+            | TermwrapError::ExternalWrapper(_)
+            | TermwrapError::ConcurrentSessionsOff(_)
+            | TermwrapError::ReferenceProductPresent => ErrorKind::Coexistence,
             TermwrapError::TermserviceRestart(_) | TermwrapError::Registry(_) => ErrorKind::Os,
             TermwrapError::Journal(_) => ErrorKind::Internal,
         };
@@ -375,5 +418,29 @@ mod tests {
         assert!(j.contains(r#""state":{"state":"blocked","reason":{"reason":"unknown_termsrv_build","version":"#), "{j}");
         let back: TermwrapStatus = serde_json::from_str(&j).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn external_state_json_shape_and_usability() {
+        let wrapper = WrapperCandidate {
+            kind: WrapperKind::duo(),
+            service_dll: PathBuf::from(r"C:\Program Files\Duo\TermWrap.dll"),
+            config_file: None,
+            dll_version: Some(FileVersion::new(1, 6, 0, 0)),
+            signed: SignatureState::Trusted,
+        };
+        let ok = TermwrapState::External { wrapper: wrapper.clone(), blocked: None };
+        let j = serde_json::to_string(&ok).unwrap();
+        assert!(j.starts_with(r#"{"state":"external","wrapper":{"kind":"external","product":"duo","#), "{j}");
+        assert_eq!(serde_json::from_str::<TermwrapState>(&j).unwrap(), ok);
+        assert!(ok.wrapper_usable());
+        let blocked = TermwrapState::External { wrapper, blocked: Some(BlockReason::ConcurrentSessionsOff) };
+        assert!(!blocked.wrapper_usable());
+        assert!(!TermwrapState::ForeignActive { service_dll: "x".into() }.wrapper_usable());
+        assert!(!TermwrapState::Off.wrapper_usable());
+        assert_eq!(BlockReason::ConcurrentSessionsOff.code(), "concurrent_sessions_off");
+        assert_eq!(BlockReason::ExternalWrapper.code(), "external_wrapper");
+        let b: BackendError = TermwrapError::ExternalWrapper("x".into()).into();
+        assert_eq!(b.kind, ErrorKind::Coexistence);
     }
 }

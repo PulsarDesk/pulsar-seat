@@ -90,6 +90,9 @@ pub trait HostFacts: Send + Sync {
     fn native_machine(&self) -> u16;
     /// Expanded `%SystemRoot%`, e.g. `C:\Windows`.
     fn system_root(&self) -> Option<String>;
+    /// `value` with its `%VAR%` references expanded in the service's environment (a
+    /// REG_EXPAND_SZ ServiceDll such as `%ProgramFiles%\...`). `None` if it cannot be done.
+    fn expand(&self, value: &str) -> Option<String>;
 }
 
 pub use crate::journal::{SystemWallClock as SystemClock, WallClock as Clock};
@@ -119,14 +122,19 @@ impl KnownLocationDiscovery {
     }
 
     /// RDP Wrapper's documented locations: `%ProgramFiles%\RDP Wrapper\rdpwrap.dll`
-    /// (default) and `%SystemRoot%\System32\rdpwrap.dll` (its `-s` install option).
+    /// (default) and `%SystemRoot%\System32\rdpwrap.dll` (its `-s` install option), plus
+    /// the one location of the external (detect-only) wrapper, `%ProgramFiles%\Duo\TermWrap.dll`.
     pub fn default_locations(program_files: Option<&str>, system_root: Option<&str>) -> Vec<std::path::PathBuf> {
+        use crate::termwrap::support::{DUO_DIR, DUO_TERMWRAP_DLL, RDPWRAP_DLL};
         let mut v = Vec::new();
         if let Some(pf) = program_files {
-            v.push(Path::new(pf).join("RDP Wrapper").join(crate::termwrap::support::RDPWRAP_DLL));
+            v.push(Path::new(pf).join("RDP Wrapper").join(RDPWRAP_DLL));
         }
         if let Some(sr) = system_root {
-            v.push(Path::new(sr).join("System32").join(crate::termwrap::support::RDPWRAP_DLL));
+            v.push(Path::new(sr).join("System32").join(RDPWRAP_DLL));
+        }
+        if let Some(pf) = program_files {
+            v.push(Path::new(pf).join(DUO_DIR).join(DUO_TERMWRAP_DLL));
         }
         v
     }
@@ -162,5 +170,7 @@ mod tests {
         let v = KnownLocationDiscovery::default_locations(Some(r"C:\Program Files"), Some(r"C:\Windows"));
         assert_eq!(v[0], Path::new(r"C:\Program Files").join("RDP Wrapper").join("rdpwrap.dll"));
         assert_eq!(v[1], Path::new(r"C:\Windows").join("System32").join("rdpwrap.dll"));
+        assert_eq!(v[2], Path::new(r"C:\Program Files").join("Duo").join("TermWrap.dll"));
+        assert_eq!(v.len(), 3);
     }
 }

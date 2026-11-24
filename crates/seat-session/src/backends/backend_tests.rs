@@ -433,6 +433,74 @@ fn termsrv_wrapper_end_to_end_over_fakes() {
     let _ = engine;
 }
 
+/// External wrapper mode: another product's wrapper is active; seats run on it, nothing of
+/// the wrapper is written, restarted or restored.
+#[cfg(feature = "experimental-client-sku")]
+#[test]
+fn termsrv_wrapper_uses_an_active_external_wrapper_detect_only() {
+    use crate::termwrap::fake::{FAKE_EXTERNAL_SERVICE_DLL, FakeWorld as TwWorld};
+    use crate::termwrap::system::{ALLOW_MULTIPLE_TS_SESSIONS, ENABLE_CONCURRENT_SESSIONS, LICENSING_CORE, WINLOGON};
+    use crate::termwrap::{TermwrapPolicy, WARNING_VERSION};
+
+    let tw = TwWorld::with_external_active();
+    let w = FakeWorld::client();
+    let mut deps = w.deps();
+    deps.termwrap = Some(Arc::new(tw.termwrap(TermwrapPolicy::default())));
+    let rds_reg = w.registry.clone();
+    rds_reg.put(TERMSERVICE_PARAMETERS, "ServiceDll", RegValue::ExpandSz(FAKE_EXTERNAL_SERVICE_DLL.into()));
+    let b = create_backend(SessionBackendKind::TermsrvWrapper, deps);
+    let mut settings = GlobalSettings::default();
+    settings.backends.session = SessionBackendKind::TermsrvWrapper;
+    // The experimental ack is still required.
+    assert_eq!(b.prepare_host(&settings).unwrap_err().reason, "experimental_not_acknowledged");
+    settings.backends.experimental_ack = WARNING_VERSION;
+    let notes = b.prepare_host(&settings).unwrap();
+    assert!(notes.contains(&"termsrv_wrapper_external".to_string()), "{notes:?}");
+    assert!(!notes.contains(&"termsrv_wrapper_enabled".to_string()), "{notes:?}");
+    let p = b.probe().unwrap();
+    assert_eq!(p.availability, Availability::Available, "{:?}", p.notes);
+    assert!(p.notes.contains(&"wrapper_managed_externally".to_string()));
+    let s2 = seat_cfg(2, Some("ali"));
+    assert!(matches!(b.start(&req(&s2, &settings, Some("pw"))).unwrap(), StartStep::LaunchHost(_)));
+    b.restore_host().unwrap();
+    // Our documented RDP rows are restored; the wrapper and its rows are untouched.
+    assert_eq!(rds_reg.get(TS, "fDenyTSConnections").unwrap(), RegValue::Absent);
+    assert_eq!(tw.service_dll(), FAKE_EXTERNAL_SERVICE_DLL);
+    assert_eq!(tw.scm.restarts.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(tw.journal.records.lock().unwrap().is_empty());
+    assert_eq!(tw.registry.get(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS).unwrap(), RegValue::Dword(1));
+    assert_eq!(tw.registry.get(WINLOGON, ALLOW_MULTIPLE_TS_SESSIONS).unwrap(), RegValue::Dword(1));
+
+    // A failing read-only check blocks probe, prepare and start without touching anything.
+    tw.registry.put(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS, RegValue::Dword(0));
+    assert_eq!(b.probe().unwrap().availability, Availability::Unavailable { reason: "concurrent_sessions_off".into() });
+    assert_eq!(b.prepare_host(&settings).unwrap_err().reason, "concurrent_sessions_off");
+    assert_eq!(b.start(&req(&s2, &settings, Some("pw"))).unwrap_err().reason, "concurrent_sessions_off");
+    assert_eq!(tw.registry.get(LICENSING_CORE, ENABLE_CONCURRENT_SESSIONS).unwrap(), RegValue::Dword(0));
+    assert_eq!(tw.scm.restarts.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+/// Only another product's wrapper is installed and ServiceDll is stock: never turned on by us.
+#[cfg(feature = "experimental-client-sku")]
+#[test]
+fn termsrv_wrapper_never_enables_an_inactive_external_wrapper() {
+    use crate::termwrap::fake::{FAKE_EXTERNAL, FakeFile, FakeWorld as TwWorld};
+    use crate::termwrap::{SignatureState, TermwrapPolicy, WARNING_VERSION, pe};
+
+    let tw = TwWorld::default();
+    tw.files.put(FAKE_EXTERNAL, FakeFile::dll(pe::IMAGE_FILE_MACHINE_AMD64, SignatureState::Trusted));
+    let w = FakeWorld::client();
+    let mut deps = w.deps();
+    deps.termwrap = Some(Arc::new(tw.termwrap(TermwrapPolicy::default())));
+    let b = create_backend(SessionBackendKind::TermsrvWrapper, deps);
+    assert_eq!(b.probe().unwrap().availability, Availability::Unavailable { reason: "external_wrapper_inactive".into() });
+    let mut settings = GlobalSettings::default();
+    settings.backends.experimental_ack = WARNING_VERSION;
+    assert_eq!(b.prepare_host(&settings).unwrap_err().reason, "external_wrapper_inactive");
+    assert!(crate::termwrap::paths::is_stock_service_dll(&tw.service_dll(), Some(r"C:\Windows")));
+    assert_eq!(tw.scm.restarts.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 // ---------- fast_user_switch ----------
 
 #[test]

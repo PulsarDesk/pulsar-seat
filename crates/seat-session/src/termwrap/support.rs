@@ -18,6 +18,14 @@ pub const RDPWRAP_PROJECT: &str = "rdpwrap";
 /// File names that project uses (public README / installer source).
 pub const RDPWRAP_DLL: &str = "rdpwrap.dll";
 pub const RDPWRAP_INI: &str = "rdpwrap.ini";
+/// Product id of an operator-installed third-party multi-session product whose own setup
+/// points `TermService\Parameters\ServiceDll` at its wrapper (spec/remote 30 §2.4):
+/// `%ProgramFiles%\Duo\TermWrap.dll`. Only these interop identifiers (folder and file
+/// name) are used; the DLL is never read beyond its version resource, Authenticode
+/// signature, PE machine field and ACL.
+pub const DUO_PRODUCT: &str = "duo";
+pub const DUO_DIR: &str = "Duo";
+pub const DUO_TERMWRAP_DLL: &str = "TermWrap.dll";
 /// Upper bound for a config file we are willing to parse.
 pub const MAX_CONFIG_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -27,6 +35,12 @@ pub enum WrapperKind {
     /// A wrapper whose public config format we can read. `project` is a stable id such as
     /// [`RDPWRAP_PROJECT`].
     KnownOpenSource { project: String },
+    /// A wrapper that another installed product set up and manages itself ("external
+    /// wrapper" mode, detect-only). Pulsar Seat never points ServiceDll at it, never
+    /// restores it and never writes its rows; it only uses an already active one when every
+    /// read-only check passes (`WindowsTermwrap::external_state`). No support table, so it
+    /// never passes [`gate`] and can never be enabled by us.
+    External { product: String },
     /// Anything else. There is no support table to check, so it can never pass the gate.
     Unknown,
 }
@@ -36,10 +50,25 @@ impl WrapperKind {
         WrapperKind::KnownOpenSource { project: RDPWRAP_PROJECT.to_owned() }
     }
 
-    /// Classify by the DLL file name (case-insensitive).
+    pub fn duo() -> Self {
+        WrapperKind::External { product: DUO_PRODUCT.to_owned() }
+    }
+
+    /// True for a wrapper another product manages ([`WrapperKind::External`]).
+    pub fn is_external(&self) -> bool {
+        matches!(self, WrapperKind::External { .. })
+    }
+
+    /// Classify by the DLL file name (case-insensitive). An external product's wrapper is
+    /// recognised only inside its own folder (`...\Duo\TermWrap.dll`); the engine further
+    /// requires one of the fixed install locations.
     pub fn for_dll(dll: &Path) -> Self {
+        let dir = dll.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str());
         match dll.file_name().and_then(|n| n.to_str()) {
             Some(n) if n.eq_ignore_ascii_case(RDPWRAP_DLL) => Self::rdpwrap(),
+            Some(n) if n.eq_ignore_ascii_case(DUO_TERMWRAP_DLL) && dir.is_some_and(|d| d.eq_ignore_ascii_case(DUO_DIR)) => {
+                Self::duo()
+            }
             _ => WrapperKind::Unknown,
         }
     }
@@ -86,6 +115,9 @@ pub fn parse_support_table(kind: &WrapperKind, text: &str) -> Result<SupportTabl
         WrapperKind::KnownOpenSource { project } => {
             Err(TermwrapError::WrapperConfig(format!("no parser for wrapper project {project:?}")))
         }
+        WrapperKind::External { product } => Err(TermwrapError::WrapperConfig(format!(
+            "the wrapper of {product:?} is managed by its owner and has no support table"
+        ))),
         WrapperKind::Unknown => Err(TermwrapError::WrapperConfig("unknown wrapper kind has no support table".into())),
     }
 }
@@ -191,5 +223,19 @@ mod tests {
         let other = Path::new(r"C:\x\wrap.dll");
         assert_eq!(WrapperKind::for_dll(other), WrapperKind::Unknown);
         assert_eq!(WrapperKind::Unknown.config_file_for(other), None);
+    }
+
+    #[test]
+    fn external_kind_needs_its_folder_and_has_no_table() {
+        let duo = Path::new(r"C:\Program Files\duo\termwrap.DLL");
+        let k = WrapperKind::for_dll(duo);
+        assert_eq!(k, WrapperKind::duo());
+        assert!(k.is_external());
+        assert!(!WrapperKind::rdpwrap().is_external());
+        assert_eq!(k.config_file_for(duo), None);
+        assert!(parse_support_table(&k, INI).is_err());
+        assert_eq!(gate(FileVersion::new(10, 0, 26100, 9818), &SupportTable::default()), GateResult::Unknown);
+        assert_eq!(WrapperKind::for_dll(Path::new(r"C:\Program Files\Other\TermWrap.dll")), WrapperKind::Unknown);
+        assert_eq!(WrapperKind::for_dll(Path::new("TermWrap.dll")), WrapperKind::Unknown);
     }
 }

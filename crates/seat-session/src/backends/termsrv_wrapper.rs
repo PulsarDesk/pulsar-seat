@@ -6,6 +6,12 @@
 //! warning (`experimental_ack == EXPERIMENTAL_WARNING_VERSION`). Never chosen as a
 //! fallback. Without the cargo feature `experimental-client-sku` the backend reports
 //! `unavailable{feature_not_built}`.
+//!
+//! External wrapper mode (detect-only): when another installed product already pointed
+//! ServiceDll at its own wrapper and every read-only check passes
+//! (`TermwrapState::External { blocked: None }`), seats run on it; `prepare_host` only
+//! claims the documented RDP rows (`rds`), never ServiceDll or the wrapper rows, and
+//! `restore_host` leaves the wrapper alone.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +27,10 @@ use super::SessionDeps;
 use super::rds_loopback::RdsLoopbackBackend;
 use crate::edition::{HostClass, arch_name, classify};
 use crate::error::{err, reason};
+
+/// Reason code: the only installed wrapper belongs to another product and ServiceDll does
+/// not point at it (external wrapper mode never turns it on).
+pub const EXTERNAL_WRAPPER_INACTIVE: &str = "external_wrapper_inactive";
 
 pub struct TermsrvWrapperBackend {
     rdp: RdsLoopbackBackend,
@@ -65,8 +75,23 @@ impl TermsrvWrapperBackend {
         }
         Ok(match st.state {
             TermwrapState::On { .. } => self.rdp.rdp_readiness(notes, true).unwrap_or(Availability::Available),
+            // External wrapper mode: another product's wrapper is active and passes every
+            // read-only check; seats use it, Pulsar Seat never changes it.
+            TermwrapState::External { blocked: None, .. } => {
+                notes.push("wrapper_managed_externally".into());
+                self.rdp.rdp_readiness(notes, true).unwrap_or(Availability::Available)
+            }
+            TermwrapState::External { blocked: Some(reason), .. } => {
+                notes.push("wrapper_managed_externally".into());
+                Availability::Unavailable { reason: reason.code().into() }
+            }
             TermwrapState::Off if st.supported => Availability::NeedsSetup { what: "enable_termsrv_wrapper".into() },
             TermwrapState::Off if st.candidates.is_empty() => Availability::Unavailable { reason: "wrapper_missing".into() },
+            // Only another product's wrapper is installed and it is not active: its owner
+            // turns it on, never us.
+            TermwrapState::Off if st.candidates.iter().all(|c| c.kind.is_external()) => {
+                Availability::Unavailable { reason: EXTERNAL_WRAPPER_INACTIVE.into() }
+            }
             TermwrapState::Off => Availability::Unavailable { reason: "unknown_termsrv_build".into() },
             TermwrapState::ForeignActive { .. } => {
                 notes.push("wrapper_managed_externally".into());
@@ -149,11 +174,25 @@ impl SessionBackend for TermsrvWrapperBackend {
             let mut notes = Vec::new();
             match &st.state {
                 TermwrapState::On { .. } => {}
+                // Detect-only: no ServiceDll write, no wrapper rows, no TermService restart.
+                TermwrapState::External { blocked: None, .. } => notes.push("termsrv_wrapper_external".into()),
+                TermwrapState::External { wrapper, blocked: Some(r) } => {
+                    return Err(r.clone().into_error(wrapper.service_dll.display().to_string()).into());
+                }
                 TermwrapState::ForeignActive { service_dll } => {
                     return Err(err(ErrorKind::Coexistence, reason::FOREIGN_SERVICE_DLL, format!("ServiceDll is {service_dll}")));
                 }
                 TermwrapState::Off | TermwrapState::Blocked { .. } => {
-                    let cand = st.candidates.first().ok_or_else(|| err(ErrorKind::NotFound, "wrapper_missing", "no wrapper DLL found"))?;
+                    let Some(cand) = st.candidates.iter().find(|c| !c.kind.is_external()) else {
+                        return Err(match st.candidates.is_empty() {
+                            true => err(ErrorKind::NotFound, "wrapper_missing", "no wrapper DLL found"),
+                            false => err(
+                                ErrorKind::Coexistence,
+                                EXTERNAL_WRAPPER_INACTIVE,
+                                "only another product's wrapper is installed and it is not active; its owner turns it on",
+                            ),
+                        });
+                    };
                     eng.enable(&cand.service_dll, settings.backends.experimental_ack)?;
                     notes.push("termsrv_wrapper_enabled".into());
                 }
