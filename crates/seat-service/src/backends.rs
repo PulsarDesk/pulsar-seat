@@ -60,6 +60,8 @@ pub trait BackendFactory: Send + Sync {
     fn hold_usb_capture(&self) -> bool {
         false
     }
+    /// End [`Self::hold_usb_capture`]: the input backend was chosen again. Default: nothing.
+    fn resume_usb_capture(&self) {}
     /// Release what this run captured (service stop, input backend deselected), without
     /// touching anything else. Returns error texts. Default: nothing.
     fn release_usb_input(&self) -> Vec<String> {
@@ -73,6 +75,12 @@ pub trait BackendFactory: Send + Sync {
     /// Effective seat masks of the audio endpoints, for the audio backend of `kind`
     /// (its shared fallback never picks another seat's endpoint, spec 60 §8.3).
     fn set_audio_masks(&self, _kind: AudioBackendKind, _masks: Vec<(seat_core::DeviceKey, seat_core::SeatMask)>) {}
+}
+
+/// `winusb_capture` becomes the active input backend (from another kind): the operator's
+/// restore hold (`BackendFactory::hold_usb_capture`) ends.
+pub fn usb_capture_chosen_again(old: InputBackendKind, new: InputBackendKind) -> bool {
+    new == InputBackendKind::WinusbCapture && old != InputBackendKind::WinusbCapture
 }
 
 /// snake_case name of a serde enum (`rds_loopback`).
@@ -732,6 +740,9 @@ pub mod testing {
             self.usb_order.lock().unwrap_or_else(|e| e.into_inner()).push("hold");
             true
         }
+        fn resume_usb_capture(&self) {
+            self.usb_order.lock().unwrap_or_else(|e| e.into_inner()).push("resume");
+        }
         fn release_usb_input(&self) -> Vec<String> {
             self.usb_releases.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Vec::new()
@@ -743,6 +754,16 @@ pub mod testing {
 mod tests {
     use super::testing::MockFactory;
     use super::*;
+
+    /// Gaming PC E2E round 2 (bug J): choosing `winusb_capture` again ends the operator's
+    /// restore hold; staying on it, or leaving it, does not.
+    #[test]
+    fn usb_capture_hold_ends_when_the_backend_is_chosen_again() {
+        use InputBackendKind as K;
+        assert!(usb_capture_chosen_again(K::RawInputHost, K::WinusbCapture));
+        assert!(!usb_capture_chosen_again(K::WinusbCapture, K::WinusbCapture));
+        assert!(!usb_capture_chosen_again(K::WinusbCapture, K::RawInputHost));
+    }
 
     #[test]
     fn defaults_select_configured() {

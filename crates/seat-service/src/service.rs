@@ -1101,6 +1101,11 @@ impl Service {
                 log::warn(&format!("USB input release on deselect: {e}"));
             }
         }
+        if backends::usb_capture_chosen_again(old.input.kind(), b.input.kind()) {
+            // The operator's restore hold ends when the backend is chosen again, as its log
+            // line says (gaming PC E2E round 2: off and on again kept it held, bug J).
+            self.factory.resume_usb_capture();
+        }
         let kept: std::collections::HashSet<_> = b.gates.iter().map(|g| g.kind()).collect();
         for g in old.gates.iter().filter(|g| !kept.contains(&g.kind())) {
             match g.revert_all() {
