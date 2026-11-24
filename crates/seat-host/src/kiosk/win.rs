@@ -383,6 +383,8 @@ struct Shell {
     reader: Option<RawReader>,
     units: Vec<String>,
     autostarted: bool,
+    /// "No monitor from the service" was logged (once per shell).
+    no_monitor_logged: bool,
     tick: u64,
     font: *mut c_void,
     big_font: *mut c_void,
@@ -635,8 +637,13 @@ impl Shell {
         let home_class = class("PulsarSeat.KioskHome", wndproc, std::ptr::null_mut());
         for m in &self.layout.monitors {
             let h = create(&home_class, WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, WS_POPUP | WS_VISIBLE, *m);
+            if h.is_null() {
+                klog!("launcher window on {m:?} not created: {}", std::io::Error::last_os_error());
+            }
             self.homes.push(h);
         }
+        // Bug 6 diagnostics: what the shell shows (round 2 compares with the screen).
+        klog!("layout: {} monitor(s) {:?}", self.layout.monitors.len(), self.layout.monitors);
         if let Some(b) = self.layout.bar() {
             move_window(self.bar, hwnd_topmost(), b, SWP_SHOWWINDOW);
         }
@@ -672,10 +679,15 @@ impl Shell {
             self.audio.set_endpoints(d.audio.clone());
             if !d.monitors.is_empty() {
                 self.apply_layout(d.monitors);
+            } else if self.layout.is_empty() && !self.no_monitor_logged {
+                // Nothing to show and no app to start until a monitor arrives (bug 6).
+                self.no_monitor_logged = true;
+                klog!("the service lists no monitor of this seat in the desktop: no launcher, no apps yet");
             }
         }
         if !self.autostarted && !self.layout.is_empty() {
             self.autostarted = true;
+            klog!("autostart: {} app(s)", self.args.plan.apps.iter().filter(|a| a.autostart).count());
             self.autostart();
         }
         redraw(self.bar);
@@ -737,6 +749,7 @@ impl Shell {
             )
         };
         if ok == 0 {
+            klog!("app {} not started: {}", app.title, std::io::Error::last_os_error());
             self.error_line = Some(format!("{}: {}", copy::START_FAILED.get(), app.title));
             redraw(self.bar);
             return;
@@ -745,6 +758,7 @@ impl Shell {
         unsafe {
             if AssignProcessToJobObject(self.job, pi.hProcess) == 0 {
                 // Not in the job means not routable and not reset: do not run it.
+                klog!("app {} not put into the seat's job ({}); ended", app.title, std::io::Error::last_os_error());
                 windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
             } else {
                 // Per-process shim (round 4 kiosk-isolation, x86 / x64 apps only): load the
@@ -774,6 +788,7 @@ impl Shell {
                 self.app_of_pid.insert(pi.dwProcessId, i);
                 self.pending_focus.push(pi.dwProcessId);
                 self.error_line = None;
+                klog!("app {} started (pid {})", app.title, pi.dwProcessId);
             }
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
@@ -1457,17 +1472,33 @@ fn font(height: i32, bold: bool) -> *mut c_void {
 /// A verified `kiosk_shell` connection (the service checks PID + session against the shells
 /// it started; right after the launch it may not know the PID yet, so callers retry).
 fn connect(seat: seat_core::SeatNumber) -> Option<pipe::Conn<std::fs::File>> {
-    let mut c = pipe::open().ok()?;
-    c.hello(ClientKind::KioskShell, Some(seat), None).ok()?;
-    Some(c)
+    try_connect(seat).ok()
+}
+
+/// [`connect`] with the reason of a failure (logged by the poll thread, bug 6 diagnostics).
+fn try_connect(seat: seat_core::SeatNumber) -> Result<pipe::Conn<std::fs::File>, String> {
+    let mut c = pipe::open().map_err(|e| format!("pipe: {e}"))?;
+    c.hello(ClientKind::KioskShell, Some(seat), None).map_err(|e| format!("hello: {e}"))?;
+    Ok(c)
 }
 
 /// Service poll thread.
 fn poll_service(seat: seat_core::SeatNumber, tx: Sender<UiEvent>, tid: u32) {
     let mut conn = None;
+    // Last connection outcome logged (`None` = nothing logged yet): only changes are logged.
+    let mut logged: Option<Result<(), String>> = None;
     loop {
         if conn.is_none() {
-            conn = connect(seat);
+            let r = try_connect(seat);
+            let now = r.as_ref().map(|_| ()).map_err(Clone::clone);
+            if logged.as_ref() != Some(&now) {
+                match &now {
+                    Ok(()) => klog!("service connected"),
+                    Err(e) => klog!("service not reachable ({e}); retrying every {POLL_MS} ms"),
+                }
+                logged = Some(now);
+            }
+            conn = r.ok();
         }
         let mut devices = None;
         let mut filter = None;
@@ -1528,7 +1559,9 @@ fn watch_stop(seat: seat_core::SeatNumber, tid: u32) {
     // (which grants SYSTEM full access, so the service can set it).
     let ev = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
     if ev.is_null() {
-        klog!("stop event could not be created; the service will kill the shell");
+        // Access denied here = the seat user has no create right in the session's `Local\`
+        // namespace (bug 6: the service grants it with the desktop rights since 2026-11-24).
+        klog!("stop event could not be created ({}); the service will kill the shell", std::io::Error::last_os_error());
         return;
     }
     // SAFETY: our handle. A stale signal (left by an earlier shell) does not count.
@@ -1842,6 +1875,7 @@ fn run_shell(args: ShellArgs) -> i32 {
         dirty: false,
         clipped: false,
         service_seen_ms: 0,
+        no_monitor_logged: false,
         stream_ok: false,
         audio: KioskAudio::new(seat_media::create_app_endpoint_policy()),
         modified_threads: HashSet::new(),
