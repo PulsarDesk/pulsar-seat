@@ -657,7 +657,14 @@ since 2026-11-17 every kiosk seat 2+ runs as its own Windows user (see "Per-seat
   (`win::host_account::interactive_token_in_session`), the logon SID journaled
   (`run\kiosk-grants.json`) before `pulsar-seat-host --desktop-acl grant --sid S --kiosk`
   grants the interactive user's rights on `WinSta0` / `Default`
-  (`KIOSK_WINSTA_ACCESS` / `KIOSK_DESKTOP_ACCESS`), `LoadUserProfileW`, then
+  (`KIOSK_WINSTA_ACCESS` / `KIOSK_DESKTOP_ACCESS`) **and on the session's named-object
+  directory** `\Sessions\<id>\BaseNamedObjects` (`KIOSK_BNO_ACCESS` = query, traverse, create
+  object, create subdirectory, read control: the session owner's own mask;
+  `win::host_account::edit_session_named_objects`, `NtOpenDirectoryObject` +
+  `SetSecurityInfo`; added 2026-11-24 after the gaming PC E2E, bug 6: everyone else only gets
+  query + traverse there, so the seat user could not create any `Local\` object and the
+  shell's stop event failed; a revoke always clears it, best effort, since the ACE dies with
+  the session), `LoadUserProfileW`, then
   `SessionLauncher::launch_as` (`CreateProcessAsUserW` with that token, the seat's job). The
   logon lives as long as the shell (dropped on `log_off` or when a dead shell is restarted:
   profile unloaded, grant revoked; a crashed run's grants are swept at the next start). Any
@@ -1268,7 +1275,15 @@ monitor's same-container hub keeps a seat the monitor is not on.
   and announced `INPUT_FLAG_MOUSE_RELATIVE`.
 - **Audio:** rdpsnd (PCM) to `AudioBridge::start_playback/play`. `AUDIO_INPUT` from
   `AudioBridge::start_capture`. `rebind_audio` maps to `AudioBridge::set_route`. Dead
-  streams are reopened every second.
+  streams are reopened every second. Since 2026-11-24 (gaming PC E2E, bug 4: no wave ever
+  reached the host with the static channel alone) playback is also offered on
+  `AUDIO_PLAYBACK_DVC` + `AUDIO_PLAYBACK_LOSSY_DVC` (`seat_rdp::audio::dvc_playback`, one
+  shared state, own handler on the same sink; Windows 8 and later try these first,
+  HYPOTHESIS that the tested Windows 11 build did not fall back). Every format exchange is
+  logged (`seat host: audio formats on <transport>: ...`, or `none of ours matches`), as are
+  `playback started ... on the seat's endpoint` / `seat endpoint NOT open (notes ...)` and
+  `playback stopped`; no such line while sound plays in the seat = the server never opened
+  audio for this connection.
 - **Seat audio jitter buffer (2026-11-20, OSMS parity G7):** the playback FIFO
   `seat_media::bridge::PcmRing` is also the jitter buffer. Its policy is
   `JitterConfig` (`AudioBridge::jitter`, default `JitterConfig::SEAT`: target 30 ms,
