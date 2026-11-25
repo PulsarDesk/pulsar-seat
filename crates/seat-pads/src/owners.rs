@@ -353,7 +353,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn secured_store_refuses_user_owned_root() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::win::fsacl::user_owned_tempdir();
         let s = FileOwnerStore::under(dir.path());
         assert!(s.save(&[]).is_err());
         assert!(!s.path().exists());

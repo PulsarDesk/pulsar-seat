@@ -128,6 +128,47 @@ pub fn secure_dir(root: &Path, leaf: &Path) -> Result<(), PadError> {
     apply_protected_dacl(leaf)
 }
 
+/// A temporary directory owned by the calling user's own SID (the token user), never by
+/// Administrators. A plain `tempfile::tempdir()` is owned by BUILTIN\Administrators when
+/// the process runs with an elevated admin token (default owner of such tokens), as on the
+/// GitHub runners (first CI runs, 2026-11-25): the "user-owned" premise of the tests below
+/// would not hold there.
+#[cfg(test)]
+pub(crate) fn user_owned_tempdir() -> tempfile::TempDir {
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let d = tempfile::tempdir().unwrap();
+    let mut token = std::ptr::null_mut();
+    // SAFETY: pseudo handle of this process, valid out pointer.
+    assert!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } != 0, "OpenProcessToken");
+    let token = super::Handle(token);
+    // TOKEN_USER plus the SID it points to; u64 elements keep the buffer aligned.
+    let mut buf = vec![0u64; 64];
+    let mut len = 0u32;
+    // SAFETY: valid token and a buffer of the size passed.
+    let ok = unsafe { GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len) };
+    assert!(ok != 0, "GetTokenInformation(TokenUser): {}", last_error());
+    // SAFETY: the call filled a TOKEN_USER at the start of `buf`.
+    let user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
+    let w = wide(&d.path().to_string_lossy());
+    // SAFETY: valid path; the SID points into `buf`. Setting the owner to one's own user
+    // SID needs no privilege.
+    let rc = unsafe {
+        SetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            user.User.Sid,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(rc, 0, "SetNamedSecurityInfoW(owner = token user)");
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +176,7 @@ mod tests {
     /// A directory the test user owns is refused (no system state is changed).
     #[test]
     fn user_owned_dir_refused() {
-        let d = tempfile::tempdir().unwrap();
+        let d = user_owned_tempdir();
         assert!(matches!(check_existing(d.path()), Err(PadError::Invalid(_))));
         assert!(secure_dir(d.path(), &d.path().join("pads")).is_err());
         assert!(!d.path().join("pads").exists(), "nothing created under an unsafe root");
