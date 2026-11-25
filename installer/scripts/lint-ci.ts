@@ -33,7 +33,7 @@ const STEP_KEYS = new Set([
   "name", "id", "if", "uses", "run", "with", "env", "shell", "working-directory", "continue-on-error",
   "timeout-minutes",
 ]);
-const NATIVE = /^\s*(&\s*)?(\.\/|\.\\)?[\w./\\-]*(cargo|bun|bunx|rustup|winget|git|msbuild|signtool|infverif|cmd|powershell|pwsh|curl|tar)(\.exe|\.ps1)?\b/i;
+const NATIVE = /^\s*(&\s*)?(\.\/|\.\\)?[\w./\\-]*(cargo|bun|bunx|rustup|winget|nuget|git|msbuild|signtool|infverif|cmd|powershell|pwsh|curl|tar)(\.exe|\.ps1)?\b/i;
 
 export type Finding = { where: string; msg: string };
 

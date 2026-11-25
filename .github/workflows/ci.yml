@@ -17,8 +17,15 @@
 # pwsh wrapper only fails a step on the LAST native exit code. Structure and that rule are
 # checked by installer/scripts/lint-ci.ts (bun job; locally installer/scripts/ci-local.ps1).
 #
-# Not run yet: this repository has no remote; written against GitHub's documented runner
-# images (windows-11-arm, windows-2025). Runner facts marked HYPOTHESIS below.
+# First run 2026-11-25 (run 45633649012, commit 68f537d) on github.com/PulsarDesk/pulsar-seat.
+# Verified runner facts: `windows-2025` resolves to image windows-2025-vs2026 and
+# `windows-11-arm` to windows-11-vs2026-arm64 (runner-images README; the jobs that need
+# VS 2026 name those labels explicitly: windows-2025-vs2026, windows-11-vs2026-arm). Both
+# images: VS 2026 Enterprise 18.12 (x64 / ARM64 / ARM64EC MSVC + Spectre), Windows SDK
+# 10.0.26100 only, NuGet 8.0, Chocolatey, Rust stable, LLVM; winget on the x64 image only.
+# Passed as written: shim, shim-arm64, stream-server (both arches). Fixed after it: drivers,
+# credprov (SDK / WDK from NuGet), rust (a source file, not the runner), bun (a test that
+# assumed a warm cargo cache). Remaining runner facts marked HYPOTHESIS below.
 
 name: ci
 
@@ -309,12 +316,22 @@ jobs:
 
   drivers:
     name: drivers (${{ matrix.platform }})
-    # WDK 10.0.28000 with Visual Studio 2026 Build Tools (18): the WDK 26100 MSBuild tasks
-    # do not load in VS 18, and the projects pin WindowsTargetPlatformVersion 10.0.28000.0.
-    # The runner image's own VS / WDK are not used. Drivers are built and checked, never
-    # signed, test-signed, installed or loaded here (drivers/README.md).
-    runs-on: windows-2025
+    # WDK 10.0.28000 with Visual Studio 2026 (18): the WDK 26100 MSBuild tasks do not load
+    # in VS 18, and the projects pin WindowsTargetPlatformVersion 10.0.28000.0.
+    # Verified on the first run (2026-11-25, image windows-2025-vs2026 20261116.315): the
+    # image has VS 2026 Enterprise 18.12 with the x64 / ARM64 / ARM64EC MSVC tools and
+    # Spectre libraries, the WDK VS extension (10.0.26586), NuGet 8.0, but only Windows SDK
+    # 10.0.26100; installing SDK 10.0.28000.2957 with winget failed (installer exit
+    # 0x80070057). So VS is the image's and SDK + WDK come from Microsoft's NuGet packages
+    # (installer/wdk/packages.config, applied through Directory.Build.props while
+    # PULSAR_WDK_NUGET is set), the way Microsoft's Windows-driver-samples CI builds on the
+    # same image. Both platforms build on the x64 runner (as Microsoft's does). Drivers are
+    # built and checked, never signed, test-signed, installed or loaded here
+    # (drivers/README.md).
+    runs-on: windows-2025-vs2026
     timeout-minutes: 90
+    env:
+      PULSAR_WDK_NUGET: ${{ github.workspace }}\target\wdk-nuget
     strategy:
       fail-fast: false
       matrix:
@@ -324,24 +341,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Install VS 2026 Build Tools + Windows SDK / WDK 10.0.28000
-        shell: pwsh
-        run: |
-          $vs = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools " +
-                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 " +
-                "--add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre"
-          # Order matters: the WDK installs its MSBuild content (Dev18) into the Build Tools
-          # that already exist.
-          winget install --id Microsoft.VisualStudio.BuildTools --exact --version 18.11.3 --accept-package-agreements --accept-source-agreements --disable-interactivity --override $vs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($id in "Microsoft.WindowsSDK.10.0.28000", "Microsoft.WindowsWDK.10.0.28000") {
-            winget install --id $id --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          $kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10"
-          if (-not (Test-Path (Join-Path $kits "build\10.0.28000.0\bin\Microsoft.DriverKit.Build.Tasks.18.0.dll"))) {
-            Write-Error "WDK 10.0.28000 MSBuild tasks for VS 18 not found"; exit 1
-          }
+      # split-pad (Rust UMDF driver) builds for both targets; LLVM (libclang for bindgen) is
+      # on the image.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+      - name: Windows SDK + WDK 10.0.28000 (NuGet)
+        run: nuget restore installer/wdk/packages.config -PackagesDirectory $env:PULSAR_WDK_NUGET -NonInteractive
       # Rebuild, zero warnings (msbuild /WX in the projects + the script's log check),
       # infverif /w (and /u for the UMDF package), PE machine of every .sys / .dll.
       - name: Build, infverif, PE machine
@@ -387,10 +393,13 @@ jobs:
   # Credential provider DLL (credprov/, C++, msbuild v145 + SDK 10.0.28000): built and
   # self-tested on its native runner (the self-test runs where the DLL's architecture runs),
   # PE machine checked, never registered. The installers job puts it into the payload.
-  # ARM64 is an ARM64X DLL (needs the ARM64EC MSVC tools + Spectre libraries; HYPOTHESIS:
-  # the component ids below match VS 18, checked only against the local install).
-  # HYPOTHESIS: winget and the VS 18 Build Tools installer work on windows-11-arm as on
-  # windows-2025 (not run yet).
+  # ARM64 is an ARM64X DLL (needs the ARM64EC MSVC tools + Spectre libraries).
+  # Verified on the first run (2026-11-25): windows-11-arm (image windows-11-vs2026-arm64)
+  # has no winget, so the VS Build Tools install failed there; windows-2025 failed at the
+  # winget SDK 10.0.28000 install (0x80070057). Both images document VS 2026 Enterprise
+  # 18.12 with VC.Tools.ARM64EC + VC.Runtimes.ARM64EC.Spectre, NuGet 8.0, and SDK 10.0.26100
+  # only. So: the image's VS + the SDK from Microsoft's NuGet packages, as in the drivers
+  # job (built and self-tested locally that way, ARM64X + x64, 2026-11-25).
   credprov:
     name: credprov (${{ matrix.arch }})
     strategy:
@@ -399,27 +408,21 @@ jobs:
         include:
           - arch: arm64
             platform: ARM64
-            runner: windows-11-arm
+            runner: windows-11-vs2026-arm
           - arch: x64
             platform: x64
-            runner: windows-2025
+            runner: windows-2025-vs2026
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      PULSAR_WDK_NUGET: ${{ github.workspace }}\target\wdk-nuget
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Install VS 2026 Build Tools + Windows SDK 10.0.28000
-        shell: pwsh
-        run: |
-          $vs = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools " +
-                "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 " +
-                "--add Microsoft.VisualStudio.Component.VC.Tools.ARM64EC --add Microsoft.VisualStudio.Component.VC.Runtimes.ARM64EC.Spectre"
-          winget install --id Microsoft.VisualStudio.BuildTools --exact --version 18.11.3 --accept-package-agreements --accept-source-agreements --disable-interactivity --override $vs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          winget install --id Microsoft.WindowsSDK.10.0.28000 --exact --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Windows SDK 10.0.28000 (NuGet)
+        run: nuget restore installer/wdk/packages.config -PackagesDirectory $env:PULSAR_WDK_NUGET -NonInteractive
       # Release + Debug, zero warnings, self-test (exit code 0 = every check passed), PE
       # machine of the DLL; -OutDir copies the Release DLL for the payload.
       - name: Build + self-test
