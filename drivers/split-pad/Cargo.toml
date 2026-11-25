@@ -21,7 +21,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # windows-drivers-rs (MIT OR Apache-2.0, Microsoft). Pin the tested release when the
 # first build is done; versions below are the ones the code was written against.
-wdk = "0.3"
+# Not the `wdk` crate: nothing uses it (cargo 1.100 warns "unused dependency", which the
+# zero-warning driver build fails on; first CI runs, 2026-11-25).
 wdk-sys = "0.3"
 wdk-panic = "0.3"
 # User-mode Win32 calls (sections, events, thread-pool waits) are allowed in UMDF.
