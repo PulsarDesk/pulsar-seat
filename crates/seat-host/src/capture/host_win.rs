@@ -10,7 +10,10 @@
 //! Written from the Microsoft Learn pages on `MapViewOfFile`, `WaitForSingleObject`,
 //! `QueryPerformanceCounter`. **Untested on hardware.**
 
-use super::{AgentPointer, FrameTracker, Route, cursor_state, desktop_pos, ring_generation, route};
+use super::{
+    AgentPointer, FrameTracker, PointerPublisher, Route, cursor_state, desktop_pos,
+    ring_generation, route,
+};
 use crate::ironrdp::SharedSink;
 use seat_core::backend::display::{FrameSink, GpuFrameRef, SeatOutputs};
 use seat_core::capture::{
@@ -173,16 +176,7 @@ fn ended(r: &Ring) -> bool {
     m.state() == CaptureState::Stopped || m.generation() != r.offer.generation
 }
 
-fn set_gate(
-    sink: &SharedSink,
-    covered: &[usize],
-    handle: &seat_rdp::Handle,
-    pointer: &AgentPointer,
-) {
-    if covered.is_empty() {
-        // Not live: the last published position is stale.
-        pointer.clear();
-    }
+fn set_gate(sink: &SharedSink, covered: &[usize], handle: &seat_rdp::Handle) {
     let was_live = sink.gate().owns_cursor();
     if sink.gate().set(covered) && was_live && covered.is_empty() {
         // Back to the RDP picture: the engine's last frames were dropped, ask for all.
@@ -200,6 +194,7 @@ fn run(
     stop: Arc<AtomicBool>,
 ) {
     let mut rects: Vec<Rect> = Vec::new();
+    let mut pointer = PointerPublisher::new(pointer);
     let mut ring: Option<Ring> = None;
     let mut fetches = 0u64;
     let mut last_fetch: Option<Instant> = None;
@@ -264,7 +259,8 @@ fn run(
         }
         if ring.as_ref().is_none_or(ended) {
             // Nothing to read: show the RDP picture.
-            set_gate(&sink, &[], &handle, &pointer);
+            set_gate(&sink, &[], &handle);
+            pointer.clear("no capture ring (not offered or ended)");
             // Republish the position once live again (it was cleared).
             last_cursor = None;
             std::thread::sleep(Duration::from_millis(100));
@@ -288,7 +284,8 @@ fn run(
         let m = r.mailbox();
         if let Err(f) = live(&m, qpc()) {
             note(format!("not live: {}", f.reason()));
-            set_gate(&sink, &[], &handle, &pointer);
+            set_gate(&sink, &[], &handle);
+            pointer.clear(&format!("capture not live: {}", f.reason()));
             // Republish the position once live again (it was cleared).
             last_cursor = None;
             tracker.reset();
@@ -300,7 +297,10 @@ fn run(
         if !covered.is_empty() {
             note(format!("live on monitor(s) {covered:?}"));
         }
-        set_gate(&sink, &covered, &handle, &pointer);
+        set_gate(&sink, &covered, &handle);
+        if covered.is_empty() {
+            pointer.clear("no RDP monitor is captured (all keep the RDP picture)");
+        }
         // Frames.
         for (c, out) in r.offer.outputs.iter().enumerate() {
             let Some(li) = rt.layout_of(c) else { continue };
@@ -362,9 +362,16 @@ fn run(
                     .outputs
                     .get(c.output as usize)
                     .map_or((0, 0), |o| (o.rect.width, o.rect.height));
-                match rects.get(li).and_then(|&lr| desktop_pos(&c, lr, cap)) {
-                    Some(p) => pointer.set(p),
-                    None => pointer.clear(),
+                match rects.get(li).map(|&lr| (lr, desktop_pos(&c, lr, cap))) {
+                    Some((lr, Some(p))) => pointer.set(&c, lr, cap, p),
+                    Some((lr, None)) => pointer.clear(&format!(
+                        "mailbox ({}, {}) on rect {lr:?} is outside u16 desktop pixels",
+                        c.x, c.y
+                    )),
+                    None => pointer.clear(&format!(
+                        "no layout rect for RDP monitor {li} ({} rect(s))",
+                        rects.len()
+                    )),
                 }
                 if want && shape.is_some() {
                     shape_seq = c.shape_seq;
@@ -372,12 +379,16 @@ fn run(
                 let _ = sink.captured_cursor(&cursor_state(&c, li, shape));
             } else {
                 // On an output the capture does not drive: position unknown here.
-                pointer.clear();
+                pointer.clear(&format!(
+                    "mailbox output {} is not routed to an RDP monitor (route {:?})",
+                    c.output, rt.capture
+                ));
             }
             last_cursor = Some(c);
         }
         // SAFETY: an event handle of this process.
         unsafe { WaitForSingleObject(r.offer.event as usize as HANDLE, WAIT_MS) };
     }
-    set_gate(&sink, &[], &handle, &pointer);
+    set_gate(&sink, &[], &handle);
+    pointer.clear("capture reader stopped");
 }

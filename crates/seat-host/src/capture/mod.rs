@@ -199,6 +199,109 @@ impl AgentPointer {
     }
 }
 
+/// How often a still-valid [`AgentPointer`] is logged again (sample of the mapping).
+pub const POINTER_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Rate-limited log of the [`AgentPointer`] publishing (2026-11-25 pointer-speed
+/// investigation): a line the first time, whenever the pointer turns valid / empty or the
+/// reason for empty changes, and a sample every [`POINTER_LOG_EVERY`] while valid.
+#[derive(Debug, Default)]
+pub struct PointerLog {
+    /// `Ok(())` = valid, `Err(reason)` = cleared.
+    last: Option<Result<(), String>>,
+    sampled: Option<std::time::Instant>,
+}
+
+impl PointerLog {
+    /// A position was published: `c` (mailbox, output-relative), `layout` (RDP monitor
+    /// rectangle used), `captured` (output size), `pos` (desktop pixels).
+    pub fn valid(
+        &mut self,
+        c: &PublishedCursor,
+        layout: Rect,
+        captured: (u32, u32),
+        pos: (u16, u16),
+        now: std::time::Instant,
+    ) -> Option<String> {
+        let changed = self.last != Some(Ok(()));
+        let due = self
+            .sampled
+            .is_none_or(|t| now.saturating_duration_since(t) >= POINTER_LOG_EVERY);
+        if !changed && !due {
+            return None;
+        }
+        self.last = Some(Ok(()));
+        self.sampled = Some(now);
+        Some(format!(
+            "agent pointer {}: mailbox output {} ({}, {}) visible={} captured {}x{} -> rdp monitor rect ({}, {}) {}x{} -> desktop ({}, {})",
+            if changed { "valid" } else { "sample" },
+            c.output,
+            c.x,
+            c.y,
+            c.visible,
+            captured.0,
+            captured.1,
+            layout.x,
+            layout.y,
+            layout.width,
+            layout.height,
+            pos.0,
+            pos.1
+        ))
+    }
+    /// The position was cleared because of `why`.
+    pub fn cleared(&mut self, why: &str) -> Option<String> {
+        if self
+            .last
+            .as_ref()
+            .is_some_and(|l| l.as_ref().err().map(String::as_str) == Some(why))
+        {
+            return None;
+        }
+        self.last = Some(Err(why.to_owned()));
+        self.sampled = None;
+        Some(format!("agent pointer empty: {why}"))
+    }
+}
+
+/// The capture reader's side of the [`AgentPointer`]: sets / clears it and logs through
+/// [`PointerLog`] (`seat host: capture agent pointer ...` lines in the host log).
+#[derive(Default)]
+pub struct PointerPublisher {
+    pointer: AgentPointer,
+    log: PointerLog,
+}
+
+impl PointerPublisher {
+    pub fn new(pointer: AgentPointer) -> Self {
+        Self {
+            pointer,
+            log: PointerLog::default(),
+        }
+    }
+    pub fn set(
+        &mut self,
+        c: &PublishedCursor,
+        layout: Rect,
+        captured: (u32, u32),
+        pos: (u16, u16),
+    ) {
+        self.pointer.set(pos);
+        if let Some(l) = self
+            .log
+            .valid(c, layout, captured, pos, std::time::Instant::now())
+        {
+            eprintln!("seat host: capture {l}");
+        }
+    }
+    pub fn clear(&mut self, why: &str) {
+        self.pointer.clear();
+        if let Some(l) = self.log.cleared(why) {
+            eprintln!("seat host: capture {l}");
+        }
+    }
+}
+
 /// The agent's pointer (`c`, relative to its captured output of `captured` = (width,
 /// height) pixels) in RDP desktop pixels, on RDP monitor rectangle `layout`. The capture
 /// and the RDP monitor normally have the same size; if not, the position is scaled.
@@ -337,6 +440,57 @@ mod tests {
         assert_eq!(p.get(), Some((0, 0)), "origin is a position, not empty");
         p.clear();
         assert_eq!(p.get(), None);
+    }
+
+    #[test]
+    fn pointer_log_on_change_and_sampled() {
+        use std::time::{Duration, Instant};
+        let mut l = PointerLog::default();
+        let c = PublishedCursor {
+            output: 0,
+            visible: true,
+            x: 10,
+            y: 20,
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let first = l.valid(&c, r(0, 2560), (2560, 1440), (10, 20), t0).unwrap();
+        assert!(
+            first.contains("valid") && first.contains("desktop (10, 20)"),
+            "{first}"
+        );
+        assert!(
+            first.contains("rdp monitor rect (0, 0) 2560x1080"),
+            "{first}"
+        );
+        assert!(
+            l.valid(
+                &c,
+                r(0, 2560),
+                (2560, 1440),
+                (11, 20),
+                t0 + Duration::from_secs(1)
+            )
+            .is_none()
+        );
+        let s = l
+            .valid(
+                &c,
+                r(0, 2560),
+                (2560, 1440),
+                (12, 20),
+                t0 + POINTER_LOG_EVERY,
+            )
+            .unwrap();
+        assert!(s.contains("sample"), "{s}");
+        assert_eq!(l.cleared("x").as_deref(), Some("agent pointer empty: x"));
+        assert!(l.cleared("x").is_none(), "same reason: once");
+        assert!(l.cleared("y").is_some(), "new reason");
+        assert!(
+            l.valid(&c, r(0, 2560), (2560, 1440), (10, 20), t0)
+                .unwrap()
+                .contains("valid")
+        );
     }
 
     #[test]

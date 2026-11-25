@@ -290,6 +290,92 @@ pub struct SeatInputSink {
     /// Buttons pressed by relative events (released by relative events too).
     rel_buttons: u8,
     was_relative: bool,
+    /// Mode last written to the log (`None` = nothing logged yet).
+    logged_mode: Option<bool>,
+    trace: MouseTrace,
+}
+
+/// Where a wheel event's position came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelSource {
+    /// The in-session agent's pointer position.
+    Agent,
+    /// The server's `pointer_pos` (on the desktop).
+    Server,
+    /// `RdpInputSink`'s own position (absolute path).
+    Absolute,
+}
+
+/// Mouse output counters of [`SeatInputSink`] (2026-11-25 pointer-speed investigation): one
+/// `input-trace mouse_out` line about once a second while the mouse moves, with the moves
+/// sent relative vs absolute and the summed |dx| / |dy| of each, and the wheel position
+/// sources.
+#[derive(Debug, Default)]
+pub struct MouseTrace {
+    window_start: Option<std::time::Instant>,
+    rel: u64,
+    rel_dx: u64,
+    rel_dy: u64,
+    abs: u64,
+    abs_dx: u64,
+    abs_dy: u64,
+    wheel: [u64; 3],
+}
+
+impl MouseTrace {
+    fn start(&mut self, now: std::time::Instant) {
+        self.window_start.get_or_insert(now);
+    }
+    /// One `Move { dx, dy }` sent relative or through the absolute path.
+    pub fn moved(&mut self, relative: bool, dx: i32, dy: i32, now: std::time::Instant) {
+        self.start(now);
+        let (n, sx, sy) = if relative { (&mut self.rel, &mut self.rel_dx, &mut self.rel_dy) } else { (&mut self.abs, &mut self.abs_dx, &mut self.abs_dy) };
+        *n += 1;
+        *sx += u64::from(dx.unsigned_abs());
+        *sy += u64::from(dy.unsigned_abs());
+    }
+    pub fn wheel(&mut self, src: WheelSource, now: std::time::Instant) {
+        self.start(now);
+        self.wheel[src as usize] += 1;
+    }
+    /// The line for a window at least [`seat_core::input_trace::WINDOW`] old; resets it.
+    pub fn take_line(&mut self, now: std::time::Instant) -> Option<String> {
+        let start = self.window_start?;
+        let span = now.saturating_duration_since(start);
+        if span < seat_core::input_trace::WINDOW {
+            return None;
+        }
+        let line = format!(
+            "input-trace mouse_out: in {:.2}s rel n={} sum_dx={} sum_dy={} abs n={} sum_dx={} sum_dy={} wheel agent={} server={} abs={}",
+            span.as_secs_f64(),
+            self.rel,
+            self.rel_dx,
+            self.rel_dy,
+            self.abs,
+            self.abs_dx,
+            self.abs_dy,
+            self.wheel[WheelSource::Agent as usize],
+            self.wheel[WheelSource::Server as usize],
+            self.wheel[WheelSource::Absolute as usize],
+        );
+        *self = Self::default();
+        Some(line)
+    }
+}
+
+/// Log text of the inputs that decide [`SeatInputSink`]'s mouse mode.
+pub fn mode_reason(state: &seat_rdp::ChannelState, agent: Option<&crate::capture::AgentPointer>) -> String {
+    let agent = match agent {
+        None => "none".to_owned(),
+        Some(a) => match a.get() {
+            Some((x, y)) => format!("valid ({x}, {y})"),
+            None => "empty".to_owned(),
+        },
+    };
+    format!(
+        "connected={} relative_supported={} relative_offered={} pointer_hidden={} agent_pointer={} server_pointer_pos={:?}",
+        state.connected, state.relative_supported, state.relative_offered, state.pointer_hidden, agent, state.pointer_pos
+    )
 }
 
 const BUTTON_BITS: [u8; 5] = [
@@ -337,7 +423,7 @@ impl SeatInputSink {
         } else {
             outputs
         };
-        Self { inner, handle, outputs, agent: None, rel_buttons: 0, was_relative: false }
+        Self { inner, handle, outputs, agent: None, rel_buttons: 0, was_relative: false, logged_mode: None, trace: MouseTrace::default() }
     }
     /// Use relative mouse input on the normal desktop too, with `pointer` (the in-session
     /// agent's position) for wheel events and the resync.
@@ -352,8 +438,23 @@ impl SeatInputSink {
     /// The real pointer position in desktop pixels: the agent's, else the server's when it
     /// lies on the desktop (a server may report (65535, 65535), which is no position).
     fn known_pos(&self, state: &seat_rdp::ChannelState) -> Option<(u16, u16)> {
+        self.known_pos_from(state).map(|(p, _)| p)
+    }
+    /// [`Self::known_pos`] with its source.
+    fn known_pos_from(&self, state: &seat_rdp::ChannelState) -> Option<((u16, u16), WheelSource)> {
         let on_desktop = |p: &(u16, u16)| abs_packet_at(&self.outputs, *p).is_some();
-        self.agent.as_ref().and_then(|a| a.get()).filter(on_desktop).or(state.pointer_pos.filter(on_desktop))
+        let agent = self.agent.as_ref().and_then(|a| a.get()).filter(on_desktop).map(|p| (p, WheelSource::Agent));
+        agent.or(state.pointer_pos.filter(on_desktop).map(|p| (p, WheelSource::Server)))
+    }
+    /// Count what goes through the absolute path (trace).
+    fn trace_absolute(&mut self, packets: &[InputPacket], now: std::time::Instant) {
+        for p in packets {
+            match p {
+                InputPacket::Move { dx, dy } => self.trace.moved(false, *dx, *dy, now),
+                InputPacket::Wheel { .. } => self.trace.wheel(WheelSource::Absolute, now),
+                _ => {}
+            }
+        }
     }
     pub fn set_outputs(&mut self, outputs: Vec<seat_core::device::Rect>) {
         if !outputs.is_empty() {
@@ -376,6 +477,7 @@ impl SeatInputSink {
         match p {
             InputPacket::Move { dx, dy } => {
                 self.handle.relative(*dx, *dy);
+                self.trace.moved(true, *dx, *dy, std::time::Instant::now());
             }
             InputPacket::Buttons { down, up } => {
                 for bit in BUTTON_BITS {
@@ -389,8 +491,11 @@ impl SeatInputSink {
                     }
                 }
             }
-            InputPacket::Wheel { d, h } => match self.known_pos(state) {
-                Some((x, y)) => RdpInputChannel::send(&mut self.handle, &wheel_events(*d, *h, x, y))?,
+            InputPacket::Wheel { d, h } => match self.known_pos_from(state) {
+                Some(((x, y), src)) => {
+                    self.trace.wheel(src, std::time::Instant::now());
+                    RdpInputChannel::send(&mut self.handle, &wheel_events(*d, *h, x, y))?
+                }
                 None => return Ok(false),
             },
             _ => return Ok(false),
@@ -403,6 +508,26 @@ impl InputSink for SeatInputSink {
     fn send(&mut self, packets: &[InputPacket]) -> BackendResult<()> {
         let state = self.handle.state();
         let relative = self.relative_mode(&state);
+        if self.logged_mode != Some(relative) {
+            let mode = if relative { "relative" } else { "absolute" };
+            eprintln!("seat host: mouse mode {mode}: {}", mode_reason(&state, self.agent.as_ref()));
+            self.logged_mode = Some(relative);
+        }
+        let r = self.send_inner(packets, &state, relative);
+        if let Some(l) = self.trace.take_line(std::time::Instant::now()) {
+            eprintln!("seat host: {l}");
+        }
+        r
+    }
+    fn release_all(&mut self) -> BackendResult<()> {
+        self.release_relative_buttons();
+        self.inner.release_all()
+    }
+}
+
+impl SeatInputSink {
+    fn send_inner(&mut self, packets: &[InputPacket], state: &seat_rdp::ChannelState, relative: bool) -> BackendResult<()> {
+        let state = *state;
         if self.was_relative && !relative {
             // Relative input ended (capture over, support lost): buttons pressed during it
             // go up, and the absolute path goes on from the real pointer position.
@@ -413,6 +538,7 @@ impl InputSink for SeatInputSink {
         }
         self.was_relative = relative;
         if !relative {
+            self.trace_absolute(packets, std::time::Instant::now());
             return self.inner.send(packets);
         }
         // Keep the order: runs of other packets go through the sink in between.
@@ -420,6 +546,7 @@ impl InputSink for SeatInputSink {
         for (i, p) in packets.iter().enumerate() {
             if start < i && matches!(p, InputPacket::Move { .. } | InputPacket::Buttons { .. } | InputPacket::Wheel { .. }) {
                 // Flush what came before (only packets the relative path does not take).
+                self.trace_absolute(&packets[start..i], std::time::Instant::now());
                 self.inner.send(&packets[start..i])?;
                 start = i;
             }
@@ -428,13 +555,10 @@ impl InputSink for SeatInputSink {
             }
         }
         if start < packets.len() {
+            self.trace_absolute(&packets[start..], std::time::Instant::now());
             self.inner.send(&packets[start..])?;
         }
         Ok(())
-    }
-    fn release_all(&mut self) -> BackendResult<()> {
-        self.release_relative_buttons();
-        self.inner.release_all()
     }
 }
 
@@ -1539,6 +1663,48 @@ mod tests {
         // release_all afterwards: nothing relative is left to release.
         s.release_all().unwrap();
         assert!(!matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { .. })));
+    }
+
+    #[test]
+    fn mouse_trace_line_once_a_second() {
+        use std::time::{Duration, Instant};
+        let mut t = MouseTrace::default();
+        let t0 = Instant::now();
+        assert_eq!(t.take_line(t0), None, "nothing moved");
+        t.moved(true, 3, -4, t0);
+        t.moved(true, -2, 1, t0);
+        t.moved(false, 10, 0, t0);
+        t.wheel(WheelSource::Agent, t0);
+        t.wheel(WheelSource::Absolute, t0);
+        assert_eq!(t.take_line(t0 + Duration::from_millis(500)), None, "window not over");
+        let l = t.take_line(t0 + Duration::from_secs(1)).unwrap();
+        assert!(l.contains("rel n=2 sum_dx=5 sum_dy=5 abs n=1 sum_dx=10 sum_dy=0 wheel agent=1 server=0 abs=1"), "{l}");
+        assert_eq!(t.take_line(t0 + Duration::from_secs(5)), None, "reset after the line");
+    }
+
+    #[test]
+    fn mode_reason_names_every_input() {
+        let st = seat_rdp::ChannelState { connected: true, relative_supported: true, pointer_pos: Some((65535, 65535)), ..Default::default() };
+        let p = crate::capture::AgentPointer::new();
+        assert!(mode_reason(&st, None).contains("agent_pointer=none"));
+        assert!(mode_reason(&st, Some(&p)).contains("agent_pointer=empty"));
+        p.set((7, 8));
+        let r = mode_reason(&st, Some(&p));
+        assert!(r.contains("connected=true relative_supported=true") && r.contains("pointer_hidden=false"), "{r}");
+        assert!(r.contains("agent_pointer=valid (7, 8)") && r.contains("server_pointer_pos=Some((65535, 65535))"), "{r}");
+    }
+
+    /// The trace counts what each path sent (relative moves are not counted as absolute).
+    #[test]
+    fn trace_counts_by_path() {
+        let (h, _rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, _p) = agent_sink(&h);
+        s.send(&[InputPacket::Move { dx: 2, dy: 2 }]).unwrap();
+        h_set_desktop_relative(&h);
+        s.send(&[InputPacket::Move { dx: -6, dy: 1 }, InputPacket::Wheel { d: 120, h: false }]).unwrap();
+        assert_eq!((s.trace.rel, s.trace.rel_dx, s.trace.abs, s.trace.abs_dx), (1, 6, 1, 2));
+        assert_eq!(s.trace.wheel, [0, 0, 1], "no position known: the absolute path");
+        assert_eq!(s.logged_mode, Some(true));
     }
 
     #[test]

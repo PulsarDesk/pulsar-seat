@@ -99,3 +99,27 @@ Tests (seat-host): `agent_pointer_desktop_motion_and_buttons_are_relative`,
 HYPOTHESIS until the maintainer retests: Windows applies the seat user's pointer speed and
 acceleration to RDP relative mouse input (`TS_FP_RELPOINTER_EVENT`), so the pointer then
 feels like on a normal desktop. Not deployed. The input-trace meters (78028fc) stay.
+
+## Retest of 7fbe26e: still too sensitive (2026-11-25)
+
+Maintainer: the pointer still feels raw 1:1. host-02.log could not tell whether relative mode
+was on. Added logging (no behaviour change):
+
+- `seat host: mouse mode relative|absolute: connected=.. relative_supported=..
+  relative_offered=.. pointer_hidden=.. agent_pointer=none|empty|valid (x, y)
+  server_pointer_pos=..` on the first input and on every mode switch
+  (`SeatInputSink::send`, `mode_reason`). Note: relative mode needs the agent pointer
+  *attached* (session_capture), not a valid position; a valid position only matters for the
+  wheel and the resync.
+- `seat host: input-trace mouse_out: in 1.00s rel n=.. sum_dx=.. sum_dy=.. abs n=.. sum_dx=..
+  sum_dy=.. wheel agent=.. server=.. abs=..` about once a second while the mouse is used
+  (`MouseTrace`).
+- `seat host: capture agent pointer valid|sample: mailbox output N (x, y) visible=..
+  captured WxH -> rdp monitor rect (x, y) WxH -> desktop (x, y)` on the first valid position,
+  on a change back to valid and every 10 s; `agent pointer empty: <reason>` once per reason
+  (`capture::PointerLog` / `PointerPublisher`, `capture/host_win.rs`).
+
+Reading: `mouse mode absolute` with `relative_supported=false` = hypothesis (a) (relative never
+used); `mouse mode relative` plus `rel n=` counts while it still feels 1:1 = hypothesis (b)
+(the session applies no ballistics to RDP relative input; then move injection into the session
+is the next lead).
