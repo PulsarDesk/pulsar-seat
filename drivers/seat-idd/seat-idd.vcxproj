@@ -61,8 +61,10 @@
       <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
-      <!-- The WDK does not add the versioned IddCx stub directory itself. -->
-      <AdditionalLibraryDirectories>$(WindowsSdkDir)Lib\$(TargetPlatformVersion)\um\$(Platform)\iddcx\$(IDDCX_VERSION_MAJOR).$(IDDCX_VERSION_MINOR);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- The WDK does not add the versioned IddCx stub directory itself. The stub is a WDK
+           library: WDKContentRoot, which is the SDK folder with installed kits and the WDK
+           package with the NuGet kits (Directory.Build.props). -->
+      <AdditionalLibraryDirectories>$([MSBuild]::EnsureTrailingSlash('$(WDKContentRoot)'))Lib\$(TargetPlatformVersion)\um\$(Platform)\iddcx\$(IDDCX_VERSION_MAJOR).$(IDDCX_VERSION_MINOR);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>IddCxStub.lib;d3d11.lib;dxgi.lib;avrt.lib;OneCoreUAP.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
       <CETCompat Condition="'$(Platform)'=='x64'">true</CETCompat>

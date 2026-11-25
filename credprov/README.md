@@ -152,3 +152,7 @@ runner per architecture); locally `installer\scripts\ci-local.ps1 -CredProv` (or
 `-Payload`). `build-installer.ps1` calls it and puts the DLL into the
 payload. Outputs go to `credprov\build\` (gitignored). No `/INTEGRITYCHECK`: it would make
 the loader demand a signature.
+
+CI takes the SDK 10.0.28000 from Microsoft's NuGet packages (`installer/wdk/packages.config`,
+used while `PULSAR_WDK_NUGET` names the restored folder; see `drivers/README.md`, Build),
+with the runner image's VS 2026. Locally: `ci-local.ps1 -CredProv -WdkNuGet`.

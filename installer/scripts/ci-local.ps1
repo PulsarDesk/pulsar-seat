@@ -12,6 +12,9 @@
 #   ... -Drivers        also the drivers job (msbuild ARM64 + x64, infverif, analysis, submission CABs)
 #   ... -Installers     also the MSI for the native arch (build-installer.ps1 -SkipCargo; implies -Payload)
 #   ... -StreamServer   also the stream-server job (Sunshine patch check + MSYS2 build, x64 and ARM64)
+#   ... -WdkNuGet       -CredProv / -Drivers with the SDK + WDK from NuGet, as CI does
+#                       (nuget.exe on PATH; restores installer/wdk/packages.config into
+#                       target\wdk-nuget, ~2.2 GB, and sets PULSAR_WDK_NUGET for this run)
 #   ... -Release        also the tag-only gates (release key list); never sets up a tag
 #   ... -FastLink       link the debug / test gates with rust-lld instead of MSVC link.exe
 #
@@ -33,6 +36,7 @@ param(
     [switch] $Release,
     [switch] $StreamServer,
     [switch] $FastLink,
+    [switch] $WdkNuGet,
     [string] $CargoTargetDir = ""
 )
 
@@ -143,6 +147,12 @@ try {
         Gate "release key list (tag gate)" {
             Run cargo run --locked --quiet -p seat-release --bin pulsar-seat-release '--' check-signers installer/release-signers.txt --require
         }
+    }
+
+    # ---- credprov / drivers jobs: SDK + WDK from NuGet like CI (Directory.Build.props).
+    if ($WdkNuGet -and ($CredProv -or $Payload -or $Installers -or $Drivers)) {
+        $env:PULSAR_WDK_NUGET = Join-Path $repo "target\wdk-nuget"
+        Gate "Windows SDK + WDK (NuGet)" { Run nuget restore installer/wdk/packages.config -PackagesDirectory $env:PULSAR_WDK_NUGET -NonInteractive }
     }
 
     # ---- credprov job (C++ credential provider: Release + Debug, /WX, self-test)

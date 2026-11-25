@@ -13,6 +13,10 @@
 #
 # Needs Visual Studio Build Tools 2026 (18) + Windows SDK + WDK 10.0.28000 (the WDK
 # 26100 MSBuild tasks do not load in VS 18). Works on an ARM64 or an x64 host.
+# With PULSAR_WDK_NUGET set (CI; ci-local.ps1 -WdkNuGet) the SDK + WDK come from the
+# restored NuGet packages of installer/wdk/packages.config instead of the installed kits:
+# msbuild through Directory.Build.props, the tools here through Get-WdkRoot, split-pad
+# through a merged content root (Get-CargoWdkRoot). Any VS 2026 with the WDK extension.
 #
 #   powershell -ExecutionPolicy Bypass -File installer\scripts\build-drivers.ps1
 #   ... -Platforms ARM64 -Configurations Release -Projects seat-idd -Analyze
@@ -87,12 +91,60 @@ Get-ChildItem Env: | Where-Object { $_.Name -match '^CARGO_TARGET_.+_LINKER$' } 
     Write-Warning "ignoring $($_.Name)=$($_.Value) for the driver builds (link.exe only)"
     Remove-Item "Env:$($_.Name)"
 }
-$infverif = Join-Path $kits "Tools\$Sdk\$hostArch\infverif.exe"
-if (-not (Test-Path $infverif)) { $infverif = Join-Path $kits "Tools\$Sdk\x64\infverif.exe" }
-$apivalidator = Join-Path $kits "bin\$Sdk\$hostArch\apivalidator.exe"
-if (-not (Test-Path $apivalidator)) { $apivalidator = Join-Path $kits "bin\$Sdk\x64\apivalidator.exe" }
+# Kit root per target platform. Installed kits: one root for everything. NuGet
+# (PULSAR_WDK_NUGET): one WDK package per target arch (Lib, universalDDIs, rule sets); the
+# host tools come from the package of the host arch, since each package ships infverif
+# for its own arch only.
+$nuget = $env:PULSAR_WDK_NUGET
+$nugetVer = $null
+if ($nuget) {
+    $cfg = Get-Content (Join-Path $repo "installer\wdk\packages.config") -Raw
+    $nugetVer = [regex]::Match($cfg, 'id="Microsoft\.Windows\.WDK\.x64" version="([^"]+)"').Groups[1].Value
+    if (-not $nugetVer) { throw "no WDK version in installer\wdk\packages.config" }
+}
+function Get-WdkRoot([string] $platform) {
+    if (-not $nuget) { return $kits }
+    $a = if ($platform -eq "ARM64") { "arm64" } else { "x64" }
+    $r = Join-Path $nuget "Microsoft.Windows.WDK.$a.$nugetVer\c"
+    if (-not (Test-Path $r)) { throw "WDK package missing: $r (nuget restore installer\wdk\packages.config -PackagesDirectory $nuget)" }
+    return $r
+}
+# split-pad (wdk-build) wants one WDKContentRoot holding the SDK and the WDK, as an
+# installed kit does; the NuGet packages split them. Merge the parts it reads (headers,
+# import libraries) once per arch under $nuget\merged-<arch>. $null = installed kits.
+function Get-CargoWdkRoot([string] $platform) {
+    if (-not $nuget) { return $null }
+    $a = if ($platform -eq "ARM64") { "arm64" } else { "x64" }
+    $root = Join-Path $nuget "merged-$a"
+    $stamp = Join-Path $root ".complete-$nugetVer"
+    if (Test-Path $stamp) { return $root }
+    $wdk = Get-WdkRoot $platform
+    $sdkAll = Join-Path $nuget "Microsoft.Windows.SDK.CPP.$nugetVer\c"
+    $sdkArch = Join-Path $nuget "Microsoft.Windows.SDK.CPP.$a.$nugetVer\c"
+    $copies = @(
+        @((Join-Path $sdkAll "Include\$Sdk"), (Join-Path $root "Include\$Sdk")),
+        @((Join-Path $wdk "Include"), (Join-Path $root "Include")),
+        @((Join-Path $sdkArch "um\$a"), (Join-Path $root "Lib\$Sdk\um\$a")),
+        @((Join-Path $sdkArch "ucrt\$a"), (Join-Path $root "Lib\$Sdk\ucrt\$a")),
+        @((Join-Path $wdk "Lib"), (Join-Path $root "Lib"))
+    )
+    foreach ($c in $copies) {
+        if (-not (Test-Path $c[0])) { throw "NuGet kit folder missing: $($c[0])" }
+        robocopy $c[0] $c[1] /E /XD cppwinrt winrt /NFL /NDL /NJH /NJS /NP /MT:16 | Out-Null
+        # robocopy: 0-7 success (files copied / skipped), 8 and up failure.
+        if ($LASTEXITCODE -ge 8) { throw "robocopy $($c[0]) -> $($c[1]) failed (exit $LASTEXITCODE)" }
+    }
+    $global:LASTEXITCODE = 0
+    New-Item -ItemType File -Force $stamp | Out-Null
+    return $root
+}
+$hostKits = Get-WdkRoot $(if ($hostArch -eq "arm64") { "ARM64" } else { "x64" })
+$infverif = Join-Path $hostKits "Tools\$Sdk\$hostArch\infverif.exe"
+if (-not (Test-Path $infverif)) { $infverif = Join-Path $hostKits "Tools\$Sdk\x64\infverif.exe" }
+$apivalidator = Join-Path $hostKits "bin\$Sdk\$hostArch\apivalidator.exe"
+if (-not (Test-Path $apivalidator)) { $apivalidator = Join-Path $hostKits "bin\$Sdk\x64\apivalidator.exe" }
 Write-Host "MSBuild:  $msbuild"
-Write-Host "SDK/WDK:  $Sdk"
+Write-Host "SDK/WDK:  $Sdk$(if ($nuget) { " (NuGet $nugetVer, $nuget)" } else { " (installed kits)" })"
 
 # Rust UMDF driver (drivers/split-pad): cargo build into the shared target dir, then the
 # package dir like the MSBuild projects (stamped INF + DLL + catalog). Needs LLVM (libclang
@@ -110,10 +162,14 @@ function Build-CargoDriver([string] $name, [string] $platform, [string] $config,
     Write-Host "== $name $platform $config"
     # cargo writes progress to stderr: capture everything into the log.
     $prev = $ErrorActionPreference
+    $prevRoot = $env:WDKContentRoot
+    $merged = Get-CargoWdkRoot $platform
+    if ($merged) { $env:WDKContentRoot = $merged }
     $ErrorActionPreference = "Continue"
     & cargo @cargoArgs *> $log
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
+    $env:WDKContentRoot = $prevRoot
     $text = Get-Content $log -Raw
     $warn = @([regex]::Matches($text, "(?m)^warning: .*$") | ForEach-Object { $_.Value } | Sort-Object -Unique)
     foreach ($l in $warn) { Write-Host "  $l" -ForegroundColor Yellow }
@@ -127,10 +183,14 @@ function Build-CargoDriver([string] $name, [string] $platform, [string] $config,
     Copy-Item $dll $pkg
     $inf = Join-Path $pkg "$crate.inf"
     Copy-Item (Join-Path $dir "$crate.inx") $inf
-    $tools = Join-Path $kits "bin\$Sdk\x86"
+    # stampinf: x86 in the installed kit, host arch only in the NuGet packages.
+    $bin = Join-Path (Get-WdkRoot $platform) "bin\$Sdk"
+    $tools = Join-Path $bin "x86"
+    $stampinf = Join-Path $tools "stampinf.exe"
+    if (-not (Test-Path $stampinf)) { $stampinf = Join-Path $bin "$hostArch\stampinf.exe" }
     $arch = if ($platform -eq "ARM64") { "ARM64" } else { "amd64" }
     $umdf = (Select-String -Path (Join-Path $dir "Cargo.toml") -Pattern 'target-umdf-version-minor\s*=\s*(\d+)').Matches[0].Groups[1].Value
-    & (Join-Path $tools "stampinf.exe") -a $arch -v "0.1.0.0" -u "2.$umdf.0" -x -f $inf *> (Join-Path $logs "$name.stampinf.log")
+    & $stampinf -a $arch -v "0.1.0.0" -u "2.$umdf.0" -x -f $inf *> (Join-Path $logs "$name.stampinf.log")
     if ($LASTEXITCODE -ne 0) { $failures.Add("$name $platform $config : stampinf exit $LASTEXITCODE"); return $null }
     $os = if ($platform -eq "ARM64") { "10_VB_ARM64" } else { "10_VB_X64" }
     $catLog = Join-Path $logs "$name.inf2cat.log"
@@ -169,7 +229,7 @@ foreach ($platform in $Platforms) {
                 "/p:SignMode=Off",
                 "/flp:LogFile=$log;Verbosity=normal"
             )
-            if ($Analyze) { $mbArgs += "/p:RunCodeAnalysis=true"; $mbArgs += "/p:CodeAnalysisRuleSet=$(Join-Path $kits "CodeAnalysis\$RuleSet")" }
+            if ($Analyze) { $mbArgs += "/p:RunCodeAnalysis=true"; $mbArgs += "/p:CodeAnalysisRuleSet=$(Join-Path (Get-WdkRoot $platform) "CodeAnalysis\$RuleSet")" }
             Write-Host "== $name $platform $config"
             # Output goes to the log file; never cut the pipe of a running msbuild.
             & $msbuild @mbArgs | Out-Null
@@ -201,7 +261,7 @@ foreach ($platform in $Platforms) {
                 if (-not $SkipApiValidator) {
                     # Universal driver: every imported API must be in the SDK's Universal
                     # DDI list for the target architecture.
-                    $ddiDir = Join-Path $kits "build\$Sdk\universalDDIs\$($platform.ToLower())"
+                    $ddiDir = Join-Path (Get-WdkRoot $platform) "build\$Sdk\universalDDIs\$($platform.ToLower())"
                     $avLog = Join-Path $logs ("$name." + $b.BaseName + ".apivalidator.log")
                     & $apivalidator "-BinaryPath:$($b.FullName)" "-SupportedApiXmlFiles:$(Join-Path $ddiDir 'UniversalDDIs.xml')" "-ModuleWhiteListXmlFiles:$(Join-Path $ddiDir 'ModuleWhitelist.xml')" *> $avLog
                     $avCode = $LASTEXITCODE

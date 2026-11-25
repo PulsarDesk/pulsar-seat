@@ -144,6 +144,15 @@ Spectre-mitigated libraries, Windows SDK 10.0.28000 and WDK 10.0.28000 (winget i
 (`Microsoft.DriverKit.Build.Tasks.17.0.dll`) do not load in VS 18; only 28000 ships the 18.0
 tasks.
 
+Without installing the SDK / WDK (CI does this): any VS 2026 with the C++ tools above and
+the WDK VS extension, plus Microsoft's NuGet packages pinned in
+`installer/wdk/packages.config`:
+`nuget restore installer/wdk/packages.config -PackagesDirectory target\wdk-nuget`, then set
+`PULSAR_WDK_NUGET` to that folder (absolute path) for the build. `Directory.Build.props`
+then points msbuild at the packages, `build-drivers.ps1` takes infverif / ApiValidator /
+stampinf / the rule sets from them and gives split-pad a merged SDK + WDK content root
+(`target\wdk-nuget\merged-<arch>`). `ci-local.ps1 -Drivers -WdkNuGet` does all of it.
+
 ```
 powershell -ExecutionPolicy Bypass -File installer\scripts\build-drivers.ps1
 # options: -Platforms ARM64,x64  -Configurations Release,Debug  -Projects seat-idd

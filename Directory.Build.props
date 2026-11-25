@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<!--
+  Windows SDK + WDK from Microsoft's NuGet packages (installer/wdk/packages.config), the
+  route Microsoft's own driver-samples CI uses. Applies only while the environment variable
+  PULSAR_WDK_NUGET names the restored packages folder (CI drivers / credprov jobs,
+  `ci-local.ps1 -WdkNuGet`); otherwise msbuild uses the installed kits as before.
+  The GitHub runner images carry VS 2026 but only SDK 10.0.26100, and the SDK installer
+  failed there (first CI run, 2026-11-25, docs/journal.md).
+-->
+<Project>
+  <PropertyGroup Condition="'$(PULSAR_WDK_NUGET)' != ''">
+    <PulsarWdkNuGetRoot>$([MSBuild]::EnsureTrailingSlash('$(PULSAR_WDK_NUGET)'))</PulsarWdkNuGetRoot>
+    <PulsarWdkNuGetVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)installer\wdk\packages.config')), 'id="Microsoft\.Windows\.WDK\.x64" version="([^"]+)"').Groups[1].Value)</PulsarWdkNuGetVersion>
+    <PulsarWdkNuGetArch Condition="'$(Platform)' == 'x64'">x64</PulsarWdkNuGetArch>
+    <PulsarWdkNuGetArch Condition="'$(Platform)' == 'ARM64' or '$(Platform)' == 'ARM64EC'">arm64</PulsarWdkNuGetArch>
+    <PulsarWdkNuGetWdk>$(PulsarWdkNuGetRoot)Microsoft.Windows.WDK.$(PulsarWdkNuGetArch).$(PulsarWdkNuGetVersion)\build\native\Microsoft.Windows.WDK.$(PulsarWdkNuGetArch).props</PulsarWdkNuGetWdk>
+    <PulsarWdkNuGetSdkArch>$(PulsarWdkNuGetRoot)Microsoft.Windows.SDK.CPP.$(PulsarWdkNuGetArch).$(PulsarWdkNuGetVersion)\build\native\Microsoft.Windows.SDK.cpp.$(PulsarWdkNuGetArch).props</PulsarWdkNuGetSdkArch>
+    <PulsarWdkNuGetSdk>$(PulsarWdkNuGetRoot)Microsoft.Windows.SDK.CPP.$(PulsarWdkNuGetVersion)\build\native\Microsoft.Windows.SDK.cpp.props</PulsarWdkNuGetSdk>
+  </PropertyGroup>
+  <!-- Same order as Microsoft's samples: WDK, SDK (target arch), SDK. No WDK for ARM64EC
+       (only the credprov self-test builds as ARM64EC; ARM64EC links the arm64 SDK libs). -->
+  <Import Project="$(PulsarWdkNuGetWdk)" Condition="'$(PULSAR_WDK_NUGET)' != '' and '$(Platform)' != 'ARM64EC' and Exists('$(PulsarWdkNuGetWdk)')" />
+  <Import Project="$(PulsarWdkNuGetSdkArch)" Condition="'$(PULSAR_WDK_NUGET)' != '' and Exists('$(PulsarWdkNuGetSdkArch)')" />
+  <Import Project="$(PulsarWdkNuGetSdk)" Condition="'$(PULSAR_WDK_NUGET)' != '' and Exists('$(PulsarWdkNuGetSdk)')" />
+  <Target Name="PulsarWdkNuGetCheck" BeforeTargets="PrepareForBuild" Condition="'$(PULSAR_WDK_NUGET)' != ''">
+    <Error Condition="'$(PulsarWdkNuGetArch)' == ''" Text="PULSAR_WDK_NUGET: no SDK package for platform $(Platform)" />
+    <Error Condition="!Exists('$(PulsarWdkNuGetSdk)') or !Exists('$(PulsarWdkNuGetSdkArch)')" Text="PULSAR_WDK_NUGET is set but the SDK packages are missing ($(PulsarWdkNuGetSdkArch)); run: nuget restore installer/wdk/packages.config -PackagesDirectory &quot;$(PULSAR_WDK_NUGET)&quot;" />
+    <Message Importance="high" Text="Windows SDK / WDK from NuGet $(PulsarWdkNuGetVersion) ($(PulsarWdkNuGetArch)): WindowsSdkDir=$(WindowsSdkDir) WDKContentRoot=$(WDKContentRoot)" />
+  </Target>
+</Project>
