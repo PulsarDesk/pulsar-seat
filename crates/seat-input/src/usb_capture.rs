@@ -1136,7 +1136,7 @@ impl WorkerCtx {
                         meter.hit(got);
                         meter.wait(got.saturating_duration_since(asked));
                         proc.set_options(opts());
-                        for ev in tr.translate(&report) {
+                        for ev in tr.translate_all(&report) {
                             self.dispatch(&mut proc, &ev, kbd.as_ref(), mouse.as_ref());
                         }
                         let done = Instant::now();

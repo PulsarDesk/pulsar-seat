@@ -20,8 +20,8 @@ use super::{cr_error, guid, last_error, wide};
 use crate::platform::cancelled;
 use crate::usb_capture::{INTERFACE_GUID, UsbReportReader, UsbReportSource};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CM_Get_Device_Interface_List_SizeW, CM_Get_Device_Interface_ListW, CR_BUFFER_SMALL, CR_SUCCESS,
 };
@@ -34,7 +34,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
 use windows_sys::Win32::System::IO::OVERLAPPED;
-use windows_sys::Win32::System::Threading::CreateEventW;
+use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent};
 
 /// Largest report descriptor we ask for.
 const MAX_DESCRIPTOR: u16 = 4096;
@@ -77,6 +77,35 @@ impl UsbReportSource for WinUsbSource {
     }
 }
 
+/// Reads kept in flight on the interrupt-IN pipe, so a 500/1000 Hz device does not lose
+/// reports in the gap between one completed read and the next submit.
+const READS_IN_FLIGHT: usize = 4;
+
+/// Transfer length of one read: exactly one packet. A buffer larger than
+/// `wMaxPacketSize` makes WinUSB wait for more packets when a report fills a whole packet
+/// (it is not a short packet), so a read held ~8 reports of an 8-byte mouse and the seat
+/// pointer moved in bursts (gaming PC 2026-11-25, input-trace `usb_read` 10-15/s).
+fn transfer_len(max_packet: usize) -> usize {
+    max_packet.max(1)
+}
+
+/// One submitted read: buffer and OVERLAPPED boxed so they stay put while pending.
+struct Slot {
+    buf: Vec<u8>,
+    ov: Box<OVERLAPPED>,
+    pending: bool,
+}
+
+// SAFETY: the event handle in the OVERLAPPED is a kernel handle usable from any thread.
+unsafe impl Send for Slot {}
+
+/// The reads in flight, oldest first (WinUSB completes a pipe's reads in order).
+#[derive(Default)]
+struct Ring {
+    slots: Vec<Slot>,
+    next: usize,
+}
+
 /// One open interface.
 pub struct WinUsbDevice {
     file: usize,
@@ -85,6 +114,7 @@ pub struct WinUsbDevice {
     packet: usize,
     descriptor: Option<Vec<u8>>,
     cancelled: AtomicBool,
+    ring: Mutex<Ring>,
 }
 
 // SAFETY: the handles are kernel / WinUSB handles usable from any thread; WinUSB allows a
@@ -123,7 +153,15 @@ impl WinUsbDevice {
             unsafe { CloseHandle(h) };
             return Err(e);
         }
-        let mut dev = Self { file: h as usize, usb: usb as usize, pipe: 0, packet: 64, descriptor: None, cancelled: AtomicBool::new(false) };
+        let mut dev = Self {
+            file: h as usize,
+            usb: usb as usize,
+            pipe: 0,
+            packet: 64,
+            descriptor: None,
+            cancelled: AtomicBool::new(false),
+            ring: Mutex::new(Ring::default()),
+        };
         let mut desc = USB_INTERFACE_DESCRIPTOR::default();
         // SAFETY: initialised handle, sized out struct.
         if unsafe { WinUsb_QueryInterfaceSettings(dev.handle(), 0, &mut desc) } == 0 {
@@ -137,7 +175,7 @@ impl WinUsbDevice {
             }
             if pipe.PipeType == UsbdPipeTypeInterrupt && pipe.PipeId & 0x80 != 0 {
                 dev.pipe = pipe.PipeId;
-                dev.packet = usize::from(pipe.MaximumPacketSize).max(8);
+                dev.packet = transfer_len(usize::from(pipe.MaximumPacketSize));
                 break;
             }
         }
@@ -176,41 +214,57 @@ impl UsbReportReader for WinUsbDevice {
         self.descriptor.clone()
     }
 
+    /// One packet per completed transfer, with [`READS_IN_FLIGHT`] reads queued. Called
+    /// from the one reader thread; [`Self::cancel`] does not take the ring lock.
     fn read(&self) -> BackendResult<Vec<u8>> {
+        let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+        if ring.slots.is_empty() {
+            for _ in 0..READS_IN_FLIGHT {
+                // SAFETY: manual-reset event, unnamed; closed in `Drop`.
+                let ev: HANDLE = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+                if ev.is_null() {
+                    return Err(last_error("create_event_failed", "CreateEventW"));
+                }
+                ring.slots.push(Slot { buf: vec![0u8; self.packet], ov: Box::new(OVERLAPPED { hEvent: ev, ..Default::default() }), pending: false });
+            }
+            for i in 0..ring.slots.len() {
+                self.submit(&mut ring.slots[i])?;
+            }
+        }
         loop {
             if self.cancelled.load(Ordering::SeqCst) {
                 return Err(cancelled());
             }
-            let mut buf = vec![0u8; self.packet.max(64)];
-            // SAFETY: manual-reset event, unnamed.
-            let ev: HANDLE = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
-            if ev.is_null() {
-                return Err(last_error("create_event_failed", "CreateEventW"));
+            let i = ring.next;
+            let n = ring.slots.len();
+            let slot = &mut ring.slots[i];
+            if !slot.pending {
+                self.submit(slot)?;
             }
-            let ov = OVERLAPPED { hEvent: ev, ..Default::default() };
             let mut got = 0u32;
-            // SAFETY: buffer and OVERLAPPED live until the result is collected below.
-            let ok = unsafe { WinUsb_ReadPipe(self.handle(), self.pipe, buf.as_mut_ptr(), buf.len() as u32, std::ptr::null_mut(), &ov) };
+            // SAFETY: the slot's OVERLAPPED of a submitted read; waits for completion or abort.
+            let done = unsafe { WinUsb_GetOverlappedResult(self.handle(), &*slot.ov, &mut got, 1) } != 0;
             // SAFETY: no arguments.
-            let started = ok != 0 || unsafe { GetLastError() } == ERROR_IO_PENDING;
-            let done = started
-                // SAFETY: same handle / OVERLAPPED; waits for completion or abort.
-                && unsafe { WinUsb_GetOverlappedResult(self.handle(), &ov, &mut got, 1) } != 0;
-            // SAFETY: no arguments (read before CloseHandle can change it).
             let err = if done { 0 } else { unsafe { GetLastError() } };
-            // SAFETY: event created above.
-            unsafe { CloseHandle(ev) };
+            slot.pending = false;
+            ring.next = (i + 1) % n;
             if !done {
                 if err == ERROR_OPERATION_ABORTED || self.cancelled.load(Ordering::SeqCst) {
                     return Err(cancelled());
                 }
                 return Err(BackendError::new(ErrorKind::Os, "winusb_read_failed", format!("WinUsb_ReadPipe: {err}")).with_win32(err));
             }
-            if got == 0 {
+            let slot = &mut ring.slots[i];
+            let report = slot.buf[..(got as usize).min(slot.buf.len())].to_vec();
+            // Queue this slot again before returning, so a read stays in flight while the
+            // caller decodes. A submit failure surfaces on the slot's next turn.
+            if !self.cancelled.load(Ordering::SeqCst) {
+                let _ = self.submit(slot);
+            }
+            if report.is_empty() {
                 continue; // zero-length packet
             }
-            buf.truncate(got as usize);
-            return Ok(buf);
+            return Ok(report);
         }
     }
 
@@ -221,11 +275,48 @@ impl UsbReportReader for WinUsbDevice {
     }
 }
 
+impl WinUsbDevice {
+    /// Submit one read into `slot` (its buffer and OVERLAPPED stay put until collected).
+    fn submit(&self, slot: &mut Slot) -> BackendResult<()> {
+        // SAFETY: event handle of this slot.
+        unsafe { ResetEvent(slot.ov.hEvent) };
+        let ev = slot.ov.hEvent;
+        *slot.ov = OVERLAPPED { hEvent: ev, ..Default::default() };
+        // SAFETY: the boxed buffer and OVERLAPPED outlive the transfer: they are only freed
+        // in `Drop`, after the pipe is aborted and every pending read collected.
+        let ok = unsafe { WinUsb_ReadPipe(self.handle(), self.pipe, slot.buf.as_mut_ptr(), slot.buf.len() as u32, std::ptr::null_mut(), &*slot.ov) };
+        // SAFETY: no arguments.
+        if ok != 0 || unsafe { GetLastError() } == ERROR_IO_PENDING {
+            slot.pending = true;
+            return Ok(());
+        }
+        // SAFETY: no arguments.
+        let err = unsafe { GetLastError() };
+        if err == ERROR_OPERATION_ABORTED || self.cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled());
+        }
+        Err(BackendError::new(ErrorKind::Os, "winusb_read_failed", format!("WinUsb_ReadPipe: {err}")).with_win32(err))
+    }
+}
+
 impl Drop for WinUsbDevice {
     fn drop(&mut self) {
-        // SAFETY: handles owned by this object, freed once.
+        let ring = self.ring.get_mut().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: handles owned by this object, freed once. Pending reads are aborted and
+        // collected before their buffers and events go away.
         unsafe {
-            WinUsb_Free(self.handle());
+            if ring.slots.iter().any(|s| s.pending) {
+                WinUsb_AbortPipe(self.usb as WINUSB_INTERFACE_HANDLE, self.pipe);
+            }
+            for s in ring.slots.iter_mut() {
+                if s.pending {
+                    let mut got = 0u32;
+                    WinUsb_GetOverlappedResult(self.usb as WINUSB_INTERFACE_HANDLE, &*s.ov, &mut got, 1);
+                    s.pending = false;
+                }
+                CloseHandle(s.ov.hEvent);
+            }
+            WinUsb_Free(self.usb as WINUSB_INTERFACE_HANDLE);
             CloseHandle(self.file as HANDLE);
         }
     }
@@ -234,6 +325,15 @@ impl Drop for WinUsbDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One read is exactly one packet: a 64-byte buffer on an 8-byte pipe held ~8 mouse
+    /// reports per transfer (seat pointer in bursts, gaming PC 2026-11-25).
+    #[test]
+    fn transfer_is_one_packet() {
+        assert_eq!(transfer_len(8), 8);
+        assert_eq!(transfer_len(64), 64);
+        assert_eq!(transfer_len(0), 1);
+    }
 
     /// Read-only: an unknown node has no WinUSB interface of ours.
     #[test]

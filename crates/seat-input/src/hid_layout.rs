@@ -116,6 +116,15 @@ pub struct ReportLayout {
     pub uses_report_ids: bool,
 }
 
+impl ReportLayout {
+    /// Bytes of input report `id` on the wire, the report id byte included when the layout
+    /// uses ids. `None` when the layout has no input field for that id.
+    pub fn input_report_len(&self, id: u8) -> Option<usize> {
+        let bits = self.inputs.iter().filter(|f| f.report_id == id).map(|f| f.bit_offset + f.size * f.count).max()?;
+        Some(bits.div_ceil(8) as usize + usize::from(self.uses_report_ids))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
     Truncated,

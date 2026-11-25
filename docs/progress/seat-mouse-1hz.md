@@ -42,3 +42,23 @@ agent instead of RDP input (`target/ref/OpenStreamMultiSeat/docs/puestos-locales
 fallback if the loss is between `rdp_send` and `session_pointer` (inside termsrv / the session).
 
 Verify: `cargo nextest run -p seat-core input_trace`, `-p seat-input winusb_router`.
+
+## Cause found (2026-11-25, input-trace readings)
+
+Maintainer test with the meters: `usb_read` 7-15 reads/s, `max_gap` up to 380 ms while the
+mouse moved continuously; every later stage (`service_publish`, `pipe_push`, `host_recv`,
+`rdp_send`) passed the same counts 1:1 with sub-ms busy and no wait. So the loss was at the USB
+read itself.
+
+Cause: `win/winusb_reader.rs` read into `vec![0u8; packet.max(64)]`. The Logitech MI_01
+interrupt-IN pipe has a small `wMaxPacketSize` and each mouse report fills a whole packet, which
+is not a short packet, so WinUSB completed a transfer only when the 64-byte buffer was full
+(~8 reports). `usb_capture` then decoded the buffer as ONE report: most motion was lost and the
+rest came in bursts. The 5591ba9 activity throttle was not the cause (it stays, harmless).
+
+Fix: one packet per transfer (`transfer_len`), 4 overlapped reads kept in flight (ring of boxed
+buffer + OVERLAPPED, collected in order, aborted and collected in `Drop`), and
+`ReportTranslator::translate_all` splits a buffer into reports by `ReportLayout::input_report_len`
+(defensive). `win/hid.rs` (HID class `ReadFile`, one report per read) and the pad readers are not
+affected. Tests: `transfer_is_one_packet`, `translate_all_splits_concatenated_reports`,
+`translate_all_boot_mouse`. Hardware: deployed, maintainer retest pending (HYPOTHESIS until then).

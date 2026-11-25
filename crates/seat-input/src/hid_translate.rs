@@ -185,6 +185,26 @@ impl ReportTranslator {
         }
     }
 
+    /// Events of every input report in `buf`. A USB read normally carries one report; if a
+    /// transfer ever holds several back to back (a read buffer larger than one packet), each
+    /// is decoded in order instead of only the first. Lengths come from the layout; an
+    /// unknown report id or a short tail is decoded as one report, as before.
+    pub fn translate_all(&mut self, buf: &[u8]) -> Vec<RawUnitEvent> {
+        let mut out = Vec::new();
+        let mut rest = buf;
+        while !rest.is_empty() {
+            let id = if self.layout.uses_report_ids { rest[0] } else { 0 };
+            let len = match self.layout.input_report_len(id) {
+                Some(n) if n > 0 && n < rest.len() => n,
+                _ => rest.len(),
+            };
+            let (one, tail) = rest.split_at(len);
+            out.extend(self.translate(one));
+            rest = tail;
+        }
+        out
+    }
+
     /// Events of one input report (report id first when the layout uses ids).
     pub fn translate(&mut self, report: &[u8]) -> Vec<RawUnitEvent> {
         let d = self.decode(report);
@@ -302,6 +322,41 @@ mod tests {
         let ev = t.translate(&[0, 0, 0x48, 0, 0, 0, 0, 0]);
         assert_eq!(ev, vec![key(0x1D, 4), key(0x45, 0), key(0x1D, 5), key(0x45, 1)]);
         assert!(t.translate(&[0, 0, 0, 0, 0, 0, 0, 0]).is_empty(), "no second break");
+    }
+
+    /// Several reports in one transfer are all decoded, in order (gaming PC 2026-11-25: a
+    /// read held ~8 mouse reports and only the first one moved the pointer).
+    #[test]
+    fn translate_all_splits_concatenated_reports() {
+        let layout = parse(MOUSE_DESC).unwrap();
+        assert_eq!(layout.input_report_len(1), Some(8));
+        let mut t = ReportTranslator::new(layout);
+        let mut buf = Vec::new();
+        for x in [3u8, 4, 5] {
+            buf.extend_from_slice(&[1, 0x00, x, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        }
+        let ev = t.translate_all(&buf);
+        assert_eq!(
+            ev,
+            [3, 4, 5].iter().map(|&x| RawUnitEvent::Mouse { flags: 0, buttons: 0, data: 0, x, y: 1 }).collect::<Vec<_>>()
+        );
+        // One report: same as `translate`.
+        assert_eq!(t.translate_all(&buf[..8]), vec![RawUnitEvent::Mouse { flags: 0, buttons: 0, data: 0, x: 3, y: 1 }]);
+        // Unknown id: the rest decodes as one report, as before (no events for an unknown id).
+        assert!(t.translate_all(&[9, 1, 2, 3]).is_empty());
+    }
+
+    /// Boot mouse (no report ids): 3-byte reports back to back.
+    #[test]
+    fn translate_all_boot_mouse() {
+        let layout = boot_mouse();
+        let n = layout.input_report_len(0).unwrap();
+        let mut t = ReportTranslator::new(layout);
+        let mut buf = vec![0u8; n * 2];
+        buf[1] = 2;
+        buf[n + 1] = 7;
+        let ev = t.translate_all(&buf);
+        assert_eq!(ev.len(), 2, "{ev:?}");
     }
 
     #[test]
