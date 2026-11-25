@@ -36,3 +36,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming",
 ] }
+
+[features]
+# TEST ONLY: file trace of every provider call for the A-path VM probe (C:\apath\out).
+a-path-trace = []

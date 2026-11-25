@@ -37,6 +37,23 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) fn trace(msg: &str) {
     let w: Vec<u16> = format!("PulsarSeat.Wrds: {msg}\n\0").encode_utf16().collect();
     unsafe { OutputDebugStringW(PCWSTR(w.as_ptr())) };
+    // TEST ONLY (feature `a-path-trace`, off by default): the A-path VM probe needs the
+    // provider's call order; TermService's debug output is not visible there.
+    #[cfg(feature = "a-path-trace")]
+    {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(r"C:\apath\out\wrds-trace.log") {
+            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            let _ = writeln!(f, "{t:?} {msg}");
+        }
+    }
+}
+
+/// TEST ONLY (feature `a-path-trace`): one line per COM call into the provider.
+#[inline]
+fn call_trace(_name: &str) {
+    #[cfg(feature = "a-path-trace")]
+    trace(&format!("call {_name}"));
 }
 
 /// A COM pointer moved between MTA threads.
@@ -146,6 +163,10 @@ impl Shared {
             put_wide(&mut s.ClientName, &info.client_name);
             put_wide(&mut s.UserName, &info.user);
             put_wide(&mut s.Domain, &info.domain);
+            // The embedded listener settings must carry a valid level: left zeroed
+            // (level 0 = INVALID) TermService failed OnConnected with 0x80070519
+            // (ERROR_UNKNOWN_REVISION) before calling anything else (test VM 2026-11-25).
+            s.WRdsListenerSettings = listener_settings();
         }
         match unsafe { cb.OnConnected(&conn, &settings) } {
             Ok(ccb) => {
@@ -190,12 +211,14 @@ struct Manager;
 
 impl IWRdsProtocolManager_Impl for Manager_Impl {
     fn Initialize(&self, _settings: Ref<IWRdsProtocolSettings>, _wrds: *const WRDS_SETTINGS) -> windows_core::Result<()> {
+        call_trace("Initialize");
         trace(&format!("initialize {VERSION}"));
         shared().start_pipe();
         Ok(())
     }
 
     fn CreateListener(&self, name: &PCWSTR) -> windows_core::Result<IWRdsProtocolListener> {
+        call_trace("CreateListener");
         let n = if name.is_null() { String::new() } else { unsafe { name.to_string() }.unwrap_or_default() };
         if !n.eq_ignore_ascii_case(LISTENER_NAME) {
             trace(&format!("listener {n:?} is not ours"));
@@ -205,21 +228,27 @@ impl IWRdsProtocolManager_Impl for Manager_Impl {
     }
 
     fn NotifyServiceStateChange(&self, _state: *const WTS_SERVICE_STATE) -> windows_core::Result<()> {
+        call_trace("NotifyServiceStateChange");
         Ok(())
     }
     fn NotifySessionOfServiceStart(&self, _id: *const WTS_SESSION_ID) -> windows_core::Result<()> {
+        call_trace("NotifySessionOfServiceStart");
         Ok(())
     }
     fn NotifySessionOfServiceStop(&self, _id: *const WTS_SESSION_ID) -> windows_core::Result<()> {
+        call_trace("NotifySessionOfServiceStop");
         Ok(())
     }
     fn NotifySessionStateChange(&self, _id: *const WTS_SESSION_ID, _event: u32) -> windows_core::Result<()> {
+        call_trace("NotifySessionStateChange");
         Ok(())
     }
     fn NotifySettingsChange(&self, _settings: *const WRDS_SETTINGS) -> windows_core::Result<()> {
+        call_trace("NotifySettingsChange");
         Ok(())
     }
     fn Uninitialize(&self) -> windows_core::Result<()> {
+        call_trace("Uninitialize");
         let s = shared();
         s.set_listener(None);
         s.gate.request_stop();
@@ -230,22 +259,29 @@ impl IWRdsProtocolManager_Impl for Manager_Impl {
 
 // ---- listener ----
 
+/// Level-1 listener settings: no own security descriptor (the WinStation key's `Security`
+/// value applies). Also embedded in every connection's settings.
+fn listener_settings() -> WRDS_LISTENER_SETTINGS {
+    let mut s = WRDS_LISTENER_SETTINGS { WRdsListenerSettingLevel: WRDS_LISTENER_SETTING_LEVEL_1, ..Default::default() };
+    s.WRdsListenerSetting.WRdsListenerSettings1 =
+        WRDS_LISTENER_SETTINGS_1 { MaxProtocolListenerConnectionCount: crate::state::MAX_CONNECTIONS as u32, ..Default::default() };
+    s
+}
+
 #[implement(IWRdsProtocolListener)]
 struct Listener;
 
 impl IWRdsProtocolListener_Impl for Listener_Impl {
     fn GetSettings(&self, level: WRDS_LISTENER_SETTING_LEVEL) -> windows_core::Result<WRDS_LISTENER_SETTINGS> {
+        call_trace("GetSettings");
         if level != WRDS_LISTENER_SETTING_LEVEL_1 {
             return Err(E_INVALIDARG.into());
         }
-        let mut s = WRDS_LISTENER_SETTINGS { WRdsListenerSettingLevel: WRDS_LISTENER_SETTING_LEVEL_1, ..Default::default() };
-        // No own security descriptor: the WinStation key's `Security` value applies.
-        s.WRdsListenerSetting.WRdsListenerSettings1 =
-            WRDS_LISTENER_SETTINGS_1 { MaxProtocolListenerConnectionCount: crate::state::MAX_CONNECTIONS as u32, ..Default::default() };
-        Ok(s)
+        Ok(listener_settings())
     }
 
     fn StartListen(&self, cb: Ref<IWRdsProtocolListenerCallback>) -> windows_core::Result<()> {
+        call_trace("StartListen");
         let cb = cb.ok()?.clone();
         trace("start listen");
         shared().set_listener(Some(cb));
@@ -253,6 +289,7 @@ impl IWRdsProtocolListener_Impl for Listener_Impl {
     }
 
     fn StopListen(&self) -> windows_core::Result<()> {
+        call_trace("StopListen");
         trace("stop listen");
         shared().set_listener(None);
         Ok(())
@@ -295,14 +332,17 @@ fn hardware_id(buf: &PCWSTR, count: u32) -> windows_core::Result<()> {
 
 impl IWRdsProtocolConnection_Impl for Connection_Impl {
     fn GetLogonErrorRedirector(&self) -> windows_core::Result<IWRdsProtocolLogonErrorRedirector> {
+        call_trace("GetLogonErrorRedirector");
         Ok(self.to_interface())
     }
 
     fn AcceptConnection(&self) -> windows_core::Result<()> {
+        call_trace("AcceptConnection");
         if shared().with(|c| c.accepted(self.id)) { Ok(()) } else { Err(E_UNEXPECTED.into()) }
     }
 
     fn GetClientData(&self, out: *mut WTS_CLIENT_DATA) -> windows_core::Result<()> {
+        call_trace("GetClientData");
         let info = lock(&shared().core).client_info(self.id).ok_or(windows_core::Error::from(E_UNEXPECTED))?;
         let mut d = WTS_CLIENT_DATA {
             fInheritAutoLogon: true.into(),
@@ -326,11 +366,13 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetClientMonitorData(&self, count: *mut u32, primary: *mut u32) -> windows_core::Result<()> {
+        call_trace("GetClientMonitorData");
         write(count, 1)?;
         write(primary, 0)
     }
 
     fn GetUserCredentials(&self, out: *mut WTS_USER_CREDENTIAL) -> windows_core::Result<()> {
+        call_trace("GetUserCredentials");
         if out.is_null() {
             return Err(E_POINTER.into());
         }
@@ -345,15 +387,18 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetLicenseConnection(&self) -> windows_core::Result<IWRdsProtocolLicenseConnection> {
+        call_trace("GetLicenseConnection");
         Ok(self.to_interface())
     }
 
     fn AuthenticateClientToSession(&self, _id: *mut WTS_SESSION_ID) -> windows_core::Result<()> {
+        call_trace("AuthenticateClientToSession");
         // No reconnect by client authentication: every seat start is a fresh logon.
         Err(E_NOTIMPL.into())
     }
 
     fn NotifySessionId(&self, id: *const WTS_SESSION_ID, _handle: HANDLE_PTR) -> windows_core::Result<()> {
+        call_trace("NotifySessionId");
         if id.is_null() {
             return Err(E_POINTER.into());
         }
@@ -363,6 +408,7 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetInputHandles(&self, kbd: *mut HANDLE_PTR, mouse: *mut HANDLE_PTR, beep: *mut HANDLE_PTR) -> windows_core::Result<()> {
+        call_trace("GetInputHandles");
         // Input reaches the seat through the stream server inside the session (SendInput),
         // not through protocol input devices. HYPOTHESIS: null handles are accepted.
         write(kbd, HANDLE_PTR(0))?;
@@ -371,22 +417,26 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetVideoHandle(&self) -> windows_core::Result<HANDLE_PTR> {
+        call_trace("GetVideoHandle");
         // The display is the WDDM indirect display driver named in GetHardwareId.
         // HYPOTHESIS: a null video handle is accepted when the protocol names an IDD.
         Ok(HANDLE_PTR(0))
     }
 
     fn ConnectNotify(&self, _session: u32) -> windows_core::Result<()> {
+        call_trace("ConnectNotify");
         Ok(())
     }
 
     fn IsUserAllowedToLogon(&self, _session: u32, _token: HANDLE_PTR, domain: &PCWSTR, user: &PCWSTR) -> windows_core::Result<()> {
+        call_trace("IsUserAllowedToLogon");
         let s = shared();
         let ok = lock(&s.core).allowed_to_logon(self.id, &wide(domain), &wide(user), &s.computer);
         if ok { Ok(()) } else { Err(E_ACCESSDENIED.into()) }
     }
 
     fn SessionArbitrationEnumeration(&self, _token: HANDLE_PTR, _single: BOOL, _ids: *mut u32, _count: *mut u32) -> windows_core::Result<()> {
+        call_trace("SessionArbitrationEnumeration");
         // HYPOTHESIS: E_NOTIMPL lets TermService arbitrate (the stock behaviour).
         Err(E_NOTIMPL.into())
     }
@@ -399,6 +449,7 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
         id: *const WTS_SESSION_ID,
         _settings: *mut WRDS_CONNECTION_SETTINGS,
     ) -> windows_core::Result<()> {
+        call_trace("LogonNotify");
         if id.is_null() {
             return Err(E_POINTER.into());
         }
@@ -408,16 +459,19 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn PreDisconnect(&self, reason: u32) -> windows_core::Result<()> {
+        call_trace("PreDisconnect");
         shared().with(|c| c.disconnected(self.id, reason));
         Ok(())
     }
 
     fn DisconnectNotify(&self) -> windows_core::Result<()> {
+        call_trace("DisconnectNotify");
         shared().with(|c| c.disconnected(self.id, 0));
         Ok(())
     }
 
     fn Close(&self) -> windows_core::Result<()> {
+        call_trace("Close");
         let s = shared();
         lock(&s.conn_cbs).remove(&self.id);
         s.with(|c| c.closed(self.id));
@@ -425,19 +479,23 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetProtocolStatus(&self, out: *mut WTS_PROTOCOL_STATUS) -> windows_core::Result<()> {
+        call_trace("GetProtocolStatus");
         write(out, WTS_PROTOCOL_STATUS::default())
     }
 
     fn GetLastInputTime(&self) -> windows_core::Result<u64> {
+        call_trace("GetLastInputTime");
         Ok(0)
     }
 
     fn SetErrorInfo(&self, error: u32) -> windows_core::Result<()> {
+        call_trace("SetErrorInfo");
         trace(&format!("connection {} error info {error:#x}", self.id));
         Ok(())
     }
 
     fn CreateVirtualChannel(&self, _name: &PCSTR, _static: BOOL, _priority: u32) -> windows_core::Result<usize> {
+        call_trace("CreateVirtualChannel");
         // No virtual channels on this protocol: sound comes from the session's audio
         // endpoint (`WTS_QUERY_AUDIOENUM_DLL` below) captured by the stream server; input and
         // pads reach the seat through the stream server too.
@@ -452,6 +510,7 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
         _in: *const WTS_PROPERTY_VALUE,
         out: *mut WTS_PROPERTY_VALUE,
     ) -> windows_core::Result<()> {
+        call_trace("QueryProperty");
         if *query == WTS_QUERY_LOGON_SCREEN_SIZE {
             // HYPOTHESIS: two ULONG entries, width then height.
             if n_out < 2 || out.is_null() {
@@ -490,16 +549,19 @@ impl IWRdsProtocolConnection_Impl for Connection_Impl {
     }
 
     fn GetShadowConnection(&self) -> windows_core::Result<IWRdsProtocolShadowConnection> {
+        call_trace("GetShadowConnection");
         Err(E_NOTIMPL.into())
     }
 
     fn NotifyCommandProcessCreated(&self, _session: u32) -> windows_core::Result<()> {
+        call_trace("NotifyCommandProcessCreated");
         Ok(())
     }
 }
 
 impl IWRdsProtocolLicenseConnection_Impl for Connection_Impl {
     fn RequestLicensingCapabilities(&self, caps: *mut WTS_LICENSE_CAPABILITIES, size: *mut u32) -> windows_core::Result<()> {
+        call_trace("RequestLicensingCapabilities");
         if caps.is_null() || size.is_null() {
             return Err(E_POINTER.into());
         }
@@ -523,30 +585,36 @@ impl IWRdsProtocolLicenseConnection_Impl for Connection_Impl {
     }
 
     fn SendClientLicense(&self, _license: *const u8, _size: u32) -> windows_core::Result<()> {
+        call_trace("SendClientLicense");
         Ok(())
     }
 
     fn RequestClientLicense(&self, _r1: *const u8, _r2: u32, _out: *mut u8, _size: *mut u32) -> windows_core::Result<()> {
+        call_trace("RequestClientLicense");
         // No client license store on this protocol; RDS licensing of the seat user (per-user
-        // CAL) is the host's (spec/remote 30 §13). HYPOTHESIS: E_NOTIMPL is accepted.
+        // CAL) is the host's (spec/remote 30 Â§13). HYPOTHESIS: E_NOTIMPL is accepted.
         Err(E_NOTIMPL.into())
     }
 
     fn ProtocolComplete(&self, _complete: u32) -> windows_core::Result<()> {
+        call_trace("ProtocolComplete");
         Ok(())
     }
 }
 
 impl IWRdsProtocolLogonErrorRedirector_Impl for Connection_Impl {
     fn OnBeginPainting(&self) -> windows_core::Result<()> {
+        call_trace("OnBeginPainting");
         Ok(())
     }
 
     fn RedirectStatus(&self, _msg: &PCWSTR) -> windows_core::Result<WTS_LOGON_ERROR_REDIRECTOR_RESPONSE> {
+        call_trace(&format!("RedirectStatus {:?}", wide(_msg)));
         Ok(WTS_LOGON_ERR_NOT_HANDLED)
     }
 
     fn RedirectMessage(&self, _caption: &PCWSTR, _msg: &PCWSTR, _ty: u32) -> windows_core::Result<WTS_LOGON_ERROR_REDIRECTOR_RESPONSE> {
+        call_trace(&format!("RedirectMessage {:?} {:?} type {_ty:#x}", wide(_caption), wide(_msg)));
         Ok(WTS_LOGON_ERR_NOT_HANDLED)
     }
 
@@ -558,6 +626,7 @@ impl IWRdsProtocolLogonErrorRedirector_Impl for Connection_Impl {
         msg: &PCWSTR,
         _ty: u32,
     ) -> windows_core::Result<WTS_LOGON_ERROR_REDIRECTOR_RESPONSE> {
+        call_trace("RedirectLogonError");
         let text = wide(msg);
         shared().with(|c| c.logon_error(self.id, nt, sub, &text));
         Ok(WTS_LOGON_ERR_NOT_HANDLED)
@@ -566,10 +635,12 @@ impl IWRdsProtocolLogonErrorRedirector_Impl for Connection_Impl {
 
 impl IWRdsWddmIddProps_Impl for Connection_Impl {
     fn GetHardwareId(&self, buf: &PCWSTR, count: u32) -> windows_core::Result<()> {
+        call_trace("GetHardwareId");
         hardware_id(buf, count)
     }
 
     fn OnDriverLoad(&self, session: u32, _driver: HANDLE_PTR) -> windows_core::Result<()> {
+        call_trace("OnDriverLoad");
         // The handle belongs to TermService; the service talks to the driver through its own
         // control interface (seat-idd remote role, SYSTEM only).
         shared().with(|c| c.driver_loaded(self.id, session, None));
@@ -577,11 +648,13 @@ impl IWRdsWddmIddProps_Impl for Connection_Impl {
     }
 
     fn OnDriverUnload(&self, session: u32) -> windows_core::Result<()> {
+        call_trace("OnDriverUnload");
         shared().with(|c| c.driver_unloaded(self.id, session));
         Ok(())
     }
 
     fn EnableWddmIdd(&self, enabled: BOOL) -> windows_core::Result<()> {
+        call_trace("EnableWddmIdd");
         trace(&format!("connection {} WDDM IDD {}", self.id, enabled.as_bool()));
         Ok(())
     }
@@ -589,16 +662,19 @@ impl IWRdsWddmIddProps_Impl for Connection_Impl {
 
 impl IWRdsWddmIddProps1_Impl for Connection_Impl {
     fn GetHardwareId(&self, buf: &PCWSTR, count: u32) -> windows_core::Result<()> {
+        call_trace("GetHardwareId");
         hardware_id(buf, count)
     }
 
     fn OnDriverLoad(&self, session: u32, instance: &PCWSTR) -> windows_core::Result<()> {
+        call_trace("OnDriverLoad");
         let id = wide(instance);
         shared().with(|c| c.driver_loaded(self.id, session, Some(id)));
         Ok(())
     }
 
     fn OnDriverUnload(&self, session: u32) -> windows_core::Result<()> {
+        call_trace("OnDriverUnload");
         shared().with(|c| c.driver_unloaded(self.id, session));
         Ok(())
     }
@@ -611,6 +687,7 @@ struct Factory;
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(&self, outer: Ref<IUnknown>, riid: *const GUID, out: *mut *mut c_void) -> windows_core::Result<()> {
+        call_trace("CreateInstance");
         if out.is_null() || riid.is_null() {
             return Err(E_POINTER.into());
         }
@@ -623,6 +700,7 @@ impl IClassFactory_Impl for Factory_Impl {
     }
 
     fn LockServer(&self, _lock: BOOL) -> windows_core::Result<()> {
+        call_trace("LockServer");
         Ok(())
     }
 }
