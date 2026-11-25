@@ -112,6 +112,15 @@ fn group_member_sids(group_sid: &str) -> Result<Vec<String>, SessionError> {
         }
         return Err(SessionError::Win32 { api: "NetLocalGroupGetMembers", code: rc });
     }
+    // An empty group may come back with a null buffer: a slice from a null pointer is
+    // undefined behaviour even with length 0 (debug builds panic on it, test VM 2026-11-25).
+    if buf.is_null() || read == 0 {
+        if !buf.is_null() {
+            // SAFETY: allocated by the API.
+            unsafe { NetApiBufferFree(buf.cast()) };
+        }
+        return Ok(Vec::new());
+    }
     // SAFETY: `read` rows of LOCALGROUP_MEMBERS_INFO_0.
     let rows = unsafe { std::slice::from_raw_parts(buf.cast::<LOCALGROUP_MEMBERS_INFO_0>(), read as usize) };
     let out = rows.iter().filter_map(|r| sid_to_string(r.lgrmi0_sid).ok()).collect();
