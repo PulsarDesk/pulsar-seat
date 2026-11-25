@@ -29,7 +29,13 @@ use seat_core::device::{Device, DeviceKind};
 use seat_core::ids::{DeviceKey, SeatNumber};
 use seat_core::{Clock, SystemClock};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, Weak};
+
+/// Minimum spacing of activity events per captured unit (as `kmdf_router`).
+pub const ACTIVITY_THROTTLE_MS: u64 = 100;
+/// Activity events waiting for the delivery worker; more are dropped (activity is a hint).
+const ACTIVITY_QUEUE: usize = 64;
 
 /// Sinks and settings the capture readers deliver through.
 struct Shared {
@@ -37,9 +43,37 @@ struct Shared {
     packets: Mutex<Option<PacketSink>>,
     hotkey: Mutex<Option<HotkeySink>>,
     emergency: Mutex<Option<EmergencySink>>,
-    activity: Mutex<Option<ActivitySink>>,
+    activity: Arc<Mutex<Option<ActivitySink>>>,
+    /// Last activity time per unit (throttle).
+    last_activity: Mutex<BTreeMap<DeviceKey, u64>>,
+    /// To the activity worker. gaming PC 2026-11-25: the service's activity sink takes the
+    /// service state lock; called on the USB reader thread for every report it held the
+    /// next `WinUsb_ReadPipe` back, and the seat pointer moved in jumps about once a second.
+    activity_tx: Mutex<Option<SyncSender<ActivityEvent>>>,
     inv: Arc<Inventory>,
     clock: Arc<dyn Clock>,
+}
+
+impl Shared {
+    /// Worker that touches the inventory and calls the activity sink off the reader threads.
+    /// Ends when `Shared` (the sender) is dropped.
+    fn start_activity_worker(&self) {
+        let (tx, rx) = sync_channel::<ActivityEvent>(ACTIVITY_QUEUE);
+        let (inv, sink) = (self.inv.clone(), self.activity.clone());
+        let spawned = std::thread::Builder::new().name("seat-input-usb-activity".into()).spawn(move || {
+            for ev in rx {
+                inv.touch(&ev.key, ev.at_ms);
+                let s = lock(&sink).clone();
+                if let Some(s) = s {
+                    s(ev);
+                }
+            }
+        });
+        match spawned {
+            Ok(_) => *lock(&self.activity_tx) = Some(tx),
+            Err(e) => log::error!("winusb_capture: activity worker not started ({e}); activity is not reported"),
+        }
+    }
 }
 
 impl CaptureHandler for Shared {
@@ -61,12 +95,20 @@ impl CaptureHandler for Shared {
             s();
         }
     }
+    /// Called on the USB reader thread for every report: throttled, then handed to the
+    /// activity worker (never blocks the reader).
     fn activity(&self, key: &DeviceKey) {
         let at_ms = self.clock.now_ms();
-        self.inv.touch(key, at_ms);
-        let s = lock(&self.activity).clone();
-        if let Some(s) = s {
-            s(ActivityEvent { key: key.clone(), at_ms, key_sc: None, click: false });
+        {
+            let mut last = lock(&self.last_activity);
+            let t = last.entry(key.clone()).or_insert(0);
+            if *t != 0 && at_ms.saturating_sub(*t) < ACTIVITY_THROTTLE_MS {
+                return;
+            }
+            *t = at_ms;
+        }
+        if let Some(tx) = lock(&self.activity_tx).as_ref() {
+            let _ = tx.try_send(ActivityEvent { key: key.clone(), at_ms, key_sc: None, click: false });
         }
     }
     fn options(&self) -> UnitOptions {
@@ -101,10 +143,13 @@ impl WinusbCaptureRouter {
             packets: Mutex::new(None),
             hotkey: Mutex::new(None),
             emergency: Mutex::new(None),
-            activity: Mutex::new(None),
+            activity: Arc::new(Mutex::new(None)),
+            last_activity: Mutex::new(BTreeMap::new()),
+            activity_tx: Mutex::new(None),
             inv: inv.clone(),
             clock,
         });
+        shared.start_activity_worker();
         let weak: Weak<dyn CaptureHandler> = Arc::downgrade(&(shared.clone() as Arc<dyn CaptureHandler>));
         capture.set_handler(weak);
         // A new router = the input backend (or its settings) was chosen again: an operator's
@@ -333,6 +378,7 @@ mod tests {
         swap: Arc<FakeSwap>,
         src: Arc<FakeUsbSource>,
         journal: Arc<MemoryJournal>,
+        clock: Arc<seat_core::mock::MockClock>,
     }
 
     /// The fake tree (`units::tests::tree`): one composite USB receiver (keyboard on MI_00,
@@ -346,9 +392,11 @@ mod tests {
         let src = Arc::new(FakeUsbSource::default());
         let journal = Arc::new(MemoryJournal::default());
         let cap = UsbCapture::with_clock(swap.clone(), src.clone(), journal.clone(), Arc::new(seat_core::mock::MockClock::default()));
-        let r = WinusbCaptureRouter::with_clock(inv, &InputSettings::default(), topology, cap, Arc::new(seat_core::mock::MockClock::default()));
+        let clock = Arc::new(seat_core::mock::MockClock::default());
+        clock.advance(1_000);
+        let r = WinusbCaptureRouter::with_clock(inv, &InputSettings::default(), topology, cap, clock.clone());
         r.enumerate().unwrap();
-        Env { r, p, swap, src, journal }
+        Env { r, p, swap, src, journal, clock }
     }
 
     fn kbd(e: &Env) -> DeviceKey {
@@ -467,6 +515,43 @@ mod tests {
         e.r.apply_routes(&routes).unwrap();
         assert!(e.swap.is_captured(KBD_NODE));
         assert!(!e.r.notes().contains(&"usb_capture_held".to_string()));
+        e.r.release_captures();
+    }
+
+    /// gaming PC 2026-11-25 (pointer moved about once a second): a slow activity sink (the
+    /// service takes its state lock there) must not hold the reader back, and activity is
+    /// throttled per unit.
+    #[test]
+    fn slow_activity_sink_does_not_stall_packets() {
+        let e = env(HostTopology::SeatOneConsole);
+        add_second_keyboard(&e);
+        let k = kbd(&e);
+        let got: Got = Arc::default();
+        let g = got.clone();
+        e.r.set_packet_sink(Arc::new(move |seat, p| g.lock().unwrap().push((seat, p.to_vec()))));
+        let gate = Arc::new(Mutex::new(()));
+        let seen = Arc::new(Mutex::new(0usize));
+        let (g2, s2) = (gate.clone(), seen.clone());
+        e.r.set_activity_sink(Arc::new(move |_| {
+            let _held = g2.lock().unwrap();
+            *s2.lock().unwrap() += 1;
+        }));
+        let dev = e.src.plug(KBD_NODE, Some(KEYBOARD_DESC));
+        e.r.set_running_seats(&[s(2)]);
+        e.r.apply_routes(&[InputRoute { key: k.clone(), mask: s(2).mask() }]).unwrap();
+        let blocked = gate.lock().unwrap();
+        for i in 0..6u8 {
+            let key = if i % 2 == 0 { 0x04 } else { 0 };
+            dev.push(&[0, 0, key, 0, 0, 0, 0, 0]);
+        }
+        wait_for(|| got.lock().unwrap().len() >= 6);
+        drop(blocked);
+        wait_for(|| *seen.lock().unwrap() >= 1);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(*seen.lock().unwrap(), 1, "one activity per throttle window");
+        e.clock.advance(ACTIVITY_THROTTLE_MS);
+        dev.push(&[0, 0, 0x04, 0, 0, 0, 0, 0]);
+        wait_for(|| *seen.lock().unwrap() == 2);
         e.r.release_captures();
     }
 
