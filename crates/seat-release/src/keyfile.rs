@@ -59,9 +59,25 @@ pub fn dacl_is_restricted(sddl: &str, user_sid: &str) -> bool {
     user && system
 }
 
+/// The user's trustee as Windows writes it in a DACL string built from
+/// [`key_dacl_sddl`]: the SID, or an SDDL alias when the SID has one (`LA` for the
+/// built-in Administrator account, RID 500, e.g. the GitHub runner account; first CI
+/// runs, 2026-11-25). `None` when the string is not such a DACL.
+pub fn user_trustee(rendered: &str) -> Option<String> {
+    let rest = rendered.strip_prefix("D:P")?;
+    let start = rest.find('(')?;
+    rest[start..]
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .split(")(")
+        .filter_map(|a| a.split(';').nth(5))
+        .find(|t| !matches!(*t, "SY" | "S-1-5-18"))
+        .map(str::to_string)
+}
+
 #[cfg(windows)]
 mod imp {
-    use super::{Protection, dacl_is_restricted, key_dacl_sddl};
+    use super::{Protection, dacl_is_restricted, key_dacl_sddl, user_trustee};
     use std::fs::File;
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
@@ -193,6 +209,24 @@ mod imp {
         if rc != 0 {
             return Err(format!("GetSecurityInfo: Win32 error {rc}"));
         }
+        sd_dacl_sddl(sd)
+    }
+
+    /// `sddl` parsed and written back by Windows (test helper for the alias rendering).
+    #[cfg(test)]
+    pub fn render_dacl(sddl: &str) -> Result<String, String> {
+        let w: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid SDDL; sd freed by Local.
+        if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(w.as_ptr(), 1, &mut sd, std::ptr::null_mut()) } == 0 {
+            return Err(format!("SDDL: {}", last()));
+        }
+        let _g = Local(sd);
+        sd_dacl_sddl(sd)
+    }
+
+    /// DACL of a security descriptor as SDDL (SIDs that have an alias are written as it).
+    fn sd_dacl_sddl(sd: PSECURITY_DESCRIPTOR) -> Result<String, String> {
         let mut s: *mut u16 = std::ptr::null_mut();
         // SAFETY: valid descriptor; string freed by Local.
         if unsafe {
@@ -274,7 +308,10 @@ mod imp {
         // SAFETY: fresh handle, owned by the File from here on (closed on every path).
         let f = unsafe { File::from_raw_handle(h as _) };
         let got = dacl_of(f.as_raw_handle() as HANDLE)?;
-        if !dacl_is_restricted(&got, &sid) {
+        // The read-back string writes the user as Windows renders it (an alias such as
+        // `LA` for some SIDs): accept the SID or that rendering of it, nothing else.
+        let alias = user_trustee(&sd_dacl_sddl(sd)?);
+        if !dacl_is_restricted(&got, &sid) && !alias.is_some_and(|a| dacl_is_restricted(&got, &a)) {
             drop(f);
             let _ = std::fs::remove_file(path);
             return Err(format!("{}: the restricted DACL did not apply (got {got}); nothing written", path.display()));
@@ -321,6 +358,35 @@ mod tests {
         assert!(!dacl_is_restricted(&format!("D:P(A;;FR;;;{me})(A;;FA;;;SY)"), me));
         assert!(!dacl_is_restricted(&format!("D:P(D;;FA;;;{me})(A;;FA;;;SY)"), me));
         assert!(!dacl_is_restricted("", me));
+    }
+
+    #[test]
+    fn user_trustee_reads_the_rendered_user() {
+        let me = "S-1-5-21-1-2-3-1001";
+        assert_eq!(user_trustee(&key_dacl_sddl(me)).as_deref(), Some(me));
+        assert_eq!(user_trustee("D:PAI(A;;FA;;;SY)(A;;FA;;;LA)").as_deref(), Some("LA"));
+        assert_eq!(user_trustee("D:P(A;;FA;;;S-1-5-18)"), None);
+        assert_eq!(user_trustee("D:(A;;FA;;;LA)"), None);
+        assert_eq!(user_trustee(""), None);
+    }
+
+    /// The real rendering of the built-in Administrator account (RID 500 of this machine's
+    /// account domain) is an alias, and the key file check accepts that rendering only.
+    #[cfg(windows)]
+    #[test]
+    fn rid_500_account_renders_as_alias_and_passes() {
+        let me = imp::current_user_sid().unwrap();
+        // Local accounts (and the runner's) live in the machine's account domain.
+        let Some(domain) = me.rsplit_once('-').map(|(d, _)| d.to_string()) else { panic!("{me}") };
+        if !domain.starts_with("S-1-5-21-") {
+            return; // a domain or other account: this machine's RID 500 is not derivable here
+        }
+        let admin = format!("{domain}-500");
+        let rendered = imp::render_dacl(&key_dacl_sddl(&admin)).unwrap();
+        assert_eq!(user_trustee(&rendered).as_deref(), Some("LA"), "{rendered}");
+        // Read back literally, the SID does not match; its rendering does.
+        assert!(!dacl_is_restricted(&rendered, &admin), "{rendered}");
+        assert!(dacl_is_restricted(&rendered, "LA"), "{rendered}");
     }
 
     #[cfg(windows)]
