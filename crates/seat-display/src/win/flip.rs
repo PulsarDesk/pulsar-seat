@@ -19,7 +19,10 @@
 //!   (key 0). The seat cursor is then drawn on the back buffer only
 //!   ([`FlipChain::present_with_cursor`]: the cursor's patch of the frame texture goes
 //!   through a small staging copy, is blended on the CPU and written into the back
-//!   buffer), so the frame texture stays clean.
+//!   buffer), so the frame texture stays clean. A frame the producer does not hand over
+//!   (keyed mutex timeout / abandoned, handle no longer opens) fails with a
+//!   `shared_frame_*` reason and leaves the frame texture as it was; the presenter then
+//!   drops that frame and keeps the chain (`crate::model::flip_action`, 2026-11-25).
 //!
 //! - VRR (`OutputPlacement::vrr`, spec 40 §6.6, added 2026-11-17): where DXGI reports
 //!   `DXGI_FEATURE_PRESENT_ALLOW_TEARING`, the chain is created with
@@ -32,7 +35,8 @@
 //! works on the target drivers).
 
 use super::win_err;
-use crate::model::{blend_cursor_region, cursor_rect, flip_buffer};
+use crate::model::{blend_cursor_region, cursor_rect, flip_buffer, SHARED_FRAME_ABANDONED, SHARED_FRAME_OPEN, SHARED_FRAME_TIMEOUT};
+use seat_core::capture::KeyedAcquire;
 use seat_core::backend::display::CursorState;
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
 use seat_core::device::Rect;
@@ -48,12 +52,12 @@ const MAX_OPENED: usize = 8;
 /// Longest wait for a shared texture's keyed mutex (the producer released it already).
 const ACQUIRE_MS: u32 = 100;
 
-/// `AcquireSync` with its raw result (`WAIT_TIMEOUT` is a success code the generated
-/// wrapper would turn into `Ok`).
-fn acquire(m: &IDXGIKeyedMutex, key: u64, ms: u32) -> bool {
+/// `AcquireSync` with its raw result (`WAIT_TIMEOUT` and `WAIT_ABANDONED` are success
+/// codes the generated wrapper would turn into `Ok`; see [`KeyedAcquire`]).
+fn acquire(m: &IDXGIKeyedMutex, key: u64, ms: u32) -> KeyedAcquire {
     // SAFETY: vtable call on a live interface with plain arguments.
     let hr = unsafe { (Interface::vtable(m).AcquireSync)(Interface::as_raw(m), key, ms) };
-    hr.0 == 0
+    KeyedAcquire::from_hresult(hr.0)
 }
 
 struct Opened {
@@ -237,7 +241,11 @@ impl FlipChain {
                 // SAFETY: the producer keeps `handle` open while `generation` is current.
                 let (tex, mutex) = unsafe {
                     let d1: ID3D11Device1 = self.dev.cast().map_err(e("ID3D11Device1"))?;
-                    let tex: ID3D11Texture2D = d1.OpenSharedResource1(HANDLE(handle as *mut _)).map_err(e("OpenSharedResource1"))?;
+                    // A handle that no longer opens belongs to a ring the producer closed
+                    // (producer side; a removed device still classifies as a device loss).
+                    let tex: ID3D11Texture2D = d1
+                        .OpenSharedResource1(HANDLE(handle as *mut _))
+                        .map_err(|err| win_err(SHARED_FRAME_OPEN, "OpenSharedResource1", &err))?;
                     let mutex: IDXGIKeyedMutex = tex.cast().map_err(e("IDXGIKeyedMutex"))?;
                     (tex, mutex)
                 };
@@ -250,18 +258,40 @@ impl FlipChain {
                 self.opened.len() - 1
             }
         };
-        self.ensure_content(src.width, src.height)?;
-        let (Some((content, ..)), Some(o)) = (&self.content, self.opened.get(idx)) else { return Ok(()) };
-        if !acquire(&o.mutex, 1, ACQUIRE_MS) {
-            return Err(BackendError::new(ErrorKind::Timeout, "flip_presenter", "shared frame not released by the producer"));
+        // Take the key before touching the frame texture: a frame the producer does not
+        // hand over leaves the last good frame in place (the caller presents it again).
+        match acquire(&self.opened[idx].mutex, 1, ACQUIRE_MS) {
+            KeyedAcquire::Acquired => {}
+            KeyedAcquire::Timeout => {
+                return Err(BackendError::new(ErrorKind::Timeout, SHARED_FRAME_TIMEOUT, "shared frame not released by the producer"));
+            }
+            KeyedAcquire::Abandoned => {
+                // Not ours and not consistent (see `KeyedAcquire`): nothing to release;
+                // close our copy so the next frame with this handle opens it afresh.
+                self.opened.remove(idx);
+                return Err(BackendError::new(ErrorKind::Os, SHARED_FRAME_ABANDONED, "shared frame's keyed mutex abandoned by the producer"));
+            }
+            KeyedAcquire::Failed(hr) => {
+                return Err(BackendError::new(ErrorKind::Os, "flip_presenter", format!("AcquireSync failed: {hr:#x}")).with_win32(hr as u32));
+            }
         }
-        let b = D3D11_BOX { left: src.x as u32, top: src.y as u32, front: 0, right: src.x as u32 + src.width, bottom: src.y as u32 + src.height, back: 1 };
-        // SAFETY: both textures live; the shared one is ours while key 1 is held.
-        unsafe {
-            self.ctx.CopySubresourceRegion(content, 0, 0, 0, 0, &o.tex, 0, Some(&b));
-            o.mutex.ReleaseSync(0).map_err(e("ReleaseSync"))?;
+        let sized = self.ensure_content(src.width, src.height);
+        let o = &self.opened[idx];
+        if let (Ok(()), Some((content, ..))) = (&sized, &self.content) {
+            let b = D3D11_BOX { left: src.x as u32, top: src.y as u32, front: 0, right: src.x as u32 + src.width, bottom: src.y as u32 + src.height, back: 1 };
+            // SAFETY: both textures live; the shared one is ours while key 1 is held.
+            unsafe { self.ctx.CopySubresourceRegion(content, 0, 0, 0, 0, &o.tex, 0, Some(&b)) };
         }
-        Ok(())
+        // Always hand key 0 back, also when the frame texture could not be sized.
+        // SAFETY: we hold key 1 of this live mutex.
+        unsafe { o.mutex.ReleaseSync(0) }.map_err(e("ReleaseSync"))?;
+        sized
+    }
+
+    /// Close every shared texture this chain opened (the producer's ring may have been
+    /// rebuilt; the next frame opens its texture again).
+    pub fn forget_shared(&mut self) {
+        self.opened.clear();
     }
 
     /// Present the frame texture letterboxed into a `ww`×`wh` window, synced to vblank.

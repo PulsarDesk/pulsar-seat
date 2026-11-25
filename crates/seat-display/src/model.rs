@@ -963,6 +963,99 @@ pub fn pick_flip_adapter(ccd: u64, dxgi_owner: Option<u64>) -> AdapterChoice {
     }
 }
 
+/// Reason of a shared GPU frame whose keyed mutex the producer did not release in time
+/// (`FlipChain::take_shared`).
+pub const SHARED_FRAME_TIMEOUT: &str = "shared_frame_timeout";
+/// Reason of a shared GPU frame whose keyed mutex was abandoned by the producer.
+pub const SHARED_FRAME_ABANDONED: &str = "shared_frame_abandoned";
+/// Reason of a shared GPU frame that could not be opened (the producer closed its ring).
+pub const SHARED_FRAME_OPEN: &str = "shared_frame_open";
+/// `DXGI_ERROR_DEVICE_REMOVED` / `DEVICE_HUNG` / `DEVICE_RESET`.
+pub const DXGI_DEVICE_LOST: [u32; 3] = [0x887a_0005, 0x887a_0006, 0x887a_0007];
+/// Device losses after which an output stays on the GDI blit.
+pub const MAX_GPU_LOST: u8 = 5;
+/// Other flip-chain failures in a row (no good present between them) that are answered
+/// with a re-created chain; the next one moves the output to GDI for good.
+pub const MAX_CHAIN_RECREATES: u8 = 1;
+/// Shared-frame misses in a row after which the presenter closes every shared texture it
+/// opened (they are opened again from the next frame's handle).
+pub const SHARED_MISSES_REOPEN: u32 = 3;
+
+/// What went wrong on a flip-chain output's frame (presenter, `render_gpu`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlipFailure {
+    /// The producer still holds the shared frame (keyed mutex `WAIT_TIMEOUT`).
+    SharedTimeout,
+    /// The producer abandoned the shared frame's keyed mutex (`WAIT_ABANDONED`).
+    SharedAbandoned,
+    /// The shared frame's handle could not be opened (ring gone or replaced).
+    SharedOpen,
+    /// The device was removed, hung or reset.
+    DeviceLost,
+    /// Any other swap chain / device call failed.
+    Chain,
+}
+
+impl FlipFailure {
+    /// A producer-side hiccup: the presenter's own chain is fine.
+    pub fn producer_side(self) -> bool {
+        matches!(self, Self::SharedTimeout | Self::SharedAbandoned | Self::SharedOpen)
+    }
+}
+
+/// Classify a flip-chain error by its reason and Win32 / `HRESULT` code. A lost device
+/// wins over the reason (opening a shared texture on a removed device is a device loss).
+pub fn classify_flip_failure(reason: &str, win32: Option<u32>) -> FlipFailure {
+    if win32.is_some_and(|c| DXGI_DEVICE_LOST.contains(&c)) {
+        return FlipFailure::DeviceLost;
+    }
+    match reason {
+        SHARED_FRAME_TIMEOUT => FlipFailure::SharedTimeout,
+        SHARED_FRAME_ABANDONED => FlipFailure::SharedAbandoned,
+        SHARED_FRAME_OPEN => FlipFailure::SharedOpen,
+        _ => FlipFailure::Chain,
+    }
+}
+
+/// The presenter's answer to a [`FlipFailure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlipAction {
+    /// Skip this frame, keep the chain, present the last good frame (cursor updated).
+    DropFrame,
+    /// [`Self::DropFrame`] and close every shared texture the chain opened, so the next
+    /// frame opens its texture afresh (the producer's ring may have been rebuilt).
+    DropFrameReopen,
+    /// Drop the chain; GDI blit on the same window until the retry timer creates it again.
+    RecreateChain,
+    /// Give the flip chain up: GDI blit on a new window from now on.
+    GdiForGood,
+}
+
+/// Decide what a flip-chain failure does to the output. `shared_misses`: producer-side
+/// failures in a row on this output, this one included; `device_losses`: device losses
+/// handled before this one; `chain_errors`: other chain failures since the last good
+/// present, before this one.
+///
+/// A producer hiccup never costs the flip chain (2026-11-25 gaming PC: one keyed-mutex
+/// timeout of the capture ring moved a seat to GDI for good, and the black RDP picture
+/// behind it stayed until the host was restarted). When the ring keeps failing, the seat
+/// host's capture reader sees the mailbox go not live / a new ring and switches by itself.
+pub fn flip_action(f: FlipFailure, shared_misses: u32, device_losses: u8, chain_errors: u8) -> FlipAction {
+    match f {
+        FlipFailure::SharedAbandoned => FlipAction::DropFrameReopen,
+        FlipFailure::SharedTimeout | FlipFailure::SharedOpen => {
+            if shared_misses >= SHARED_MISSES_REOPEN && shared_misses % SHARED_MISSES_REOPEN == 0 {
+                FlipAction::DropFrameReopen
+            } else {
+                FlipAction::DropFrame
+            }
+        }
+        FlipFailure::DeviceLost if device_losses < MAX_GPU_LOST => FlipAction::RecreateChain,
+        FlipFailure::Chain if chain_errors < MAX_CHAIN_RECREATES => FlipAction::RecreateChain,
+        FlipFailure::DeviceLost | FlipFailure::Chain => FlipAction::GdiForGood,
+    }
+}
+
 /// Sampled brightness of a tight BGRA frame: `(samples, non-black samples)`, one sample
 /// every `step` pixels in both directions; a pixel is non-black when B + G + R > 30 (the
 /// threshold the E2E Desktop Duplication probe uses). Diagnostics: tells a black picture
@@ -999,6 +1092,52 @@ pub(crate) mod tests {
     use super::*;
     use seat_core::mock::MockPnpTree;
     use seat_core::pnp::PnpNode;
+
+    #[test]
+    fn flip_failures_are_classified_by_code_then_reason() {
+        use FlipFailure as F;
+        assert_eq!(classify_flip_failure(SHARED_FRAME_TIMEOUT, None), F::SharedTimeout);
+        assert_eq!(classify_flip_failure(SHARED_FRAME_ABANDONED, None), F::SharedAbandoned);
+        assert_eq!(classify_flip_failure(SHARED_FRAME_OPEN, Some(0x8007_0006)), F::SharedOpen);
+        // Opening a shared texture on a removed device is a device loss.
+        assert_eq!(classify_flip_failure(SHARED_FRAME_OPEN, Some(0x887a_0005)), F::DeviceLost);
+        assert_eq!(classify_flip_failure("flip_presenter", Some(0x887a_0007)), F::DeviceLost);
+        assert_eq!(classify_flip_failure("flip_presenter", Some(0x887a_0001)), F::Chain);
+        assert_eq!(classify_flip_failure("flip_presenter", None), F::Chain);
+        assert!(F::SharedTimeout.producer_side() && F::SharedOpen.producer_side() && F::SharedAbandoned.producer_side());
+        assert!(!F::DeviceLost.producer_side() && !F::Chain.producer_side());
+    }
+
+    #[test]
+    fn producer_hiccups_never_cost_the_flip_chain() {
+        use FlipAction as A;
+        use FlipFailure as F;
+        // The 2026-11-25 case: one keyed-mutex timeout drops the frame only.
+        assert_eq!(flip_action(F::SharedTimeout, 1, 0, 0), A::DropFrame);
+        assert_eq!(flip_action(F::SharedTimeout, 2, 0, 0), A::DropFrame);
+        // Every SHARED_MISSES_REOPEN-th miss in a row closes the opened textures.
+        assert_eq!(flip_action(F::SharedTimeout, SHARED_MISSES_REOPEN, 0, 0), A::DropFrameReopen);
+        assert_eq!(flip_action(F::SharedOpen, SHARED_MISSES_REOPEN + 1, 0, 0), A::DropFrame);
+        assert_eq!(flip_action(F::SharedTimeout, 2 * SHARED_MISSES_REOPEN, 0, 0), A::DropFrameReopen);
+        // Abandoned: the texture is not consistent any more, reopen at once.
+        assert_eq!(flip_action(F::SharedAbandoned, 1, 0, 0), A::DropFrameReopen);
+        // Even after many device losses / chain errors, a producer miss is no chain failure.
+        for f in [F::SharedTimeout, F::SharedAbandoned, F::SharedOpen] {
+            assert!(matches!(flip_action(f, 1000, MAX_GPU_LOST, 9), A::DropFrame | A::DropFrameReopen));
+        }
+    }
+
+    #[test]
+    fn chain_failures_recreate_before_gdi() {
+        use FlipAction as A;
+        use FlipFailure as F;
+        assert_eq!(flip_action(F::DeviceLost, 0, 0, 0), A::RecreateChain);
+        assert_eq!(flip_action(F::DeviceLost, 0, MAX_GPU_LOST - 1, 0), A::RecreateChain);
+        assert_eq!(flip_action(F::DeviceLost, 0, MAX_GPU_LOST, 0), A::GdiForGood);
+        // Other chain errors: one re-creation, then GDI for good.
+        assert_eq!(flip_action(F::Chain, 0, 0, 0), A::RecreateChain);
+        assert_eq!(flip_action(F::Chain, 0, 0, MAX_CHAIN_RECREATES), A::GdiForGood);
+    }
 
     pub(crate) fn sample_edid(serial: u32, name: &str) -> Vec<u8> {
         let mut b = vec![0u8; 128];

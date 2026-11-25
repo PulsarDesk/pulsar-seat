@@ -357,6 +357,52 @@ impl RingCursor {
     }
 }
 
+/// Outcome of `IDXGIKeyedMutex::AcquireSync` on a ring texture (both sides of the ring).
+///
+/// Microsoft Learn (`IDXGIKeyedMutex::AcquireSync`): besides `S_OK` the call returns the
+/// success codes `WAIT_TIMEOUT` (the key was not released within the wait) and
+/// `WAIT_ABANDONED` ("the shared surface and keyed mutex are no longer in a consistent
+/// state": the other device released the surface while it held the mutex, e.g. its
+/// process died or tore its ring down mid-frame); for that case the documented remedy is
+/// to release and recreate both the keyed mutex and the shared surface. Unlike a Win32
+/// mutex, an abandoned keyed mutex is **not** treated as acquired here: nothing is
+/// copied, nothing is released (there is no consistent key to hand on), and the surface
+/// is dropped by whoever can rebuild it:
+///
+/// - producer (session agent): ends the ring generation, so a new ring with new
+///   textures is offered and the seat host fetches it (ring reset);
+/// - consumer (presenter): drops that frame and closes its opened copy of the texture,
+///   keeps the swap chain and the last good frame on screen.
+///
+/// So neither process waits on a key the other can never release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyedAcquire {
+    /// The key is ours; release it with the next key when done.
+    Acquired,
+    /// `WAIT_TIMEOUT`: the other side still holds the surface.
+    Timeout,
+    /// `WAIT_ABANDONED`: the surface is no longer consistent; recreate it.
+    Abandoned,
+    /// Any other result (an error `HRESULT`, e.g. device removed).
+    Failed(i32),
+}
+
+/// `WAIT_ABANDONED` / `WAIT_TIMEOUT` as `AcquireSync` returns them.
+pub const KEYED_WAIT_ABANDONED: i32 = 0x80;
+pub const KEYED_WAIT_TIMEOUT: i32 = 0x102;
+
+impl KeyedAcquire {
+    /// Classify the raw `HRESULT` of `AcquireSync`.
+    pub fn from_hresult(hr: i32) -> Self {
+        match hr {
+            0 => Self::Acquired,
+            KEYED_WAIT_TIMEOUT => Self::Timeout,
+            KEYED_WAIT_ABANDONED => Self::Abandoned,
+            other => Self::Failed(other),
+        }
+    }
+}
+
 /// `DXGI_OUTDUPL_POINTER_SHAPE_TYPE` values.
 pub const SHAPE_MONOCHROME: u32 = 1;
 pub const SHAPE_COLOR: u32 = 2;
@@ -579,6 +625,16 @@ mod tests {
 
     fn words() -> Vec<AtomicU64> {
         (0..MAILBOX_WORDS).map(|_| AtomicU64::new(0)).collect()
+    }
+
+    #[test]
+    fn keyed_acquire_results() {
+        assert_eq!(KeyedAcquire::from_hresult(0), KeyedAcquire::Acquired);
+        assert_eq!(KeyedAcquire::from_hresult(0x102), KeyedAcquire::Timeout);
+        assert_eq!(KeyedAcquire::from_hresult(0x80), KeyedAcquire::Abandoned);
+        // DXGI_ERROR_DEVICE_REMOVED is an error, not a wait result.
+        let removed = 0x887a_0005u32 as i32;
+        assert_eq!(KeyedAcquire::from_hresult(removed), KeyedAcquire::Failed(removed));
     }
     fn r(x: i32, y: i32, w: u32, h: u32) -> Rect {
         Rect { x, y, width: w, height: h }

@@ -33,8 +33,8 @@
 //! outputs are not handled and keep the RDP picture).
 
 use seat_core::capture::{
-    CaptureState, MAILBOX_BYTES, MAILBOX_WORDS, MAX_CAPTURE_OUTPUTS, Mailbox, PublishedCursor,
-    PublishedFrame, RING_SLOTS, RingCursor, shape_to_bgra,
+    CaptureState, KeyedAcquire, MAILBOX_BYTES, MAILBOX_WORDS, MAX_CAPTURE_OUTPUTS, Mailbox,
+    PublishedCursor, PublishedFrame, RING_SLOTS, RingCursor, shape_to_bgra,
 };
 use seat_core::device::Rect;
 use seat_proto::{AgentEvent, CaptureOffer, CaptureOutput};
@@ -286,11 +286,46 @@ impl Drop for Slot {
     }
 }
 
-/// `AcquireSync` with its raw result (`WAIT_TIMEOUT` would be `Ok` in the wrapper).
-fn acquire(m: &IDXGIKeyedMutex, key: u64) -> bool {
+/// `AcquireSync` with its raw result (`WAIT_TIMEOUT` / `WAIT_ABANDONED` would be `Ok` in
+/// the wrapper).
+fn acquire(m: &IDXGIKeyedMutex, key: u64) -> KeyedAcquire {
     // SAFETY: vtable call on a live interface with plain arguments; no wait.
     let hr = unsafe { (Interface::vtable(m).AcquireSync)(Interface::as_raw(m), key, 0) };
-    hr.0 == 0
+    KeyedAcquire::from_hresult(hr.0)
+}
+
+/// What [`pick_slot`] found.
+enum Pick {
+    /// This slot's key is ours (key 0, or key 1 = a frame the presenter never took).
+    Slot(usize),
+    /// Every candidate is busy (the presenter is copying): skip this frame.
+    Busy,
+    /// A slot's keyed mutex was abandoned (the seat host died or dropped the texture
+    /// while holding key 1): the ring must be rebuilt.
+    Abandoned(usize),
+}
+
+/// A free ring slot for the next copy.
+///
+/// Keyed-mutex semantics (2026-11-25, see `seat_core::capture::KeyedAcquire`): with a zero
+/// wait, `WAIT_TIMEOUT` just means the presenter holds that slot, so the next candidate is
+/// tried. `WAIT_ABANDONED` is **not** ownership: Microsoft Learn says the surface and its
+/// mutex are no longer consistent and both must be recreated. The producer is the side
+/// that can recreate them, so the worker ends the generation (`End::Lost`) and the
+/// coordinator builds a new ring; the seat host sees the old mailbox go `lost` and
+/// fetches the new one. Skipping the slot instead would leave a ring with a dead slot
+/// that can wedge the presenter (it may still wait for key 1 of it).
+fn pick_slot(ring: &[Slot], candidates: &[usize]) -> Pick {
+    for &s in candidates {
+        for key in [0, 1] {
+            match acquire(&ring[s].mutex, key) {
+                KeyedAcquire::Acquired => return Pick::Slot(s),
+                KeyedAcquire::Abandoned => return Pick::Abandoned(s),
+                KeyedAcquire::Timeout | KeyedAcquire::Failed(_) => {}
+            }
+        }
+    }
+    Pick::Busy
 }
 
 /// Pointer state shared by the workers and the poller.
@@ -432,6 +467,17 @@ fn worker(
         match unsafe { dupl.AcquireNextFrame(ACQUIRE_MS, &mut info, &mut res) } {
             Ok(()) => {}
             Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => continue,
+            // 0x887A0026 is DXGI_ERROR_ACCESS_LOST: the duplication became invalid (desktop
+            // switch to the lock / UAC / Winlogon desktop, mode change, full-screen app).
+            // Its system message text reads "The keyed mutex was abandoned", but it has
+            // nothing to do with the ring's keyed mutexes (those return WAIT_ABANDONED, see
+            // `pick_slot`). The documented answer is to release the duplication and create
+            // a new one: end this generation and rebuild (`DuplicateOutput` is then denied
+            // with E_ACCESSDENIED while the secure desktop is shown; the coordinator keeps
+            // retrying).
+            Err(e) if e.code() == DXGI_ERROR_ACCESS_LOST => {
+                return End::Lost(format!("AcquireNextFrame: DXGI_ERROR_ACCESS_LOST ({e})"));
+            }
             Err(e) => return End::Lost(format!("AcquireNextFrame: {e}")),
         }
         let mut signal = false;
@@ -441,16 +487,26 @@ fn worker(
         {
             // A free slot: key 0 (the presenter gave it back) or key 1 (a frame it never
             // took, older than the one published after it).
-            let pick = cursor
-                .candidates()
-                .into_iter()
-                .find(|&s| acquire(&ring[s].mutex, 0) || acquire(&ring[s].mutex, 1));
-            if let Some(s) = pick {
+            let pick = pick_slot(&ring, &cursor.candidates());
+            if let Pick::Abandoned(s) = pick {
+                // SAFETY: the frame acquired above.
+                let _ = unsafe { dupl.ReleaseFrame() };
+                return End::Lost(format!("ring slot {s}: keyed mutex abandoned by the seat host"));
+            }
+            if let Pick::Slot(s) = pick {
                 let slot = &ring[s];
                 // SAFETY: both textures live; the slot is ours while its key is held.
-                unsafe {
+                let released = unsafe {
                     ctx.CopyResource(&slot.tex, &src);
-                    let _ = slot.mutex.ReleaseSync(1);
+                    slot.mutex.ReleaseSync(1)
+                };
+                if let Err(e) = released {
+                    // We would keep the key: the presenter would wait on a slot that never
+                    // comes (its acquire times out, then it sees the mutex abandoned when
+                    // this ring goes). Never publish it; rebuild the ring instead.
+                    // SAFETY: the frame acquired above.
+                    let _ = unsafe { dupl.ReleaseFrame() };
+                    return End::Lost(format!("ring slot {s}: ReleaseSync: {e}"));
                 }
                 cursor.published(s);
                 m.publish(

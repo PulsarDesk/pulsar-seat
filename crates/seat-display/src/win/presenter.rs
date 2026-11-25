@@ -16,7 +16,11 @@
 //!   change is recorded in a small per-account file (`gdi::record_mode_change`) so the
 //!   next presenter start resets what a crashed or killed host left behind;
 //! - a flip chain lost to a device removal / reset (driver update, TDR) is re-created
-//!   (limited retries) instead of staying on the GDI blit for good;
+//!   (limited retries) instead of staying on the GDI blit for good; any other chain
+//!   failure is answered with one re-creation before the GDI blit for good. A GPU frame
+//!   the producer does not hand over (shared keyed mutex timeout / abandoned, handle gone)
+//!   is dropped and the last good frame stays: never a chain failure
+//!   ([`crate::model::flip_action`], 2026-11-25);
 //! - the seat's pointer is composited from [`CursorState`] (straight-alpha BGRA shape);
 //! - GPU frames (zero-copy EGFX path, round 4): a flip-chain output that is no clone
 //!   source takes [`GpuFrameRef`]s ([`FrameSink::present_gpu`]): the newest one is kept
@@ -51,6 +55,7 @@ use super::flip::FlipChain;
 use crate::model::{
     blend_cursor_region, centre, coalesce_dirty, console_clip, contains_point, copy_region, cursor_rect, letterbox, move_back,
     nonblack_samples, pick_flip_adapter, pick_follow_mode, AdapterChoice, ModeFollower, MODE_FOLLOW_SETTLE,
+    classify_flip_failure, flip_action, FlipAction, FlipFailure,
 };
 use seat_core::backend::display::{CursorState, FrameRef, FrameSink, GpuFrameRef, OutputPlacement, SeatOutputs};
 use seat_core::backend::{BackendError, BackendResult, ErrorKind};
@@ -172,6 +177,11 @@ struct Out {
     /// Flip presentation failed for good: GDI blit on a window created after the flip
     /// chain was dropped (never a flip chain again for this output).
     gdi_only: bool,
+    /// GPU frames in a row the producer did not hand over (keyed mutex timeout /
+    /// abandoned, handle gone): dropped, the chain stays (`flip_action`).
+    shared_misses: u32,
+    /// Flip-chain failures other than device losses since the last good present.
+    chain_errors: u8,
     /// Diagnostics (gaming PC E2E bug 3): what came in, what went out.
     stats: OutStats,
 }
@@ -185,6 +195,8 @@ struct OutStats {
     presents: u64,
     present_errors: u64,
     occluded: u64,
+    /// GPU frames dropped because the producer did not hand them over.
+    dropped_frames: u64,
     /// GDI paints of a frame.
     gdi_paints: u64,
     /// Adapter choice of the flip chain (`None`: no chain).
@@ -194,8 +206,8 @@ struct OutStats {
 impl OutStats {
     /// The counters that make a new diagnostics line worth writing.
     fn moved_since(&self, last: &OutStats) -> bool {
-        (self.cpu_frames, self.gpu_frames, self.presents, self.present_errors, self.occluded, self.gdi_paints)
-            != (last.cpu_frames, last.gpu_frames, last.presents, last.present_errors, last.occluded, last.gdi_paints)
+        (self.cpu_frames, self.gpu_frames, self.presents, self.present_errors, self.occluded, self.dropped_frames, self.gdi_paints)
+            != (last.cpu_frames, last.gpu_frames, last.presents, last.present_errors, last.occluded, last.dropped_frames, last.gdi_paints)
     }
 }
 
@@ -209,12 +221,8 @@ struct SharedFrame {
 /// Dirty rectangles kept per GPU output before the next upload; more = full upload
 /// (`coalesce_dirty` would give up on that many anyway).
 const MAX_PENDING_RECTS: usize = 32;
-/// Device losses after which an output stays on the GDI blit.
-const MAX_GPU_LOST: u8 = 5;
 /// Failed flip-chain re-creations in a row after which an output stays on GDI.
 const MAX_GPU_CREATE_FAILURES: u8 = 3;
-/// DXGI_ERROR_DEVICE_REMOVED / DEVICE_HUNG / DEVICE_RESET.
-const DXGI_DEVICE_LOST: [u32; 3] = [0x887a_0005, 0x887a_0006, 0x887a_0007];
 
 impl Out {
     /// Queue dirty areas for the next GPU upload, bounded.
@@ -335,6 +343,8 @@ impl WindowPresenter {
                         shared: None,
                         frame_pending: false,
                         gdi_only: false,
+                        shared_misses: 0,
+                        chain_errors: 0,
                         stats: OutStats::default(),
                     })
                 })
@@ -860,7 +870,7 @@ fn retry_gpu(shared: &Arc<Mutex<Shared>>) {
                 o.gpu_luid = c.luid();
                 o.stats.adapter = Some(choice);
                 CHAINS.with(|m| m.borrow_mut().insert(i, c));
-                log::info!("presenter: output {i}: flip chain re-created after a device loss on adapter {:x}", o.gpu_luid);
+                log::info!("presenter: output {i}: flip chain re-created after a device loss / chain failure on adapter {:x}", o.gpu_luid);
                 o.gpu = true;
                 o.gpu_retry = false;
                 o.gpu_create_failures = 0;
@@ -932,8 +942,8 @@ fn log_stats(shared: &Arc<Mutex<Shared>>) {
                 "no frame".to_string()
             };
             lines.push(format!(
-                "presenter: output {i} (target {} adapter {:x}) via {path}: cpu frames {}, gpu frames {}, presents {}, present errors {}, occluded {}, gdi paints {}, {picture}",
-                o.placement.target_id, o.placement.adapter_luid, st.cpu_frames, st.gpu_frames, st.presents, st.present_errors, st.occluded, st.gdi_paints
+                "presenter: output {i} (target {} adapter {:x}) via {path}: cpu frames {}, gpu frames {}, presents {}, present errors {}, occluded {}, dropped gpu frames {}, gdi paints {}, {picture}",
+                o.placement.target_id, o.placement.adapter_luid, st.cpu_frames, st.gpu_frames, st.presents, st.present_errors, st.occluded, st.dropped_frames, st.gdi_paints
             ));
         }
         lines
@@ -1059,7 +1069,7 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
         /// GPU frame (`None`: keep the last one) and the cursor to draw over it.
         Shared(Option<SharedFrame>, Option<(CursorState, Vec<u8>)>),
     }
-    let (job, ww, wh, hwnd) = {
+    let (job, ww, wh, hwnd, misses) = {
         let mut s = lock(shared);
         let hwnd = s.hwnds.get(i).copied().unwrap_or(0);
         let cursor = s.cursor.clone();
@@ -1095,11 +1105,14 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
                 Job::Frame(o.fw, o.fh, data)
             }
         };
-        (job, ww, wh, hwnd)
+        (job, ww, wh, hwnd, o.shared_misses)
     };
-    let result = CHAINS.with(|c| {
+    // `shared`: what became of a GPU frame (None: no frame this time; Err: dropped, see
+    // below).
+    let (result, shared_outcome) = CHAINS.with(|c| {
         let mut c = c.borrow_mut();
-        let Some(ch) = c.get_mut(&i) else { return Ok(0) };
+        let Some(ch) = c.get_mut(&i) else { return (Ok(0), None) };
+        let mut outcome: Option<Result<(), BackendError>> = None;
         let r = match job {
             Job::Message(text) => {
                 let (w, h) = (ww.clamp(1, 7680), wh.clamp(1, 4320));
@@ -1109,20 +1122,62 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
             Job::Frame(fw, fh, regions) => ch.upload(fw, fh, &regions).and_then(|_| ch.present(ww, wh)),
             Job::Shared(frame, cursor) => {
                 let taken = match frame {
-                    Some(f) => ch.take_shared(f.handle, f.generation, f.src),
+                    Some(f) => match ch.take_shared(f.handle, f.generation, f.src) {
+                        Ok(()) => {
+                            outcome = Some(Ok(()));
+                            Ok(())
+                        }
+                        Err(e) => {
+                            let failure = classify_flip_failure(&e.reason, e.win32);
+                            if failure.producer_side() {
+                                // The producer did not hand this frame over (2026-11-25:
+                                // capture ring keyed mutex timeout): not a chain failure.
+                                // Drop it and present the last good frame again.
+                                if flip_action(failure, misses.saturating_add(1), 0, 0) == FlipAction::DropFrameReopen {
+                                    ch.forget_shared();
+                                }
+                                outcome = Some(Err(e));
+                                Ok(())
+                            } else {
+                                Err(e)
+                            }
+                        }
+                    },
                     None => Ok(()),
                 };
                 taken.and_then(|_| ch.present_with_cursor(ww, wh, cursor.as_ref().map(|(c, p)| (c, p.as_slice()))))
             }
         };
-        r.map(|_| ch.last_present_status())
+        (r.map(|_| ch.last_present_status()), outcome)
     });
     {
         let mut s = lock(shared);
         if let Some(o) = s.outputs.get_mut(i).and_then(|o| o.as_mut()) {
+            match shared_outcome {
+                Some(Ok(())) => {
+                    if o.shared_misses > 0 {
+                        log::info!("presenter: output {i}: GPU frames taken again after {} dropped", o.shared_misses);
+                    }
+                    o.shared_misses = 0;
+                }
+                Some(Err(e)) => {
+                    o.shared_misses = o.shared_misses.saturating_add(1);
+                    o.stats.dropped_frames += 1;
+                    let reopen = flip_action(classify_flip_failure(&e.reason, e.win32), o.shared_misses, 0, 0) == FlipAction::DropFrameReopen;
+                    if o.shared_misses == 1 || reopen {
+                        log::warn!(
+                            "presenter: output {i}: GPU frame dropped ({e}; {} in a row); flip chain kept, last frame shown{}",
+                            o.shared_misses,
+                            if reopen { ", shared textures closed for reopening" } else { "" }
+                        );
+                    }
+                }
+                None => {}
+            }
             match &result {
                 Ok(status) => {
                     o.stats.presents += 1;
+                    o.chain_errors = 0;
                     if *status == super::flip::DXGI_STATUS_OCCLUDED {
                         if o.stats.occluded == 0 {
                             log::warn!("presenter: output {i}: Present reports DXGI_STATUS_OCCLUDED (the window's content is not shown)");
@@ -1135,7 +1190,9 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
         }
     }
     if let Err(e) = result {
-        let lost = e.win32.is_some_and(|c| DXGI_DEVICE_LOST.contains(&c));
+        // Only device / swap chain failures get here (producer-side shared-frame failures
+        // were dropped above). Re-create the chain first; GDI for good only after that.
+        let failure = classify_flip_failure(&e.reason, e.win32);
         CHAINS.with(|c| c.borrow_mut().remove(&i));
         let mut new_window = false;
         if let Some(o) = lock(shared).outputs.get_mut(i).and_then(|o| o.as_mut()) {
@@ -1145,18 +1202,27 @@ fn render_gpu(shared: &Arc<Mutex<Shared>>, i: usize) {
             // and sends CPU frames again.
             o.shared = None;
             o.frame_pending = false;
-            if lost && o.gpu_lost < MAX_GPU_LOST {
-                o.gpu_lost += 1;
-                o.gpu_retry = true;
-                o.gpu_create_failures = 0;
-                log::warn!("presenter: output {i}: GPU device lost ({e}); GDI blit until the flip chain is re-created");
-            } else {
-                // GDI and flip-model presentation are not mixed on one window (HYPOTHESIS
-                // for the black gaming PC monitors, E2E bug 3): the GDI blit goes to a new
-                // window.
-                o.gdi_only = true;
-                new_window = true;
-                log::warn!("presenter: output {i}: flip present failed ({e}); GDI blit on a new window from now on");
+            o.shared_misses = 0;
+            match flip_action(failure, 0, o.gpu_lost, o.chain_errors) {
+                FlipAction::RecreateChain => {
+                    if failure == FlipFailure::DeviceLost {
+                        o.gpu_lost += 1;
+                        log::warn!("presenter: output {i}: GPU device lost ({e}); GDI blit until the flip chain is re-created");
+                    } else {
+                        o.chain_errors = o.chain_errors.saturating_add(1);
+                        log::warn!("presenter: output {i}: flip present failed ({e}); GDI blit until the flip chain is re-created");
+                    }
+                    o.gpu_retry = true;
+                    o.gpu_create_failures = 0;
+                }
+                FlipAction::GdiForGood | FlipAction::DropFrame | FlipAction::DropFrameReopen => {
+                    // GDI and flip-model presentation are not mixed on one window
+                    // (HYPOTHESIS for the black gaming PC monitors, E2E bug 3): the GDI
+                    // blit goes to a new window.
+                    o.gdi_only = true;
+                    new_window = true;
+                    log::warn!("presenter: output {i}: flip present failed again ({e}); GDI blit on a new window from now on");
+                }
             }
         }
         if new_window {
