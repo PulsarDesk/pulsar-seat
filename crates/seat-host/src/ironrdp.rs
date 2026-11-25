@@ -1009,6 +1009,10 @@ mod win {
                     Ok(c) => c,
                     Err(e) => return lost(e.to_string()),
                 };
+                // Input trace (2026-11-25 mouse ~1 Hz): input events/s received from the
+                // service, the longest gap between two, the time to forward one (busy) and
+                // the time spent waiting for the input lock (wait).
+                let mut meter = seat_core::input_trace::InputMeter::new("host_recv");
                 loop {
                     let frame = match ev.next_event() {
                         Ok(Some(f)) => f,
@@ -1016,11 +1020,23 @@ mod win {
                         Err(e) => return lost(e.to_string()),
                     };
                     match &frame.event {
-                        Event::InputPackets { .. } => {
-                            if let Some(i) = &input
-                                && let Err(e) = lock(i).on_event(&frame.event)
-                            {
-                                eprintln!("seat host: input forward failed: {e}");
+                        Event::InputPackets { packets, .. } => {
+                            let t = std::time::Instant::now();
+                            meter.hit(t);
+                            meter.depth(packets.len() as u64);
+                            if let Some(i) = &input {
+                                let g = lock(i);
+                                let locked = std::time::Instant::now();
+                                meter.wait(locked.saturating_duration_since(t));
+                                if let Err(e) = g.on_event(&frame.event) {
+                                    eprintln!("seat host: input forward failed: {e}");
+                                }
+                                drop(g);
+                                let done = std::time::Instant::now();
+                                meter.busy(done.saturating_duration_since(locked));
+                                if let Some(l) = meter.take_line(done) {
+                                    eprintln!("seat host: {l}");
+                                }
                             }
                         }
                         Event::HostCommand { seat, command } if *seat == a.seat => match flow::on_command(command) {

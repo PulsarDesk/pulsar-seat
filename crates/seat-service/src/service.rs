@@ -495,9 +495,20 @@ impl Service {
             }
         }));
         let weak = self.weak.clone();
+        // Input trace (2026-11-25 mouse ~1 Hz): publishes/s and time inside the event hub.
+        let meter = std::sync::Mutex::new(seat_core::input_trace::InputMeter::new("service_publish"));
         b.input.set_packet_sink(Arc::new(move |seat, packets| {
             if let Some(s) = weak.upgrade() {
+                let t = std::time::Instant::now();
                 s.events.publish(Event::InputPackets { seat, packets: packets.to_vec() });
+                let done = std::time::Instant::now();
+                let mut m = meter.lock().unwrap_or_else(|e| e.into_inner());
+                m.hit(t);
+                m.busy(done.saturating_duration_since(t));
+                m.depth(packets.len() as u64);
+                if let Some(l) = m.take_line(done) {
+                    crate::log::info(&format!("{l} seat={seat}"));
+                }
             }
         }));
         let weak = self.weak.clone();

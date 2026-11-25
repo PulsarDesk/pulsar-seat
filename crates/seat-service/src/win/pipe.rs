@@ -565,6 +565,10 @@ fn serve(pipe: Arc<PipeIo>, handler: Handler, sessions: SessionCounts, trusted: 
             push_stop = Some(stop.clone());
             let (p, w, dead) = (pipe.clone(), write_lock.clone(), dead.clone());
             std::thread::spawn(move || {
+                // Input trace (2026-11-25 mouse ~1 Hz): input frames/s pushed on this
+                // connection and the time each pipe write took (the client reading slowly
+                // shows up here).
+                let mut meter = seat_core::input_trace::InputMeter::new("pipe_push");
                 loop {
                     if stop.load(Ordering::SeqCst) {
                         break;
@@ -574,7 +578,18 @@ fn serve(pipe: Arc<PipeIo>, handler: Handler, sessions: SessionCounts, trusted: 
                             if stop.load(Ordering::SeqCst) {
                                 break;
                             }
-                            if !write_frame(&w, &p, &ServerFrame::Event(frame)) {
+                            let input = matches!(frame.event, seat_proto::Event::InputPackets { .. });
+                            let t = std::time::Instant::now();
+                            let ok = write_frame(&w, &p, &ServerFrame::Event(frame));
+                            if input {
+                                let done = std::time::Instant::now();
+                                meter.hit(t);
+                                meter.wait(done.saturating_duration_since(t));
+                                if let Some(l) = meter.take_line(done) {
+                                    log::info(&format!("{l} pid={pid}"));
+                                }
+                            }
+                            if !ok {
                                 // Client stopped reading (timeout) or hung up: close.
                                 dead.store(true, Ordering::SeqCst);
                                 p.cancel_all();

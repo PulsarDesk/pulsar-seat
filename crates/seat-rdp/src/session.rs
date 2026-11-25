@@ -130,13 +130,15 @@ pub enum Command {
 pub struct Handle {
     tx: Sender<Command>,
     state: Arc<Mutex<ChannelState>>,
+    /// Input commands sent and not yet taken by the engine (input trace, 2026-11-25).
+    pending_input: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// A handle and the receiver the engine runs on.
 pub fn channel(initial_desktop: (u16, u16)) -> (Handle, Receiver<Command>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let state = ChannelState { desktop: initial_desktop, ..Default::default() };
-    (Handle { tx, state: Arc::new(Mutex::new(state)) }, rx)
+    (Handle { tx, state: Arc::new(Mutex::new(state)), pending_input: Arc::default() }, rx)
 }
 
 impl Handle {
@@ -155,10 +157,24 @@ impl Handle {
         self.tx.send(c).is_ok()
     }
     pub fn relative(&self, dx: i32, dy: i32) -> bool {
+        self.input_queued();
         self.send(Command::Relative { dx, dy })
     }
     pub fn relative_button(&self, bit: u8, down: bool) -> bool {
+        self.input_queued();
         self.send(Command::RelativeButton { bit, down })
+    }
+    fn input_queued(&self) {
+        self.pending_input.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// One input command taken by the engine; returns how many were queued with it.
+    fn input_taken(&self) -> u64 {
+        let before = self.pending_input.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        if before == 0 {
+            // A command sent past `input_queued` (tests): keep the counter at zero.
+            self.pending_input.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        before
     }
     /// `reason`: why the host asks (logged with the layout, sent or not).
     pub fn set_layout(&self, monitors: Vec<MonitorDef>, reason: &'static str) -> bool {
@@ -180,6 +196,7 @@ impl RdpInputChannel for Handle {
         if events.is_empty() {
             return Ok(());
         }
+        self.input_queued();
         if self.tx.send(Command::Input(events.to_vec())).is_err() {
             return Err(BackendError::new(ErrorKind::NotReady, "rdp_engine_gone", "the RDP engine stopped"));
         }
@@ -504,6 +521,11 @@ struct Active<'a> {
     /// Clipboard / rdpdr timers and their refusal log.
     channel_ticker: crate::channels::Ticker,
     channel_log: crate::channels::RefusalLog,
+    /// Input trace (2026-11-25 mouse ~1 Hz): input commands/s taken, the longest gap,
+    /// the time to encode and write one (busy), the longest server PDU handled since the
+    /// previous input (wait: input queued behind it) and the queue depth.
+    input_meter: seat_core::input_trace::InputMeter,
+    pdu_busy_max: Duration,
     handle: &'a Handle,
     sink: &'a mut dyn FrameSink,
     hooks: &'a mut dyn Hooks,
@@ -1126,6 +1148,25 @@ impl Active<'_> {
 
     /// `Ok(false)` = stop (shutdown).
     fn command(&mut self, c: Command) -> Result<bool, End> {
+        if matches!(c, Command::Input(_) | Command::Relative { .. } | Command::RelativeButton { .. }) {
+            let t = Instant::now();
+            let depth = self.handle.input_taken();
+            let ok = self.command_inner(c);
+            let done = Instant::now();
+            let m = &mut self.input_meter;
+            m.hit(t);
+            m.depth(depth);
+            m.busy(done.saturating_duration_since(t));
+            m.wait(std::mem::take(&mut self.pdu_busy_max));
+            if let Some(l) = m.take_line(done) {
+                eprintln!("seat-rdp: {l}");
+            }
+            return ok;
+        }
+        self.command_inner(c)
+    }
+
+    fn command_inner(&mut self, c: Command) -> Result<bool, End> {
         match c {
             Command::Input(ev) => {
                 for o in translate(&ev, &mut self.slots) {
@@ -1362,6 +1403,7 @@ impl Active<'_> {
             self.write(&frame)?;
             match self.framed.read_pdu() {
                 Ok((action, payload)) => {
+                    let pdu_start = Instant::now();
                     let hidden = if action == ironrdp_pdu::Action::FastPath { fastpath_pointer_hidden(&payload) } else { None };
                     let behind = self.sink.backlog() > 0;
                     if let Some(mut g) = self.stage.get_dvc_mut::<GfxChannel>() {
@@ -1385,6 +1427,10 @@ impl Active<'_> {
                     if self.gfx.frames() != self.frames_at_present || self.last_present.elapsed() >= PRESENT_INTERVAL {
                         self.present();
                         self.flush_acks()?;
+                    }
+                    let pdu_busy = pdu_start.elapsed();
+                    if pdu_busy > self.pdu_busy_max {
+                        self.pdu_busy_max = pdu_busy;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1503,6 +1549,8 @@ pub fn run(
                     gfx_reported: (gfx.snapshot(), Instant::now()),
                     channel_ticker: crate::channels::Ticker::default(),
                     channel_log: media.channels.log.clone(),
+                    input_meter: seat_core::input_trace::InputMeter::new("rdp_send"),
+                    pdu_busy_max: Duration::ZERO,
                     handle,
                     sink: &mut *sink,
                     hooks: &mut *hooks,

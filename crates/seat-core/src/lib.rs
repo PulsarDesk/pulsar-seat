@@ -35,6 +35,7 @@ pub mod error;
 pub mod frame_rate;
 pub mod i18n;
 pub mod ids;
+pub mod input_trace;
 pub mod latency;
 pub mod pnp;
 pub mod reference;

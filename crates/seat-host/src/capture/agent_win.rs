@@ -554,6 +554,9 @@ fn poller(shared: Arc<Shared>, pointer: Arc<Mutex<Pointer>>, stop: Arc<AtomicBoo
     };
     let m = shared.mailbox();
     let mut last = (i32::MIN, i32::MIN);
+    // Input trace (2026-11-25 mouse ~1 Hz): pointer position changes per second as the
+    // seat session sees them (the end of the input path).
+    let mut meter = seat_core::input_trace::InputMeter::new("session_pointer");
     while !stop.load(Ordering::SeqCst) {
         if timer.is_null() {
             std::thread::sleep(Duration::from_millis(2));
@@ -569,6 +572,13 @@ fn poller(shared: Arc<Shared>, pointer: Arc<Mutex<Pointer>>, stop: Arc<AtomicBoo
         // SAFETY: out pointer valid.
         if unsafe { GetCursorPos(&mut pt) } == 0 || (pt.x, pt.y) == last {
             continue;
+        }
+        if last.0 != i32::MIN {
+            let now = std::time::Instant::now();
+            meter.hit(now);
+            if let Some(l) = meter.take_line(now) {
+                eprintln!("pulsar-seat-agent: {l}");
+            }
         }
         last = (pt.x, pt.y);
         let mut p = lock(&pointer);

@@ -1123,13 +1123,26 @@ impl WorkerCtx {
             }
             let mut tr = ReportTranslator::new(self.layout(&*r));
             let mut failures = 0u32;
+            // Input trace (2026-11-25 mouse ~1 Hz): reports/s, time blocked in the read
+            // (wait) and time spent translating and handing on (busy).
+            let mut meter = seat_core::input_trace::InputMeter::new("usb_read");
             loop {
-                match r.read() {
+                let asked = Instant::now();
+                let read = r.read();
+                let got = Instant::now();
+                match read {
                     Ok(report) => {
                         failures = 0;
+                        meter.hit(got);
+                        meter.wait(got.saturating_duration_since(asked));
                         proc.set_options(opts());
                         for ev in tr.translate(&report) {
                             self.dispatch(&mut proc, &ev, kbd.as_ref(), mouse.as_ref());
+                        }
+                        let done = Instant::now();
+                        meter.busy(done.saturating_duration_since(got));
+                        if let Some(l) = meter.take_line(done) {
+                            log::info!("{l} node={}", self.node);
                         }
                     }
                     Err(e) if e.reason == "cancelled" => break,
