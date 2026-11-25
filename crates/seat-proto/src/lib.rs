@@ -178,6 +178,11 @@ mod tests {
         let two = SeatNumber::new(2).unwrap();
         assert_eq!(RequestBody::GetStatus.access(), Access::Status);
         assert_eq!(RequestBody::StartSeats { seats: None }.access(), Access::Admin);
+        // 2026-11-25: config read is its own class; every config write stays admin.
+        assert_eq!(RequestBody::GetConfig.access(), Access::ConfigRead);
+        assert_eq!(RequestBody::ResetConfig { confirm: true }.access(), Access::Admin);
+        assert_eq!(RequestBody::SetSeatPassword { seat: two, password: None }.access(), Access::Admin);
+        assert_eq!(serde_json::to_string(&Access::ConfigRead).unwrap(), r#"{"level":"config_read"}"#);
         assert_eq!(RequestBody::RelogonSeat { seat: two }.access(), Access::OwnSeat(two));
         assert_eq!(RequestBody::SwitchSeat { seat: two }.access(), Access::Admin);
         assert_eq!(RequestBody::SwitchSeat { seat: two }.min_protocol(), 3);

@@ -59,6 +59,12 @@ pub enum Access {
     Any,
     /// Interactive users may read status unless the admin-only policy is on.
     Status,
+    /// Read the seat configuration (`get_config`): interactive users may, like `Status`,
+    /// unless the admin-only policy ("restricted") is on. Unlike `Status`, the service's
+    /// own verified processes get no exemption under admin-only. Non-admins get a redacted
+    /// view (the service drops free-form values that may hold secrets). Added 2026-11-25
+    /// (maintainer decision, read-only Seats board; additive).
+    ConfigRead,
     /// An elevated administrator, or the user signed in on this seat when
     /// `users_may_control_own_seat` is on (and admin-only is off).
     OwnSeat(SeatNumber),
@@ -442,6 +448,7 @@ impl RequestBody {
                 Access::Any
             }
             R::Subscribe { .. } | R::PollEvents { .. } | R::GetStatus | R::GetBackends | R::ListDevices => Access::Status,
+            R::GetConfig => Access::ConfigRead,
             R::RelogonSeat { seat } => Access::OwnSeat(*seat),
             R::HostGetAssignment { seat }
             | R::HostTakeCredentials { seat }
@@ -458,7 +465,6 @@ impl RequestBody {
                 Access::CredentialProvider
             }
             R::Preflight
-            | R::GetConfig
             | R::ValidateConfig { .. }
             | R::ApplyConfig { .. }
             | R::ResetConfig { .. }

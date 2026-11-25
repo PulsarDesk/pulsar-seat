@@ -228,3 +228,15 @@ otherwise:
   `duo_service_running`. ASTER rules unchanged; nothing is written into the reference
   product's keys or files. Architecture "Remote kind beside the reference remote product".
   HYPOTHESIS until a hardware run.
+
+## Decisions (2026-11-25, maintainer)
+
+- **Standard users may read the seat configuration** (manager redesign v2 D1, read-only
+  Seats board). `get_config` moved from `Access::Admin` to the new `Access::ConfigRead`:
+  any caller after `hello`, except when `admin_only` ("restricted") is on and the caller is
+  not an admin; no exemption for the service's own processes under the lock. Non-admins get
+  a redacted document (environment variable values and app arguments emptied). Every write
+  stays admin only. Spec note: `spec/local/10-manager.md` (implementation notes) and
+  `20-service.md` §13.5 grant interactive users "read-only status" if the admin allows it;
+  reading the configuration goes beyond "status", so this is a deliberate widening, not a
+  spec requirement. `spec/` is not edited. Architecture "Control pipe" (`ConfigRead`).

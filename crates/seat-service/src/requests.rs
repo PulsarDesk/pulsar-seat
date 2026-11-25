@@ -143,7 +143,13 @@ impl Service {
                 checks.extend(self.console_checks());
                 Ok(ResponseBody::Checks(checks))
             }
-            B::GetConfig => Ok(ResponseBody::Config(self.config_view())),
+            B::GetConfig => {
+                let mut view = self.config_view();
+                if !caller.admin() {
+                    redact_for_non_admin(&mut view.config);
+                }
+                Ok(ResponseBody::Config(view))
+            }
             B::ValidateConfig { config } => {
                 let mut c = *config;
                 c.normalize();
@@ -1290,6 +1296,39 @@ pub(crate) fn fill_remote_resources(cfg: &mut Config) -> Result<(), SeatNumber> 
         return Ok(());
     }
     seat_core::remote::assign_resources(cfg, &listening_ports(), || uuid::Uuid::new_v4().to_string())
+}
+
+/// The config a non-admin caller gets from `get_config` (decision 2026-11-25, read-only
+/// Seats board). The document holds no password, pairing key, token or PIN (those live in
+/// the secret store / LSA); what is dropped here is free-form text an administrator may
+/// have put a secret into: per-seat environment variable values (names stay) and the
+/// command-line arguments of startup apps, kiosk apps, kiosk shell apps and remote seat
+/// apps (the program paths stay). Writes are admin only, so a redacted view is never
+/// saved back.
+pub(crate) fn redact_for_non_admin(cfg: &mut Config) {
+    for seat in &mut cfg.seats {
+        for var in &mut seat.environment {
+            var.value.clear();
+        }
+        for app in &mut seat.startup_apps {
+            app.args.clear();
+        }
+        if let Some(local) = seat.local.as_mut() {
+            if let Some(kiosk) = local.kiosk.as_mut() {
+                kiosk.args.clear();
+            }
+            if let Some(shell) = local.kiosk_shell.as_mut() {
+                for app in &mut shell.apps {
+                    app.args.clear();
+                }
+            }
+        }
+        if let Some(remote) = seat.remote.as_mut() {
+            for app in &mut remote.apps {
+                app.arguments.clear();
+            }
+        }
+    }
 }
 
 /// Local TCP / UDP ports in use (the remote seat port allocator skips their blocks).

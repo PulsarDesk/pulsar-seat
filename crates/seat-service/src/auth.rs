@@ -126,10 +126,15 @@ pub fn authorize(
         }
         // Verified service processes keep status / their own topics under admin_only.
         Access::Status if caller.service_process() => Ok(()),
+        // ConfigRead has no service-process exemption: under admin_only a non-admin seat
+        // host, agent, listener or kiosk shell sees no configuration either.
         _ if settings.admin_only && !admin => {
             Err(ProtoError::new(ErrorCode::AdminOnly, "settings are restricted to administrators"))
         }
         Access::Status => Ok(()),
+        // Any helloed caller reads the configuration (redacted for non-admins by the
+        // service; decision 2026-11-25, read-only Seats board).
+        Access::ConfigRead => Ok(()),
         Access::Admin => {
             if admin {
                 Ok(())
@@ -236,6 +241,26 @@ mod tests {
         let moved = Caller { credprov_session: Some(4), ..fake };
         assert!(authorize(Access::CredentialProvider, &moved, &g, None).is_err());
         assert!(authorize(Access::CredentialProvider, &host, &g, None).is_err());
+    }
+
+    #[test]
+    fn config_read_is_open_unless_restricted() {
+        let open = GlobalSettings::default();
+        let locked = GlobalSettings { admin_only: true, ..Default::default() };
+        let u = user(3);
+        assert!(authorize(Access::ConfigRead, &u, &open, None).is_ok());
+        assert_eq!(authorize(Access::ConfigRead, &u, &locked, None).unwrap_err().code, ErrorCode::AdminOnly);
+        // Writes stay admin only.
+        assert_eq!(authorize(Access::Admin, &u, &open, None).unwrap_err().code, ErrorCode::AccessDenied);
+        let admin = Caller { client: Some(ClientKind::Manager), ..Caller::system() };
+        assert!(authorize(Access::ConfigRead, &admin, &locked, None).is_ok());
+        // No service-process exemption under the lock (unlike status).
+        let kiosk = Caller { client: Some(ClientKind::KioskShell), kiosk_seat: Some(s(2)), ..user(1) };
+        assert!(authorize(Access::Status, &kiosk, &locked, None).is_ok());
+        assert_eq!(authorize(Access::ConfigRead, &kiosk, &locked, None).unwrap_err().code, ErrorCode::AdminOnly);
+        // Hello first.
+        let no_hello = Caller { client: None, ..u };
+        assert_eq!(authorize(Access::ConfigRead, &no_hello, &open, None).unwrap_err().code, ErrorCode::BadRequest);
     }
 
     #[test]

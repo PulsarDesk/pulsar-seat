@@ -1663,10 +1663,23 @@ monitor's same-container hub keeps a seat the monitor is not on.
 - `PROTOCOL_VERSION = 3` (2026-11-14, seat kinds: see §10.2), `MIN_PROTOCOL_VERSION = 1`. First request must be
   `hello(Hello {client: ClientKind, client_version, protocol_version, seat?, token?})` →
   `HelloReply {service_version, protocol_version, min_protocol_version, caller: CallerInfo}`.
-- Authorisation: `RequestBody::access() -> Access::{Any, Status, OwnSeat(seat), Admin,
+- Authorisation: `RequestBody::access() -> Access::{Any, Status, ConfigRead, OwnSeat(seat), Admin,
   Host(seat), Agent, ConsoleListener}`, checked against the caller's token (impersonation); `Admin` needs an
   elevated token (Administrators enabled) or SYSTEM; `admin_only` restricts everything but
   `Any`; `Host` needs the PID the service started + the one-time `--token`.
+- `ConfigRead` (2026-11-25, maintainer decision, read-only Seats board of the manager
+  redesign): only `get_config`. Any caller after `hello` may read, unless `admin_only`
+  ("restricted") is on and the caller is not an admin (`admin_only` error); unlike
+  `Status`, verified service processes (host, agent, listener, kiosk shell) get no
+  exemption under the lock. Not served before the boot decision (`not_ready`). A non-admin
+  gets the whole document (seats with accounts, kinds, devices with names / hardware ids /
+  serials, settings, remote seat options, `password_set` / `password_failing` markers)
+  except free-form text that may hold a secret: per-seat `environment[].value` is emptied
+  (names kept) and the arguments of `startup_apps`, `local.kiosk`, `local.kiosk_shell.apps`
+  and `remote.apps` are dropped (program paths kept) (`requests::redact_for_non_admin`).
+  The document itself holds no password, pairing key, token, OTP or PIN (secret store /
+  LSA). `validate_config`, `apply_config`, `reset_config`, `import_reference`,
+  `set_seat_password` and every other write stay `Admin`.
 - Requests: connection (`hello`, `subscribe{topics}`, `poll_events`), status (`get_status`,
   `get_backends`, `preflight`), config (`get_config`, `validate_config`, `apply_config{config,
   base_revision, force}`, `reset_config`, `import_reference`, `set_seat_password` write-only,
@@ -1942,7 +1955,8 @@ caller's hello version is lower. `get_status` carries `kind`
 per seat (`SeatRuntime.kind`).
 
 Seat v1 requests are unchanged (§5). Split v2 requests, as v3 (all `Access::Admin`; remote
-seat status is admin only, decision §5):
+seat status is admin only, decision §5; since 2026-11-25 `get_config` is `ConfigRead`, so a
+standard user sees the remote seats' configuration, redacted, but still not their status):
 
 | v3 request | Split v2 | Seat kind |
 | --- | --- | --- |

@@ -186,7 +186,8 @@ fn authorisation_table_enforced() {
     let h = harness();
     let mut u = user(1);
     assert!(matches!(call(&h, &mut u, RequestBody::GetStatus), Ok(ResponseBody::Status(_))));
-    assert_eq!(call(&h, &mut u, RequestBody::GetConfig).unwrap_err().code, ErrorCode::AccessDenied);
+    // Config read is open to standard users (decision 2026-11-25); writes are not.
+    assert!(matches!(call(&h, &mut u, RequestBody::GetConfig), Ok(ResponseBody::Config(_))));
     assert_eq!(call(&h, &mut u, RequestBody::StartSeats { seats: None }).unwrap_err().code, ErrorCode::AccessDenied);
     let mut a = admin();
     assert!(matches!(call(&h, &mut a, RequestBody::GetConfig), Ok(ResponseBody::Config(_))));
@@ -659,6 +660,98 @@ fn admin_only_keeps_hosts_subscribed() {
     // A plain user is still restricted.
     let mut u = user(1);
     assert_eq!(call(&h, &mut u, RequestBody::GetStatus).unwrap_err().code, ErrorCode::AdminOnly);
+}
+
+/// Decision 2026-11-25 (read-only Seats board): a standard user reads the config, redacted;
+/// every write stays admin only; the admin-only lock ("restricted") hides it again.
+#[test]
+fn standard_user_reads_a_redacted_config() {
+    use seat_core::config::{EnvVar, KioskApp};
+    let mut c = two_seat_config();
+    {
+        let seat = c.seats.iter_mut().find(|x| x.number == s(2)).unwrap();
+        seat.environment = vec![EnvVar { name: "GAME_TOKEN".into(), value: "very-secret".into() }];
+        seat.startup_apps = vec![KioskApp { command: r"C:\Apps\tool.exe".into(), args: vec!["--key=very-secret".into()] }];
+        seat.local_mut().unwrap().kiosk = Some(KioskApp { command: r"C:\Apps\kiosk.exe".into(), args: vec!["--pin".into(), "very-secret".into()] });
+    }
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut a = admin();
+    call(&h, &mut a, RequestBody::SetSeatPassword { seat: s(2), password: Some(Secret::new("pw2")) }).unwrap();
+    let ResponseBody::Config(full) = call(&h, &mut a, RequestBody::GetConfig).unwrap() else { panic!() };
+    assert!(serde_json::to_string(&full).unwrap().contains("very-secret"), "admins see everything");
+
+    let mut u = user(1);
+    let ResponseBody::Config(v) = call(&h, &mut u, RequestBody::GetConfig).unwrap() else { panic!() };
+    let json = serde_json::to_string(&v).unwrap();
+    assert!(!json.contains("very-secret"), "{json}");
+    assert!(!json.contains("pw2"));
+    let seat = v.config.seat(s(2)).unwrap();
+    assert_eq!(seat.environment[0].name, "GAME_TOKEN");
+    assert_eq!(seat.environment[0].value, "");
+    assert_eq!(seat.startup_apps[0].command, r"C:\Apps\tool.exe");
+    assert!(seat.startup_apps[0].args.is_empty());
+    assert_eq!(seat.local_settings().kiosk.as_ref().unwrap().command, r"C:\Apps\kiosk.exe");
+    // The board keeps what it needs: seats, devices, password markers, revision.
+    assert_eq!(v.config.seats.len(), full.config.seats.len());
+    assert_eq!(v.config.devices, full.config.devices);
+    assert_eq!(v.config.revision, full.config.revision);
+    assert_eq!(v.password_set, vec![s(2)]);
+
+    // Writes stay admin only.
+    let base = v.config.revision;
+    let e = call(&h, &mut u, RequestBody::ApplyConfig { config: Box::new(v.config.clone()), base_revision: base, force: false }).unwrap_err();
+    assert_eq!(e.code, ErrorCode::AccessDenied);
+    assert_eq!(call(&h, &mut u, RequestBody::ValidateConfig { config: Box::new(v.config.clone()) }).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(call(&h, &mut u, RequestBody::ResetConfig { confirm: true }).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(call(&h, &mut u, RequestBody::SetSeatPassword { seat: s(2), password: None }).unwrap_err().code, ErrorCode::AccessDenied);
+    assert_eq!(h.s.lock().config.seat(s(2)).unwrap().environment[0].value, "very-secret");
+}
+
+#[test]
+fn restricted_lock_hides_the_config_from_standard_users() {
+    let mut c = two_seat_config();
+    c.settings.admin_only = true;
+    let h = harness_with(c, None);
+    h.s.boot();
+    let mut u = user(1);
+    assert_eq!(call(&h, &mut u, RequestBody::GetConfig).unwrap_err().code, ErrorCode::AdminOnly);
+    let ResponseBody::Hello(reply) = call(&h, &mut user(1), hello_body(ClientKind::Manager)).unwrap() else { panic!() };
+    assert!(reply.caller.restricted);
+    let mut a = admin();
+    assert!(matches!(call(&h, &mut a, RequestBody::GetConfig), Ok(ResponseBody::Config(_))));
+}
+
+#[test]
+fn redaction_covers_kiosk_shell_and_remote_apps() {
+    use seat_core::config::{KioskShell, KioskShellApp};
+    let mut c = two_seat_config();
+    let seat = c.seats.iter_mut().find(|x| x.number == s(2)).unwrap();
+    let app = KioskShellApp {
+        title: "Game".into(),
+        command: r"C:\g.exe".into(),
+        args: vec!["--token=x".into()],
+        autostart: false,
+        monitor: 0,
+        app_id: None,
+        fullscreen: false,
+    };
+    seat.local_mut().unwrap().kiosk_shell = Some(KioskShell { apps: vec![app], ..Default::default() });
+    let mut remote = seat_core::remote::RemoteSeat::default();
+    remote.apps = vec![seat_core::remote::AutostartApp {
+        id: "a".into(),
+        path: r"C:\r.exe".into(),
+        arguments: "--password x".into(),
+        run_as_system: false,
+    }];
+    c.seats.push(SeatConfig::new_remote(s(3), remote));
+    crate::requests::redact_for_non_admin(&mut c);
+    let shell = c.seat(s(2)).unwrap().local_settings().kiosk_shell.clone().unwrap();
+    assert_eq!(shell.apps[0].command, r"C:\g.exe");
+    assert!(shell.apps[0].args.is_empty());
+    let r = c.seat(s(3)).unwrap().remote.clone().unwrap();
+    assert_eq!(r.apps[0].path, r"C:\r.exe");
+    assert_eq!(r.apps[0].arguments, "");
 }
 
 #[test]
