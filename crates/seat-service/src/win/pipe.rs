@@ -635,28 +635,75 @@ mod tests {
 
     /// Interactive users may connect with [`seat_proto::PIPE_CLIENT_ACCESS`] but may not
     /// create further server instances on the name (no `FILE_CREATE_PIPE_INSTANCE`).
-    /// Meaningful only when the test runs non-elevated (the usual dev shell): an elevated
-    /// token matches the Administrators GA entry and may create instances.
+    /// The non-admin case is built explicitly: this thread impersonates a restricted copy
+    /// of its own token with Administrators deny-only, so it holds in an elevated shell or
+    /// on the elevated CI runners too (first CI runs, 2026-11-25). The real token is
+    /// checked separately: an admin may create instances (the GA entry), a non-admin not.
     #[test]
     fn users_cannot_create_rogue_instances() {
         use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Security::{
+            CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, ImpersonateLoggedOnUser, PSID,
+            SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_DUPLICATE, WinBuiltinAdministratorsSid,
+        };
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        struct Revert;
+        impl Drop for Revert {
+            fn drop(&mut self) {
+                // SAFETY: ends this thread's impersonation (no-op when none).
+                unsafe { RevertToSelf() };
+            }
+        }
+        fn create_result(server: &PipeServer) -> Result<(), io::ErrorKind> {
+            match server.create_instance(false) {
+                Ok(h) => {
+                    // SAFETY: handle we just created.
+                    unsafe { CloseHandle(h) };
+                    Ok(())
+                }
+                Err(e) => Err(e.kind()),
+            }
+        }
+
         let name = format!(r"\\.\pipe\PulsarSeat.TestRogue.{}", std::process::id());
         let server = PipeServer::new(&name, seat_proto::PIPE_SDDL).unwrap();
         let _first = server.claim().unwrap();
+
+        // Non-admin: restricted copy of our token, Administrators deny-only.
         let mut token: HANDLE = std::ptr::null_mut();
         // SAFETY: pseudo handle of our process; out pointer valid.
-        assert!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } != 0);
-        let admin = token_is_admin(token);
+        assert!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &mut token) } != 0);
+        let mut ba = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut size = ba.len() as u32;
+        // SAFETY: buffer large enough for any SID.
+        assert!(unsafe { CreateWellKnownSid(WinBuiltinAdministratorsSid, std::ptr::null_mut(), ba.as_mut_ptr() as PSID, &mut size) } != 0);
+        let disable = SID_AND_ATTRIBUTES { Sid: ba.as_mut_ptr() as PSID, Attributes: 0 };
+        let mut restricted: HANDLE = std::ptr::null_mut();
+        // SAFETY: valid token and SID array of one entry; out handle closed below.
+        let ok = unsafe {
+            CreateRestrictedToken(token, DISABLE_MAX_PRIVILEGE, 1, &disable, 0, std::ptr::null(), 0, std::ptr::null(), &mut restricted)
+        };
         // SAFETY: token from OpenProcessToken.
         unsafe { CloseHandle(token) };
-        match server.create_instance(false) {
-            Ok(h) => {
-                // SAFETY: handle we just created.
-                unsafe { CloseHandle(h) };
-                assert!(admin, "a non-admin created a second server instance");
-            }
-            Err(e) => assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}"),
+        assert!(ok != 0, "CreateRestrictedToken: {}", io::Error::last_os_error());
+        {
+            // SAFETY: restricted primary token with TOKEN_QUERY | TOKEN_DUPLICATE.
+            assert!(unsafe { ImpersonateLoggedOnUser(restricted) } != 0, "{}", io::Error::last_os_error());
+            let _revert = Revert;
+            // Null = this thread's (impersonation) token: the premise really holds.
+            assert!(!token_is_admin(std::ptr::null_mut()), "restricted token still an admin");
+            assert_eq!(create_result(&server), Err(io::ErrorKind::PermissionDenied), "a non-admin created a second server instance");
+        }
+        // SAFETY: token from CreateRestrictedToken.
+        unsafe { CloseHandle(restricted) };
+
+        // Our real token. Null = a copy of the primary token (CheckTokenMembership needs an
+        // impersonation token; the process token itself would always say "not a member").
+        if token_is_admin(std::ptr::null_mut()) {
+            assert_eq!(create_result(&server), Ok(()), "an admin may create instances (GA entry)");
+        } else {
+            assert_eq!(create_result(&server), Err(io::ErrorKind::PermissionDenied), "a non-admin created a second server instance");
         }
         // The client access mask still opens the pipe.
         let c = std::fs::OpenOptions::new().access_mode(seat_proto::PIPE_CLIENT_ACCESS).open(&name);
