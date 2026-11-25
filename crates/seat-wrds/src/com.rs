@@ -592,7 +592,7 @@ impl IWRdsProtocolLicenseConnection_Impl for Connection_Impl {
     fn RequestClientLicense(&self, _r1: *const u8, _r2: u32, _out: *mut u8, _size: *mut u32) -> windows_core::Result<()> {
         call_trace("RequestClientLicense");
         // No client license store on this protocol; RDS licensing of the seat user (per-user
-        // CAL) is the host's (spec/remote 30 Â§13). HYPOTHESIS: E_NOTIMPL is accepted.
+        // CAL) is the host's (spec/remote 30 §13). HYPOTHESIS: E_NOTIMPL is accepted.
         Err(E_NOTIMPL.into())
     }
 
