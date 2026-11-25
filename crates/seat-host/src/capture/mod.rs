@@ -171,6 +171,53 @@ pub fn cursor_state(
     }
 }
 
+/// Bit of the [`AgentPointer`] word that says a position is stored.
+const POS_VALID: u64 = 1 << 63;
+
+/// Last pointer position the in-session agent published (`GetCursorPos` in the seat
+/// session), in RDP desktop pixels (the coordinates of `TS_POINTER_EVENT` and of
+/// [`crate::ironrdp::input_rects`]). Written by the capture reader, read by the input sink
+/// for wheel events and for the resync when relative input stops (2026-11-25, pointer
+/// ballistics). Empty while the capture is not live (logon / lock / UAC desktop, agent gone).
+#[derive(Clone, Default)]
+pub struct AgentPointer(Arc<AtomicU64>);
+
+impl AgentPointer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn set(&self, pos: (u16, u16)) {
+        let v = POS_VALID | (u64::from(pos.0) << 16) | u64::from(pos.1);
+        self.0.store(v, Ordering::Release);
+    }
+    pub fn clear(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+    pub fn get(&self) -> Option<(u16, u16)> {
+        let v = self.0.load(Ordering::Acquire);
+        (v & POS_VALID != 0).then_some(((v >> 16) as u16, v as u16))
+    }
+}
+
+/// The agent's pointer (`c`, relative to its captured output of `captured` = (width,
+/// height) pixels) in RDP desktop pixels, on RDP monitor rectangle `layout`. The capture
+/// and the RDP monitor normally have the same size; if not, the position is scaled.
+pub fn desktop_pos(c: &PublishedCursor, layout: Rect, captured: (u32, u32)) -> Option<(u16, u16)> {
+    let axis = |v: i32, cap: u32, size: u32, origin: i32| -> Option<u16> {
+        let size = i64::from(size.max(1));
+        let v = if cap > 0 {
+            i64::from(v) * size / i64::from(cap)
+        } else {
+            i64::from(v)
+        };
+        u16::try_from(i64::from(origin) + v.clamp(0, size - 1)).ok()
+    };
+    Some((
+        axis(c.x, captured.0, layout.width, layout.x)?,
+        axis(c.y, captured.1, layout.height, layout.y)?,
+    ))
+}
+
 /// Generation the seat host gives the textures of its `fetch`-th ring (the presenter keys
 /// opened textures by handle and generation; the RDP compositor counts up from 1, so the
 /// capture's values live in the top half).
@@ -278,5 +325,45 @@ mod tests {
         assert_eq!(cursor_state(&c, 0, Some(vec![1; 16])).shape.len(), 16);
         assert_ne!(ring_generation(1), 1);
         assert_ne!(ring_generation(1), ring_generation(2));
+    }
+
+    #[test]
+    fn agent_pointer_round_trip() {
+        let p = AgentPointer::new();
+        assert_eq!(p.get(), None);
+        p.clone().set((3839, 2159));
+        assert_eq!(p.get(), Some((3839, 2159)), "clones share the word");
+        p.set((0, 0));
+        assert_eq!(p.get(), Some((0, 0)), "origin is a position, not empty");
+        p.clear();
+        assert_eq!(p.get(), None);
+    }
+
+    #[test]
+    fn agent_position_maps_onto_the_rdp_monitor() {
+        let c = |x, y| PublishedCursor {
+            output: 0,
+            visible: true,
+            x,
+            y,
+            ..Default::default()
+        };
+        // Second monitor at x 1920: output-relative + monitor origin.
+        assert_eq!(
+            desktop_pos(&c(10, 20), r(1920, 1920), (1920, 1080)),
+            Some((1930, 20))
+        );
+        // Clamped inside the monitor.
+        assert_eq!(
+            desktop_pos(&c(-5, 5000), r(0, 1920), (1920, 1080)),
+            Some((0, 1079))
+        );
+        // A capture of another size is scaled onto the RDP monitor.
+        assert_eq!(
+            desktop_pos(&c(1280, 720), r(0, 1920), (2560, 2160)),
+            Some((960, 360))
+        );
+        // Beyond u16 (no RDP desktop is that large): no position.
+        assert_eq!(desktop_pos(&c(0, 0), r(70_000, 1920), (1920, 1080)), None);
     }
 }

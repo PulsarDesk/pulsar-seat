@@ -62,3 +62,40 @@ buffer + OVERLAPPED, collected in order, aborted and collected in `Drop`), and
 (defensive). `win/hid.rs` (HID class `ReadFile`, one report per read) and the pad readers are not
 affected. Tests: `transfer_is_one_packet`, `translate_all_splits_concatenated_reports`,
 `translate_all_boot_mouse`. Hardware: deployed, maintainer retest pending (HYPOTHESIS until then).
+
+## Pointer overshoot (2026-11-25, after the WinUSB fix)
+
+Maintainer retest after e9b0009: delivery is 1:1 (~110-125 reports/s through every stage, no
+loss), but the pointer "flies" / overshoots. Cause: on the normal desktop `SeatInputSink`
+(`crates/seat-host/src/ironrdp.rs`) handed `InputPacket::Move` to `RdpInputSink`
+(`crates/seat-input/src/rdp.rs`), which adds the raw USB counts 1:1 to its own absolute
+position and sends absolute `TS_POINTER_EVENT` moves. Absolute moves skip the seat user's
+pointer speed and "Enhance pointer precision", so a high-DPI mouse moved one pixel per count.
+Relative RDP mouse was used only while the session hid the pointer.
+
+Fix: `SeatInputSink::with_agent_pointer` (set for `session_capture` seats only). With it,
+`Move` and `Buttons` go out as relative RDP events (`Handle::relative` /
+`relative_button`) whenever the server took relative mouse input and the connection is up,
+pointer visible or not. `Abs`, touch, pen, keys, consumer and SAS keep their paths. The wheel
+(`TS_POINTER_EVENT` has x, y) uses the real pointer position (`SeatInputSink::known_pos`): the
+agent's `GetCursorPos` position, which the capture reader turns into RDP desktop pixels
+(`capture::desktop_pos`, layout rectangle + output-relative position, scaled if the capture
+size differs) and shares as `capture::AgentPointer` (one atomic word, cleared while the
+capture is not live); else the server's `pointer_pos` only when it lies on the desktop (the
+gaming PC reports (65535, 65535)); else the old absolute path. Leaving relative mode (support
+lost) releases relative buttons and resyncs `RdpInputSink` from the same real position.
+Seats without the agent pointer (`rdp_decode`) and servers without relative support behave as
+before.
+
+Tests (seat-host): `agent_pointer_desktop_motion_and_buttons_are_relative`,
+`agent_pointer_wheel_uses_the_agent_position`, `server_pointer_sentinel_is_rejected`,
+`agent_pointer_without_relative_support_stays_absolute`,
+`leaving_relative_mode_resyncs_from_the_agent_position`,
+`release_all_releases_relative_buttons`, `without_agent_pointer_visible_pointer_stays_absolute`,
+`without_agent_pointer_relative_only_while_pointer_hidden` (renamed from
+`relative_motion_only_while_pointer_hidden`), `capture::tests::agent_pointer_round_trip`,
+`agent_position_maps_onto_the_rdp_monitor`.
+
+HYPOTHESIS until the maintainer retests: Windows applies the seat user's pointer speed and
+acceleration to RDP relative mouse input (`TS_FP_RELPOINTER_EVENT`), so the pointer then
+feels like on a normal desktop. Not deployed. The input-trace meters (78028fc) stay.

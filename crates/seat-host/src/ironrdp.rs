@@ -16,8 +16,10 @@
 //!      engine, layout changes back to the engine (display control)
 //!   5. audio bridge on the seat's endpoints (seat_media::bridge::AudioBridge, WASAPI by
 //!      endpoint id): rdpsnd playback, AUDIO_INPUT microphone
-//!   6. input: raw reader / service packets -> SeatInputSink (absolute pointer, keys,
-//!      touch / pen; relative motion while the session hides the pointer)
+//!   6. input: raw reader / service packets -> SeatInputSink (keys, touch / pen; mouse
+//!      motion and buttons relative on session_capture seats so the seat user's pointer
+//!      speed applies, else absolute with relative motion while the session hides the
+//!      pointer)
 //!   7. engine (seat_rdp::run) on this thread: listener check, TCP, peer check, TLS with
 //!      the pinned certificate, CredSSP, session; in-host reconnect for transient
 //!      failures only, and only without a stored password (with one the host exits as
@@ -264,15 +266,27 @@ impl FrameSink for SharedSink {
     }
 }
 
-/// The seat's input sink over the engine: everything through `RdpInputSink`, except
-/// while the session hides the pointer (games, pointer capture): then motion and buttons
-/// go out as relative mouse events (no absolute position, so a click never warps the
-/// pointer) and the wheel as an absolute event at the server's pointer position. When the
-/// capture ends, `RdpInputSink` continues from the server's pointer position.
+/// The seat's input sink over the engine: everything through `RdpInputSink`, except mouse
+/// motion and buttons while relative input is used. Then they go out as relative mouse
+/// events (no absolute position, so a click never warps the pointer) and the wheel as an
+/// absolute event at the real pointer position ([`Self::known_pos`]).
+///
+/// Relative input is used when the server takes it and either
+/// - the seat has the in-session agent's pointer ([`Self::with_agent_pointer`],
+///   `session_capture` seats): always, so the seat session applies its user's pointer
+///   speed and "Enhance pointer precision" to the raw mouse counts (2026-11-25: absolute
+///   moves added raw USB counts 1:1 and the pointer overshot), or
+/// - the session hides the pointer (games, pointer capture).
+///
+/// Otherwise (no relative support, no agent pointer and a visible pointer) everything goes
+/// through `RdpInputSink` as before. When relative input stops, `RdpInputSink` continues
+/// from the real pointer position.
 pub struct SeatInputSink {
     inner: RdpInputSink<Handle>,
     handle: Handle,
     outputs: Vec<seat_core::device::Rect>,
+    /// The agent's pointer position (`session_capture` seats only).
+    agent: Option<crate::capture::AgentPointer>,
     /// Buttons pressed by relative events (released by relative events too).
     rel_buttons: u8,
     was_relative: bool,
@@ -323,7 +337,23 @@ impl SeatInputSink {
         } else {
             outputs
         };
-        Self { inner, handle, outputs, rel_buttons: 0, was_relative: false }
+        Self { inner, handle, outputs, agent: None, rel_buttons: 0, was_relative: false }
+    }
+    /// Use relative mouse input on the normal desktop too, with `pointer` (the in-session
+    /// agent's position) for wheel events and the resync.
+    pub fn with_agent_pointer(mut self, pointer: crate::capture::AgentPointer) -> Self {
+        self.agent = Some(pointer);
+        self
+    }
+    /// Whether motion and buttons go out as relative events now.
+    fn relative_mode(&self, state: &seat_rdp::ChannelState) -> bool {
+        state.relative_active() || (self.agent.is_some() && state.connected && state.relative_supported)
+    }
+    /// The real pointer position in desktop pixels: the agent's, else the server's when it
+    /// lies on the desktop (a server may report (65535, 65535), which is no position).
+    fn known_pos(&self, state: &seat_rdp::ChannelState) -> Option<(u16, u16)> {
+        let on_desktop = |p: &(u16, u16)| abs_packet_at(&self.outputs, *p).is_some();
+        self.agent.as_ref().and_then(|a| a.get()).filter(on_desktop).or(state.pointer_pos.filter(on_desktop))
     }
     pub fn set_outputs(&mut self, outputs: Vec<seat_core::device::Rect>) {
         if !outputs.is_empty() {
@@ -341,8 +371,8 @@ impl SeatInputSink {
         self.rel_buttons = 0;
     }
 
-    /// One packet while the pointer is captured; `false` = not handled here.
-    fn relative_packet(&mut self, p: &InputPacket, pointer_pos: Option<(u16, u16)>) -> BackendResult<bool> {
+    /// One packet in relative mode; `false` = not handled here.
+    fn relative_packet(&mut self, p: &InputPacket, state: &seat_rdp::ChannelState) -> BackendResult<bool> {
         match p {
             InputPacket::Move { dx, dy } => {
                 self.handle.relative(*dx, *dy);
@@ -359,7 +389,7 @@ impl SeatInputSink {
                     }
                 }
             }
-            InputPacket::Wheel { d, h } => match pointer_pos {
+            InputPacket::Wheel { d, h } => match self.known_pos(state) {
                 Some((x, y)) => RdpInputChannel::send(&mut self.handle, &wheel_events(*d, *h, x, y))?,
                 None => return Ok(false),
             },
@@ -372,12 +402,12 @@ impl SeatInputSink {
 impl InputSink for SeatInputSink {
     fn send(&mut self, packets: &[InputPacket]) -> BackendResult<()> {
         let state = self.handle.state();
-        let relative = state.relative_active();
+        let relative = self.relative_mode(&state);
         if self.was_relative && !relative {
-            // Capture ended: buttons pressed during it go up, and the absolute path goes on
-            // from where the server left the pointer.
+            // Relative input ended (capture over, support lost): buttons pressed during it
+            // go up, and the absolute path goes on from the real pointer position.
             self.release_relative_buttons();
-            if let Some(p) = state.pointer_pos.and_then(|pos| abs_packet_at(&self.outputs, pos)) {
+            if let Some(p) = self.known_pos(&state).and_then(|pos| abs_packet_at(&self.outputs, pos)) {
                 self.inner.send(&[p])?;
             }
         }
@@ -393,7 +423,7 @@ impl InputSink for SeatInputSink {
                 self.inner.send(&packets[start..i])?;
                 start = i;
             }
-            if self.relative_packet(p, state.pointer_pos)? {
+            if self.relative_packet(p, &state)? {
                 start = i + 1;
             }
         }
@@ -818,7 +848,15 @@ mod win {
         let g = geometry(&monitors);
         let (handle, rx) = seat_rdp::channel((g.width as u16, g.height as u16));
         let outputs = Arc::new(Mutex::new(asg.outputs.clone()));
-        let seat_input = SharedInput(Arc::new(Mutex::new(SeatInputSink::new(handle.clone(), input_rects(&asg.outputs, &g.outputs)))));
+        // Session capture seats: the agent's pointer position comes with the capture, so
+        // mouse motion can go out relative (the seat user's pointer settings apply).
+        let session_capture = asg.frame_source == seat_core::config::LocalFrameSource::SessionCapture;
+        let agent_pointer = crate::capture::AgentPointer::new();
+        let mut input_sink = SeatInputSink::new(handle.clone(), input_rects(&asg.outputs, &g.outputs));
+        if session_capture {
+            input_sink = input_sink.with_agent_pointer(agent_pointer.clone());
+        }
+        let seat_input = SharedInput(Arc::new(Mutex::new(input_sink)));
 
         // Presenter: frames from the engine; display changes go back as a new layout (and
         // the absolute pointer follows at once; the engine corrects it after the server
@@ -843,13 +881,14 @@ mod win {
         // In-session capture (OSMS-parity G1): the agent's frames replace the RDP picture
         // while they are live; the reader ends with the engine.
         let stop_capture = Arc::new(AtomicBool::new(false));
-        if asg.frame_source == seat_core::config::LocalFrameSource::SessionCapture {
+        if session_capture {
             crate::capture::host_win::spawn(
                 ctl.clone(),
                 args.seat,
                 sink.clone(),
                 outputs.clone(),
                 handle.clone(),
+                agent_pointer,
                 stop_capture.clone(),
             );
         }
@@ -1337,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn relative_motion_only_while_pointer_hidden() {
+    fn without_agent_pointer_relative_only_while_pointer_hidden() {
         let (h, rx) = seat_rdp::channel((1920, 1080));
         let mut s = SeatInputSink::new(h.clone(), vec![]);
         s.send(&[InputPacket::Move { dx: 5, dy: 5 }]).unwrap();
@@ -1347,6 +1386,173 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Input(_))));
         assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Relative { dx: 3, dy: -2 })));
         assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Input(_))));
+    }
+
+    /// `rdp_decode` seat (no agent pointer) on a server with relative support: the visible
+    /// pointer stays absolute, exactly as before 2026-11-25.
+    #[test]
+    fn without_agent_pointer_visible_pointer_stays_absolute() {
+        use seat_core::backend::input::buttons;
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let mut s = SeatInputSink::new(h.clone(), vec![]);
+        h.update_state(|st| {
+            st.connected = true;
+            st.relative_supported = true;
+        });
+        s.send(&[InputPacket::Move { dx: 5, dy: 5 }, InputPacket::Buttons { down: buttons::LEFT, up: 0 }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(
+                ev,
+                vec![
+                    RdpInputEvent::Pointer { flags: ptrflags::MOVE, x: 965, y: 545 },
+                    RdpInputEvent::Pointer { flags: ptrflags::BUTTON1 | ptrflags::DOWN, x: 965, y: 545 }
+                ]
+            ),
+            _ => panic!("absolute move and click"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    fn agent_sink(h: &Handle) -> (SeatInputSink, crate::capture::AgentPointer) {
+        let p = crate::capture::AgentPointer::new();
+        (SeatInputSink::new(h.clone(), vec![]).with_agent_pointer(p.clone()), p)
+    }
+
+    fn h_set_desktop_relative(h: &Handle) {
+        h.update_state(|s| {
+            s.connected = true;
+            s.relative_supported = true;
+            s.pointer_hidden = false;
+        });
+    }
+
+    /// Session capture seat, pointer visible: motion and buttons go out relative (the seat
+    /// session applies its user's pointer speed); keys keep their order around them.
+    #[test]
+    fn agent_pointer_desktop_motion_and_buttons_are_relative() {
+        use seat_core::backend::input::buttons;
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, _p) = agent_sink(&h);
+        h_set_desktop_relative(&h);
+        s.send(&[
+            InputPacket::Key { sc: 0x1E, f: 0 },
+            InputPacket::Move { dx: 7, dy: -3 },
+            InputPacket::Buttons { down: buttons::LEFT, up: 0 },
+            InputPacket::Buttons { down: 0, up: buttons::LEFT },
+            InputPacket::Key { sc: 0x1E, f: 1 },
+        ])
+        .unwrap();
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Input(_))), "key down");
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Relative { dx: 7, dy: -3 })));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::LEFT, down: true })));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::LEFT, down: false })));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Input(_))), "key up");
+        assert!(rx.try_recv().is_err());
+        // An absolute device (tablet) still goes through the absolute path.
+        s.send(&[InputPacket::Abs { x: 0, y: 0, o: 0 }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::MOVE, x: 0, y: 0 }]),
+            _ => panic!("absolute packet stays absolute"),
+        }
+    }
+
+    #[test]
+    fn agent_pointer_wheel_uses_the_agent_position() {
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, p) = agent_sink(&h);
+        h_set_desktop_relative(&h);
+        h.update_state(|st| st.pointer_pos = Some((100, 200)));
+        p.set((300, 400));
+        s.send(&[InputPacket::Wheel { d: -120, h: false }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, wheel_events(-120, false, 300, 400)),
+            _ => panic!("wheel at the agent's position"),
+        }
+        // No agent position (capture not live): the server's, when it is on the desktop.
+        p.clear();
+        s.send(&[InputPacket::Wheel { d: 120, h: true }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, wheel_events(120, true, 100, 200)),
+            _ => panic!("wheel at the server's position"),
+        }
+    }
+
+    /// The gaming PC's server reports (65535, 65535): no position, so the wheel goes through
+    /// the absolute path (at the sink's own position) instead of to the corner.
+    #[test]
+    fn server_pointer_sentinel_is_rejected() {
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, _p) = agent_sink(&h);
+        h_set_desktop_relative(&h);
+        h.update_state(|st| st.pointer_pos = Some((65535, 65535)));
+        s.send(&[InputPacket::Wheel { d: 120, h: false }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::WHEEL | 120, x: 960, y: 540 }]),
+            _ => panic!("absolute-path wheel"),
+        }
+        // Same for a server position past the desktop.
+        h.update_state(|st| st.pointer_pos = Some((1920, 10)));
+        s.send(&[InputPacket::Wheel { d: 120, h: false }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::WHEEL | 120, x: 960, y: 540 }]),
+            _ => panic!("absolute-path wheel"),
+        }
+    }
+
+    #[test]
+    fn agent_pointer_without_relative_support_stays_absolute() {
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, p) = agent_sink(&h);
+        h.update_state(|st| st.connected = true);
+        p.set((10, 10));
+        s.send(&[InputPacket::Move { dx: 5, dy: 5 }]).unwrap();
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::MOVE, x: 965, y: 545 }]),
+            _ => panic!("absolute move"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Relative support lost with a button held: the button goes up and the absolute path
+    /// continues from the agent's position (no jump to the sink's stale position).
+    #[test]
+    fn leaving_relative_mode_resyncs_from_the_agent_position() {
+        use seat_core::backend::input::buttons;
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, p) = agent_sink(&h);
+        h_set_desktop_relative(&h);
+        s.send(&[InputPacket::Buttons { down: buttons::RIGHT, up: 0 }, InputPacket::Move { dx: 40, dy: 0 }]).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::RIGHT, down: true })));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::Relative { dx: 40, dy: 0 })));
+        p.set((500, 600));
+        h.update_state(|st| st.relative_supported = false);
+        s.send(&[InputPacket::Move { dx: 1, dy: 0 }]).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::RIGHT, down: false })));
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::MOVE, x: 500, y: 600 }]),
+            _ => panic!("sync move to the agent's position"),
+        }
+        match rx.try_recv() {
+            Ok(seat_rdp::Command::Input(ev)) => assert_eq!(ev, vec![RdpInputEvent::Pointer { flags: ptrflags::MOVE, x: 501, y: 600 }]),
+            _ => panic!("absolute move from there"),
+        }
+        // release_all afterwards: nothing relative is left to release.
+        s.release_all().unwrap();
+        assert!(!matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { .. })));
+    }
+
+    #[test]
+    fn release_all_releases_relative_buttons() {
+        use seat_core::backend::input::buttons;
+        let (h, rx) = seat_rdp::channel((1920, 1080));
+        let (mut s, _p) = agent_sink(&h);
+        h_set_desktop_relative(&h);
+        s.send(&[InputPacket::Buttons { down: buttons::LEFT | buttons::X1, up: 0 }]).unwrap();
+        while rx.try_recv().is_ok() {}
+        s.release_all().unwrap();
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::LEFT, down: false })));
+        assert!(matches!(rx.try_recv(), Ok(seat_rdp::Command::RelativeButton { bit: buttons::X1, down: false })));
+        assert!(rx.try_recv().is_err(), "the absolute sink had nothing pressed");
     }
 
     fn h_set_relative(h: &Handle) {

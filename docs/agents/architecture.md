@@ -1438,8 +1438,10 @@ monitor's same-container hub keeps a seat the monitor is not on.
   `PULSAR_SEAT_GFX_ZERO_COPY=0`; metrics in `SessionEvent::Graphics`. GPU behaviour is
   HYPOTHESIS until the first hardware run (crate README, Known limits).
 - **Input:** `SeatInputSink` = `RdpInputSink` over `seat_rdp::Handle` (fast-path, MS-RDPEI
-  touch / pen). `Move` packets become relative events while the server hides the pointer
-  and announced `INPUT_FLAG_MOUSE_RELATIVE`.
+  touch / pen). When the server announced `INPUT_FLAG_MOUSE_RELATIVE`, `Move` and
+  `Buttons` packets become relative events while the server hides the pointer, and on
+  `session_capture` seats always (2026-11-25, so the seat user's pointer speed applies;
+  wheel at the agent's pointer position, `capture::AgentPointer`).
 - **Audio:** rdpsnd (PCM) to `AudioBridge::start_playback/play`. `AUDIO_INPUT` from
   `AudioBridge::start_capture`. `rebind_audio` maps to `AudioBridge::set_route`. Dead
   streams are reopened every second. Since 2026-11-24 (gaming PC E2E, bug 4: no wave ever
